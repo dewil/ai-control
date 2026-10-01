@@ -164,4 +164,3 @@ oauth_host = "https://auth.kimi.ai"
             self.assertNotIn('SECRET',json.dumps(cached))
 
 if __name__=='__main__': unittest.main()
-
