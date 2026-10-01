@@ -256,3 +256,7 @@ $EDITOR ~/.claude-control/projects.yaml   # вписать свои проект
 ## Лицензия
 
 [MIT](./LICENSE). Бери, дорабатывай, используй у себя - оставь copyright-уведомление в производных копиях.
+
+## Сессии Codex из Telegram
+
+«Сессии → проект» открывает Codex. Кнопка «➕ Codex · Astra» создаёт отдельный диалог, который продолжается через подключённый клиент Codex. «Claude» открывает прежнее управление Claude. Реестр проектов общий. Установка и диагностика: [runbook-codex-sessions.md](docs/runbook-codex-sessions.md).

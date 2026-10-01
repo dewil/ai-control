@@ -10,6 +10,8 @@
 # Формат: одно имя файла из bin/ в строке. Пустые строки и # - комментарии.
 
 claude-rc
+codex-rc
+_codex_rc.py
 claude-rc-agent
 claude-rc-takeover
 claude-control-logrotate
