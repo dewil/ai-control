@@ -120,7 +120,7 @@ claude-rc reap [--dry-run]                # погасить зомби: юни�
 - **У агента нет git.** Три круга аудита нашли три независимых способа исполнить код агента до человеческой приёмки через git-механизмы (хуки, флаги вроде `git log --output=`, clean-фильтры, fsmonitor) - глушить их по одному оказалось невыигрываемой гонкой. Git отобран целиком: коммитит рантайм, после заявки о готовности ([V2.10](./docs/design-2026-07-28-v2.10-task-actually-works.md)).
 
 ### tgbot - дашборд парка
-Long-poll Telegram-бот (getUpdates, не webhook - webhooks режет DPI в ряде сетей). Команды `/agents`, `/agent <name>`, `/new <проект> <текст>` (родить задачу), `/task <name> <текст>` (событие существующему агенту), `/menu` и `/limits` (остатки подписочных лимитов Claude/Codex); карточки вопросов и приёмки - с inline-кнопками, ответ тапом или reply-ем. Приватные чаты + whitelist по `from.id`; весь вывод агентов - недоверенные данные, эскейпится и шлётся как `<pre>`.
+Long-poll Telegram-бот (getUpdates, не webhook - webhooks режет DPI в ряде сетей). Команды `/agents`, `/agent <name>`, `/new <проект> <текст>` (родить задачу), `/task <name> <текст>` (событие существующему агенту), `/menu` и `/limits` (остатки подписочных лимитов Claude/Codex/Kimi Code); карточки вопросов и приёмки - с inline-кнопками, ответ тапом или reply-ем. Приватные чаты + whitelist по `from.id`; весь вывод агентов - недоверенные данные, эскейпится и шлётся как `<pre>`.
 
 ### <a id="canon-fleet-reconciler"></a>canon-maintainer - fleet-reconciler канона
 Раскатывает ревизии канона из [claude-toolkit](https://github.com/dewil/claude-toolkit) по парку git-проектов **через pull request'ы**, детерминированно и без LLM в data-plane. Потребляет транзакционный дельта-движок toolkit'а (`canon-delta.py`). Инженерно самая плотная часть:
@@ -138,7 +138,7 @@ Long-poll Telegram-бот (getUpdates, не webhook - webhooks режет DPI в
 **Acceptor** ([этап 7](./docs/design-2026-07-12-stage7-acceptor-role.md)) - ролевой судья артефактов в независимом контексте (deterministic / role-review / both), с corpus-runner и confusion-matrix для калибровки. **Harvester** ([этап 7b](./docs/design-2026-07-13-stage7b-harvester.md)) - операторские правки (revise/reject) превращаются в кандидаты правил ролей: collect -> propose -> digest -> approve.
 
 ### limits-digest - дайджест лимитов LLM
-Каждые 15 минут снимает остаток подписочных лимитов Claude/Codex (метаданные квоты, не inference - саму квоту не тратит) и шлёт панель в Telegram **только при изменении цифр** (дедуп по сигнатуре процентов/статусов, время сброса не считается изменением). [Runbook](./docs/runbook-limits-digest.md).
+Каждые 15 минут снимает остаток подписочных лимитов Claude/Codex/Kimi Code (метаданные квоты, не inference - саму квоту не тратит) и шлёт панель в Telegram **только при изменении цифр** (дедуп по сигнатуре процентов/статусов, время сброса не считается изменением). [Runbook](./docs/runbook-limits-digest.md).
 
 > Этап 6 (веб-панель управления парком) - пока [дизайн](./docs/design-2026-07-14-stage6-web-panel.md), не реализация.
 
