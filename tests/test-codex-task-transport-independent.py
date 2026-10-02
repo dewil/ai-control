@@ -80,6 +80,7 @@ class TransportContract(unittest.TestCase):
             action()
         self.assertNotIn(SECRET, str(caught.exception))
 
+    # FR-CXTASK-TRANSPORT-01
     def test_handshake_and_exact_parameters(self):
         transport, socket, connector = self.make_transport()
         self.assertEqual([m["method"] for m in socket.sent], ["initialize", "initialized"])
@@ -96,6 +97,7 @@ class TransportContract(unittest.TestCase):
             self.assertEqual(params, original)
         self.assertEqual(connector.calls, 1)
 
+    # FR-CXTASK-TRANSPORT-02
     def test_fifo_preserves_unknown_approvals_and_foreign_threads(self):
         transport, socket, _ = self.make_transport()
         events = [
@@ -112,12 +114,14 @@ class TransportContract(unittest.TestCase):
             self.assertEqual(transport.receive(deadline=time.monotonic() + 1), event)
         self.assertEqual(len(socket.sent), 3, "Server requests must receive no automatic reply")
 
+    # FR-CXTASK-TRANSPORT-02
     def test_receive_skips_unrelated_response(self):
         transport, socket, _ = self.make_transport()
         event = {"method": "turn/completed", "params": {}}
         socket.frames.extend([json.dumps({"id": "late", "result": {}}), json.dumps(event)])
         self.assertEqual(transport.receive(deadline=time.monotonic() + 1), event)
 
+    # FR-CXTASK-TRANSPORT-01, FR-CXTASK-TRANSPORT-03
     def test_invalid_deadlines_and_methods_send_nothing(self):
         for deadline in (0, float("nan"), float("inf"), -float("inf"), None, "tomorrow"):
             with self.subTest(deadline=deadline):
@@ -132,12 +136,14 @@ class TransportContract(unittest.TestCase):
                 self.assert_safe_failure(lambda: transport.call(method, {}, deadline=time.monotonic() + 1))
                 self.assertEqual(len(socket.sent), before)
 
+    # FR-CXTASK-TRANSPORT-03
     def test_constructor_rejects_expired_deadline_before_send(self):
         socket = FakeSocket()
         connector = FakeConnector(socket)
         self.assert_safe_failure(lambda: CodexTaskTransport("/offline/test.sock", deadline=0, connector=connector))
         self.assertEqual(socket.sent, [])
 
+    # FR-CXTASK-TRANSPORT-03
     def test_connect_deadline(self):
         connector = FakeConnector(FakeSocket(), stall=True)
         start = time.monotonic()
@@ -145,6 +151,7 @@ class TransportContract(unittest.TestCase):
         self.assertLess(time.monotonic() - start, .5)
         self.assertEqual(connector.calls, 1)
 
+    # FR-CXTASK-TRANSPORT-03
     def test_operation_deadlines_are_independent(self):
         socket = FakeSocket()
         connector = FakeConnector(socket)
@@ -157,6 +164,7 @@ class TransportContract(unittest.TestCase):
             self.assertEqual(transport.call("thread/read", {}, deadline=time.monotonic() + 1), {"ok": True})
         self.assertEqual(len(socket.sent), 4)
 
+    # FR-CXTASK-TRANSPORT-03, FR-CXTASK-TRANSPORT-04
     def test_send_and_receive_timeouts_close_without_retry(self):
         for operation in ("send", "recv", "receive"):
             with self.subTest(operation=operation):
@@ -176,6 +184,7 @@ class TransportContract(unittest.TestCase):
                 self.assertEqual(connector.calls, 1)
                 self.assertLessEqual(len(socket.sent), 3)
 
+    # FR-CXTASK-TRANSPORT-04
     def test_errors_close_and_discard_buffered_events(self):
         bad_frames = [
             SECRET,
@@ -200,6 +209,7 @@ class TransportContract(unittest.TestCase):
                 self.assertEqual(len(socket.sent), before)
                 self.assertEqual(connector.calls, 1)
 
+    # FR-CXTASK-TRANSPORT-04
     def test_queue_overflow_closes_and_invalidates_events(self):
         transport, socket, connector = self.make_transport(max_events=1)
         def enqueue(message, ws):
@@ -212,6 +222,7 @@ class TransportContract(unittest.TestCase):
         self.assertEqual(connector.calls, 1)
         self.assertEqual(len(socket.sent), 3)
 
+    # FR-CXTASK-TRANSPORT-04
     def test_send_failure_closes_without_retry(self):
         transport, socket, connector = self.make_transport()
         socket.send_error = True
@@ -220,6 +231,7 @@ class TransportContract(unittest.TestCase):
         self.assertEqual(connector.calls, 1)
         self.assertEqual(len(socket.sent), 2)
 
+    # FR-CXTASK-TRANSPORT-04
     def test_close_is_idempotent_and_prevents_operations(self):
         transport, socket, _ = self.make_transport()
         transport.close()
