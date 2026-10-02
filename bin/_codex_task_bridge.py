@@ -166,10 +166,21 @@ class CodexTaskBridge:
                 pass
         self._directory()
         self._sync_directory(os.path.dirname(self.state_dir))
-        fd = self._open('bridge.lock', os.O_RDWR | os.O_CREAT)
+        initializing = False
+        try:
+            fd = self._open('bridge.lock', os.O_RDWR)
+        except FileNotFoundError:
+            # Only a completely empty directory is a new binding. Never recreate
+            # one half of a previously existing pair or reset interrupted setup.
+            _require(not os.listdir(self.state_dir))
+            fd = self._open('bridge.lock', os.O_RDWR | os.O_CREAT | os.O_EXCL)
+            initializing = True
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self._sync_directory(self.state_dir)
+            if initializing:
+                _require(os.listdir(self.state_dir) == ['bridge.lock'])
+                self._write(dict(schema=1, binding=asdict(self.binding), calls={}))
             yield
         finally:
             os.close(fd)
@@ -186,7 +197,7 @@ class CodexTaskBridge:
         try:
             fd = self._open('journal.json', os.O_RDONLY)
         except FileNotFoundError:
-            return dict(schema=1, binding=asdict(self.binding), calls={})
+            raise BridgeError('Missing task bridge journal') from None
         with os.fdopen(fd, 'rb') as stream:
             payload = stream.read(self._LIMIT + 1)
         _require(len(payload) <= self._LIMIT)
