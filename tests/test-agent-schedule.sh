@@ -1024,42 +1024,29 @@ TZ=America/New_York tick "$AGS33" "1773039600"; RCS33_4=$?  # 2026-03-09 03:00 E
   || fail "S33: last_slot продвинулся на понедельничный слот"
 
 # =============================================================== S28
-# Структурный, про класс дефекта, а не про расписание: install.sh копирует в
-# ~/.local/bin ЯВНЫЙ список файлов. Внутренний хелпер bin/_*, забытый в этом
-# списке, ломает раскатку целиком - зовущие его скрипты делают source/import
-# соседнего файла, которого в целевом каталоге не окажется. На V2.7b так чуть
-# не уехал _rc_projects.sh, на V2.8 - _schedule_spec.py. Проверяем ВСЕ хелперы
-# сразу, чтобы следующий такой файл ловился сам.
-#
-# Аудит серьезная 6 (второй проход): исходная версия делала `grep -q -- "$b"
-# install.sh` ПО ВСЕМУ ФАЙЛУ - совпадает и с комментарием ("больше не копируем
-# _foo.py"), и с любым другим упоминанием имени, не только со СПИСКОМ
-# копирования (`for script in ...; do install_script "$script"; done`).
-# Файл, реально выпавший из цикла копирования, но упомянутый где-то текстом,
-# такой тест не поймает - а установленный `claude-agent-run` упадет на
-# импорте. Проверяем сам список: извлекаем слова из тела `for script in
-# ...; do` (все вхождения, оба цикла install.sh), а не текст файла целиком.
-echo "=== S28: каждый внутренний хелпер bin/_* реально входит в СПИСОК КОПИРОВАНИЯ install.sh (не просто упомянут где-то в файле) ==="
+# Список установки — scripts.manifest, а не устаревший for script in install.sh.
+# Каждый внутренний helper должен быть в читаемом манифесте: отсутствие
+# одного имени обязано краснить проверку (backlog 2026-08-24, закрытие02.10).
+echo "=== S28: каждый внутренний хелпер bin/_* входит в scripts.manifest ==="
 INSTALLED_SCRIPTS=$(python3 -c '
-import re, sys
-text = open(sys.argv[1]).read()
-names = set()
-for m in re.finditer(r"for script in(.*?); do", text, re.S):
-    names.update(m.group(1).replace("\\", " ").split())
-print("\n".join(sorted(names)))
-' "$HERE/../install.sh")
+import sys
+from pathlib import Path
+names = [line.split("#", 1)[0].strip()
+         for line in Path(sys.argv[1]).read_text().splitlines()]
+print("\n".join(name for name in names if name))
+' "$HERE/../scripts.manifest")
 S28_MISSING=""
 for h in "$HERE/.."/bin/_*; do
-  [[ -f "$h" ]] || continue   # каталоги (напр. __pycache__) хелперами не считаем
+  [[ -f "$h" ]] || continue
   b=$(basename "$h")
   grep -qxF -- "$b" <<<"$INSTALLED_SCRIPTS" || S28_MISSING="$S28_MISSING $b"
 done
-[[ -z "$S28_MISSING" ]] && ok || fail "S28: хелперы не входят в цикл копирования install.sh:$S28_MISSING"
+[[ -z "$S28_MISSING" ]] && ok || fail "S28: хелперы отсутствуют в scripts.manifest:$S28_MISSING"
 
 # =============================================================== S34
 # Тот же жанр дефекта, что и S28 (install.sh молча не засевает то, чего
 # бинарь требует), но другой канал доставки: не копирование bin/_* хелперов
-# циклом for, а копирование runtime-файлов из examples/*.example в
+# через манифест, а копирование runtime-файлов из examples/*.example в
 # $CONTROL_DIR через copy_example_if_missing (install.sh:246-266). Бинарь,
 # который на отсутствии такого файла делает fail-closed отказ
 # ([[ -f "$path" ]] || fail ...), на свежей установке без засева не
