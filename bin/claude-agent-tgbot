@@ -650,6 +650,15 @@ def route_callback(data):
         # V3.0: экран сессий. Имя проекта уходит в argv claude-rc, короткий id -
         # в резолв uuid, поэтому оба поля отбиваются по строгой форме прямо здесь:
         # это вход из сети, а не наши данные.
+        m = re.fullmatch(r"c:p:([a-zA-Z0-9_-]{1,32})(?::([0-9]{1,3}))?", data)
+        if m:
+            return "codex_project", m.group(1), m.group(2)
+        m = re.fullmatch(r"c:n:([a-zA-Z0-9_-]{1,32})", data)
+        if m:
+            return "codex_new", m.group(1), None
+        m = re.fullmatch(r"c:([sud]):([a-zA-Z0-9_-]{1,32}):([0-9a-f]{12})", data)
+        if m:
+            return {"s": "codex_card", "u": "codex_resume", "d": "codex_interrupt"}[m.group(1)], m.group(2), m.group(3)
         if data == "s":
             return "sessions_root", None, None
         m = re.match(r"^s:p:([a-zA-Z0-9_-]{1,32})$", data)
@@ -677,6 +686,91 @@ def route_callback(data):
 
 
 # ---------------------------------------------------------- V3.0: экран сессий
+
+def run_codex(args, timeout=25):
+    """Codex CLI returns structured JSON; failures stay visible in the menu."""
+    try:
+        result = subprocess.run([os.path.join(BIN_DIR, "codex-rc")] + args,
+                                capture_output=True, text=True, timeout=timeout)
+        if result.returncode:
+            return result.returncode, {}, redact((result.stderr or "Codex недоступен").strip())
+        data = json.loads(result.stdout)
+        if not isinstance(data, dict):
+            raise ValueError("неверный ответ Codex")
+        return 0, data, ""
+    except subprocess.TimeoutExpired:
+        return 1, {}, "Codex: время ожидания истекло. Обновите список перед повторным созданием."
+    except Exception as exc:
+        return 1, {}, "Codex: ошибка CLI (%s)" % type(exc).__name__
+
+
+def codex_list_kb(project, rows, page=0, has_more=False):
+    buttons = [[("➕ Codex", "c:n:%s" % project)]] if page == 0 else []
+    for row in rows:
+        icon = "●" if row.get("status") == "active" else "○"
+        label = _clip_label(redact("%s %s" % (icon, row.get("title") or row["short"])))
+        when = session_when(row.get("mtime"))
+        buttons.append([(label + (" · " + when if when else ""),
+                         "c:s:%s:%s" % (project, row["short"]))])
+    nav = []
+    if page:
+        nav.append(("‹ назад", "c:p:%s:%d" % (project, page - 1)))
+    if has_more and page < 999:
+        nav.append(("дальше ›", "c:p:%s:%d" % (project, page + 1)))
+    if nav:
+        buttons.append(nav)
+    buttons.append([("Claude", "s:p:%s" % project), ("‹ проекты", "s")])
+    return _inline(buttons)
+
+
+def codex_card_view(project, row, note=""):
+    status = {"active": "работает", "idle": "готова", "notLoaded": "сохранена",
+              "systemError": "ошибка сервера"}.get(row.get("status"), "неизвестно")
+    text = "<b>Codex · %s</b>\n%s\nСостояние: %s" % (
+        html.escape(row.get("title") or row["short"]), html.escape(project), status)
+    if row.get("model"):
+        text += "\nМодель: %s" % html.escape(str(row["model"]))
+    if row.get("reasoning_effort"):
+        text += "\nEffort: %s" % html.escape(str(row["reasoning_effort"]))
+    text += "\nID: <code>%s</code>" % html.escape(row["sid"])
+    text += "\n\nПродолжайте в подключённом клиенте Codex."
+    if note:
+        text += "\n\n" + html.escape(redact(note))
+    buttons = [[("Открыть / возобновить", "c:u:%s:%s" % (project, row["short"]))]]
+    if row.get("status") == "active":
+        buttons.append([("Прервать работу", "c:d:%s:%s" % (project, row["short"]))])
+    buttons.append([("‹ Codex", "c:p:%s" % project), ("Claude", "s:p:%s" % project)])
+    return text, _inline(buttons)
+
+
+def _handle_codex_callback(token, proxy, chat_id, message_id, kind, project, short):
+    commands = {"codex_new": "new", "codex_card": "show",
+                "codex_resume": "resume", "codex_interrupt": "interrupt"}
+    page = int(short or 0) if kind == "codex_project" else 0
+    if kind == "codex_project":
+        args = ["sessions", project, "--page", str(page)]
+    else:
+        args = [commands[kind], project] + ([short] if kind != "codex_new" else [])
+    rc, data, error = run_codex(args, timeout=120 if kind == "codex_new" else 25)
+    if rc:
+        text = "<b>Codex · %s</b>\n%s" % (html.escape(project), html.escape(redact(error)))
+        # No new button on an error screen: a partially created session may exist.
+        kb = _inline([[("Обновить Codex", "c:p:%s" % project)],
+                      [("Claude", "s:p:%s" % project), ("‹ проекты", "s")]])
+    elif kind == "codex_project":
+        rows = data.get("rows", [])
+        text = "<b>%s · Codex</b>\n%s" % (
+            html.escape(project), "Выберите сессию." if rows else "Сессий пока нет.")
+        if page:
+            text += " Стр. %d." % (page + 1)
+        kb = codex_list_kb(project, rows, page, data.get("has_more", False))
+    else:
+        note = {"codex_new": "Новая сессия Codex создана.",
+                "codex_resume": "Сессия открыта. Продолжайте в клиенте Codex.",
+                "codex_interrupt": "Запрос прерывания обработан."}.get(kind, "")
+        text, kb = codex_card_view(project, data, note)
+    _send_or_edit(token, proxy, chat_id, message_id, text, kb)
+
 
 def run_rc(args, timeout=60):
     """claude-rc <args> (без подкоманды agent). Вывод - недоверенные данные."""
@@ -884,7 +978,7 @@ def sessions_list_kb(project, rows, page=0, has_more=False):
         nav.append(("дальше ›", "s:p:%s:%d" % (project, page + 1)))
     if nav:
         kbrows.append(nav)
-    kbrows.append([("‹ проекты", "s")])
+    kbrows.append([("Codex", "c:p:%s" % project), ("‹ проекты", "s")])
     return _inline(kbrows)
 
 
@@ -938,7 +1032,7 @@ def sessions_root_kb(projects, live_rows):
     """Корневой экран: сверху что запущено, снизу проекты."""
     rows = [[(live_label(r), "s:s:%s:%s" % (r["project"], r["short"]))]
             for r in live_rows]
-    btns = [(p, "s:p:%s" % p) for p in projects]
+    btns = [(p, "c:p:%s" % p) for p in projects]
     rows += [btns[i:i + 2] for i in range(0, len(btns), 2)]
     if not rows:
         rows = [[("(нет проектов)", "s")]]
@@ -990,10 +1084,10 @@ def send_sessions_root(token, proxy, chat_id, message_id=None):
         text = "Реестр проектов пуст или CLI недоступен."
     elif live_rows:
         stale = sum(1 for r in live_rows if r.get("health") == "stale")
-        text = "<b>Сессии</b>\nЗапущено: %d%s" % (
+        text = "<b>Сессии</b>\nClaude запущено: %d%s\nПроекты открываются в Codex." % (
             len(live_rows), " (◌ %d молчит)" % stale if stale else "")
     else:
-        text = "<b>Сессии</b>\nСейчас ничего не запущено."
+        text = "<b>Сессии</b>\nВыберите проект · Codex по умолчанию."
     _send_or_edit(token, proxy, chat_id, message_id, text,
                   sessions_root_kb(projects, live_rows))
 
@@ -1164,6 +1258,7 @@ def _is_not_modified(exc):
 # от обработчика - роутинг и сам обработчик знали про сжатие, а цикл нет, и тап
 # по "сжать" молча не делал ничего (найдено 2026-08-04).
 SESSION_CALLBACK_KINDS = frozenset((
+    "codex_project", "codex_new", "codex_card", "codex_resume", "codex_interrupt",
     "sessions_root", "sessions_project", "session_card", "session_up",
     "session_down", "session_new", "session_rm_ask", "session_rm_do",
     "session_compact_ask", "session_compact_do", "session_compact_up",
@@ -1174,6 +1269,9 @@ SESSION_CALLBACK_KINDS = frozenset((
 def _handle_sessions_callback(token, proxy, chat_id, message_id, kind, project, short):
     """Тап по экрану сессий. Действия идут через claude-rc: бот сам ничего не
     запускает и не гасит, его дело - меню и пересказ результата."""
+    if kind.startswith("codex_"):
+        _handle_codex_callback(token, proxy, chat_id, message_id, kind, project, short)
+        return
     if kind == "sessions_root":
         send_sessions_root(token, proxy, chat_id, message_id)
         return
@@ -3917,7 +4015,8 @@ def mode_selftest():
     kb6 = sessions_root_kb(["projectone", "two"], live)
     d6 = [b["callback_data"] for row in kb6["inline_keyboard"] for b in row]
     t("корень: активные ведут прямо в карточку", "s:s:projectone:aaaaaaaa" in d6)
-    t("корень: проекты на месте", "s:p:projectone" in d6 and "s:p:two" in d6)
+    # FR-CXSESS-01: новое меню проектов открывает Codex; s:* по-прежнему Claude.
+    t("корень: проекты на месте", "c:p:projectone" in d6 and "c:p:two" in d6)
     t("корень: не ссылается на удаленный root", "m:root" not in d6)
     t("карточка: новая сессия рисуется без похода в список",
       "ffffffff" in txt4 and "поднята новая сессия" in txt4)

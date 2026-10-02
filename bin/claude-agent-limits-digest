@@ -43,6 +43,8 @@ env (~/.config/claude-control/env; все со здравыми дефолтам
                                  стейт OpenRouter: <dir>/limits/openrouter-state.json,
                                  стейт Yandex Cloud: <dir>/limits/yandex-state.json,
                                  кэш IAM-токена Яндекса: <dir>/limits/yandex-iam.json (600)
+  LIMITS_KIMI_HOME             Kimi Code config + credentials (деф. KIMI_CODE_HOME
+                                 или ~/.kimi-code; Python 3.11+)
   LIMITS_OPENROUTER_KEY_FILE     ключ OpenRouter, одна строка (деф.
                                  ~/.config/openrouter/key); файла нет -
                                  блока OpenRouter в панели нет
@@ -999,6 +1001,314 @@ def build_yandex(now=None):
     return _prepaid_build(YANDEX, now, measure)
 
 
+# ------------------------------------------------------------------ Kimi Code
+# INV-LIM-16/17. Current TypeScript CLI storage and managed usage protocol.
+KIMI_HOME = os.environ.get('LIMITS_KIMI_HOME', os.environ.get(
+    'KIMI_CODE_HOME', os.path.expanduser('~/.kimi-code')))
+KIMI_WINDOWS = (
+    ('limit_5h', 'five_hour', '5ч', 'time'),
+    ('limit_7d', 'seven_day', 'нед', 'week'),
+    ('limit_month_total', 'month_total', 'месяц', 'month'),
+    ('limit_month_code', 'month_code', 'код/м', 'month'),
+)
+KIMI_UA = 'claude-control/1.0'
+
+
+def kimi_refresh_request(host, refresh_token):
+    """OAuth form POST; neither request nor response body is logged."""
+    from urllib.parse import urlencode
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler(
+        {'http': PROXY, 'https': PROXY} if PROXY else {}))
+    req = urllib.request.Request(host + '/api/oauth/token', data=urlencode({
+        'client_id': '17e5f671-d194-4dfb-9706-5516cb48c098',
+        'grant_type': 'refresh_token', 'refresh_token': refresh_token,
+    }).encode(), headers={'Content-Type': 'application/x-www-form-urlencoded',
+                         'User-Agent': KIMI_UA, 'Accept': 'application/json'})
+    try:
+        with opener.open(req, timeout=TIMEOUT) as response:
+            return response.status, json.load(response)
+    except urllib.error.HTTPError as exc:
+        return exc.code, None
+    except Exception as exc:
+        log('Kimi refresh failed: ' + type(exc).__name__)
+        return 0, None
+
+
+def _kimi_token(path, name, host, rejected=None):
+    """Refresh under the CLI's proper-lockfile directory, with heartbeat.
+
+    Never break a peer's lock. The CLI can recover stale locks itself;
+    this reader reports lock contention rather than risking token rotation.
+    """
+    import tempfile
+    import threading
+    token = read_json(path)
+
+    def usable(value):
+        return (isinstance(value, dict)
+                and isinstance(value.get('access_token'), str)
+                and bool(value['access_token'])
+                and value['access_token'] != rejected
+                and isinstance(value.get('expires_at'), (int, float))
+                and value['expires_at'] > time.time() + 60)
+
+    if usable(token):
+        return token['access_token'], None
+    if not isinstance(token, dict) or not token.get('refresh_token'):
+        return None, {'status': 'stale'}
+    lock = os.path.join(KIMI_HOME, 'oauth', name + '.lock')
+    os.makedirs(os.path.dirname(lock), exist_ok=True)
+    try:
+        os.mkdir(lock)
+    except FileExistsError:
+        # It may have refreshed just before we saw the lock.
+        token = read_json(path)
+        if usable(token):
+            return token['access_token'], None
+        return None, {'status': 'error', 'detail': 'oauth_busy'}
+    stop = threading.Event()
+    lost = threading.Event()
+    identity = os.stat(lock).st_ino
+
+    def owns_lock():
+        try:
+            return os.stat(lock).st_ino == identity
+        except OSError:
+            return False
+
+    def heartbeat():
+        while not stop.wait(1):
+            try:
+                if not owns_lock():
+                    lost.set()
+                    return
+                os.utime(lock, None)
+            except OSError:
+                lost.set()
+                return
+
+    thread = threading.Thread(target=heartbeat, daemon=True)
+    thread.start()
+    try:
+        token = read_json(path)
+        if usable(token):
+            return token['access_token'], None
+        if not isinstance(token, dict) or not token.get('refresh_token'):
+            return None, {'status': 'stale'}
+        code, body = kimi_refresh_request(host, token['refresh_token'])
+        if code != 200:
+            return None, {'status': 'stale' if code in (400, 401, 403) else 'error',
+                          'detail': 'refresh_http_%s' % code}
+        ttl = body.get('expires_in') if isinstance(body, dict) else None
+        try:
+            ttl = float(ttl)
+        except (ValueError, TypeError):
+            ttl = 0
+        if (not isinstance(body, dict)
+                or not isinstance(body.get('access_token'), str)
+                or not body['access_token']
+                or not isinstance(body.get('refresh_token'), str)
+                or not body['refresh_token'] or not math.isfinite(ttl) or ttl <= 0):
+            return None, {'status': 'error', 'detail': 'refresh_bad_response'}
+        # Login/logout and old CLI versions may not share the lock: don't
+        # overwrite credentials if another writer changed them meanwhile.
+        if lost.is_set() or not owns_lock() or read_json(path) != token:
+            return None, {'status': 'error', 'detail': 'oauth_changed'}
+        saved = {key: body[key] for key in ('access_token', 'refresh_token')}
+        saved.update(expires_at=time.time() + ttl, expires_in=ttl,
+                     token_type='Bearer', scope=body.get('scope', ''))
+        fd, tmp = tempfile.mkstemp(prefix='.kimi-token-', dir=os.path.dirname(path))
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+                json.dump(saved, fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        return saved['access_token'], None
+    finally:
+        stop.set()
+        thread.join(timeout=2)
+        if owns_lock():
+            os.rmdir(lock)
+
+
+def _kimi_authoritative_limits(body):
+    """FR-KIMI-LIMITS-01..03: current quota counters beat legacy ratios."""
+    if not isinstance(body, dict):
+        raise ValueError('bad_response')
+    limits = body.get('limits', [])
+    if not isinstance(limits, list):
+        raise ValueError('bad_limits')
+    factors = {'TIME_UNIT_SECOND': 1, 'TIME_UNIT_MINUTE': 60,
+               'TIME_UNIT_HOUR': 3600, 'TIME_UNIT_DAY': 86400}
+    keys = {18000: 'five_hour', 604800: 'seven_day'}
+    result = {}
+    counters = {}
+    for entry in limits:
+        if not isinstance(entry, dict) or not isinstance(entry.get('window'), dict):
+            raise ValueError('bad_limits')
+        window = entry['window']
+        duration = window.get('duration')
+        factor = factors.get(window.get('timeUnit'))
+        if factor is None:
+            continue
+        if isinstance(duration, bool):
+            raise ValueError('bad_duration')
+        try:
+            duration = float(duration)
+        except (TypeError, ValueError):
+            raise ValueError('bad_duration') from None
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError('bad_duration')
+        key = keys.get(duration * factor)
+        if key is None:
+            continue
+        detail = entry.get('detail')
+        if not isinstance(detail, dict):
+            raise ValueError('bad_detail')
+        # FR-KIMI-REMAINING: API can emit used or remaining independently.
+        values = {}
+        for field in ('limit', 'used', 'remaining'):
+            if field != 'limit' and field not in detail:
+                continue
+            raw = detail.get(field)
+            if isinstance(raw, bool):
+                raise ValueError('bad_counter')
+            try:
+                number = float(raw)
+            except (TypeError, ValueError):
+                raise ValueError('bad_counter') from None
+            if not math.isfinite(number) or number < 0:
+                raise ValueError('bad_counter')
+            values[field] = number
+        limit = values['limit']
+        if limit <= 0 or not ('used' in values or 'remaining' in values):
+            raise ValueError('bad_counter')
+        if 'remaining' in values:
+            remaining = values['remaining']
+            if remaining > limit:
+                raise ValueError('bad_counter')
+            if 'used' in values and not math.isclose(
+                    values['used'] + remaining, limit, rel_tol=1e-12, abs_tol=0):
+                raise ValueError('conflicting_counters')
+        used = values['used'] if 'used' in values else limit - values['remaining']
+        normalized = {'remaining': 100 - min(100, used / limit * 100)}
+        reset = detail.get('resetTime')
+        if isinstance(reset, str) and parse_iso(reset):
+            normalized['resets_at'] = reset
+        signature = (limit, used, reset if isinstance(reset, str) else None)
+        previous = counters.get(key)
+        if previous is not None and (previous[2] != signature[2]
+                or not math.isclose(previous[0], limit, rel_tol=1e-12, abs_tol=0)
+                or not math.isclose(previous[1], used, rel_tol=1e-12, abs_tol=limit * 1e-12)):
+            raise ValueError('conflicting_limits')
+        counters[key] = signature
+        result[key] = normalized
+    return result
+
+
+def build_kimi():
+    config = os.path.join(KIMI_HOME, 'config.toml')
+    if not os.path.exists(config):
+        return None
+    try:
+        import tomllib  # Kimi integration requires Python 3.11+ only when configured.
+        with open(config, 'rb') as fh:
+            provider = tomllib.load(fh).get('providers', {}).get('managed:kimi-code')
+        if provider is None:
+            return None
+        base = provider.get('base_url', '').rstrip('/')
+        hosts = {'https://api.kimi.ai/coding/v1': 'https://auth.kimi.ai',
+                 'https://api.kimi.com/coding/v1': 'https://auth.kimi.com'}
+        oauth = provider.get('oauth') or {}
+        host = oauth.get('oauth_host', hosts.get(base))
+        name = oauth.get('key', '').removeprefix('oauth/')
+        if (base not in hosts or host != hosts[base]
+                or oauth.get('storage', 'file') != 'file'
+                or not re.fullmatch(r'[A-Za-z0-9_-]+', name)):
+            return {'status': 'error', 'detail': 'kimi_config'}
+        path = os.path.join(KIMI_HOME, 'credentials', name + '.json')
+        token, error = _kimi_token(path, name, host)
+        if error:
+            return error
+        headers = {'Authorization': 'Bearer ' + token,
+                   'Accept': 'application/json', 'User-Agent': KIMI_UA}
+        code, body = http_get(base + '/usages', headers, PROXY)
+        if code == 401:
+            token, error = _kimi_token(path, name, host, rejected=token)
+            if error:
+                return error
+            headers['Authorization'] = 'Bearer ' + token
+            code, body = http_get(base + '/usages', headers, PROXY)
+        if code != 200:
+            return {'status': 'stale' if code == 401 else 'error',
+                    'detail': 'http_%s' % code}
+        try:
+            authoritative = _kimi_authoritative_limits(body)
+        except ValueError as error:
+            return {'status': 'error', 'detail': str(error)}
+        usages = get_in(body, 'usages')
+        if usages is None and authoritative:
+            usages = {}
+        if not isinstance(usages, dict):
+            return {'status': 'error', 'detail': 'bad_response'}
+        result = dict(authoritative, status='ok')
+        for remote, key, _, _ in KIMI_WINDOWS:
+            if key in authoritative or remote not in usages:
+                continue
+            entry = usages[remote]
+            ratio = entry.get('used_ratio') if isinstance(entry, dict) else None
+            if isinstance(ratio, bool) or ratio is None or ratio == '':
+                return {'status': 'error', 'detail': 'bad_ratio'}
+            try:
+                ratio = float(ratio)
+            except (ValueError, TypeError):
+                return {'status': 'error', 'detail': 'bad_ratio'}
+            if not math.isfinite(ratio) or ratio < 0:
+                return {'status': 'error', 'detail': 'bad_ratio'}
+            window = {'remaining': 100 - min(100, ratio * 100)}
+            reset = entry.get('reset_time')
+            if isinstance(reset, str) and parse_iso(reset):
+                window['resets_at'] = reset
+            result[key] = window
+        return result if len(result) > 1 else {'status': 'error', 'detail': 'no_windows'}
+    except Exception as exc:
+        # Never echo a config or credential parsing exception (may contain secrets).
+        return {'status': 'error', 'detail': type(exc).__name__}
+
+
+def _kimi_used(window):
+    used = max(0, min(100, 100 - float(window['remaining'])))
+    return php_round(used * 10) / 10
+
+
+def _kimi_section(data, tz, now):
+    if not isinstance(data, dict):
+        return None
+    if data.get('status') != 'ok':
+        reason = ('нужен вход: kimi login' if data.get('status') == 'stale'
+                  else 'лимиты недоступны')
+        return 'Kimi Code\n ' + reason
+    lines = ['Kimi Code']
+    for _, key, label, kind in KIMI_WINDOWS:
+        window = data.get(key)
+        if not isinstance(window, dict) or not isinstance(window.get('remaining'), (int, float)):
+            continue
+        used = _kimi_used(window)
+        elapsed = _elapsed_percent(window.get('resets_at'), kind, now)
+        line = ' ' + label.ljust(5) + ' ' + _bar(used, elapsed) + '  %.1f%%' % used
+        reset = parse_iso(window.get('resets_at'))
+        if reset:
+            fmt = '%H:%M' if kind == 'time' else '%d.%m %H:%M'
+            line += ' / ' + reset.astimezone(tz).strftime(fmt)
+            line += ' (%s)' % _fmt_countdown(window['resets_at'], now)
+        lines.append(line + _pace_mark(used, elapsed))
+    return '\n'.join(lines)
+
+
 def safe(fn):
     try:
         return fn()
@@ -1442,6 +1752,15 @@ def digits_signature(snapshot):
             if isinstance(cr, (int, float)):
                 seg.append("credits=%d" % int(cr))
         parts.append("|".join(seg))
+    kimi = snapshot.get("kimi")
+    if isinstance(kimi, dict):
+        seg = ["kimi", kimi.get("status", "ok"), ""]
+        if kimi.get("status") == "ok":
+            for _, key, _, _ in KIMI_WINDOWS:
+                window = kimi.get(key)
+                if isinstance(window, dict) and isinstance(window.get("remaining"), (int, float)):
+                    seg.append("%s=%.1f" % (key, _kimi_used(window)))
+        parts.append("|".join(seg))
     return ";".join(parts)
 
 
@@ -1489,7 +1808,10 @@ def render(envelope, now=None):
         if section:
             lines.append("")
             lines.append(section)
-    # OpenRouter - после Codex, перед хостом; прицепом, вне digits_signature.
+    kimi = _kimi_section(snapshot.get("kimi"), tz, now_eff)
+    if kimi:
+        lines.extend(["", kimi])
+    # OpenRouter - после Kimi, перед хостом; прицепом, вне digits_signature.
     openrouter = _openrouter_section(snapshot.get("openrouter"), tz)
     if openrouter:
         lines.append("")
@@ -1735,6 +2057,9 @@ def mode_once(argv):
         "codex": safe(build_codex),
         "host": safe(build_host),  # прицепом, вне digits_signature
     }
+    kimi = safe(build_kimi)
+    if kimi is not None:
+        snapshot["kimi"] = kimi
     # OpenRouter - тоже прицепом, вне digits_signature. Нет файла ключа -
     # секции нет вовсе (функция не настроена, а не сбой).
     openrouter = safe(build_openrouter)
