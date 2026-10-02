@@ -100,7 +100,7 @@ Code-mode cells могут пережить turn terminal. Runtime сначал�
 
 ## Фиксированный профиль native TASK
 
-Dedicated host и thread используют один control_task profile: scoped granularread/write, shell/hooks/notify/extraexecutors disabled, localownedV8 для inherited code mode; sourceaccounting и correlatednative registry дополняют disabledMCP catalog. Namedprofile толькоthread недостаточен при reloadworkspace requirements. Fixedrelease/companion hashes и completeevidence обязательны до обычной задачи; несовпадение отказывает, model/effort не выбираются. Подробнее [sealed profile](../dev/2026-10-03-spec-codex-task-sealed-profile.md).
+Dedicated host и thread используют один control_task profile: scoped granularread/write, shell/hooks/notify/extraexecutors disabled, localownedV8 для inherited code mode; sourceaccounting и correlatednative registry дополняют disabledMCP catalog. Namedprofile толькоthread недостаточен при reloadworkspace requirements. Fixedrelease/companion hashes и completeevidence обязательны до обычной задачи; несовпадение отказывает, model/effort не выбираются. Подробнее [sealed profile](../dev/done/2026-10-03-spec-codex-task-sealed-profile.md).
 
 | Инвариант | Тесты |
 |---|---|
