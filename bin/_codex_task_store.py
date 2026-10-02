@@ -126,6 +126,13 @@ class CodexTaskOperationStore:
         else:
             require(stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() and st.st_nlink == 1
                     and (not mode & 0o022 if spec else mode == 0o600))
+        if directory:
+            for i, (oldpath, oldfd, oldprivate, olddir, oldspec) in enumerate(pins):
+                if olddir and oldpath == path:
+                    opened = os.fstat(oldfd)
+                    require((st.st_dev, st.st_ino) == (opened.st_dev, opened.st_ino))
+                    pins[i] = (path, oldfd, private or oldprivate, True, False)
+                    return oldfd
         flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
         if directory:
             flags |= os.O_DIRECTORY
@@ -293,7 +300,12 @@ class CodexTaskOperationStore:
             require('codex_state_id' not in control and control['generation'] == 0
                     and control['desired'] == 'paused' and control['lease']['state'] == 'none'
                     and control['lease'].get('start_attempt_id') is None)
-            require(not os.listdir(staging_agent_dir + '/inbox/inflight'))
+            for entry in os.listdir(staging_agent_dir + '/inbox'):
+                if entry == '.inbox.lock':
+                    continue
+                directory = staging_agent_dir + '/inbox/' + entry
+                s._pin(directory, ctx['pins'])
+                require(not os.listdir(directory))
             s._spec(ctx, deadline)
             target = os.path.join(state_root, state_id)
             os.mkdir(target, 0o700)
@@ -364,6 +376,7 @@ class CodexTaskOperationStore:
         require(type(index['schema']) is int and index['schema'] == 1 and index['state_id'] == state_id
                 and index['agent_dir'] == self.agent_dir and index['task_incarnation'] == control['incarnation'])
         require(type(index['operations']) is dict and len(index['operations']) <= 256)
+        events = set()
         for opid, op in index['operations'].items():
             canonical_uuid(opid)
             require(type(op) is dict and set(op) == {'schema', 'operation_id', 'task_incarnation',
@@ -376,6 +389,8 @@ class CodexTaskOperationStore:
                     and type(op['launch_reserved']) is bool and type(op['start_reserved']) is bool)
             text(op['attempt_id'], True)
             text(op['event_key'], True)
+            require(op['event_key'] not in events)
+            events.add(op['event_key'])
             for key in ('thread_id', 'turn_id'):
                 if op[key] is not None:
                     text(op[key])
@@ -406,8 +421,24 @@ class CodexTaskOperationStore:
         event = op['event_key']
         if event not in ctx['envelopes']:
             path = self.agent_dir + '/inbox/inflight/' + event + '.json'
-            value = self._read(path, ctx, deadline)
-            require(value.get('key') == event and type(value.get('meta')) is dict)
+            if not os.path.lexists(path):
+                require(op['status'] in ('finished', 'revoked'))
+                self._drain_gate(ctx, op, deadline)
+                self._pin(self.agent_dir + '/inbox/done', ctx['pins'])
+                path = self.agent_dir + '/inbox/done/' + event + '.json'
+                value = self._read(path, ctx, deadline)
+                require(value.get('key') == event and type(value.get('meta')) is dict
+                        and value['meta'].get('codex_operation') == op)
+                history = value['meta'].get('history')
+                require(type(history) is list and history and type(history[-1]) is dict)
+                outcome = history[-1].get('outcome')
+                require(type(outcome) is str and outcome in ('ok', 'asked', 'cancelled'))
+                require(op['status'] != 'revoked' or outcome == 'cancelled'
+                        or op['terminal_evidence'] is not None)
+            else:
+                value = self._read(path, ctx, deadline)
+                require(value.get('key') == event and type(value.get('meta')) is dict)
+            ctx.setdefault('envelope_paths', {})[event] = path
             ctx['envelopes'][event] = value
         return ctx['envelopes'][event]
 
@@ -438,6 +469,8 @@ class CodexTaskOperationStore:
 
     def _write_op(self, ctx, op, deadline):
         env = self._envelope(ctx, op, deadline)
+        require(ctx['envelope_paths'][op['event_key']] ==
+                self.agent_dir + '/inbox/inflight/' + op['event_key'] + '.json')
         env['meta']['codex_operation'] = clone(op)
         self._write(self.agent_dir + '/inbox/inflight/' + op['event_key'] + '.json', env, ctx, deadline)
 
@@ -450,8 +483,8 @@ class CodexTaskOperationStore:
                 self._load_envelopes(ctx, deadline)
                 self._consistent(ctx)
                 operations = ctx['index']['operations']
-                require(len(operations) < 256 and not any(op['event_key'] == event_key and
-                        op['status'] not in ('finished', 'revoked') for op in operations.values()))
+                require(len(operations) < 256 and not any(op['event_key'] == event_key
+                        for op in operations.values()))
                 for old in operations.values():
                     if (old['generation'], old['attempt_id']) != (generation, attempt_id):
                         self._drain_gate(ctx, old, deadline)
@@ -545,6 +578,7 @@ class CodexTaskOperationStore:
                 if envop is not None:
                     require(type(envop) is dict and all(envop.get(k) == op[k] for k in
                             ('schema', 'operation_id', 'task_incarnation', 'generation', 'attempt_id', 'event_key', 'host_state_dir')))
+                require(envop is None or envop.get('status') != 'finished' or op['status'] == 'finished')
                 if op['status'] not in ('finished', 'revoked') or envop != op:
                     require(op['status'] != 'finished')
                     op['status'] = 'revoked'
@@ -628,6 +662,8 @@ class CodexTaskOperationStore:
                 self._drain_receipt(ctx, op, evidence, deadline)
                 require(self._envelope(ctx, op, deadline)['meta'].get('codex_operation') == op)
                 require(op['drain_evidence'] in (None, evidence))
+                if op['drain_evidence'] == evidence:
+                    return clone(op)
                 op['drain_evidence'] = evidence
                 # Drain receipt changes no callback authority; keep envelope projection exact.
                 self._write_index(ctx, deadline)
@@ -670,6 +706,8 @@ class CodexTaskOperationStore:
                 target.update(status='finished', terminal_evidence=evidence)
                 require(envop == op or envop == target)
                 require(op['status'] in ('active', 'revoked', 'finished'))
+                if op == target and envop == target:
+                    return clone(op)
                 self._write_op(ctx, target, deadline)
                 ctx['index']['operations'][operation_id] = target
                 self._write_index(ctx, deadline)
