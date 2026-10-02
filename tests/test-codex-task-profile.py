@@ -141,6 +141,14 @@ class ProfileTests(unittest.TestCase):
  def test_catalog_completeness(self):
   for pages in [[],[{'data':[],'nextCursor':'more'}],[{'data':[{'name':'inventory','runtimeStatus':'starting','tools':{},'resources':[],'resourceTemplates':[]}],'nextCursor':None}]]:
    a=self.evidence(); a[3]=pages; self.reject(p.validate_sealed_policy,*a)
+ def test_catalog_names_equal_observed_config(self):
+  a=self.evidence(); a[3]=[{'data':[],'nextCursor':None}]; self.reject(p.validate_sealed_policy,*a)
+  a=self.evidence(); a[3][0]['data'].append({'name':'extra','runtimeStatus':'disabled','tools':{},'resources':[],'resourceTemplates':[]}); self.reject(p.validate_sealed_policy,*a)
+  a=self.evidence(); a[2]['mcp_servers']['dormant']={'enabled':False}; self.reject(p.validate_sealed_policy,*a)
+  a=self.evidence(); a[2]['mcp_servers']={}; a[3]=[{'data':[],'nextCursor':None}]; p.validate_sealed_policy(*a)
+ def test_nested_flags_reject_numeric_boolean_spoof(self):
+  for mutate in [lambda c:c['features'].update(shell_tool=0),lambda c:c['features'].update(code_mode_interrupt=1),lambda c:c['features']['code_mode_host'].update(enabled=1),lambda c:c['features']['code_mode_host'].update(disable_in_process_fallback=0),lambda c:c['permissions']['control_task']['network'].update(enabled=0),lambda c:c['agents'].update(enabled=0),lambda c:c['mcp_servers']['inventory'].update(enabled=0),lambda c:c['tools']['update_plan'].update(enabled=0)]:
+   a=self.evidence(); mutate(a[2]); self.reject(p.validate_sealed_policy,*a)
  def test_registry_and_release_refusals(self):
   for registry in [REGISTRY[:-1],REGISTRY+['exec_command'],REGISTRY+['clock__curr_time'],tuple(REGISTRY)]:
    a=self.evidence(); a[4]=registry; self.reject(p.validate_sealed_policy,*a)
