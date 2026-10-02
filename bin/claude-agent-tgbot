@@ -733,7 +733,7 @@ def codex_card_view(project, row, note=""):
     if row.get("reasoning_effort"):
         text += "\nEffort: %s" % html.escape(str(row["reasoning_effort"]))
     text += "\nID: <code>%s</code>" % html.escape(row["sid"])
-    text += "\n\nНа телефоне откройте эту сессию на подключённой машине Codex."
+    text += "\n\nПродолжайте в подключённом клиенте Codex."
     if note:
         text += "\n\n" + html.escape(redact(note))
     buttons = [[("Открыть / возобновить", "c:u:%s:%s" % (project, row["short"]))]]
