@@ -47,7 +47,7 @@ FR-CXDEFAULT-01..05: новые диалоги наследуют эффекти
 - **INV-CXHOST-04:** scoped stop требует внешнего quiescence proof, и только pinned original main exit вместе с pinned original cgroup drain либо matching inactive drained recovery создаёт durable stopped receipt. Этот receipt не разрешает cleanup worktree.
 - **INV-CXHOST-05:** default environment/config/auth не означают изоляцию capabilities. Process supervisor не подключён к TASK/reconciler и не отвечает на approvals/dynamic tool calls.
 
-Трассируемость host: tests/test-codex-task-host.py, FR-CXHOST-01..05 / INV-CXHOST-01..05. Известные дыры: trusted dynamic bridge, native approvals routing и full persistent-thread admission, runtime wiring и production acceptance остаются незавершёнными.
+Трассируемость host: tests/test-codex-task-host.py, FR-CXHOST-01..05 / INV-CXHOST-01..05. Известные дыры: concrete trusted bridge backend, native approvals routing и full persistent-thread admission, runtime wiring и production acceptance остаются незавершёнными.
 
 ## Trusted dynamic bridge (02.10.2026)
 
