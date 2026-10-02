@@ -177,7 +177,7 @@ class CodexTaskRuntimeTransport(CodexTaskTransport):
     @staticmethod
     def _identity(value):
         try:
-            return (isinstance(value, str) and bool(value)
+            return (type(value) is str and bool(value)
                     and len(value.encode('utf-8')) <= 256
                     and all(ord(char) >= 32 and not 127 <= ord(char) <= 159 for char in value))
         except UnicodeError:
@@ -192,7 +192,32 @@ class CodexTaskRuntimeTransport(CodexTaskTransport):
         raise ValueError('Invalid callback identity')
 
     @staticmethod
-    def _canonical(value):
+    def _plain_json(value):
+        # Built-in JSON values only: custom equality/iteration can otherwise
+        # validate one permission or identity while serializing another.
+        def visit(node):
+            kind = type(node)
+            if node is None or kind in (str, bool, int, float):
+                return
+            if kind is list:
+                for item in node:
+                    visit(item)
+                return
+            if kind is dict:
+                for key, item in node.items():
+                    if type(key) is not str:
+                        raise ValueError('Invalid callback payload')
+                    visit(item)
+                return
+            raise ValueError('Invalid callback payload')
+        try:
+            visit(value)
+        except RecursionError:
+            raise ValueError('Invalid callback payload') from None
+
+    @classmethod
+    def _canonical(cls, value):
+        cls._plain_json(value)
         try:
             return json.dumps(value, allow_nan=False, ensure_ascii=False,
                               sort_keys=True, separators=(',', ':')).encode('utf-8')
@@ -298,6 +323,8 @@ class CodexTaskRuntimeTransport(CodexTaskTransport):
     def _pending(self, request_id, method, thread_id, turn_id, identity_name,
                  identity, deadline):
         self._ready(deadline)
+        if type(method) is not str or not all(map(self._identity, (thread_id, turn_id, identity))):
+            raise ValueError('Invalid callback reply identity')
         entry = self._requests.get(self._request_key(request_id))
         if (entry is None or entry['state'] != 'pending' or entry['method'] != method
                 or self._owner != (thread_id, turn_id)
@@ -325,6 +352,7 @@ class CodexTaskRuntimeTransport(CodexTaskTransport):
                       call_id, deadline):
         entry = self._pending(request_id, self._DYNAMIC, thread_id, turn_id,
                               'callId', call_id, deadline)
+        self._plain_json(result)
         if (not isinstance(result, dict) or set(result) != {'success', 'contentItems'}
                 or type(result['success']) is not bool
                 or not isinstance(result['contentItems'], list)
@@ -338,10 +366,11 @@ class CodexTaskRuntimeTransport(CodexTaskTransport):
 
     def reply_approval(self, request_id, result, *, method, thread_id,
                        turn_id, item_id, deadline):
-        if not isinstance(method, str) or method not in self._APPROVALS:
+        if type(method) is not str or method not in self._APPROVALS:
             raise ValueError('Invalid approval method')
         entry = self._pending(request_id, method, thread_id, turn_id,
                               'itemId', item_id, deadline)
+        self._plain_json(result)
         if not isinstance(result, dict):
             raise ValueError('Invalid approval result')
         if method == 'item/permissions/requestApproval':
@@ -363,6 +392,7 @@ class CodexTaskRuntimeTransport(CodexTaskTransport):
                          item_id, deadline):
         entry = self._pending(request_id, self._INPUT, thread_id, turn_id,
                               'itemId', item_id, deadline)
+        self._plain_json(answers)
         question_ids = {q['id'] for q in entry['params']['questions']}
         if not isinstance(answers, dict) or not answers or not set(answers) <= question_ids:
             raise ValueError('Invalid input answers')
