@@ -4,12 +4,14 @@ import copy
 import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
 import tempfile
 import tomllib
 import unittest
 
 MODULE = Path(__file__).resolve().parents[1] / 'bin/_codex_task_profile.py'
+sys.path.insert(0, str(MODULE.parent))
 SPEC = importlib.util.spec_from_file_location('profile_under_test', MODULE)
 p = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(p)
