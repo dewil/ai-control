@@ -85,3 +85,15 @@ FR-CXDEFAULT-01..05: новые диалоги наследуют эффекти
 - **INV-CXFILE-04:** helper не подтверждает native builtin policy/admission, сохраняет defaultCLI; independent real-filesystem tests и install checks.
 
 Трассируемость tests/test-codex-task-files.py FR/INV-CXFILE01..04. Native permissions/read-scope и runtime callbacks/operation routing остаются отдельными gates.
+
+
+## Отзыв owned native host
+
+Code-mode cells могут пережить turn terminal. Runtime сначала durable отзывает operation под TASK fence, затем отдельный host.abort при trusted revoked guard гасит исходный pinned process/cgroup. stop сохраняет прежний quiescent gate. Ни terminal, ни interrupt ACK, ни abort receipt по отдельности не разрешают TASK completion/cleanup.
+
+| Инвариант | Тесты |
+|---|---|
+| INV-CXABORT-01 — explicit revoked guard, old stop unchanged | test-codex-task-host-abort.py |
+| INV-CXABORT-02 — owned identity/durable stop/drain | test-codex-task-host-abort.py |
+| INV-CXABORT-03 — deadlines/guards/static errors/no cleanup | test-codex-task-host-abort.py |
+| INV-CXABORT-04 — independent RED/compliance/checks | feature validation |
