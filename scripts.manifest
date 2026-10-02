@@ -12,6 +12,8 @@
 claude-rc
 codex-rc
 _codex_rc.py
+# Подготовительный lifecycle helper: пока без TASK/CLI/runtime wiring.
+_codex_task_lifecycle.py
 claude-rc-agent
 claude-rc-takeover
 claude-control-logrotate

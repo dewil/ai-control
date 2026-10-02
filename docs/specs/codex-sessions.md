@@ -1,6 +1,6 @@
 # Сессии Codex
 
-Решение 2026-10-01: Codex/Astra — основной вход в проекты из Telegram, Claude сохраняется отдельной вкладкой. Реестр projects.yaml и его резолвер общие. Kimi и Sol — возможные исполнители основного агента; автоматическая оркестрация вне этого изменения.
+Решение 2026-10-01: Codex — основной вход в проекты из Telegram, Claude сохраняется отдельной вкладкой. Решение 02.10.2026: новые сессии используют актуальные серверные defaults модели и effort. Реестр projects.yaml и его резолвер общие. Kimi и Sol — возможные исполнители основного агента; автоматическая оркестрация вне этого изменения.
 
 ## Инварианты
 
@@ -27,3 +27,14 @@ Codex CLI/App Server 0.159.3: WebSocket поверх Unix domain socket обще
 FR-CXDEFAULT-01..05: новые диалоги наследуют эффективные настройки модели и reasoning effort общего сервера для папки проекта. Бот не фиксирует Astra/Sol, не передаёт model/effort в thread/start или служебный turn/start и не меняет системный config. Повторное создание после смены defaults получает новые значения; resume сохраняет прежние настройки. Карточка показывает только фактические известные model/effort из API, экранированные как текст; неизвестное не выдумывается. Отдельные вкладки движков сохраняются. Публичная кнопка создания — «➕ Codex».
 
 Трассируемость дополнения: tests/test-codex-system-defaults.py. Подробная локальная спека: docs/dev/2026-10-02-spec-codex-system-defaults.md. Мобильная приёмка остаётся отдельным незавершённым условием.
+
+
+## Подготовительный lifecycle задач (02.10.2026)
+
+`bin/_codex_task_lifecycle.py` - отдельный импортируемый модуль с внедряемым transport; он не подключён к TASK, reconciler, CLI или Telegram. Импорт и конструктор не выполняют RPC. Допускаются только `thread/read` с полной историей, `turn/start` без overrides и адресный `turn/interrupt`; `thread/resume` отсутствует. Требуется заранее материализованный выделенный task thread, canonical cwd и исключительное владение со стороны caller. На первом этапе поддерживается только legacy/full history; другие формы дают unknown.
+
+Журнал вне cwd сохраняет неизменяемые identity, operation UUID4, текст/hash и baseline. Локальный flock сериализует adapters, запись проходит через fsync файла, atomic replace и fsync каталога/созданных родительских записей. Ошибка чтения или чужая history до отправки сохраняет prepared intent; первая отправка допустима только после возврата исходного точного baseline и identity. Устойчивое uncertain намерение записывается до отправки: потерянный ответ восстанавливается только по точным marker/text/turn identity и никогда не разрешает повторный start. Native approval остаётся без ответа. Interrupt ACK не доказывает остановку; terminal receipt сохраняется только для совпавшего completed/failed/interrupted хода.
+
+Уже устойчивый terminal receipt сохраняет исход, доказательство и final text при последующей недоступности native history; это исторический факт, а свежая inspect_thread при сбое или противоречии возвращает unknown. Terminal receipt не даёт разрешения удалить worktree: новый foreign active turn остаётся видимым, а будущий runtime обязан отдельно обеспечить исключительное владение и проверить quiescence перед cleanup. Модуль не обещает distributed fencing, exactly-once execution или прекращение любых фоновых side effects. Нет transport connection, боевого smoke, runtime wiring или deployment; полноценный Codex task runtime остаётся следующим отдельным этапом.
+
+Трассируемость: `tests/test-codex-task-lifecycle.py`, группы FR-CXTASK-LIFE-01..10 (blind offline suite), и независимые durability/recovery suites `tests/test-codex-task-lifecycle-durability.py`, `tests/test-codex-task-lifecycle-recovery.py`. Native API формы закреплены на 0.159.3; этот офлайн-этап не подтверждает live совместимость иной версии.
