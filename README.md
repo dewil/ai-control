@@ -177,6 +177,12 @@ Long-poll Telegram-бот (getUpdates, не webhook - webhooks режет DPI в
 - `yq` от mikefarah, v4 - `brew install yq` (macOS); на Linux **бинарник с [GitHub releases](https://github.com/mikefarah/yq/releases)** (пакет `yq` из apt - другой проект). `install.sh` проверит версию.
 - Linux: включённый **lingering** (`loginctl enable-linger $USER`), иначе user-сервисы гибнут при logout. `install.sh` проверит и предупредит.
 
+## Ручная оценка уровня модели
+
+`claude-agent-model-advice --public-text-file ./public-task.txt --task ./docs/task.md` — отдельная opt-in команда. Она передает только явно указанный публичный файл доверенному Jev helper, а затем добавляет fenced JSON-квитанцию в Markdown-задачу. Ввод ограничен 4000 символами и 16 KiB. Helper задается абсолютным `CONTROL_JEV_HELPER` в `~/.config/claude-control/env` или окружении процесса; рядом с ним должен лежать неизмененный `jev-executor-questions.json` с закрепленным SHA-256. `CONTROL_JEV_CHEAP_MODEL`, `CONTROL_JEV_STANDARD_MODEL` и `CONTROL_JEV_DEEP_MODEL` задают необязательные сопоставления со slug моделей Codex; без них команда сохраняет только уровень.
+
+Это ручная рекомендация: команда не запускает исполнителя и не меняет текущую модель. `--risk` и `--current-model` подавляют вызов и кандидат; `clarify` также не предлагает модель. Квитанция добавляется только в существующий обычный `.md`-файл. Повторный запуск — новый явный вызов и может снова обратиться к helper. Не используй рекомендацию для задач с секретами, доступом к production или иными чувствительными рисками: оценка не подтверждает их отсутствие. Контракт: [model-advice](docs/specs/model-advice.md).
+
 ## Быстрый старт
 
 ```sh
