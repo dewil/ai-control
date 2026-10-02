@@ -176,6 +176,11 @@ class CodexTaskBridge:
             fd = self._open('bridge.lock', os.O_RDWR | os.O_CREAT | os.O_EXCL)
             initializing = True
         try:
+            if not initializing:
+                # Do not take the creator's lock while its first journal is
+                # still incomplete. Missing or unsafe journal means refusal.
+                journal_fd = self._open('journal.json', os.O_RDONLY)
+                os.close(journal_fd)
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self._sync_directory(self.state_dir)
             if initializing:
