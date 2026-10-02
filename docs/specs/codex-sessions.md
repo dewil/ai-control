@@ -108,3 +108,12 @@ Dedicated host и thread используют один control_task profile: sco
 | INV-CXSEAL-02 — granular scope/namespace/MCP sealing | test-codex-task-profile.py |
 | INV-CXSEAL-03 — complete evidence/refusal | test-codex-task-profile.py |
 | INV-CXSEAL-04 — RED/checks/compliance | feature validation |
+
+
+## Durable operation и all-host registry
+
+- **INV-CXSTORE-01..02:** trusted creator публикует private UUID index до marker/final agent publication; runtime missing/corrupt index не пересоздаёт. Immutable operation/host binding известен до launch, launch/start intents одноразовые.
+- **INV-CXSTORE-03:** launch и lifecycle RPC проходят под actual control→inbox→store fence; activation через live publication handle index-first/inflight-last; revoke/finish inflight-first/index-last. Backend callback guard компонуется без повторного control flock.
+- **INV-CXSTORE-04..05:** все known host tombstones сохраняются, previous-attempt drain требуется до нового attempt и cleanup; strict private pins/finite JSON/bounds/deadlines. Native/kernel evidence проверяет trusted caller, store сверяет owned journal identity.
+
+Трассируемость tests/test-codex-task-operation-store.py, FR/INV-CXSTORE01..05. Единственный spec parse использует установленный mikefarah yq `-o=json -I=0 .`; runtime integration должна передавать тот же strict reader backend через spec_reader, чей прежний default `-c` несовместим с YAML на mikefarah yq. Store сам не выполняет native RPC, control writes, TASK commit/finalization; runner/reconciler/create/approvals/install E2E остаются отдельными gates.
