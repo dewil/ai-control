@@ -195,6 +195,20 @@ class BridgeContract(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.enters, 2)
 
+    def test_abrupt_writer_interruption_never_retries_intent(self):
+        self.writer_error = KeyboardInterrupt()
+        with self.assertRaises((KeyboardInterrupt, BridgeError)):
+            self.handle()
+        self.writer_error = None
+        with self.assertRaises(BridgeError): self.handle(bridge=self.make_bridge())
+        self.assertEqual(len(self.calls), 1)
+
+    def test_binding_directory_revalidated_before_next_effect(self):
+        self.handle()
+        self.agent.rmdir()
+        with self.assertRaises(BridgeError): self.handle(self.request(call='second'))
+        self.assertEqual(len(self.calls), 1)
+
     def test_same_call_changed_payload_or_tool_conflicts(self):
         self.handle()
         for r in [self.request(arguments={'question': 'changed'}), self.request('task_done')]:
