@@ -76,3 +76,12 @@ FR-CXDEFAULT-01..05: новые диалоги наследуют эффекти
 - **INV-CXRPC-04:** bounded registry/FIFO/deadlines, uncertain send закрывает socket без retry; caller validation zero-send, protocol errors без payload.
 
 Трассируемость tests/test-codex-task-runtime-transport.py FR/INV-CXRPC01..04. Дыры общего runtime: trusted human routing, source-backed admission и safe read tools, operation publication/runner/reconciler/menu/deployment acceptance.
+
+## Scoped files для no-shell task
+
+- **INV-CXFILE-01:** чтение/поиск/листинг — bounded trusted tools без shell, только из immutable task worktree, без env addressing или writes.
+- **INV-CXFILE-02:** actual operation guard удерживается на чтение; ссылки/specialfiles/secretpaths и подмена файлов не дают выйти за root или получить stale output.
+- **INV-CXFILE-03:** deadlines и size/entry/depth/aggregate/output bounds обязательны; поиск literal, результаты deterministic и truncation явно виден.
+- **INV-CXFILE-04:** helper не подтверждает native builtin policy/admission, сохраняет defaultCLI; independent real-filesystem tests и install checks.
+
+Трассируемость tests/test-codex-task-files.py FR/INV-CXFILE01..04. Native permissions/read-scope и runtime callbacks/operation routing остаются отдельными gates.
