@@ -332,6 +332,42 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
+    def test_idle_reconcile_cannot_create_task_question_or_done_evidence(self):
+        self.publish_registry()
+        controller = self.make()
+        for unused in range(2):
+            self.assertEqual(controller.reconcile(deadline=time.monotonic() + 2)['outcome'], 'idle')
+        self.assertEqual(list((self.agent / 'questions').glob('*.json')), [])
+        self.assertFalse((self.agent / 'done.json').exists())
+        self.assertEqual(self.effects, [])
+
+    def test_registry_identity_drift_cannot_authorize_barrier(self):
+        self.publish_registry()
+        self.control['incarnation'] = 'f' * 32
+        save(self.agent / 'control.json', self.control)
+        with self.assertRaises(self.Error):
+            self.make().require_drained(deadline=time.monotonic() + 2)
+        self.assertEqual(self.effects, [])
+
+    def test_registry_symlink_and_hardlink_refuse_without_modifying_target(self):
+        self.publish_registry()
+        index = self.state / self.control['codex_state_id'] / 'index.json'
+        target = self.state / 'sentinel'
+        target.write_bytes(index.read_bytes())
+        target.chmod(0o600)
+        baseline = target.read_bytes()
+        index.unlink()
+        index.symlink_to(target)
+        with self.assertRaises(self.Error):
+            self.make().require_drained(deadline=time.monotonic() + 2)
+        self.assertEqual(target.read_bytes(), baseline)
+        index.unlink()
+        os.link(target, index)
+        with self.assertRaises(self.Error):
+            self.make().require_drained(deadline=time.monotonic() + 2)
+        self.assertEqual(target.read_bytes(), baseline)
+        self.assertEqual(self.effects, [])
+
     def test_prepared_not_launched_operation_revokes_without_host_launch(self):
         store = self.publish_registry()
         operation = store.prepare('event-1', 7, 'attempt-1', deadline=time.monotonic() + 2)
