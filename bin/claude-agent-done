@@ -44,17 +44,12 @@ envelope_in_inflight (V2.4 major 6).
 """
 
 import fcntl
-import html
-import json
 import os
-import subprocess
 import sys
-from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _agent_question_io import durable_json, envelope_in_inflight  # noqa: E402
-from _agent_worktree import (BASE_SHA_RE, worktree_facts,  # noqa: E402
-                             git_run, GitGuardError)
+from _agent_question_io import envelope_in_inflight  # noqa: E402
+from _agent_worktree import GitGuardError  # noqa: E402
 
 
 def fail(msg, code=2):
@@ -62,65 +57,8 @@ def fail(msg, code=2):
     sys.exit(code)
 
 
-def now_iso():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-# кап карточки готовности (bin/claude-agent-tgbot _done_card) учитывал
-# только поля кандидатов урока (LESSON_CANDIDATE_MAX_BYTES в claude-agent-
-# run), summary заявки не был ограничен вовсе (контрольный аудит серьезная
-# 6): summary ~3000 символов + три допустимых кандидата режут карточку
-# готовности на несколько сообщений Telegram (_chunk_for_html, лимит 3800
-# HTML-escaped символов), клавиатура (принять/отклонить) прикрепляется
-# ТОЛЬКО к последнему чанку - обрыв доставки после первого оставляет
-# карточку без кнопок, а повтор дублирует уже доставленный текст. Обрезка
-# ЗДЕСЬ, на источнике (единственный писатель done.json.summary) - карточка
-# по построению никогда не увидит необрезанное значение; та же обрезка
-# продублирована в claude-agent-tgbot как защита в глубину (значение могло
-# попасть в done.json иначе - старый файл до фикса, ручная правка).
-DONE_SUMMARY_MAX_BYTES = 1500
-
-
-def cap_summary(text):
-    """Обрезает summary по HTML-ESCAPED длине (не по сырым символам - см.
-    LESSON_CANDIDATE_MAX_BYTES в claude-agent-run: escape-длина - то, что
-    реально уходит в отправку, а не сырая)."""
-    s = str(text or "")
-    esc_len, kept = 0, []
-    for ch in s:
-        e = len(html.escape(ch))
-        if esc_len + e > DONE_SUMMARY_MAX_BYTES:
-            return "".join(kept) + " [обрезано]"
-        kept.append(ch)
-        esc_len += e
-    return s
-
-
-class SpecReadError(Exception):
-    """spec.yaml нечитаем/невалиден (yq вернул ненулевой код) - вызывающий
-    обязан отказать (аудит V2.7a, major 3), а не тихо подставить default:
-    подмененная/битая спека иначе молча вырождалась в workspace:'none' и
-    весь фенсинг worktree (чистое дерево/база/ветка) пропускался целиком."""
-
-
-def spec_get(agent_dir, expr, default=""):
-    try:
-        r = subprocess.run(
-            ["yq", "-r", '%s // ""' % expr,
-             os.path.join(agent_dir, "spec.yaml")],
-            capture_output=True, text=True, timeout=10)
-    except Exception as e:
-        raise SpecReadError(str(e))
-    if r.returncode != 0:
-        raise SpecReadError(r.stderr.strip() or "yq exit %d" % r.returncode)
-    v = r.stdout.strip()
-    return v if v else default
-
-
-DONE_SCHEMA_NULLS = {
-    "branch": None, "base": None, "commit_sha": None, "empty": None,
-    "changes": None, "pushed_at": None, "accepted_at": None,
-    "integrated_at": None, "cleaned_at": None, "archived_at": None}
+from _agent_done_io import (request_done_locked, cap_summary, DoneError,
+                            SpecReadError, DONE_SUMMARY_MAX_BYTES)
 
 
 def main():
@@ -144,145 +82,12 @@ def main():
         fail("CLAUDE_AGENT_EVENT_KEY не соответствует конверту в inflight "
              "этого агента")
 
-    # спека читается fail-closed (аудит V2.7a, major 3): битая/подмененная
-    # после create spec.yaml не должна молча вырождаться в workspace:'none'
-    # (весь фенсинг worktree тогда просто не выполняется); незнакомое
-    # значение workspace - тоже отказ, а не тихий дефолт.
-    try:
-        ws = spec_get(agent_dir, ".workspace", "none") or "none"
-    except SpecReadError as e:
-        fail("spec.yaml нечитаем/невалиден - заявку не на что опереть (%s)"
-             % e)
-    if ws not in ("worktree", "direct", "none"):
-        fail("spec.workspace незнакомое значение %r (fail-closed)" % ws)
-    dp = os.path.join(agent_dir, "done.json")
-
-    lock_fd = os.open(os.path.join(agent_dir, "done.lock"),
-                      os.O_WRONLY | os.O_CREAT, 0o600)
+    lock_fd = os.open(os.path.join(agent_dir, "done.lock"), os.O_WRONLY | os.O_CREAT, 0o600)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
-
-        existing = None
-        if os.path.isfile(dp):
-            try:
-                with open(dp) as f:
-                    existing = json.load(f)
-            except (OSError, ValueError):
-                existing = None
-        if not isinstance(existing, dict):
-            existing = None
-
-        if existing and existing.get("state") not in (None, "requested"):
-            fail("заявка уже в состоянии %r - переоткрыть нельзя"
-                 % existing.get("state"))
-
-        commit_sha = base = branch = empty = None
-        if ws == "worktree":
-            work = os.path.join(agent_dir, "work")
-            agent_name = os.path.basename(os.path.normpath(agent_dir))
-            # project_path - для fail-closed guard'а ЕДИНОГО git-хелпера
-            # (V2.10 §3d.2): worktree_facts/git_run отказывают без него.
-            try:
-                project_path = spec_get(agent_dir, ".project")
-            except SpecReadError as e:
-                fail("spec.yaml нечитаем/невалиден - проект worktree не "
-                     "определить (%s)" % e)
-            if not project_path:
-                fail("spec.project пуст - заявку о готовности не на что "
-                     "опереть")
-            # базовый коммит ветки задачи - из control.json (mission_base:
-            # имя историческое, смысл общий - точка форка, зафиксированная
-            # при create). Вывести ее из HEAD нельзя, см. worktree_facts.
-            try:
-                base_recorded = (json.load(
-                    open(os.path.join(agent_dir, "control.json")))
-                    or {}).get("mission_base")
-            except (OSError, ValueError):
-                base_recorded = None
-            if not base_recorded:
-                fail("в control.json нет базового коммита ветки задачи - "
-                     "заявку о готовности не на что опереть")
-            # база обязана быть полным 40-hex sha (аудит V2.7a, major 4):
-            # подмененный control.json с mission_base:"HEAD" делал бы
-            # проверку "--is-ancestor HEAD HEAD" тавтологией, истинной
-            # при любой истории.
-            if not BASE_SHA_RE.match(base_recorded):
-                fail("mission_base в control.json обязан быть полным "
-                     "40-hex sha, получено %r" % base_recorded)
-            facts = worktree_facts(work, base_recorded, agent_name,
-                                   project_path)
-            if facts is None:
-                try:
-                    st = git_run(["status", "--porcelain"], work,
-                                 project_path)
-                except GitGuardError as e:
-                    fail("worktree заблокирован защитой git (%s)" % e)
-                if st.returncode != 0 or st.stdout.strip():
-                    fail("грязное дерево worktree - у тебя нет git (V2.10 "
-                         "§3d.1), эту команду нужно звать РАНЬШЕ, пока "
-                         "дерево еще чисто; рантайм закоммитит правки "
-                         "позже сам")
-                fail("HEAD ветки задачи не потомок зафиксированной базы, "
-                     "detached HEAD, чужая ветка либо симлинк вместо work")
-            commit_sha, base, branch, empty = facts
-
-        if existing and existing.get("state") == "requested":
-            same_content = True
-            if ws == "worktree":
-                same_content = existing.get("commit_sha") == commit_sha
-            same_owner = existing.get("envelope_key") == envelope_key
-            if same_content and same_owner:
-                if summary is not None:
-                    existing["summary"] = summary
-                    durable_json(dp, existing)
-                return  # идемпотентный no-op (§3): тот же прогон, тот же коммит
-            if same_content and not same_owner:
-                # V2.10 §3c, аудит серьезная 5: явный вызов done из НОВОГО
-                # конверта (envelope_key прогона отличается от владельца
-                # заявки) переносит владение, даже если содержимое пока не
-                # изменилось (agent позвал done рано, до правок). Без этого
-                # прогон B делает работу и коммитит, но не может заявить о
-                # готовности заново (idempotent no-op молча сохранял бы
-                # владение прогона A) - карточка осталась бы на старом
-                # коммите, а Y нельзя было бы принять. pushed_at обнуляется -
-                # свежая карточка должна суметь уйти; finalized сбрасывается
-                # для worktree/direct - запись не считается финализированной,
-                # пока терминальная ветка ЭТОГО (B) прогона не подтвердит ее
-                # заново (fill_direct_changes/finalize_worktree_done).
-                # Прогон, который done не звал, чужую заявку по-прежнему не
-                # трогает - перенос владения делает только сам вызов done.
-                existing["envelope_key"] = envelope_key
-                existing["pushed_at"] = None
-                existing["finalized"] = (ws == "none")
-                # ЗАКРЫВАЕМ legacy-режим сверки тапа (аудит V2.10 r4,
-                # блокер 3). Заявка, чья карточка ушла ДО перехода на
-                # поколение, не имеет ключа pushed_gen8, и вердикт
-                # разрешает ей фолбэк на прежний идентификатор ("-" у
-                # direct/none). Без этой строки перенос владения такой
-                # фолбэк УНАСЛЕДОВАЛ БЫ: тап по старой карточке приняли бы
-                # уже против работы нового прогона, ничего не предъявив.
-                # Явный None - не то же самое, что отсутствие ключа.
-                existing["pushed_gen8"] = None
-                if summary is not None:
-                    existing["summary"] = summary
-                durable_json(dp, existing)
-                return
-
-        doc = dict(DONE_SCHEMA_NULLS)
-        doc.update({"state": "requested", "requested_at": now_iso(),
-                   "envelope_key": envelope_key, "workspace": ws,
-                   "summary": summary or "",
-                   # V2.10 §3c, аудит блокер 2: durable-признак готовности
-                   # заявки к отправке карточки. workspace:none ничего не
-                   # ждет от терминальной ветки runner'а (только summary,
-                   # уже записан) - финализирован сразу. worktree/direct
-                   # ждут fill_direct_changes/finalize_worktree_done -
-                   # done-notify молчит, пока finalized не станет true.
-                   "finalized": (ws == "none")})
-        if ws == "worktree":
-            doc.update({"branch": branch, "base": base,
-                       "commit_sha": commit_sha, "empty": empty})
-        durable_json(dp, doc)
+        request_done_locked(agent_dir, envelope_key, summary)
+    except (DoneError, SpecReadError, GitGuardError) as exc:
+        fail(str(exc))
     finally:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
         os.close(lock_fd)

@@ -19,6 +19,8 @@ grep-проверка не видела, аудит r3 блокер 1).
 import os
 import re
 import subprocess
+import time
+from _agent_question_io import remaining
 
 BASE_SHA_RE = re.compile(r'^[0-9a-f]{40}$')
 
@@ -68,7 +70,7 @@ def _raw_git(args, cwd, timeout=30, text=True, input=None):
         text=text, timeout=timeout, input=input)
 
 
-def _common_gitdir(project_path):
+def _common_gitdir(project_path, *, deadline=None, clock=time.monotonic):
     """Общий gitdir проекта, либо None. Чистая файловая проверка, без
     вызова git - той же дисциплины, что и весь сторож.
 
@@ -79,12 +81,14 @@ def _common_gitdir(project_path):
     рантайм-коммит всегда отказывал бы, а заявка инвалидировалась.
     Раскладка git тут фиксированная, поэтому общий каталог - на два уровня
     выше `<id>`."""
+    remaining(deadline, clock)
     dotgit = os.path.join(project_path, ".git")
     if os.path.isdir(dotgit):
         return os.path.realpath(dotgit)
     if not os.path.isfile(dotgit):
         return None
     try:
+        remaining(deadline, clock)
         with open(dotgit, "rb") as f:
             text = f.read().decode("utf-8", "replace").strip()
     except OSError:
@@ -111,7 +115,7 @@ def _common_gitdir(project_path):
     return None
 
 
-def _worktree_gitdir_ok(work, project_path):
+def _worktree_gitdir_ok(work, project_path, *, deadline=None, clock=time.monotonic):
     """(ok, reason) - <work>/.git явлется штатным git-worktree указателем,
     заведенным `git worktree add` из project_path, а не файлом/каталогом,
     которым агент подменил бы git собственный конфиг (V2.10 §3d.2, аудит
@@ -123,10 +127,12 @@ def _worktree_gitdir_ok(work, project_path):
     обратно - ровно то, что поддерживает сам git при `worktree add`. Агент,
     которому Write/Edit ограничены work/** (§1.1), не может подделать ОБЕ
     стороны разом: .git/worktrees/<id>/ проекта лежит вне work/**."""
+    remaining(deadline, clock)
     dotgit = os.path.join(work, ".git")
     if os.path.islink(dotgit) or not os.path.isfile(dotgit):
         return False, "<worktree>/.git не является обычным файлом-указателем"
     try:
+        remaining(deadline, clock)
         with open(dotgit, "rb") as f:
             raw = f.read()
     except OSError as e:
@@ -138,7 +144,8 @@ def _worktree_gitdir_ok(work, project_path):
     if not os.path.isabs(gitdir):
         gitdir = os.path.normpath(os.path.join(work, gitdir))
     real_gitdir = os.path.realpath(gitdir)
-    common = _common_gitdir(project_path)
+    remaining(deadline, clock)
+    common = _common_gitdir(project_path, deadline=deadline, clock=clock)
     if common is None:
         return False, "у проекта нет распознаваемого gitdir"
     expect_prefix = os.path.join(common, "worktrees") + os.sep
@@ -146,6 +153,7 @@ def _worktree_gitdir_ok(work, project_path):
         return False, "gitdir указывает мимо .git/worktrees проекта"
     back_path = os.path.join(real_gitdir, "gitdir")
     try:
+        remaining(deadline, clock)
         with open(back_path, "rb") as f:
             back_raw = f.read()
     except OSError as e:
@@ -157,7 +165,7 @@ def _worktree_gitdir_ok(work, project_path):
     return True, None
 
 
-def _worktree_filter_clean(work):
+def _worktree_filter_clean(work, *, deadline=None, clock=time.monotonic):
     """(ok, reason) - ни один индексируемый путь рабочего дерева НЕ
     объявляет атрибут filter (V2.10 §3d.2, аудит r3 блокер 1). Через `git
     check-attr -z --stdin filter`, а не grep по .gitattributes: check-attr -
@@ -167,6 +175,7 @@ def _worktree_filter_clean(work):
     Отсутствие узлов в дереве (кроме .git) - нечего проверять, ok."""
     paths = []
     for root, dirs, files in os.walk(work):
+        remaining(deadline, clock)
         if ".git" in dirs:
             dirs.remove(".git")
         for fn in files:
@@ -177,7 +186,7 @@ def _worktree_filter_clean(work):
     stdin_blob = b"\x00".join(os.fsencode(p) for p in paths) + b"\x00"
     try:
         r = _raw_git(["check-attr", "-z", "--stdin", "filter"], work,
-                     text=False, input=stdin_blob)
+                     text=False, input=stdin_blob, timeout=remaining(deadline, clock))
     except (OSError, subprocess.SubprocessError) as e:
         return False, "git check-attr не удался: %s" % e
     if r.returncode != 0:
@@ -196,20 +205,21 @@ def _worktree_filter_clean(work):
     return True, None
 
 
-def _guard(cwd, project_path):
+def _guard(cwd, project_path, *, deadline=None, clock=time.monotonic):
     """Fail-closed предпроверка ДО любого действия (V2.10 §3d.2) -
     поднимает GitGuardError при первом нарушении."""
     if not project_path:
         raise GitGuardError("project_path не задан - fail-closed")
-    ok, reason = _worktree_gitdir_ok(cwd, project_path)
+    remaining(deadline, clock)
+    ok, reason = _worktree_gitdir_ok(cwd, project_path, deadline=deadline, clock=clock)
     if not ok:
         raise GitGuardError(reason)
-    ok, reason = _worktree_filter_clean(cwd)
+    ok, reason = _worktree_filter_clean(cwd, deadline=deadline, clock=clock)
     if not ok:
         raise GitGuardError(reason)
 
 
-def git_run(args, cwd, project_path, timeout=30, text=True, input=None):
+def git_run(args, cwd, project_path, timeout=30, text=True, input=None, *, deadline=None, clock=time.monotonic):
     """ЕДИНАЯ точка вызова git в присутствии агентского worktree (V2.10
     §3d.2): коммит рантайма, факты ветки (worktree_facts ниже), статус для
     фазы интеграции (_branch_worktree_status в claude-agent-run). project_path
@@ -220,11 +230,14 @@ def git_run(args, cwd, project_path, timeout=30, text=True, input=None):
     вызывающий обязан трактовать это как отказ (та же семантика, что любой
     другой git-сбой на этом пути: комментарий не выполняется, дерево
     остается как есть)."""
-    _guard(cwd, project_path)
-    return _raw_git(args, cwd, timeout=timeout, text=text, input=input)
+    remaining(deadline, clock)
+    _guard(cwd, project_path, deadline=deadline, clock=clock)
+    result = _raw_git(args, cwd, timeout=remaining(deadline, clock, timeout), text=text, input=input)
+    remaining(deadline, clock)
+    return result
 
 
-def worktree_facts(work, base, name, project_path):
+def worktree_facts(work, base, name, project_path, *, deadline=None, clock=time.monotonic):
     """(commit_sha, base, branch, empty) чистого дерева на СВОЕЙ ветке
     задачи, либо None - грязное дерево, git-ошибка, detached/чужая ветка,
     HEAD не потомок base, либо fail-closed отказ guard'а (§3d.2) (вызывающий
@@ -239,16 +252,16 @@ def worktree_facts(work, base, name, project_path):
     if os.path.islink(work):
         return None  # симлинк вместо work - отказ (fail-closed)
     try:
-        st = git_run(["status", "--porcelain"], work, project_path)
+        st = git_run(["status", "--porcelain"], work, project_path, deadline=deadline, clock=clock)
         if st.returncode != 0 or st.stdout.strip():
             return None
-        br = git_run(["symbolic-ref", "--short", "HEAD"], work, project_path)
+        br = git_run(["symbolic-ref", "--short", "HEAD"], work, project_path, deadline=deadline, clock=clock)
         if br.returncode != 0:
             return None  # detached HEAD - нет символической ветки
         branch = br.stdout.strip()
         if not branch.startswith("task/%s-" % name):
             return None  # чужая ветка - не ветка этой задачи
-        head = git_run(["rev-parse", "HEAD"], work, project_path)
+        head = git_run(["rev-parse", "HEAD"], work, project_path, deadline=deadline, clock=clock)
         if head.returncode != 0:
             return None
         commit_sha = head.stdout.strip()
@@ -260,7 +273,7 @@ def worktree_facts(work, base, name, project_path):
         if not base:
             return None
         mb = git_run(["merge-base", "--is-ancestor", base, commit_sha],
-                     work, project_path)
+                     work, project_path, deadline=deadline, clock=clock)
         if mb.returncode != 0:
             return None
     except GitGuardError:
