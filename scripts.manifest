@@ -17,6 +17,7 @@ _codex_task_lifecycle.py
 _codex_task_transport.py
 _codex_task_policy.py
 _codex_task_host.py
+_codex_task_bridge.py
 claude-rc-agent
 claude-rc-takeover
 claude-control-logrotate
