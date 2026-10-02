@@ -37,6 +37,7 @@ claude-agent-harvest
 claude-agent-tgbot
 claude-agent-canon-maintainer
 claude-agent-limits-digest
+claude-agent-model-advice
 
 # Синтез речи: зовет claude-agent-tgbot рядом с собой (BIN_DIR), но и сам
 # запускается напрямую

@@ -171,6 +171,12 @@ Per-stage design docs live in [`docs/`](./docs/); the architecture of both layer
 - macOS: keep the Mac awake while you work remotely (launchd does not tick while asleep). The usual trick is a separate `caffeinate -i` agent; this repo does not install one.
 - Linux: enable **lingering** (`loginctl enable-linger $USER`), or user services die on logout. `install.sh` checks and warns.
 
+## Manual model-tier advice
+
+`claude-agent-model-advice --public-text-file ./public-task.txt --task ./docs/task.md` is an opt-in command. It sends only the explicitly named public file to a trusted Jev helper, then appends a fenced JSON receipt to the Markdown task. Input is capped at 4,000 characters and 16 KiB. Set the helper as an absolute `CONTROL_JEV_HELPER` path in `~/.config/claude-control/env` or the process environment; its sibling `jev-executor-questions.json` must match the pinned SHA-256. Optional `CONTROL_JEV_CHEAP_MODEL`, `CONTROL_JEV_STANDARD_MODEL`, and `CONTROL_JEV_DEEP_MODEL` values map tiers to Codex model slugs; without one, the command records the tier only.
+
+This is a manual recommendation: it does not launch an executor or change the current model. `--risk` and `--current-model` suppress the helper call and candidate; `clarify` also produces no model proposal. The receipt is appended only to an existing regular `.md` file. Each explicit rerun may call the helper again. Do not use a candidate for tasks involving secrets, production access, or other sensitive risks; the advisory cannot certify that such risks are absent. Contract: [model-advice](docs/specs/model-advice.md).
+
 ## Quick start
 
 ```sh
