@@ -1,6 +1,6 @@
 # CXTASK-POLICY: native admission отдельного task host
 
-Дата: 2026-10-02. Engineering feature spec. Пользователь согласовал dedicated task App Server ответом «согласен». Родитель private task: CONTROL-CXTASK-runtime-contract.
+Дата: 2026-10-02. Статус: offline helper реализован, independent tests GREEN и compliance PASS. Engineering feature spec. Пользователь согласовал dedicated task App Server ответом «согласен». Родитель private task: CONTROL-CXTASK-runtime-contract.
 
 ## Проблема и результат
 
