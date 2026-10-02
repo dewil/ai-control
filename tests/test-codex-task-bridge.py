@@ -366,6 +366,7 @@ class BridgeContract(unittest.TestCase):
             module = importlib.reload(sys.modules['_codex_task_bridge'])
             globals().update(BridgeError=module.BridgeError, TaskBinding=module.TaskBinding,
                              CodexTaskBridge=module.CodexTaskBridge, dynamic_tools=module.dynamic_tools)
+            self.binding = TaskBinding('incarnation', 'event', str(self.agent), 'thread', 'turn')
             self.make_bridge()
         self.assertEqual(dict(os.environ), before)
         self.assertEqual(self.enters, 0)
