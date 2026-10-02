@@ -90,6 +90,18 @@ class ProfileTests(unittest.TestCase):
   for flag,assignment in zip(argv[4::2],argv[5::2]):
    self.assertEqual(flag,'-c'); merge(parsed,tomllib.loads(assignment))
   self.assertEqual(parsed,nested(p.sealed_overrides(self.c,['inventory'])))
+ def test_host_cli_literal_dotted_keys_and_toml_values(self):
+  argv=p.sealed_host_argv(self.socket,self.c,['inventory'])
+  expected=p.sealed_overrides(self.c,['inventory'])
+  actual={}
+  for flag,assignment in zip(argv[4::2],argv[5::2]):
+   self.assertEqual(flag,'-c')
+   key,separator,value=assignment.partition('=')
+   self.assertEqual(separator,'=')
+   self.assertIn(key,expected)
+   self.assertNotIn(key,actual)
+   actual[key]=tomllib.loads('_x_='+value)['_x_']
+  self.assertEqual(actual,expected)
  def test_thread_exact_shape_and_deepcopy(self):
   tools=descriptors(); before=copy.deepcopy(tools)
   v=p.sealed_thread_params(self.c,['inventory'],tools)
