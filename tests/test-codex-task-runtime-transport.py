@@ -535,6 +535,85 @@ class RuntimeContract(unittest.TestCase):
             self.refused(transport, socket, lambda r=result: self.human_reply(transport, frame, r))
         self.human_reply(transport, frame, {'permissions': {}})
 
+    def test_permissions_scope_string_subclass_cannot_hide_session_grant(self):
+        # FR-CXRPC-03 / INV-CXRPC-03 / INV-CXRPC-04
+        class HiddenSession(str):
+            def __ne__(self, other):
+                return False
+        transport, socket = self.make()
+        frame = approval('item/permissions/requestApproval')
+        self.ingest(transport, socket, frame)
+        result = {'permissions': copy.deepcopy(frame['params']['permissions']),
+                  'scope': HiddenSession('session')}
+        self.assertEqual(json.loads(json.dumps(result))['scope'], 'session')
+        self.refused(transport, socket, lambda: self.human_reply(transport, frame, result))
+        self.human_reply(transport, frame, {'permissions': {}})
+        self.assertEqual(socket.sent[-1], {'id': 'rpc', 'result': {'permissions': {}}})
+
+    def test_approval_decision_string_subclass_cannot_hide_session_grant(self):
+        # FR-CXRPC-03 / INV-CXRPC-03 / INV-CXRPC-04
+        class HiddenSessionDecision(str):
+            def __eq__(self, other):
+                return True
+            def __ne__(self, other):
+                return False
+            def __hash__(self):
+                return hash('accept')
+        for method in ('item/commandExecution/requestApproval', 'item/fileChange/requestApproval'):
+            with self.subTest(method=method):
+                transport, socket = self.make()
+                frame = approval(method)
+                self.ingest(transport, socket, frame)
+                result = {'decision': HiddenSessionDecision('acceptForSession')}
+                self.assertEqual(json.loads(json.dumps(result))['decision'], 'acceptForSession')
+                self.refused(transport, socket, lambda: self.human_reply(transport, frame, result))
+                self.human_reply(transport, frame, {'decision': 'decline'})
+                self.assertEqual(socket.sent[-1], {'id': 'rpc', 'result': {'decision': 'decline'}})
+
+    def test_binding_rejects_string_subclasses_with_custom_equality(self):
+        # FR-CXRPC-02 / INV-CXRPC-02 / INV-CXRPC-04
+        class ForgedIdentity(str):
+            def __eq__(self, other):
+                return True
+            def __ne__(self, other):
+                return False
+            __hash__ = str.__hash__
+        transport, socket = self.make(bound=False)
+        for thread, turn in ((ForgedIdentity('foreign'), 'turn'), ('thread', ForgedIdentity('foreign'))):
+            self.refused(transport, socket, lambda t=thread, u=turn: transport.bind_operation(t, u))
+        transport.bind_operation('thread', 'turn')
+        self.ingest(transport, socket, dynamic())
+        self.reply(transport)
+
+    def test_reply_identities_reject_string_subclasses_with_custom_equality(self):
+        # FR-CXRPC-02 / INV-CXRPC-02 / INV-CXRPC-03 / INV-CXRPC-04
+        class ForgedIdentity(str):
+            def __eq__(self, other):
+                return True
+            def __ne__(self, other):
+                return False
+            __hash__ = str.__hash__
+        transport, socket = self.make()
+        self.ingest(transport, socket, dynamic())
+        for field in ('thread_id', 'turn_id', 'call_id'):
+            self.refused(transport, socket, lambda f=field: self.reply(transport, **{f: ForgedIdentity('foreign')}))
+        self.reply(transport)
+        transport, socket = self.make()
+        frame = approval()
+        self.ingest(transport, socket, frame)
+        for field in ('method', 'thread_id', 'turn_id', 'item_id'):
+            identity = dict(method=frame['method'], thread_id='thread', turn_id='turn',
+                            item_id='item', deadline=self.deadline())
+            identity[field] = ForgedIdentity('foreign')
+            self.refused(transport, socket, lambda i=identity: transport.reply_approval('rpc', {'decision': 'accept'}, **i))
+        self.human_reply(transport, frame, {'decision': 'decline'})
+        transport, socket = self.make()
+        self.ingest(transport, socket, user_input())
+        for field in ('thread_id', 'turn_id', 'item_id'):
+            self.refused(transport, socket, lambda f=field: self.input_reply(transport,
+                {'q1': {'answers': ['yes']}}, **{f: ForgedIdentity('foreign')}))
+        self.input_reply(transport, {'q1': {'answers': ['yes']}})
+
     def test_user_input_sparse_answers_exact_shape_original_id(self):
         # INV-CXRPC-03
         transport, socket = self.make()
