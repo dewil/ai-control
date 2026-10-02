@@ -7,6 +7,8 @@ import math
 import os
 import re
 import stat
+import socket
+import struct
 import subprocess
 import tempfile
 import time
@@ -46,6 +48,29 @@ def _deadline(deadline, clock):
     return remaining
 
 
+def _group(value):
+    _path(value)
+    _require(value != '/' and not value.startswith('//'))
+
+
+def _metadata(info):
+    # Access time can change during readlink/connect; identity and ownership cannot.
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _inode(value):
+    return isinstance(value, list) and len(value) == 2 and all(type(v) is int and v >= 0 for v in value)
+
+
+def _socket_identity(value):
+    if value is None or _inode(value):
+        return
+    _require(isinstance(value, dict) and set(value) == {'link', 'target_path', 'target'})
+    _require(_inode(value['link']) and _inode(value['target']))
+    _path(value['target_path'])
+
+
 def _unit(unit):
     _require(isinstance(unit, str) and unit.startswith('cctask-') and unit.endswith('.service') and _uuid(unit[7:-8], 4))
 
@@ -75,8 +100,55 @@ class SystemdTaskManager:
     _env = ('HOME', 'PATH', 'CODEX_HOME', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
             'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy')
 
-    def __init__(self, *, runner=subprocess.run, clock=time.monotonic):
+    def __init__(self, *, runner=subprocess.run, clock=time.monotonic, peer_probe=None):
         self.runner, self.clock = runner, clock
+        self.peer_probe = peer_probe if peer_probe is not None else self._peer_probe
+
+    def _peer_probe(self, socket_path, *, deadline):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                connection.settimeout(_deadline(deadline, self.clock))
+                connection.connect(socket_path)
+                pid, uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i')))
+                _require(pid > 0 and uid == os.getuid())
+                _deadline(deadline, self.clock)
+                with open('/proc/' + str(pid) + '/cgroup') as stream:
+                    content = stream.read(65537)
+                _require(len(content) <= 65536)
+                groups = [line[3:] for line in content.splitlines() if line.startswith('0::')]
+                _require(len(groups) == 1)
+                _group(groups[0])
+                return dict(pid=pid, uid=uid, cgroup=groups[0])
+        except Exception:
+            raise HostError('Task host socket peer is not confirmed') from None
+
+    def validate_socket_link(self, socket_path, control_group, *, deadline):
+        try:
+            _deadline(deadline, self.clock)
+            _group(control_group)
+            _path(socket_path)
+            parent = os.path.dirname(socket_path)
+            _require(os.path.realpath(parent) == parent)
+            link = os.lstat(socket_path)
+            _require(stat.S_ISLNK(link.st_mode) and link.st_uid == os.getuid())
+            target_path = os.readlink(socket_path)
+            _path(target_path)
+            _require(os.path.realpath(target_path) == target_path)
+            target = os.lstat(target_path)
+            _require(stat.S_ISSOCK(target.st_mode) and target.st_uid == os.getuid())
+            target_parent = os.lstat(os.path.dirname(target_path))
+            _require(stat.S_ISDIR(target_parent.st_mode) and target_parent.st_uid == os.getuid() and target_parent.st_mode & 0o077 == 0)
+            peer = self.peer_probe(target_path, deadline=deadline)
+            _require(isinstance(peer, dict) and type(peer.get('pid')) is int and peer['pid'] > 0)
+            _require(type(peer.get('uid')) is int and peer['uid'] == os.getuid())
+            _group(peer.get('cgroup'))
+            _require(peer['cgroup'] == control_group or peer['cgroup'].startswith(control_group + '/'))
+            _deadline(deadline, self.clock)
+            _require(_metadata(os.lstat(socket_path)) == _metadata(link) and os.readlink(socket_path) == target_path and _metadata(os.lstat(target_path)) == _metadata(target))
+            _require(os.path.realpath(target_path) == target_path and _metadata(os.lstat(os.path.dirname(target_path))) == _metadata(target_parent))
+            return dict(link=[link.st_dev, link.st_ino], target_path=target_path, target=[target.st_dev, target.st_ino])
+        except Exception:
+            raise HostError('Task host socket alias is not confirmed') from None
 
     def _run(self, argv, deadline):
         timeout = _deadline(deadline, self.clock)
@@ -129,7 +201,7 @@ class SystemdTaskManager:
         _require(re.fullmatch('[0-9]+', fields['MainPID']) is not None)
         pid = int(fields['MainPID'])
         if fields['LoadState'] == 'not-found':
-            _require(fields['Description'] == fields['InvocationID'] == fields['ControlGroup'] == fields['KillMode'] == ''
+            _require(fields['Description'] in ('', unit) and fields['KillMode'] in ('', 'control-group') and fields['InvocationID'] == fields['ControlGroup'] == ''
                      and pid == 0 and fields['ActiveState'] == 'inactive' and fields['SubState'] == 'dead')
             return None
         _require(result.returncode == 0 and fields['LoadState'] == 'loaded')
@@ -160,6 +232,7 @@ class CodexTaskHost:
             raise HostError('Invalid task host storage or identity') from None
 
     def _check_directory(self):
+        _require(os.path.realpath(self.state_dir) == self.state_dir)
         info = os.lstat(self.state_dir)
         _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and info.st_mode & 0o077 == 0)
 
@@ -167,7 +240,7 @@ class CodexTaskHost:
         fd = os.open(os.path.join(self.state_dir, name), flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
         try:
             info = os.fstat(fd)
-            _require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o600)
+            _require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o600)
             return fd
         except Exception:
             os.close(fd)
@@ -217,10 +290,10 @@ class CodexTaskHost:
             _require((journal['phase'] == 'prepared' and invocation is None) or
                      (journal['phase'] != 'prepared' and isinstance(invocation, str) and re.fullmatch('[0-9a-f]{32}', invocation) is not None))
             identity = journal['socket_identity']
-            _require(identity is None or (isinstance(identity, list) and len(identity) == 2 and all(type(v) is int and v >= 0 for v in identity)))
+            _socket_identity(identity)
             _require(journal['phase'] != 'prepared' or identity is None)
             return journal
-        except (UnicodeError, ValueError, TypeError):
+        except (UnicodeError, ValueError, TypeError, RecursionError):
             raise HostError('Invalid task host journal') from None
 
     @staticmethod
@@ -264,6 +337,25 @@ class CodexTaskHost:
         return HostSnapshot(journal['unit'], phase, status['invocation_id'] if status else None,
                             status['main_pid'] if status else None, self.socket, ready)
 
+    def _observe_socket(self, journal, status, deadline):
+        identity = journal['socket_identity']
+        try:
+            info = os.lstat(self.socket)
+        except FileNotFoundError:
+            _require(identity is None)
+            return False, None
+        if stat.S_ISLNK(info.st_mode):
+            _require(info.st_uid == os.getuid())
+            observed = self.manager.validate_socket_link(self.socket, status['control_group'], deadline=deadline)
+            _socket_identity(observed)
+            _require(isinstance(observed, dict) and observed['link'] == [info.st_dev, info.st_ino])
+            _require(_metadata(os.lstat(self.socket)) == _metadata(info))
+        else:
+            _require(stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid())
+            observed = [info.st_dev, info.st_ino]
+        _require(identity is None or identity == observed)
+        return True, observed
+
     def _inspect(self, journal, deadline):
         try:
             _deadline(deadline, self.clock)
@@ -275,6 +367,8 @@ class CodexTaskHost:
             _require(journal['invocation_id'] is None or journal['invocation_id'] == status['invocation_id'])
             drained = status['active_state'] in ('inactive', 'failed') and status['main_pid'] == 0 and status['control_group'] == ''
             active = status['active_state'] == 'active' and status['sub_state'] == 'running' and status['main_pid'] > 0
+            if active:
+                _group(status['control_group'])
             if journal['phase'] in ('stopping', 'stopped'):
                 if drained:
                     if journal['phase'] != 'stopped':
@@ -284,23 +378,16 @@ class CodexTaskHost:
                         persist = False
                     result = self._snapshot(journal, 'stopped', status)
                 elif active and journal['phase'] == 'stopping':
-                    return self._snapshot(journal, 'stopping', status)
+                    _, observed = self._observe_socket(journal, status, deadline)
+                    persist = journal['socket_identity'] != observed
+                    journal['socket_identity'] = observed
+                    result = self._snapshot(journal, 'stopping', status)
                 else:
                     return self._snapshot(journal)
             elif active:
-                ready = False
-                identity = journal['socket_identity']
-                try:
-                    info = os.lstat(self.socket)
-                except FileNotFoundError:
-                    _require(identity is None)
-                else:
-                    _require(stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid())
-                    observed = [info.st_dev, info.st_ino]
-                    _require(identity is None or identity == observed)
-                    journal['socket_identity'] = observed
-                    ready = True
-                persist = journal['phase'] != 'running' or journal['invocation_id'] is None or identity != journal['socket_identity']
+                ready, observed = self._observe_socket(journal, status, deadline)
+                persist = journal['phase'] != 'running' or journal['invocation_id'] is None or journal['socket_identity'] != observed
+                journal['socket_identity'] = observed
                 journal.update(phase='running', invocation_id=status['invocation_id'])
                 result = self._snapshot(journal, 'running', status, ready)
             else:
