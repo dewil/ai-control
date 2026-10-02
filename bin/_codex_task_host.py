@@ -1,0 +1,360 @@
+"""Owned task App Server supervision; no turn admission or cleanup authority."""
+from contextlib import contextmanager
+from dataclasses import dataclass
+import fcntl
+import json
+import math
+import os
+import re
+import stat
+import subprocess
+import tempfile
+import time
+from uuid import UUID, uuid4
+
+from _codex_task_policy import host_argv
+
+
+class HostError(Exception):
+    """Payload-free supervisor diagnostic."""
+
+
+def _require(value):
+    if not value:
+        raise HostError('Task host evidence is not confirmed')
+
+
+def _uuid(value, version=None):
+    try:
+        return isinstance(value, str) and str(UUID(value)) == value and (version is None or UUID(value).version == version)
+    except ValueError:
+        return False
+
+
+def _text(value):
+    return isinstance(value, str) and bool(value) and '\x00' not in value and '\n' not in value and '\r' not in value
+
+
+def _path(value):
+    _require(_text(value) and os.path.isabs(value) and os.path.normpath(value) == value)
+
+
+def _deadline(deadline, clock):
+    _require(type(deadline) in (int, float) and math.isfinite(deadline))
+    remaining = deadline - clock()
+    _require(remaining > 0 and math.isfinite(remaining))
+    return remaining
+
+
+def _unit(unit):
+    _require(isinstance(unit, str) and unit.startswith('cctask-') and unit.endswith('.service') and _uuid(unit[7:-8], 4))
+
+
+def _status(status):
+    _require(isinstance(status, dict))
+    _require(isinstance(status.get('invocation_id'), str) and re.fullmatch('[0-9a-f]{32}', status['invocation_id']) is not None)
+    _require(type(status.get('main_pid')) is int and status['main_pid'] >= 0)
+    for key in ('description', 'kill_mode', 'active_state', 'sub_state', 'control_group'):
+        _require(isinstance(status.get(key), str))
+    return status
+
+
+@dataclass(frozen=True)
+class HostSnapshot:
+    unit: str
+    phase: str
+    invocation_id: str | None
+    main_pid: int | None
+    socket: str
+    socket_ready: bool
+
+
+class SystemdTaskManager:
+    """Bounded synchronous systemd user operations with no output disclosure."""
+    _fields = ('LoadState', 'Description', 'InvocationID', 'ActiveState', 'SubState', 'MainPID', 'ControlGroup', 'KillMode')
+    _env = ('HOME', 'PATH', 'CODEX_HOME', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+            'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy')
+
+    def __init__(self, *, runner=subprocess.run, clock=time.monotonic):
+        self.runner, self.clock = runner, clock
+
+    def _run(self, argv, deadline):
+        timeout = _deadline(deadline, self.clock)
+        try:
+            return self.runner(argv, capture_output=True, text=True, check=False,
+                               stdin=subprocess.DEVNULL, timeout=timeout)
+        except Exception:
+            raise HostError('Task host manager call failed') from None
+
+    def version(self, executable, *, deadline):
+        _path(executable)
+        result = self._run([executable, '--version'], deadline)
+        _require(result.returncode == 0 and result.stdout in ('codex-cli 0.160.0', 'codex-cli 0.160.0\n'))
+        return '0.160.0'
+
+    def start(self, unit, argv, cwd, token, *, deadline):
+        _unit(unit)
+        _path(cwd)
+        _require(_uuid(token, 4) and isinstance(argv, list) and bool(argv))
+        _require(all(_text(arg) for arg in argv))
+        _path(argv[0])
+        command = ['systemd-run', '--user', '--no-ask-password', '--quiet', '--unit=' + unit,
+                   '--description=claude-control task ' + token, '--service-type=exec',
+                   '--property=KillMode=control-group', '--property=Restart=no', '--property=UMask=0077',
+                   '--property=TimeoutStopSec=5s', '--working-directory=' + cwd, '--expand-environment=no']
+        for name in self._env:
+            if name in os.environ:
+                _require('\x00' not in os.environ[name])
+                command.append('--setenv=' + name + '=' + os.environ[name])
+        result = self._run(command + ['--'] + argv, deadline)
+        _require(result.returncode == 0)
+
+    def stop(self, unit, *, deadline):
+        _unit(unit)
+        result = self._run(['systemctl', '--user', '--no-ask-password', 'stop', unit], deadline)
+        _require(result.returncode == 0)
+
+    def inspect(self, unit, *, deadline):
+        _unit(unit)
+        result = self._run(['systemctl', '--user', '--no-ask-password', 'show', unit,
+                            '--property=' + ','.join(self._fields)], deadline)
+        _require(isinstance(result.stdout, str) and len(result.stdout) <= 65536)
+        fields = {}
+        for line in result.stdout.splitlines():
+            _require('=' in line)
+            key, value = line.split('=', 1)
+            _require(key in self._fields and key not in fields)
+            fields[key] = value
+        _require(set(fields) == set(self._fields))
+        _require(re.fullmatch('[0-9]+', fields['MainPID']) is not None)
+        pid = int(fields['MainPID'])
+        if fields['LoadState'] == 'not-found':
+            _require(fields['Description'] == fields['InvocationID'] == fields['ControlGroup'] == fields['KillMode'] == ''
+                     and pid == 0 and fields['ActiveState'] == 'inactive' and fields['SubState'] == 'dead')
+            return None
+        _require(result.returncode == 0 and fields['LoadState'] == 'loaded')
+        return _status(dict(invocation_id=fields['InvocationID'], description=fields['Description'],
+                            kill_mode=fields['KillMode'], active_state=fields['ActiveState'],
+                            sub_state=fields['SubState'], main_pid=pid, control_group=fields['ControlGroup']))
+
+
+class CodexTaskHost:
+    def __init__(self, state_dir, task_incarnation, cwd, *, executable, manager=None, clock=time.monotonic):
+        try:
+            for path in (state_dir, cwd, executable):
+                _path(path)
+                _require(os.path.realpath(path) == path)
+            _require(os.path.isdir(cwd) and os.path.isfile(executable) and os.access(executable, os.X_OK))
+            _require(_uuid(task_incarnation))
+            _require(os.path.commonpath((state_dir, cwd)) not in (state_dir, cwd))
+            _require(os.path.isdir(os.path.dirname(state_dir)))
+            if not os.path.lexists(state_dir):
+                os.mkdir(state_dir, 0o700)
+            self.state_dir, self.cwd, self.executable = state_dir, cwd, executable
+            self.task_incarnation = task_incarnation
+            self.clock = clock
+            self.manager = manager if manager is not None else SystemdTaskManager(clock=clock)
+            self.socket = os.path.join(state_dir, 'server.sock')
+            self._check_directory()
+        except (OSError, ValueError, TypeError):
+            raise HostError('Invalid task host storage or identity') from None
+
+    def _check_directory(self):
+        info = os.lstat(self.state_dir)
+        _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and info.st_mode & 0o077 == 0)
+
+    def _open(self, name, flags):
+        fd = os.open(os.path.join(self.state_dir, name), flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        try:
+            info = os.fstat(fd)
+            _require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o600)
+            return fd
+        except Exception:
+            os.close(fd)
+            raise
+
+    @contextmanager
+    def _locked(self, deadline):
+        _deadline(deadline, self.clock)
+        fd = None
+        try:
+            self._check_directory()
+            # Also on reopen: a prior directory fsync may have failed after mkdir.
+            for path in (os.path.dirname(self.state_dir), self.state_dir):
+                directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            fd = self._open('host.lock', os.O_RDWR | os.O_CREAT)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            yield
+        except (OSError, ValueError, TypeError):
+            raise HostError('Task host storage unavailable') from None
+        finally:
+            if fd is not None:
+                os.close(fd)
+
+    def _read(self):
+        try:
+            fd = self._open('journal.json', os.O_RDONLY)
+        except FileNotFoundError:
+            return None
+        try:
+            with os.fdopen(fd) as stream:
+                content = stream.read(65537)
+            _require(len(content.encode('utf-8')) <= 65536)
+            journal = json.loads(content, object_pairs_hook=self._pairs)
+            keys = {'schema', 'task_incarnation', 'cwd', 'executable', 'unit', 'token', 'socket', 'phase', 'invocation_id', 'socket_identity'}
+            _require(isinstance(journal, dict) and set(journal) == keys)
+            _require(type(journal['schema']) is int and journal['schema'] == 1)
+            for key, value in (('task_incarnation', self.task_incarnation), ('cwd', self.cwd), ('executable', self.executable), ('socket', self.socket)):
+                _require(journal[key] == value)
+            _unit(journal['unit'])
+            _require(_uuid(journal['token'], 4))
+            _require(journal['phase'] in ('prepared', 'running', 'stopping', 'stopped'))
+            invocation = journal['invocation_id']
+            _require((journal['phase'] == 'prepared' and invocation is None) or
+                     (journal['phase'] != 'prepared' and isinstance(invocation, str) and re.fullmatch('[0-9a-f]{32}', invocation) is not None))
+            identity = journal['socket_identity']
+            _require(identity is None or (isinstance(identity, list) and len(identity) == 2 and all(type(v) is int and v >= 0 for v in identity)))
+            _require(journal['phase'] != 'prepared' or identity is None)
+            return journal
+        except (UnicodeError, ValueError, TypeError):
+            raise HostError('Invalid task host journal') from None
+
+    @staticmethod
+    def _pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            _require(key not in result)
+            result[key] = value
+        return result
+
+    def _write(self, journal):
+        temporary = None
+        try:
+            self._check_directory()
+            # Validate an existing destination without following links before replacement.
+            try:
+                fd = self._open('journal.json', os.O_RDONLY)
+            except FileNotFoundError:
+                pass
+            else:
+                os.close(fd)
+            fd, temporary = tempfile.mkstemp(prefix='.journal-', dir=self.state_dir)
+            with os.fdopen(fd, 'w') as stream:
+                json.dump(journal, stream, sort_keys=True)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, os.path.join(self.state_dir, 'journal.json'))
+            temporary = None
+            directory = os.open(self.state_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError:
+            raise HostError('Task host journal persistence failed') from None
+        finally:
+            if temporary is not None:
+                os.unlink(temporary)
+
+    def _snapshot(self, journal, phase='unknown', status=None, ready=False):
+        return HostSnapshot(journal['unit'], phase, status['invocation_id'] if status else None,
+                            status['main_pid'] if status else None, self.socket, ready)
+
+    def _inspect(self, journal, deadline):
+        try:
+            _deadline(deadline, self.clock)
+            status = self.manager.inspect(journal['unit'], deadline=deadline)
+            if status is None:
+                return self._snapshot(journal, 'stopped' if journal['phase'] == 'stopped' else 'unknown')
+            _status(status)
+            _require(status['description'] == 'claude-control task ' + journal['token'] and status['kill_mode'] == 'control-group')
+            _require(journal['invocation_id'] is None or journal['invocation_id'] == status['invocation_id'])
+            drained = status['active_state'] in ('inactive', 'failed') and status['main_pid'] == 0 and status['control_group'] == ''
+            active = status['active_state'] == 'active' and status['sub_state'] == 'running' and status['main_pid'] > 0
+            if journal['phase'] in ('stopping', 'stopped'):
+                if drained:
+                    if journal['phase'] != 'stopped':
+                        journal['phase'] = 'stopped'
+                        persist = True
+                    else:
+                        persist = False
+                    result = self._snapshot(journal, 'stopped', status)
+                elif active and journal['phase'] == 'stopping':
+                    return self._snapshot(journal, 'stopping', status)
+                else:
+                    return self._snapshot(journal)
+            elif active:
+                ready = False
+                identity = journal['socket_identity']
+                try:
+                    info = os.lstat(self.socket)
+                except FileNotFoundError:
+                    _require(identity is None)
+                else:
+                    _require(stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid())
+                    observed = [info.st_dev, info.st_ino]
+                    _require(identity is None or identity == observed)
+                    journal['socket_identity'] = observed
+                    ready = True
+                persist = journal['phase'] != 'running' or journal['invocation_id'] is None or identity != journal['socket_identity']
+                journal.update(phase='running', invocation_id=status['invocation_id'])
+                result = self._snapshot(journal, 'running', status, ready)
+            else:
+                return self._snapshot(journal)
+        except Exception:
+            return self._snapshot(journal)
+        # Persistence errors must escape, never masquerade as manager uncertainty.
+        if persist:
+            self._write(journal)
+        return result
+
+    def start(self, *, deadline):
+        with self._locked(deadline):
+            journal = self._read()
+            if journal is not None:
+                return self._inspect(journal, deadline)
+            try:
+                _require(self.manager.version(self.executable, deadline=deadline) == '0.160.0')
+                argv = host_argv(self.socket, executable=self.executable)
+            except Exception:
+                raise HostError('Task host launch prerequisites failed') from None
+            journal = dict(schema=1, task_incarnation=self.task_incarnation, cwd=self.cwd,
+                           executable=self.executable, unit='cctask-' + str(uuid4()) + '.service',
+                           token=str(uuid4()), socket=self.socket, phase='prepared',
+                           invocation_id=None, socket_identity=None)
+            self._write(journal)
+            try:
+                _deadline(deadline, self.clock)
+                self.manager.start(journal['unit'], argv, self.cwd, journal['token'], deadline=deadline)
+            except Exception:
+                return self._snapshot(journal)
+            return self._inspect(journal, deadline)
+
+    def inspect(self, *, deadline):
+        with self._locked(deadline):
+            journal = self._read()
+            _require(journal is not None)
+            return self._inspect(journal, deadline)
+
+    def stop(self, *, deadline, quiescent=False):
+        _require(quiescent is True)
+        with self._locked(deadline):
+            journal = self._read()
+            _require(journal is not None)
+            snapshot = self._inspect(journal, deadline)
+            if snapshot.phase not in ('running', 'stopping'):
+                return snapshot
+            journal['phase'] = 'stopping'
+            self._write(journal)
+            try:
+                _deadline(deadline, self.clock)
+                self.manager.stop(journal['unit'], deadline=deadline)
+            except Exception:
+                return self._snapshot(journal)
+            journal['phase'] = 'stopped'
+            self._write(journal)
+            return self._snapshot(journal, 'stopped')
