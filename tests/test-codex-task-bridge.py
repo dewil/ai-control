@@ -412,6 +412,84 @@ class BridgeContract(unittest.TestCase):
             with self.assertRaises(BridgeError): self.handle(self.request(call='new'), bridge=self.make_bridge())
         self.assertEqual(len(self.calls), 1)
 
+    def test_concurrent_first_use_does_not_strand_creator_storage(self):
+        import fcntl
+        import threading
+        real_open = os.open
+        real_flock = fcntl.flock
+        contender_ready = threading.Event()
+        release_contender = threading.Event()
+        contender_outcome = []
+        creator_outcome = []
+        intercepted = []
+        writes = []
+
+        @contextlib.contextmanager
+        def independent_guard(binding, *, deadline):
+            yield True
+
+        def independent_writer(binding, tool, arguments, *, deadline):
+            writes.append((binding, tool, copy.deepcopy(arguments)))
+            return {'qid': self.qid}
+
+        def concurrent_bridge():
+            return CodexTaskBridge(self.state, self.binding, guard=independent_guard,
+                                   writer=independent_writer, clock=lambda: self.now)
+
+        def run_contender():
+            try:
+                self.handle(bridge=concurrent_bridge())
+            except BaseException as error:
+                contender_outcome.append(error)
+            else:
+                contender_outcome.append('success')
+            finally:
+                contender_ready.set()
+
+        contender = threading.Thread(target=run_contender, daemon=True)
+
+        def intercept_open(path, flags, mode=0o777, *, dir_fd=None):
+            fd = real_open(path, flags, mode, dir_fd=dir_fd)
+            # Observe the first exclusive private regular-file creation only.
+            if (threading.current_thread() is not contender and not intercepted
+                    and flags & os.O_CREAT and flags & os.O_EXCL
+                    and mode == 0o600 and stat.S_ISREG(os.fstat(fd).st_mode)):
+                intercepted.append(True)
+                contender.start()
+                if not contender_ready.wait(2):
+                    os.close(fd)
+                    raise AssertionError('contender did not acquire or reject in time')
+            return fd
+
+        def intercept_flock(fd, operation):
+            result = real_flock(fd, operation)
+            if threading.current_thread() is contender and operation & fcntl.LOCK_EX:
+                contender_ready.set()
+                if not release_contender.wait(2):
+                    raise AssertionError('creator did not release contender in time')
+            return result
+
+        with patch('os.open', side_effect=intercept_open), patch('fcntl.flock', side_effect=intercept_flock):
+            try:
+                try:
+                    creator_outcome.append(self.handle(bridge=concurrent_bridge()))
+                except BaseException as error:
+                    creator_outcome.append(error)
+            finally:
+                release_contender.set()
+                if contender.ident is not None:
+                    contender.join(2)
+        self.assertTrue(intercepted, 'must exercise exclusive lock creation')
+        self.assertFalse(contender.is_alive(), 'contender must terminate within bounded wait')
+        self.assertEqual(len(contender_outcome), 1)
+        self.assertIsInstance(contender_outcome[0], BridgeError,
+                              'non-initializer must reject incomplete storage')
+        self.assertEqual(len(creator_outcome), 1)
+        self.assertIsInstance(creator_outcome[0], dict, 'original creator must initialize successfully')
+        self.assertEqual(len(writes), 1)
+        self.handle(self.request(rpc='after-initialization'), bridge=concurrent_bridge())
+        self.assertEqual(len(writes), 1)
+
     def test_call_capacity_preserves_existing_receipts(self):
         for i in range(256): self.handle(self.request(call='call' + str(i)))
         with self.assertRaises(BridgeError): self.handle(self.request(call='overflow'))
