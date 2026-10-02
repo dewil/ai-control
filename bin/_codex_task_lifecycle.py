@@ -396,7 +396,17 @@ class CodexTaskLifecycle:
         return turn
 
     def _unknown(self, record, reason):
-        record.update(phase='unknown', reason=reason, final_text=None)
+        # A read conflict does not imply an external effect. Keep the original
+        # prepared intent retryable only when its exact baseline returns.
+        if record['phase'] == 'prepared':
+            raise ProtocolError(reason)
+        receipt = record.get('terminal_receipt')
+        if receipt is not None:
+            # Historical completion survives loss of fresh native evidence;
+            # callers must inspect the current thread separately for activity.
+            record.update(phase=receipt['status'], reason=reason)
+        else:
+            record.update(phase='unknown', reason=reason, final_text=None)
         self._write(record)
         return self._snapshot(record)
 
@@ -404,6 +414,9 @@ class CodexTaskLifecycle:
         receipt = record.get('terminal_receipt')
         if receipt is not None and (receipt['turn_id'] != turn['id'] or receipt['status'] != turn['status']):
             raise ProtocolError('Native terminal receipt mismatch')
+        if receipt is not None:
+            record.update(phase=receipt['status'], reason=None)
+            return  # Never rewrite the durable final text from a later read.
         record['turn_id'] = turn['id']
         record['reason'] = None
         if turn['status'] == 'inProgress':
@@ -564,6 +577,9 @@ class CodexTaskLifecycle:
                 thread = self._read(deadline)
                 for record in records:
                     self._metadata(record, thread)
+                    if record.get('terminal_receipt') is not None:
+                        turn = self._correlate(record, thread['turns'])
+                        self._apply_turn(record, turn)
                 return {'identity_valid': True, 'active_turn_ids': self._active(thread),
                         'unresolved_operation_ids': unresolved, 'reason': None}
             except LifecycleError as error:
