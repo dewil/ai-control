@@ -82,3 +82,7 @@ Singleton second ask при уже open question отказывает BackendErr
 ## Уточнение summary format — 2026-10-03
 
 Preserve existing evidence format означает RAW summary в done.json. HTML escaping используется существующим cap_summary только для расчёта длины, Telegram renderer выполняет escape один раз. Strict backend не меняет encoding, не хранит &lt; вместо < и не режет посреди entity. Existing budget1500HTMLescaped characters applies to payload; existing " [обрезано]" marker appended afterward unchanged. Пример "<&" сохраняется буквально; "<"*2000 сохраняется как "<"*375 + " [обрезано]". Первоначальный independent test ошибочно трактовал неоднозначную формулировку как escaped storage; test-writer исправляет ожидание по этому явному контракту до semanticRED и implementationfix. Остальные strict checks не ослабляются.
+
+## Завершение backend scope
+
+Independent backend33 и весь215Codex/Telegram набор GREEN; question147, IO33, TASK697, run88, install69 и workflowShellCheck GREEN. gpt-6-sol medium re-review session01a0fe93-e0cb-7230-99ac-46d6e791eba6 PASS после semanticRED c3112b8/fixfb1f0a8. Actual author gpt-6.1-sol low проверен отдельно. Native runtime/deployment не заявлены завершёнными; следующая transport feature уже в работе.
