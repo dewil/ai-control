@@ -34,6 +34,10 @@ Telegram /sessions ──► claude-rc sessions <p> --porcelain   (uuid, имя,
 
 Глаголы CLI: `sessions <p> --porcelain`, `up <p> <uuid> [--prompt]`, `new <p>`, `down <uuid>`, `live`.
 
+## Подготовительный native lifecycle Codex
+
+`bin/_codex_task_lifecycle.py` наблюдает отдельный заранее материализованный task thread через внедряемый transport и хранит durable journal вне cwd. Перед start фиксирует uncertain intent, восстанавливает связь только по точному native marker/text и прерывает только подтверждённую пару thread/turn. Native approvals обслуживает штатный клиент. Модуль пока не подключён к TASK, reconciler, CLI или боту, не открывает соединение и не меняет настройки сервера. Запись в scripts.manifest соблюдает контракт полноты упаковки, а не включает runtime и не является deployment. Terminal receipt подтверждает исход конкретного хода и не разрешает cleanup. Контракт и границы: [Сессии Codex](specs/codex-sessions.md#подготовительный-lifecycle-задач-02102026).
+
 ## Legacy-схема (до V3.0)
 
 ```
