@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -312,6 +313,48 @@ class Contract(unittest.TestCase):
         p = self.put('a', 'ordinary')
         p.chmod(0o664)
         self.assertEqual(self.call('task_read', {'path': 'a'})['text'], 'ordinary')
+
+    def test_enumeration_uses_bounded_descriptors(self):
+        # Lower the descriptor limit only in an isolated child process.
+        for i in range(200): self.put(f'f{i:03}', 'needle')
+        child = r"""
+import contextlib, json, resource, sys
+from _codex_task_bridge import TaskBinding
+from _codex_task_files import CodexTaskFiles
+resource.setrlimit(resource.RLIMIT_NOFILE, (128, resource.getrlimit(resource.RLIMIT_NOFILE)[1]))
+@contextlib.contextmanager
+def guard(binding, *, deadline):
+    yield True
+binding = TaskBinding('a' * 32, 'event', sys.argv[1], 'thread', 'turn')
+api = CodexTaskFiles(binding, guard=guard)
+import time
+print(json.dumps(api.handle('task_list', {'limit': 500}, deadline=time.monotonic() + 30)))
+"""
+        env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / 'bin'))
+        result = subprocess.run([sys.executable, '-c', child, str(self.agent)], env=env,
+                                capture_output=True, text=True, timeout=40)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(len(payload['entries']), 200)
+        self.assertFalse(payload['truncated'])
+
+    def test_child_replacement_between_stat_and_open_refuses(self):
+        for tool, args in [('task_list', {}), ('task_search', {'query': 'needle'})]:
+            with self.subTest(tool=tool):
+                p = self.put('victim', 'needle')
+                original = os.open
+                replaced = False
+                def opening(path, flags, *positional, **kwargs):
+                    nonlocal replaced
+                    if os.fspath(path) == 'victim' and not replaced:
+                        replaced = True
+                        p.rename(self.work / 'old-victim')
+                        self.put('victim', 'replacement')
+                    return original(path, flags, *positional, **kwargs)
+                with patch('os.open', opening):
+                    self.refuse(tool, args)
+                self.assertTrue(replaced, 'fixture must intercept actual child open')
+                (self.work / 'old-victim').unlink()
 
     def test_dynamic_tools_exact_and_independent(self):
         descriptors = self.module.CodexTaskFiles.dynamic_tools()
