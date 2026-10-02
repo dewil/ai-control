@@ -278,6 +278,86 @@ class OperationStoreContract(unittest.TestCase):
         self.assertEqual(inflight.read_bytes(), before)
         self.assertEqual(self.index.read_bytes(), index_before)
 
+    def test_not_launched_cleanup_requires_intact_host_directory(self):
+        # INV-CXSTORE-04 / INV-CXSTORE-05: absent journal is not absent host proof.
+        self.publish()
+        operation = self.prepare()['operation_id']
+        self.store.revoke(deadline=self.deadline)
+        host = Path(self.read_index()['operations'][operation]['host_state_dir'])
+        self.assertTrue(host.is_dir())
+        self.assertFalse((host / 'journal.json').exists())
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+        saved = host.with_name('saved-host')
+        host.rename(saved)
+        with self.assertRaises(self.Error):
+            self.store.require_drained(deadline=self.deadline)
+        host.symlink_to(self.root / 'nonexistent-host', target_is_directory=True)
+        with self.assertRaises(self.Error):
+            self.store.require_drained(deadline=self.deadline)
+        host.unlink()
+        host.write_text('not a directory')
+        host.chmod(0o600)
+        with self.assertRaises(self.Error):
+            self.store.require_drained(deadline=self.deadline)
+        host.unlink()
+        saved.rename(host)
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+
+    def test_not_launched_cleanup_refuses_missing_operation_parent(self):
+        self.publish()
+        operation = self.prepare()['operation_id']
+        self.store.revoke(deadline=self.deadline)
+        host = Path(self.read_index()['operations'][operation]['host_state_dir'])
+        parent = host.parent
+        saved = parent.with_name('saved-operation')
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+        parent.rename(saved)
+        with self.assertRaises(self.Error):
+            self.store.require_drained(deadline=self.deadline)
+        saved.rename(parent)
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+
+    def partial_drain_publication(self):
+        self.publish()
+        operation = self.activate()
+        self.store.revoke(deadline=self.deadline)
+        evidence = self.drained(operation)
+        self.assertIsNone(self.op()['drain_evidence'])
+        real_replace = os.replace
+        def crash(src, dst, *args, **kwargs):
+            if Path(dst) == self.agent / 'inbox/inflight/event-1.json':
+                raise OSError('injected drain projection crash')
+            return real_replace(src, dst, *args, **kwargs)
+        with patch('os.replace', side_effect=crash), self.assertRaises(self.Error):
+            self.store.record_drained(operation, evidence, deadline=self.deadline)
+        self.assertEqual(self.read_index()['operations'][operation]['drain_evidence'], evidence)
+        self.assertIsNone(self.op()['drain_evidence'])
+        return operation, evidence
+
+    def test_drain_receipt_exact_repeat_repairs_projection_after_crash(self):
+        # INV-CXSTORE-03 / INV-CXSTORE-04: durable receipt before projection.
+        operation, evidence = self.partial_drain_publication()
+        journal = Path(evidence['host_state_dir']) / 'journal.json'
+        journal_before = journal.read_bytes()
+        self.store.record_drained(operation, evidence, deadline=self.deadline)
+        self.assertEqual(self.op()['drain_evidence'], evidence)
+        self.assertEqual(self.read_index()['operations'][operation]['drain_evidence'], evidence)
+        self.assertEqual(journal.read_bytes(), journal_before)
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+
+    def test_drain_receipt_conflicting_repeat_cannot_replace_durable_proof(self):
+        operation, evidence = self.partial_drain_publication()
+        index_before = self.index.read_bytes()
+        for field, value in (('invocation_id', 'c' * 32),
+            ('token', str(uuid.uuid4())), ('operation_id', str(uuid.uuid4()))):
+            with self.subTest(field=field), self.assertRaises(self.Error):
+                self.store.record_drained(operation, dict(evidence, **{field: value}), deadline=self.deadline)
+            self.assertEqual(self.index.read_bytes(), index_before)
+            self.assertEqual(self.read_index()['operations'][operation]['drain_evidence'], evidence)
+        self.store.record_drained(operation, evidence, deadline=self.deadline)
+        self.assertEqual(self.op()['drain_evidence'], evidence)
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+
     def test_creator_registry_precedes_marker_and_final_publication(self):
         # INV-CXSTORE-01
         original = (self.stage / 'control.json').read_bytes()
