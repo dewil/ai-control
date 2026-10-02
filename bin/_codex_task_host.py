@@ -2,10 +2,13 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
 import fcntl
+import errno
 import json
 import math
 import os
 import re
+import select
+import signal
 import stat
 import socket
 import struct
@@ -84,6 +87,62 @@ def _status(status):
     return status
 
 
+def _cleanup(status):
+    _require(status.get('type') == 'exec' and status.get('exit_type') == 'main'
+             and status.get('restart') == 'no' and status.get('remain_after_exit') is False
+             and status.get('send_sigkill') is True)
+
+
+@dataclass(frozen=True)
+class _ProcessHandle:
+    pid: int
+    uid: int
+    cgroup: str
+    pidfd: int
+    eventsfd: int
+    deadline: float
+    clock: object
+
+    def signal(self, sig):
+        _deadline(self.deadline, self.clock)
+        signal.pidfd_send_signal(self.pidfd, sig)
+
+    def exited(self):
+        _deadline(self.deadline, self.clock)
+        poll = select.poll()
+        poll.register(self.pidfd, select.POLLIN)
+        events = poll.poll(0)
+        if not events:
+            return False
+        _require(len(events) == 1 and events[0][0] == self.pidfd and events[0][1] in (select.POLLIN, select.POLLIN | select.POLLHUP))
+        return True
+
+    def drained(self):
+        _deadline(self.deadline, self.clock)
+        try:
+            os.lseek(self.eventsfd, 0, os.SEEK_SET)
+            _deadline(self.deadline, self.clock)
+            content = os.read(self.eventsfd, 65537).decode('ascii')
+        except OSError as error:
+            if error.errno == errno.ENODEV:
+                return True  # Captured original cgroup was removed only after emptying.
+            raise HostError('Original task cgroup evidence unavailable') from None
+        _require(len(content) <= 65536)
+        fields = {}
+        for line in content.splitlines():
+            pair = line.split()
+            _require(len(pair) == 2 and pair[0] not in fields and pair[1] in ('0', '1'))
+            fields[pair[0]] = pair[1]
+        _require('populated' in fields)
+        return fields['populated'] == '0'
+
+    def close(self):
+        try:
+            os.close(self.pidfd)
+        finally:
+            os.close(self.eventsfd)
+
+
 @dataclass(frozen=True)
 class HostSnapshot:
     unit: str
@@ -96,13 +155,42 @@ class HostSnapshot:
 
 class SystemdTaskManager:
     """Bounded synchronous systemd user operations with no output disclosure."""
-    _fields = ('LoadState', 'Description', 'InvocationID', 'ActiveState', 'SubState', 'MainPID', 'ControlGroup', 'KillMode')
+    _fields = ('LoadState', 'Description', 'InvocationID', 'ActiveState', 'SubState', 'MainPID', 'ControlGroup', 'KillMode', 'Type', 'ExitType', 'Restart', 'RemainAfterExit', 'SendSIGKILL')
     _env = ('HOME', 'PATH', 'CODEX_HOME', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
             'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy')
 
-    def __init__(self, *, runner=subprocess.run, clock=time.monotonic, peer_probe=None):
+    def __init__(self, *, runner=subprocess.run, clock=time.monotonic, peer_probe=None, process_opener=None):
         self.runner, self.clock = runner, clock
         self.peer_probe = peer_probe if peer_probe is not None else self._peer_probe
+        self.process_opener = process_opener if process_opener is not None else self._open_process
+
+    def _open_process(self, main_pid, control_group, *, deadline):
+        pidfd = eventsfd = None
+        try:
+            _deadline(deadline, self.clock)
+            pidfd = os.pidfd_open(main_pid)
+            group_path = '/sys/fs/cgroup' + control_group
+            _require(os.path.realpath(group_path) == group_path)
+            _deadline(deadline, self.clock)
+            eventsfd = os.open(group_path + '/cgroup.events', os.O_RDONLY | os.O_NOFOLLOW)
+            _deadline(deadline, self.clock)
+            info = os.stat('/proc/' + str(main_pid))
+            _require(info.st_uid == os.getuid())
+            _deadline(deadline, self.clock)
+            with open('/proc/' + str(main_pid) + '/cgroup') as stream:
+                content = stream.read(65537)
+            _require(len(content) <= 65536)
+            groups = [line[3:] for line in content.splitlines() if line.startswith('0::')]
+            _require(groups == [control_group])
+            handle = _ProcessHandle(main_pid, info.st_uid, control_group, pidfd, eventsfd, deadline, self.clock)
+            _require(not handle.exited())
+            return handle
+        except Exception:
+            if pidfd is not None:
+                os.close(pidfd)
+            if eventsfd is not None:
+                os.close(eventsfd)
+            raise HostError('Original task process anchors unavailable') from None
 
     def _peer_probe(self, socket_path, *, deadline):
         try:
@@ -173,18 +261,81 @@ class SystemdTaskManager:
         command = ['systemd-run', '--user', '--no-ask-password', '--quiet', '--unit=' + unit,
                    '--description=claude-control task ' + token, '--service-type=exec',
                    '--property=KillMode=control-group', '--property=Restart=no', '--property=UMask=0077',
-                   '--property=TimeoutStopSec=5s', '--working-directory=' + cwd, '--expand-environment=no']
+                   '--property=TimeoutStopSec=5s', '--property=ExitType=main',
+                   '--property=RemainAfterExit=no', '--property=SendSIGKILL=yes', '--working-directory=' + cwd, '--expand-environment=no']
         for name in self._env:
             if name in os.environ:
                 _require('\x00' not in os.environ[name])
-                command.append('--setenv=' + name + '=' + os.environ[name])
+                command.append('--setenv=' + name)
         result = self._run(command + ['--'] + argv, deadline)
         _require(result.returncode == 0)
 
-    def stop(self, unit, *, deadline):
-        _unit(unit)
-        result = self._run(['systemctl', '--user', '--no-ask-password', 'stop', unit], deadline)
-        _require(result.returncode == 0)
+    def stop(self, unit, *, invocation_id, main_pid, token, deadline):
+        handle = None
+        try:
+            _unit(unit)
+            _require(isinstance(invocation_id, str) and re.fullmatch('[0-9a-f]{32}', invocation_id) is not None)
+            _require(type(main_pid) is int and main_pid > 0 and _uuid(token, 4))
+            _deadline(deadline, self.clock)
+            def owned(status):
+                _status(status)
+                _cleanup(status)
+                _require(status['invocation_id'] == invocation_id and status['description'] == 'claude-control task ' + token
+                         and status['kill_mode'] == 'control-group')
+            status = self.inspect(unit, deadline=deadline)
+            owned(status)
+            _require(status['active_state'] == 'active' and status['sub_state'] == 'running' and status['main_pid'] == main_pid)
+            group = status['control_group']
+            _group(group)
+            _deadline(deadline, self.clock)
+            handle = self.process_opener(main_pid, group, deadline=deadline)
+            _require(type(handle.pid) is int and handle.pid == main_pid and type(handle.uid) is int
+                     and handle.uid == os.getuid() and handle.cgroup == group)
+            second = self.inspect(unit, deadline=deadline)
+            owned(second)
+            _require(second['active_state'] == 'active' and second['sub_state'] == 'running'
+                     and second['main_pid'] == main_pid and second['control_group'] == group)
+            def exited():
+                _deadline(deadline, self.clock)
+                value = handle.exited()
+                _require(type(value) is bool)
+                return value
+            def send(sig):
+                _deadline(deadline, self.clock)
+                try:
+                    handle.signal(sig)
+                except ProcessLookupError:
+                    _require(exited())
+            term_time = self.clock()
+            send(signal.SIGTERM)
+            killed = False
+            while True:
+                gone = exited()
+                if not gone:
+                    # No manager subprocess can delay the one-second escalation grace.
+                    if not killed and self.clock() - term_time >= 1:
+                        send(signal.SIGKILL)
+                        killed = True
+                else:
+                    _deadline(deadline, self.clock)
+                    drained = handle.drained()
+                    _require(type(drained) is bool)
+                    current = self.inspect(unit, deadline=deadline)
+                    if current is not None:
+                        owned(current)
+                    if drained and (current is None or (current['active_state'] in ('inactive', 'failed')
+                                                         and current['main_pid'] == 0 and current['control_group'] == '')):
+                        return
+                remaining = _deadline(deadline, self.clock)
+                time.sleep(min(0.02, remaining))
+        except Exception:
+            raise HostError('Original task invocation stop not confirmed') from None
+        finally:
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    raise HostError('Original task process anchors close failed') from None
 
     def inspect(self, unit, *, deadline):
         _unit(unit)
@@ -205,9 +356,12 @@ class SystemdTaskManager:
                      and pid == 0 and fields['ActiveState'] == 'inactive' and fields['SubState'] == 'dead')
             return None
         _require(result.returncode == 0 and fields['LoadState'] == 'loaded')
+        _require(fields['RemainAfterExit'] in ('yes', 'no') and fields['SendSIGKILL'] in ('yes', 'no'))
         return _status(dict(invocation_id=fields['InvocationID'], description=fields['Description'],
                             kill_mode=fields['KillMode'], active_state=fields['ActiveState'],
-                            sub_state=fields['SubState'], main_pid=pid, control_group=fields['ControlGroup']))
+                            sub_state=fields['SubState'], main_pid=pid, control_group=fields['ControlGroup'],
+                            type=fields['Type'], exit_type=fields['ExitType'], restart=fields['Restart'],
+                            remain_after_exit=fields['RemainAfterExit'] == 'yes', send_sigkill=fields['SendSIGKILL'] == 'yes'))
 
 
 class CodexTaskHost:
@@ -363,6 +517,7 @@ class CodexTaskHost:
             if status is None:
                 return self._snapshot(journal, 'stopped' if journal['phase'] == 'stopped' else 'unknown')
             _status(status)
+            _cleanup(status)
             _require(status['description'] == 'claude-control task ' + journal['token'] and status['kill_mode'] == 'control-group')
             _require(journal['invocation_id'] is None or journal['invocation_id'] == status['invocation_id'])
             drained = status['active_state'] in ('inactive', 'failed') and status['main_pid'] == 0 and status['control_group'] == ''
@@ -439,7 +594,8 @@ class CodexTaskHost:
             self._write(journal)
             try:
                 _deadline(deadline, self.clock)
-                self.manager.stop(journal['unit'], deadline=deadline)
+                self.manager.stop(journal['unit'], invocation_id=snapshot.invocation_id,
+                                  main_pid=snapshot.main_pid, token=journal['token'], deadline=deadline)
             except Exception:
                 return self._snapshot(journal)
             journal['phase'] = 'stopped'
