@@ -112,6 +112,172 @@ class OperationStoreContract(unittest.TestCase):
             host_state_dir=str(host), phase='stopped', unit=unit, token=token,
             invocation_id='b' * 32, drained=True)
 
+    def historical(self, *, finished=True, outcome='ok'):
+        self.publish()
+        operation = self.activate()
+        self.store.revoke(deadline=self.deadline)
+        self.store.record_drained(operation, self.drained(operation), deadline=self.deadline)
+        if finished:
+            self.store.finish(operation, dict(operation_id=operation, task_incarnation=INC,
+                thread_id='thread-1', turn_id='turn-1', terminal='completed',
+                terminal_proven=True, quiescent=True), deadline=self.deadline)
+        path = self.agent / 'inbox/inflight/event-1.json'
+        envelope = json.loads(path.read_text())
+        envelope['meta']['history'] = [{'outcome': outcome}]
+        save(path, envelope)
+        done = self.agent / 'inbox/done'
+        done.mkdir(mode=0o700)
+        destination = done / path.name
+        path.rename(destination)
+        return operation, destination
+
+    def historical_refused(self):
+        try:
+            result = self.store.snapshot(deadline=self.deadline)
+        except self.Error:
+            pass
+        else:
+            self.assertIs(result['reconciliation_required'], True)
+        with self.assertRaises(self.Error):
+            self.store.require_drained(deadline=self.deadline)
+
+    def test_historical_finished_matching_done_supports_snapshot_and_cleanup(self):
+        # INV-CXSTORE-04: immutable completed envelope remains durable evidence.
+        operation, destination = self.historical()
+        before = destination.read_bytes()
+        snapshot = self.store.snapshot(deadline=self.deadline)
+        self.assertIs(snapshot['reconciliation_required'], False)
+        self.assertEqual(snapshot['operations'][operation]['status'], 'finished')
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+        self.assertEqual(destination.read_bytes(), before)
+
+    def test_historical_finished_asked_is_valid_terminal_history(self):
+        operation, path = self.historical(outcome='asked')
+        self.assertIs(self.store.snapshot(deadline=self.deadline)['reconciliation_required'], False)
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+
+    def test_historical_revoked_not_launched_cancelled_supports_cleanup(self):
+        self.publish()
+        operation = self.prepare()['operation_id']
+        self.store.revoke(deadline=self.deadline)
+        source = self.agent / 'inbox/inflight/event-1.json'
+        envelope = json.loads(source.read_text())
+        envelope['meta']['history'] = [{'outcome': 'cancelled'}]
+        save(source, envelope)
+        done = self.agent / 'inbox/done'
+        done.mkdir(mode=0o700)
+        source.rename(done / source.name)
+        self.assertIs(self.store.snapshot(deadline=self.deadline)['reconciliation_required'], False)
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+
+    def test_historical_pending_or_deadletter_path_is_not_terminal_evidence(self):
+        operation, path = self.historical()
+        for folder in ('pending', 'deadletter'):
+            with self.subTest(folder=folder):
+                directory = self.agent / 'inbox' / folder
+                directory.mkdir(mode=0o700)
+                other = directory / path.name
+                path.rename(other)
+                self.historical_refused()
+                other.rename(path)
+
+    def test_historical_revoked_drained_cancelled_supports_cleanup(self):
+        operation, destination = self.historical(finished=False, outcome='cancelled')
+        self.assertEqual(self.store.snapshot(deadline=self.deadline)['operations'][operation]['status'], 'revoked')
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+
+    def test_historical_active_and_prepared_done_never_authorize_cleanup(self):
+        self.publish()
+        operation = self.prepare()['operation_id']
+        path = self.agent / 'inbox/inflight/event-1.json'
+        envelope = json.loads(path.read_text())
+        envelope['meta']['history'] = [{'outcome': 'ok'}]
+        save(path, envelope)
+        done = self.agent / 'inbox/done'
+        done.mkdir(mode=0o700)
+        destination = done / path.name
+        path.rename(destination)
+        self.historical_refused()
+
+    def test_historical_active_even_matching_native_drain_refuses(self):
+        self.publish()
+        operation = self.activate()
+        self.store.record_drained(operation, self.drained(operation), deadline=self.deadline)
+        path = self.agent / 'inbox/inflight/event-1.json'
+        envelope = json.loads(path.read_text())
+        envelope['meta']['history'] = [{'outcome': 'ok'}]
+        save(path, envelope)
+        done = self.agent / 'inbox/done'
+        done.mkdir(mode=0o700)
+        path.rename(done / path.name)
+        self.historical_refused()
+
+    def test_historical_projection_mismatches_refuse(self):
+        operation, path = self.historical()
+        original = json.loads(path.read_text())
+        for field, value in (('status', 'active'), ('operation_id', str(uuid.uuid4())),
+            ('task_incarnation', 'f' * 32), ('generation', 8), ('attempt_id', 'foreign'),
+            ('thread_id', 'foreign-thread'), ('turn_id', 'foreign-turn'),
+            ('start_reserved', False), ('launch_reserved', True)):
+            with self.subTest(field=field):
+                envelope = json.loads(json.dumps(original))
+                envelope['meta']['codex_operation'][field] = value
+                save(path, envelope)
+                self.historical_refused()
+        save(path, original)
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+
+    def test_historical_wrong_key_missing_history_and_unknown_outcome_refuse(self):
+        operation, path = self.historical()
+        original = json.loads(path.read_text())
+        variants = []
+        wrong_key = json.loads(json.dumps(original))
+        wrong_key['key'] = 'foreign-event'
+        variants.append(wrong_key)
+        no_history = json.loads(json.dumps(original))
+        del no_history['meta']['history']
+        no_history['result'] = 'completed successfully'
+        variants.append(no_history)
+        for history in ([], [{'outcome': 'unknown'}], [{'outcome': 'ok'}, {'outcome': 'pending'}],
+            [{'outcome': True}], [{'outcome': None}]):
+            envelope = json.loads(json.dumps(original))
+            envelope['meta']['history'] = history
+            variants.append(envelope)
+        for number, envelope in enumerate(variants):
+            with self.subTest(number=number):
+                save(path, envelope)
+                self.historical_refused()
+
+    def test_historical_missing_or_corrupt_done_refuses(self):
+        operation, path = self.historical()
+        path.unlink()
+        self.historical_refused()
+        path.write_text('{broken')
+        path.chmod(0o600)
+        self.historical_refused()
+
+    def test_historical_finished_never_allows_same_event_projection_replacement(self):
+        operation, path = self.historical()
+        before = self.index.read_bytes()
+        done_before = path.read_bytes()
+        with self.assertRaises(self.Error):
+            self.prepare()
+        self.assertEqual(self.index.read_bytes(), before)
+        self.assertEqual(path.read_bytes(), done_before)
+        self.assertFalse((self.agent / 'inbox/inflight/event-1.json').exists())
+        self.assertEqual(set(self.read_index()['operations']), {operation})
+
+    def test_finished_inflight_never_allows_same_event_projection_replacement(self):
+        operation, path = self.historical()
+        inflight = self.agent / 'inbox/inflight/event-1.json'
+        path.rename(inflight)
+        before = inflight.read_bytes()
+        index_before = self.index.read_bytes()
+        with self.assertRaises(self.Error):
+            self.prepare()
+        self.assertEqual(inflight.read_bytes(), before)
+        self.assertEqual(self.index.read_bytes(), index_before)
+
     def test_creator_registry_precedes_marker_and_final_publication(self):
         # INV-CXSTORE-01
         original = (self.stage / 'control.json').read_bytes()
