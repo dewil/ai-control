@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""Return a bounded, opt-in Jev executor-tier advisory for explicit public text."""
+
+import argparse
+import fcntl
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+
+
+QUESTION_SHA = "b6fc89cde27e47a909978ae763a25e0d41b9fee65296c5b235b5a25e880ae5a5"
+QUESTION_NAME = "jev-executor-questions.json"
+CONFIG_KEYS = {
+    "CONTROL_JEV_HELPER", "CONTROL_JEV_CHEAP_MODEL",
+    "CONTROL_JEV_STANDARD_MODEL", "CONTROL_JEV_DEEP_MODEL",
+}
+MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}\Z")
+JEV_MODEL_RE = re.compile(r"typesafe/jev-[A-Za-z0-9._-]{1,80}\Z")
+TIERS = {"cheap", "standard", "deep", "clarify"}
+
+
+class SafeError(Exception):
+    pass
+
+
+def read_config():
+    """Read only the four allowlisted assignments; never source the file."""
+    values = {}
+    path = Path.home() / ".config/claude-control/env"
+    try:
+        with path.open(encoding="utf-8") as stream:
+            for line in stream:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if stripped.startswith("export "):
+                    stripped = stripped[7:].lstrip()
+                key, sep, raw = stripped.partition("=")
+                if not sep or key.strip() not in CONFIG_KEYS:
+                    continue
+                key = key.strip()
+                if key in os.environ:
+                    continue
+                # Parse a value as data, with shell quoting/comments but no expansion.
+                import shlex
+                try:
+                    parts = shlex.split(raw, comments=True, posix=True)
+                except ValueError as exc:
+                    raise SafeError("invalid operator configuration") from exc
+                if len(parts) > 1:
+                    raise SafeError("invalid operator configuration")
+                values[key] = parts[0] if parts else ""
+    except FileNotFoundError:
+        pass
+    except (OSError, UnicodeError) as exc:
+        raise SafeError("cannot read operator configuration") from exc
+    for key in CONFIG_KEYS:
+        if key in os.environ:
+            values[key] = os.environ[key]
+    return values
+
+
+def open_regular(path, label, writable=False):
+    try:
+        flags = (os.O_RDWR | os.O_APPEND if writable else os.O_RDONLY) | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            os.close(fd)
+            raise SafeError(label + " must be a regular file")
+        return fd
+    except OSError as exc:
+        raise SafeError("cannot open " + label) from exc
+
+
+def bounded_public_input(path):
+    fd = open_regular(path, "public input")
+    try:
+        info = os.fstat(fd)
+        if info.st_size > 16 * 1024:
+            raise SafeError("public input exceeds size limit")
+        chunks = []
+        while True:
+            block = os.read(fd, 4096)
+            if not block:
+                break
+            chunks.append(block)
+            if sum(map(len, chunks)) > 16 * 1024:
+                raise SafeError("public input exceeds size limit")
+        data = b"".join(chunks)
+        try:
+            decoded = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise SafeError("public input must be UTF-8") from exc
+        if len(decoded) > 4000:
+            raise SafeError("public input exceeds character limit")
+        return data
+    finally:
+        os.close(fd)
+
+
+def safe_scalar(value, low, high):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "unknown"
+    try:
+        if not math.isfinite(value) or not low <= value <= high:
+            return "unknown"
+    except (OverflowError, TypeError):
+        return "unknown"
+    return value
+
+
+def workspace_roots(task_path):
+    roots = set()
+    for start in (Path.cwd(), Path(task_path).absolute()):
+        for parent in (start, *start.parents):
+            try:
+                parent_mode = parent.stat().st_mode
+            except OSError:
+                continue
+            shared_tmp = bool(parent_mode & stat.S_ISVTX and parent_mode & stat.S_IWOTH)
+            if (not shared_tmp and
+                    ((parent / ".git").exists() or (parent / ".AI/project.json").is_file())):
+                roots.add(parent.resolve())
+                break
+    return roots
+
+
+def reject_workspace_helper(helper, task_path):
+    target = Path(helper).resolve()
+    for root in workspace_roots(task_path):
+        try:
+            target.relative_to(root)
+        except ValueError:
+            continue
+        raise SafeError("configured helper must be outside the workspace")
+
+
+def receipt(args, status, tier, reason, proposed, started, **metadata):
+    value = {
+        "mode": "advisory",
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "tier": tier,
+        "status": status,
+        "reason": reason,
+        "proposed": proposed,
+        "effort": "unknown",
+        "availability": "unknown",
+        "mapping_reference": "CONTROL_JEV_" + tier.upper() + "_MODEL" if tier in {"cheap", "standard", "deep"} else "none",
+        "confirmation": "pending",
+        "original_model": args.current_model or "unknown",
+        "executor": "unchanged/not launched",
+        "question_sha256": QUESTION_SHA,
+        "jev_model": metadata.get("jev_model", "unknown"),
+        "confidence": metadata.get("confidence", "unknown"),
+        "cost": metadata.get("cost", "unknown"),
+        "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
+    }
+    return value
+
+
+def append_receipt(fd, value):
+    encoded = ("\n```json\n" + json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n```\n").encode("utf-8")
+    os.lseek(fd, 0, os.SEEK_END)
+    # A single append write under the held exclusive flock keeps each receipt intact.
+    offset = 0
+    while offset < len(encoded):
+        offset += os.write(fd, encoded[offset:])
+    os.fsync(fd)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--public-text-file", required=True)
+    parser.add_argument("--task", required=True)
+    parser.add_argument("--risk", action="store_true")
+    parser.add_argument("--current-model")
+    args = parser.parse_args()
+    started = time.monotonic()
+    task_path = Path(args.task)
+    if task_path.suffix.lower() != ".md":
+        raise SafeError("task must be an existing .md file")
+    task_fd = open_regular(task_path, "task", writable=True)
+    try:
+        fcntl.flock(task_fd, fcntl.LOCK_EX)
+        task_stat = os.fstat(task_fd)
+        public_bytes = bounded_public_input(args.public_text_file)
+        config = read_config()
+        helper = config.get("CONTROL_JEV_HELPER", "")
+        if not helper or not os.path.isabs(helper):
+            raise SafeError("CONTROL_JEV_HELPER must be an absolute operator path")
+        reject_workspace_helper(helper, task_path)
+        helper_fd = open_regular(helper, "configured helper")
+        os.close(helper_fd)
+        questions = Path(helper).parent / QUESTION_NAME
+        qfd = open_regular(questions, "frozen questions")
+        try:
+            digest = hashlib.sha256()
+            while True:
+                chunk = os.read(qfd, 65536)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        finally:
+            os.close(qfd)
+        if digest.hexdigest() != QUESTION_SHA:
+            raise SafeError("frozen questions checksum mismatch")
+        mappings = {}
+        for tier in ("cheap", "standard", "deep"):
+            key = "CONTROL_JEV_" + tier.upper() + "_MODEL"
+            value = config.get(key)
+            if value:
+                if not MODEL_RE.fullmatch(value):
+                    raise SafeError("invalid configured model mapping")
+                mappings[tier] = value
+
+        tier, status, reason = "unknown", "ok", "advisory generated"
+        model_metadata, confidence, cost = "unknown", "unknown", "unknown"
+        if args.current_model:
+            if not MODEL_RE.fullmatch(args.current_model):
+                raise SafeError("invalid current model")
+            tier, reason = "unknown", "current model supplied; evaluation skipped"
+        elif args.risk:
+            tier, reason = "unknown", "risk flag supplied; evaluation skipped"
+        else:
+            try:
+                result = subprocess.run(
+                    ["python3", helper, "--questions", str(questions)],
+                    input=public_bytes, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    timeout=95, check=False, shell=False,
+                )
+                if len(result.stdout) > 65536:
+                    raise ValueError("oversized output")
+                if result.returncode not in (0,):
+                    status, reason = "unavailable", "helper returned nonzero status"
+                else:
+                    answer = json.loads(result.stdout.decode("utf-8"))
+                    if not isinstance(answer, dict):
+                        raise ValueError("invalid result")
+                    answers = answer.get("answers")
+                    if not isinstance(answers, dict):
+                        raise ValueError("invalid answers")
+                    choice = answers.get("executor_tier", {})
+                    if (not isinstance(choice, dict) or choice.get("type") != "choice"
+                            or choice.get("choice") not in TIERS):
+                        raise ValueError("invalid tier")
+                    tier = choice["choice"]
+                    reason = "tier returned by configured Jev helper"
+                    raw_model = answer.get("model")
+                    if isinstance(raw_model, str) and JEV_MODEL_RE.fullmatch(raw_model):
+                        model_metadata = raw_model
+                    confidence = safe_scalar(answer.get("confidence"), 0, 1)
+                    cost = safe_scalar(answer.get("cost"), 0, 1000)
+            except subprocess.TimeoutExpired:
+                status, tier, reason = "unavailable", "unknown", "helper timed out"
+            except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError, RecursionError):
+                status, tier, reason = "unavailable", "unknown", "helper output invalid"
+
+        proposed = None
+        if status == "ok" and not args.current_model and not args.risk and tier in mappings:
+            proposed = {"provider": "codex", "model": mappings[tier]}
+        if tier == "clarify":
+            reason = "helper requested clarification"
+        elif status == "ok" and tier in {"cheap", "standard", "deep"} and tier not in mappings:
+            reason = "no configured model for tier"
+        value = receipt(args, status, tier, reason, proposed, started,
+                        jev_model=model_metadata, confidence=confidence, cost=cost)
+        try:
+            path_stat = os.stat(task_path, follow_symlinks=False)
+            fd_stat = os.fstat(task_fd)
+            if (not stat.S_ISREG(path_stat.st_mode)
+                    or (path_stat.st_dev, path_stat.st_ino) != (fd_stat.st_dev, fd_stat.st_ino)):
+                raise SafeError("task path changed during evaluation")
+            append_receipt(task_fd, value)
+        except SafeError:
+            raise
+        except OSError as exc:
+            raise SafeError("cannot persist task receipt") from exc
+        print(json.dumps(value, ensure_ascii=False, sort_keys=True))
+        return 0
+    finally:
+        os.close(task_fd)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except SafeError as exc:
+        print("claude-agent-model-advice: " + str(exc), file=sys.stderr)
+        raise SystemExit(2)
+    except OSError:
+        print("claude-agent-model-advice: filesystem operation failed", file=sys.stderr)
+        raise SystemExit(2)
