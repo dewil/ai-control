@@ -47,7 +47,7 @@ FR-CXDEFAULT-01..05: новые диалоги наследуют эффекти
 - **INV-CXHOST-04:** scoped stop требует внешнего quiescence proof, и только pinned original main exit вместе с pinned original cgroup drain либо matching inactive drained recovery создаёт durable stopped receipt. Этот receipt не разрешает cleanup worktree.
 - **INV-CXHOST-05:** default environment/config/auth не означают изоляцию capabilities. Process supervisor не подключён к TASK/reconciler и не отвечает на approvals/dynamic tool calls.
 
-Трассируемость host: tests/test-codex-task-host.py, FR-CXHOST-01..05 / INV-CXHOST-01..05. Известные дыры: concrete trusted bridge backend, native approvals routing и full persistent-thread admission, runtime wiring и production acceptance остаются незавершёнными.
+Трассируемость host: tests/test-codex-task-host.py, FR-CXHOST-01..05 / INV-CXHOST-01..05. Известные дыры: native approvals routing и full persistent-thread admission, runtime wiring и production acceptance остаются незавершёнными.
 
 ## Trusted dynamic bridge (02.10.2026)
 
@@ -57,4 +57,13 @@ FR-CXDEFAULT-01..05: новые диалоги наследуют эффекти
 - **INV-CXBRIDGE-04:** private bounded journal вне agent directory, nofollow/single-link storage и nonblocking local lock; corrupt state не разрешает effects. Journal не сохраняет raw question/summary.
 - **INV-CXBRIDGE-05:** task_done означает requested evidence, не terminal/accepted/cleanup. Bridge generic и injectable; existing evidence writers/locks сохраняют ownership. Same-UID malicious clients вне гарантий.
 
-Трассируемость: tests/test-codex-task-bridge.py, FR-CXBRIDGE-01..05 / INV-CXBRIDGE-01..05. Дыры: trusted backend adapter с atomic task fencing и fail-closed evidence, transport reply wiring, native approvals/dynamic-tool acceptance, persistent-thread admission и TASK/runtime integration остаются открытыми.
+Трассируемость: tests/test-codex-task-bridge.py, FR-CXBRIDGE-01..05 / INV-CXBRIDGE-01..05. Дыры: transport reply wiring, native approvals/dynamic-tool acceptance, persistent-thread admission и TASK/runtime integration остаются открытыми.
+
+## Concrete TASK backend (03.10.2026)
+
+- **INV-CXBACK-01:** control incarnation/generation/lease attempt и durable inflight operation/thread/turn — единая authority; stale/finished binding не пишет evidence и не выдаёт replay success.
+- **INV-CXBACK-02:** guard держит questions -> done -> name -> control -> inbox locks, shared writers не берут evidence locks повторно. Случайная подмена/потеря/коррупция файлов отказывает.
+- **INV-CXBACK-03:** существующие writer bodies остаются единственными создателями questions/done, strict backend проверяет evidence и worktree; done лишь requested, не cleanup.
+- **INV-CXBACK-04:** default Claude CLI semantics сохраняются; backend не зависит от daemon env, writer вне guard запрещён, deadlines/static errors и native-independent tests обязательны.
+
+Трассируемость: tests/test-codex-task-backend.py, FR-CXBACK-01..04 / INV-CXBACK-01..04. Дыры общего runtime: operation publication/revocation в TASK, native admission/read tools/transport replies/approvals, runner/reconciler/menu и production acceptance.
