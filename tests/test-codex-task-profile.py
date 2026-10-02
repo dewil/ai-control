@@ -155,6 +155,26 @@ class ProfileTests(unittest.TestCase):
  def test_catalog_completeness(self):
   for pages in [[],[{'data':[],'nextCursor':'more'}],[{'data':[{'name':'inventory','runtimeStatus':'starting','tools':{},'resources':[],'resourceTemplates':[]}],'nextCursor':None}]]:
    a=self.evidence(); a[3]=pages; self.reject(p.validate_sealed_policy,*a)
+ def test_native_typed_profile_known_null_projection(self):
+  a=self.evidence()
+  profile=a[2]['permissions']['control_task']
+  profile.update(description=None,extends=None,workspace_roots=None)
+  profile['filesystem']['glob_scan_max_depth']=None
+  network_fields='proxy_url enable_socks5 socks_url enable_socks5_udp allow_upstream_proxy dangerously_allow_non_loopback_proxy dangerously_allow_all_unix_sockets mode domains unix_sockets allow_local_binding mitm'.split()
+  profile['network'].update({key:None for key in network_fields})
+  before=copy.deepcopy(a)
+  p.validate_sealed_policy(*a)
+  self.assertEqual(a,before)
+  for target,key in [('profile','description'),('profile','extends'),('profile','workspace_roots'),('filesystem','glob_scan_max_depth')]+[('network',key) for key in network_fields]:
+   b=copy.deepcopy(a); row=b[2]['permissions']['control_task']
+   if target!='profile': row=row[target]
+   row[key]=False
+   self.reject(p.validate_sealed_policy,*b)
+  for target in ['profile','filesystem','network']:
+   b=copy.deepcopy(a); row=b[2]['permissions']['control_task']
+   if target!='profile': row=row[target]
+   row['unknown_projection_field']=None
+   self.reject(p.validate_sealed_policy,*b)
  def test_catalog_names_equal_observed_config(self):
   a=self.evidence(); a[3]=[{'data':[],'nextCursor':None}]; self.reject(p.validate_sealed_policy,*a)
   a=self.evidence(); a[3][0]['data'].append({'name':'extra','runtimeStatus':'disabled','tools':{},'resources':[],'resourceTemplates':[]}); self.reject(p.validate_sealed_policy,*a)
