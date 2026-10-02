@@ -53,7 +53,7 @@ def task_thread_params(cwd, mcp_names):
         config['mcp_servers.' + name + '.enabled'] = False
     return {'cwd': cwd, 'runtimeWorkspaceRoots': [cwd], 'ephemeral': False,
             'sandbox': 'workspace-write', 'approvalPolicy': 'on-request',
-            'environments': [], 'config': config}
+            'config': config}
 
 
 def _catalog(pages):
