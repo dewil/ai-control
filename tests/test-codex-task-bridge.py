@@ -4,6 +4,7 @@ import copy
 import importlib
 import json
 import os
+import stat
 from pathlib import Path
 import sys
 import tempfile
@@ -271,6 +272,40 @@ class BridgeContract(unittest.TestCase):
         with patch('os.fsync', side_effect=fail_after_writer):
             with self.assertRaises(BridgeError): self.handle()
         with self.assertRaises(BridgeError): self.handle(bridge=self.make_bridge())
+        self.assertEqual(len(self.calls), 1)
+
+    def test_directory_fsync_failure_after_receipt_replace_never_repeats_writer(self):
+        real_fsync = os.fsync
+        injected = []
+        def fail_receipt_directory_sync(fd):
+            if self.calls and stat.S_ISDIR(os.fstat(fd).st_mode):
+                # Discover our own persisted JSON; do not assume journal field names.
+                observed = json.loads(self.journal().read_text())
+                if self.qid in json.dumps(observed):
+                    injected.append(True)
+                    raise OSError('PRIVATE DIRECTORY FSYNC ERROR')
+            return real_fsync(fd)
+        with patch('os.fsync', side_effect=fail_receipt_directory_sync):
+            with self.assertRaises(BridgeError) as caught: self.handle()
+        self.assertTrue(injected, 'fault must occur with writer result already persisted')
+        self.assertNotIn('PRIVATE DIRECTORY FSYNC ERROR', str(caught.exception))
+        self.assertEqual(len(self.calls), 1)
+        refreshed = []
+        def observe_storage_sync(fd):
+            self.assertTrue(self.active, 'storage recovery must remain fenced')
+            refreshed.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+            return real_fsync(fd)
+        with patch('os.fsync', side_effect=observe_storage_sync):
+            try:
+                response = self.handle(self.request(rpc='receipt-replay'), bridge=self.make_bridge())
+            except BridgeError:
+                # A fail-closed reopen is permitted; uncertain effects never repeat.
+                pass
+            else:
+                self.assertIn(True, refreshed, 'replay requires a fresh storage fsync')
+                self.assertEqual(response, {'id': 'receipt-replay', 'result': {
+                    'success': True, 'contentItems': [{'type': 'inputText',
+                    'text': json.dumps({'qid': self.qid})}]}})
         self.assertEqual(len(self.calls), 1)
 
     # FR-CXBRIDGE-04 / INV-CXBRIDGE-04
