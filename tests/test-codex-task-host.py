@@ -90,6 +90,7 @@ class HostTests(unittest.TestCase):
     def count(self, name):
         return sum(call[0] == name for call in self.manager.calls)
 
+    # FR-CXHOST-01 / INV-CXHOST-01: fail closed before effects.
     def test_FR01_INV01_constructor_rejects_paths_identity_and_permissions(self):
         for changes in ({'cwd': 'relative'}, {'cwd': str(self.cwd / '..' / 'task')},
                         {'state_dir': str(self.cwd / 'state')}, {'state_dir': str(self.root)},
@@ -140,6 +141,7 @@ class HostTests(unittest.TestCase):
                 self.make().inspect(deadline=200)
             self.assertEqual(self.manager.calls, [])
 
+    # FR-CXHOST-02 / INV-CXHOST-02: durable launch intent and single start.
     def test_FR02_INV02_prepared_before_launch_and_no_relaunch(self):
         self.manager.on_start = lambda: self.assertEqual(self.journal()['phase'], 'prepared')
         snap = self.start()
@@ -182,6 +184,7 @@ class HostTests(unittest.TestCase):
         self.assertEqual(self.count('start'), 1)
         self.assertEqual(self.count('version'), 1)
 
+    # FR-CXHOST-03 / INV-CXHOST-03: ownership and readiness recovery.
     def test_FR03_INV03_replacement_unavailability_absence_and_transitional_states(self):
         self.start()
         original = dict(self.manager.status)
@@ -223,6 +226,7 @@ class HostTests(unittest.TestCase):
         path.symlink_to(self.exe)
         self.assertEqual(self.host.inspect(deadline=200).phase, 'unknown')
 
+    # FR-CXHOST-04 / INV-CXHOST-04: quiescent scoped stop and durable receipt.
     def test_FR04_INV04_quiescence_and_stop_receipt_idempotence(self):
         self.start()
         for value in (False, 1, 'yes', None):
@@ -326,6 +330,7 @@ class AdapterTests(unittest.TestCase):
         fields.update(changes)
         return ''.join(k + '=' + v + '\n' for k, v in fields.items())
 
+    # FR-CXHOST-05 / INV-CXHOST-05: systemd adapter scope and bounded calls.
     def test_FR05_INV05_scoped_commands_and_runner_deadline(self):
         self.output = 'codex-cli 0.160.0\n'
         self.assertEqual(self.manager.version('/bin/true', deadline=200), '0.160.0')
