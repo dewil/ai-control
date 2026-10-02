@@ -51,3 +51,8 @@ Success returns exactly {thread_id,model,reasoning_effort,permission_profile:'co
 - INV-CXSEAL-04: independent RED tests beforeimplementation, isolatedsharedmodulemanifest, checks and actualdifferentmodelcompliance; nativebehavioracceptance separately required.
 
 Tests in tests/test-codex-task-profile.py use actual private cwd/.git placeholdermetadata and TOML parser on argv assignments. No reading native config/auth, starting process or native modelturn. No edits to existingpolicy/tests.
+
+
+## Ограничение pinned native compiler
+
+Rust0.160 compile_read_write_glob_path и permission_path.contains_glob_chars_for_platform отвергают literalwrite roots с * ? [ ] (даже обратныйslash не отключает detector). PurebuilderTOML/globescaping fixtures не являются nativecompilationacceptance. Runtime в первом релизе поддерживает worktree root безэтихсимволов; другие пути отказдоmodelturn, безfallback/расширенияroot. Hostconfigecho/compiledthreadpolicy/nativeacceptance отдельны отpurebuilder. Обычныйdefaultagents/name/work не содержитglobs.
