@@ -95,8 +95,11 @@ class TaskPolicyTests(unittest.TestCase):
         self.assertEqual(names, original)
         for key, value in {'cwd': self.cwd, 'runtimeWorkspaceRoots': [self.cwd],
                            'ephemeral': False, 'sandbox': 'workspace-write',
-                           'approvalPolicy': 'on-request', 'environments': []}.items():
+                           'approvalPolicy': 'on-request'}.items():
             self.assertEqual(params[key], value)
+        # FR-CXTASK-POLICY-02 regression: clarified spec preserves default local
+        # environment access; environments=[] disables it in native 0.160.0.
+        self.assertNotIn('environments', params)
         config = params['config']
         for key in ('features.plugins', 'features.remote_plugin', 'features.apps',
                     'sandbox_workspace_write.network_access'):
