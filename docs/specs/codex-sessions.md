@@ -67,3 +67,12 @@ FR-CXDEFAULT-01..05: новые диалоги наследуют эффекти
 - **INV-CXBACK-04:** default Claude CLI semantics сохраняются; backend не зависит от daemon env, writer вне guard запрещён, deadlines/static errors и native-independent tests обязательны.
 
 Трассируемость: tests/test-codex-task-backend.py, FR-CXBACK-01..04 / INV-CXBACK-01..04. Дыры общего runtime: operation publication/revocation в TASK, native admission/read tools/transport replies/approvals, runner/reconciler/menu и production acceptance.
+
+## Адресованные callbacks отдельного task host
+
+- **INV-CXRPC-01:** новые admission RPCs и response APIs opt-in; existing transport contract и FIFO сохраняются, native requests никогда не получают автоматического ответа.
+- **INV-CXRPC-02:** immutable owned thread/turn плюс captured typed RPCid/callId/item identity; replay/conflict и resolved/answered tombstones запрещают чужой/повторный ответ.
+- **INV-CXRPC-03:** dynamic tool, approval и native user-input ответы разделены; transport delivery shape не заменяет human consent/TASK policy, session/amendment grants запрещены.
+- **INV-CXRPC-04:** bounded registry/FIFO/deadlines, uncertain send закрывает socket без retry; caller validation zero-send, protocol errors без payload.
+
+Трассируемость tests/test-codex-task-runtime-transport.py FR/INV-CXRPC01..04. Дыры общего runtime: trusted human routing, source-backed admission и safe read tools, operation publication/runner/reconciler/menu/deployment acceptance.
