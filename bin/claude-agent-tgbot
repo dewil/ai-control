@@ -705,7 +705,7 @@ def run_codex(args, timeout=25):
 
 
 def codex_list_kb(project, rows, page=0, has_more=False):
-    buttons = [[("➕ Codex · Astra", "c:n:%s" % project)]] if page == 0 else []
+    buttons = [[("➕ Codex", "c:n:%s" % project)]] if page == 0 else []
     for row in rows:
         icon = "●" if row.get("status") == "active" else "○"
         label = _clip_label(redact("%s %s" % (icon, row.get("title") or row["short"])))
@@ -730,6 +730,8 @@ def codex_card_view(project, row, note=""):
         html.escape(row.get("title") or row["short"]), html.escape(project), status)
     if row.get("model"):
         text += "\nМодель: %s" % html.escape(str(row["model"]))
+    if row.get("reasoning_effort"):
+        text += "\nEffort: %s" % html.escape(str(row["reasoning_effort"]))
     text += "\nID: <code>%s</code>" % html.escape(row["sid"])
     text += "\n\nНа телефоне откройте эту сессию на подключённой машине Codex."
     if note:
@@ -763,7 +765,7 @@ def _handle_codex_callback(token, proxy, chat_id, message_id, kind, project, sho
             text += " Стр. %d." % (page + 1)
         kb = codex_list_kb(project, rows, page, data.get("has_more", False))
     else:
-        note = {"codex_new": "Новая сессия Astra готова для продолжения с телефона.",
+        note = {"codex_new": "Новая сессия Codex создана.",
                 "codex_resume": "Сессия открыта. Продолжайте в клиенте Codex.",
                 "codex_interrupt": "Запрос прерывания обработан."}.get(kind, "")
         text, kb = codex_card_view(project, data, note)
