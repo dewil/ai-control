@@ -309,8 +309,14 @@ class BackendContract(unittest.TestCase):
         self.assertEqual(done["workspace"], "worktree")
         self.assertEqual(done["envelope_key"], "event-1")
         self.assertIs(done["finalized"], False)
-        self.assertLessEqual(len(done["summary"]), 1500)
-        self.assertNotIn("<", done["summary"])
+        self.assertEqual(done["summary"], "<" * 375 + " [обрезано]")
+        # Independent fresh evidence case avoids assuming repeat-done semantics.
+        (self.agent / "done.json").unlink()
+        # Storage preserves raw text; only the length budget uses HTML escaping.
+        with self.guard():
+            self.assertEqual(self.write("task_done", {"summary": "Raw <& text"}), {"requested": True})
+        uncapped = json.loads((self.agent / "done.json").read_text())
+        self.assertEqual(uncapped["summary"], "Raw <& text")
         self.assertEqual(self.git("rev-parse", "HEAD", cwd=self.project).strip(), self.base)
         self.assertTrue((self.agent / "work/.git").is_file())
 
