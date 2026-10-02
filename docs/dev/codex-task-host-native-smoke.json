@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "code_revision": "cec3d00d9caded3f869a5d7c05234c937573e9e7",
+  "codex": "0.160.0",
+  "systemd": 255,
+  "websockets": "15.0.1",
+  "native_no_inference": {
+    "version": "0.160.0",
+    "model_turns": 0,
+    "start_phase": "running",
+    "socket_ready": true,
+    "recovery_same_invocation": true,
+    "native_initialize": true,
+    "stop_phase": "stopped",
+    "durable_stop_phase": "stopped",
+    "finally_phase": "stopped"
+  },
+  "cgroup_sigterm_ignore": {
+    "mock_server": true,
+    "child_running_before": true,
+    "stop_phase": "stopped",
+    "child_executable_after": false,
+    "finally_phase": "stopped"
+  }
+}

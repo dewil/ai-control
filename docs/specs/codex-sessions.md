@@ -38,3 +38,13 @@ FR-CXDEFAULT-01..05: новые диалоги наследуют эффекти
 Уже устойчивый terminal receipt сохраняет исход, доказательство и final text при последующей недоступности native history; это исторический факт, а свежая inspect_thread при сбое или противоречии возвращает unknown. Terminal receipt не даёт разрешения удалить worktree: новый foreign active turn остаётся видимым, а будущий runtime обязан отдельно обеспечить исключительное владение и проверить quiescence перед cleanup. Модуль не обещает distributed fencing, exactly-once execution или прекращение любых фоновых side effects. Нет transport connection, боевого smoke, runtime wiring или deployment; полноценный Codex task runtime остаётся следующим отдельным этапом.
 
 Трассируемость: `tests/test-codex-task-lifecycle.py`, группы FR-CXTASK-LIFE-01..10 (blind offline suite), и независимые durability/recovery suites `tests/test-codex-task-lifecycle-durability.py`, `tests/test-codex-task-lifecycle-recovery.py`. Native API формы закреплены на 0.159.3; этот офлайн-этап не подтверждает live совместимость иной версии.
+
+## Dedicated task host (02.10.2026)
+
+- **INV-CXHOST-01:** task App Server живёт в отдельном owned systemd user unit с KillMode=control-group. Общий daemon не запускается/останавливается, model/effort не переопределяются. Наличие процесса/сокета не разрешает turn/start без effective policy и native acceptance.
+- **INV-CXHOST-02:** durable intent предшествует start/stop; recovery сверяет unit/token/InvocationID, неизвестный эффект start не повторяется. Unit absence после running или timeout не доказывает остановку.
+- **INV-CXHOST-03:** restart/foreign invocation/socket replacement дают unknown. Локальный flock и private journal вне cwd защищают от случайной конкуренции, не от злонамеренного same-UID клиента.
+- **INV-CXHOST-04:** scoped stop требует внешнего quiescence proof, и только pinned original main exit вместе с pinned original cgroup drain либо matching inactive drained recovery создаёт durable stopped receipt. Этот receipt не разрешает cleanup worktree.
+- **INV-CXHOST-05:** default environment/config/auth не означают изоляцию capabilities. Process supervisor не подключён к TASK/reconciler и не отвечает на approvals/dynamic tool calls.
+
+Трассируемость host: tests/test-codex-task-host.py, FR-CXHOST-01..05 / INV-CXHOST-01..05. Известные дыры: trusted dynamic bridge, native approvals routing и full persistent-thread admission, runtime wiring и production acceptance остаются незавершёнными.
