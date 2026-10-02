@@ -11,7 +11,6 @@ import sys
 import time
 import uuid
 
-MODEL = 'gpt-6-astra'
 PAGE_SIZE = 8
 MAX_PAGES = 100
 PROJECT_RE = re.compile(r'[a-zA-Z0-9_-]{1,32}\Z')
@@ -24,6 +23,21 @@ def canonical(path):
     if not isinstance(path, str) or not path or not os.path.isabs(os.path.expanduser(path)):
         raise ValueError('Invalid project directory')
     return os.path.realpath(os.path.expanduser(path))
+
+
+class MetadataError(ValueError):
+    """Controlled metadata validation error safe for preparation diagnostics."""
+
+
+def apply_metadata(row, source):
+    """Merge known API configuration metadata without inventing defaults."""
+    for api_key, row_key in (('model', 'model'), ('reasoningEffort', 'reasoning_effort')):
+        value = source.get(api_key)
+        if value is not None and not isinstance(value, str):
+            raise MetadataError('Invalid ' + api_key + ' metadata')
+        if value:
+            row[row_key] = value
+    return row
 
 
 def normalize_thread(thread):
@@ -40,9 +54,7 @@ def normalize_thread(thread):
     row = {'sid': sid, 'short': sid.replace('-', '')[:12],
            'title': thread.get('name') or thread.get('preview') or 'Codex',
            'mtime': thread.get('updatedAt', 0), 'cwd': cwd, 'status': status['type']}
-    if thread.get('model'):
-        row['model'] = thread['model']
-    return row
+    return apply_metadata(row, thread)
 
 
 class CodexSessions:
@@ -120,10 +132,7 @@ class CodexSessions:
     def create_session(self, project):
         cwd = self._cwd(project)
         self._connected()
-        available = any(model.get('model') == MODEL for page in self._pages('model/list', {'limit':100}) for model in page)
-        if not available:
-            raise RuntimeError('Required model gpt-6-astra is unavailable')
-        result = self.rpc('thread/start', {'cwd':cwd, 'model':MODEL, 'ephemeral':False,
+        result = self.rpc('thread/start', {'cwd':cwd, 'ephemeral':False,
                                          'sandbox':'workspace-write', 'approvalPolicy':'on-request'})
         try:
             sid = str(uuid.UUID(result['thread']['id']))
@@ -131,19 +140,23 @@ class CodexSessions:
             raise RuntimeError('thread/start returned an invalid session identity') from None
         name = project + ' · Codex · ' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         try:
-            row = self._owned(result['thread'], cwd, sid)
+            row = apply_metadata(self._owned(result['thread'], cwd, sid), result)
             self.rpc('thread/name/set', {'threadId':sid, 'name':name})
             self.rpc('turn/start', {'threadId':sid, 'input':[{'type':'text', 'text':SEED}]})
         except Exception as error:
-            raise RuntimeError('Session ' + sid + ' was created but preparation failed; ' + type(error).__name__) from None
-        row.update(title=name, model=MODEL, status='active')
+            raise RuntimeError('Session ' + sid + ' was created but preparation failed; ' + (str(error) if isinstance(error, MetadataError) else type(error).__name__)) from None
+        row.update(title=name, status='active')
         return row
 
     def resume_session(self, project, short):
         row = self.get_session(project, short)
         self._connected()
         result = self.rpc('thread/resume', {'threadId':row['sid']})
-        return self._owned(result['thread'], row['cwd'], row['sid'])
+        current = self._owned(result['thread'], row['cwd'], row['sid'])
+        for key in ('model', 'reasoning_effort'):
+            if key not in current and key in row:
+                current[key] = row[key]
+        return apply_metadata(current, result)
 
     def interrupt_session(self, project, short):
         row = self.get_session(project, short)
@@ -262,6 +275,9 @@ class WebSocketRPC:
         if len(seed) != 1 or seed[0].get('status') != 'completed':
             raise ValueError('Seed completion is not persisted')
         row['status'] = current['status']
+        for key in ('model', 'reasoning_effort'):
+            if key in current:
+                row[key] = current[key]
         return row
 
     def close(self):

@@ -102,29 +102,31 @@ class SessionsTests(unittest.TestCase):
         self.assertTrue(result['title'])
         methods=[m for m,p in self.calls]
         params=next(p for m,p in self.calls if m=='thread/start')
-        for key,value in dict(cwd=self.cwd,model='gpt-6-astra',ephemeral=False,sandbox='workspace-write',approvalPolicy='on-request').items():
+        for key,value in dict(cwd=self.cwd,ephemeral=False,sandbox='workspace-write',approvalPolicy='on-request').items():
             self.assertEqual(params[key],value)
         self.assertLess(methods.index('remoteControl/status/read'),methods.index('thread/start'))
-        self.assertLess(methods.index('model/list'),methods.index('thread/start'))
+        # FR-CXDEFAULT-01: the shared server resolves its effective defaults.
+        self.assertNotIn('model/list', methods)
+        self.assertNotIn('model', params)
         self.assertLess(methods.index('thread/name/set'),methods.index('turn/start'))
         self.assertEqual(methods.count('turn/start'),1)
 
-    def test_create_rejects_disconnected_or_missing_model_before_mutation(self):
-        for method,response in [('remoteControl/status/read',{'status':'disconnected'}),('model/list',{'data':[],'nextCursor':None})]:
-            with self.subTest(method=method):
-                self.calls.clear(); self.responses={method:response}
-                with self.assertRaises(Exception): self.service.create_session('p')
-                self.assertNotIn('thread/start',[m for m,p in self.calls])
+    def test_create_rejects_disconnected_before_mutation(self):
+        # FR-CXDEFAULT-01: model availability is no longer a client gate.
+        self.responses['remoteControl/status/read'] = {'status': 'disconnected'}
+        with self.assertRaises(Exception): self.service.create_session('p')
+        self.assertNotIn('thread/start', [m for m,p in self.calls])
 
     def test_create_validates_directory(self):
         service=mod.CodexSessions(self.rpc,lambda _:self.cwd+'/absent')
         with self.assertRaises(Exception): service.create_session('p')
         self.assertNotIn('thread/start',[m for m,p in self.calls])
 
-    def test_create_model_cursor(self):
-        self.responses['model/list']=lambda p: ({'data':[{'model':'other'}],'nextCursor':'more'} if not p.get('cursor') else {'data':[{'model':'gpt-6-astra'}],'nextCursor':None})
+    def test_create_ignores_model_list(self):
+        # FR-CXDEFAULT-01: creation does not enumerate or require Astra.
+        self.responses['model/list'] = AssertionError('Unexpected model enumeration')
         self.service.create_session('p')
-        self.assertEqual(len([1 for m,p in self.calls if m=='model/list']),2)
+        self.assertFalse(any(m == 'model/list' for m,p in self.calls))
 
     def test_resume_preserves_identity_and_permissions(self):
         row=self.thread(); self.rows=[row]
