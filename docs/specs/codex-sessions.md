@@ -97,3 +97,14 @@ Code-mode cells могут пережить turn terminal. Runtime сначал�
 | INV-CXABORT-02 — owned identity/durable stop/drain | test-codex-task-host-abort.py |
 | INV-CXABORT-03 — deadlines/guards/static errors/no cleanup | test-codex-task-host-abort.py |
 | INV-CXABORT-04 — independent RED/compliance/checks | feature validation |
+
+## Фиксированный профиль native TASK
+
+Dedicated host и thread используют один control_task profile: scoped granularread/write, shell/hooks/notify/extraexecutors disabled, localownedV8 для inherited code mode; sourceaccounting и correlatednative registry дополняют disabledMCP catalog. Namedprofile толькоthread недостаточен при reloadworkspace requirements. Fixedrelease/companion hashes и completeevidence обязательны до обычной задачи; несовпадение отказывает, model/effort не выбираются. Подробнее [sealed profile](../dev/2026-10-03-spec-codex-task-sealed-profile.md).
+
+| Инвариант | Тесты |
+|---|---|
+| INV-CXSEAL-01 — одинаковые fixed host/thread flags | test-codex-task-profile.py |
+| INV-CXSEAL-02 — granular scope/namespace/MCP sealing | test-codex-task-profile.py |
+| INV-CXSEAL-03 — complete evidence/refusal | test-codex-task-profile.py |
+| INV-CXSEAL-04 — RED/checks/compliance | feature validation |

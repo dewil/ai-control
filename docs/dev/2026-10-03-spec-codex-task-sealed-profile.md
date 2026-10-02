@@ -1,0 +1,53 @@
+# CXTASK-SEALED — фиксированный native task profile
+
+Дата2026-10-03, base9b8051e, CONTROL-CXTASK. Этот корень заменяет недостаточный workspaceWrite-only запрос отдельным opt-in pure helper; не подключает runner и не изменяет existing policy/host interfaces или системный config. Runtime/installed acceptance отдельно должны получить реальные evidence, фиксировать request digest и владеть exclusive host transport.
+
+## Проблема и принятое решение
+
+Shell false недостаточно: hooks/notify, MCP/plugins, дополнительные environments и model-driven code mode имеют отдельные пути. WorkspaceWrite даёт global read и native apply_patch может читать Update/Delete до approval. Нужны fixed deny overrides и named granular permission profile. Native0.160 accepted profile на real linked worktree; exact ALL_TOOLS diagnostic completed с apply_patch/clock/task_read. Model и effort наследуются.
+
+Для model code_mode_only включается owned local V8 companion, имеющий imports-disabled/fixed registered-tool dispatch. Это не shell. Cell может пережить turn; runtime обязан durable revoke operation и host.abort/drain до финализации. Source accounting дополняет ALL_TOOLS: async model question/progress и clock допускаются как harmless utilities, async questions не становятся TASK evidence. Полного builtin catalog RPC нет.
+
+## Публичный контракт
+
+Модуль bin/_codex_task_profile.py, stdlib, ProfileError(Exception) со static диагностикой.
+
+sealed_overrides(cwd,mcp_names)->dict
+sealed_host_argv(socket,cwd,mcp_names,*,executable='codex')->list[str]
+sealed_thread_params(cwd,mcp_names,dynamic_tools)->dict
+validate_sealed_policy(response,cwd,config,catalog_pages,registry_names,release_evidence)->dict
+
+Builders inert: никакого process/native/network/filecontents/writes/config mutation. Metadata validation разрешена. cwd canonical existing absolute directory, cwd currentUID, root/ancestors без symlink (системные ancestordirs могут принадлежать root); actual cwd/.git existing currentUID regular single-link file, linked worktree pointer CONTENT не читается. socket canonicalabsolute/notexisting, executable nonemptystring без NUL/control. mcp_names exactplainlist уникальных plainstrings [A-Za-z0-9_-]+, empty okay. Reject invalid types включая subclasses/plainJSON requirement для всего динамического input и evidence; no diagnostics с входом. Freshdeepcopyoutputs.
+
+Fixed overrides below are same host CLI and every owned thread; no model/effort/profileprovider overrides. Named default_permissions='control_task', permissions.control_task full table {filesystem:{'/':'deny',cwd:'write',cwd+'/.git':'deny',secretglob:'deny'...},network:{enabled:false}}. No extends. Legacy sandbox selector NEVERcombined with named permissions; no additional writable/network/environment roots.
+
+False feature keys: shell_tool,js_repl,js_repl_tools_only,code_mode_only,multi_agent,multi_agent_v2,hooks,plugins,remote_plugin,apps,tool_suggest,request_permissions_tool,image_generation,view_image,deferred_executor,token_budget,current_time_reminder,sleep_tool,send_message_to_user_async,browser_use,browser_use_full_cdp_access,browser_use_external,computer_use,memories,goals,agent_message_board,skill_search.
+Structured override key features.code_mode={enabled:false,direct_only_tool_namespaces:[],excluded_tool_namespaces:[]}; features.code_mode_host={enabled:true,disable_in_process_fallback:false}; features.code_mode_interrupt=true. agents.enabled=false, tools.experimental_request_user_input.enabled=false, tools.update_plan.enabled=false, memories.use_memories=false, cloud.skills.enabled=false, web_search='disabled', notify=[]. Each inherited MCP name gets mcp_servers.NAME.enabled=false. Config class ToolsV2 does not echo requestinput/updateplan flags: validator explicitly cannot attest them from config/read; trusted fixed construction + pinnedsource required. Unknown inherited config remains allowed only where selected roots/executors cannot activate it; validators do not manufacture exhaustive catalog evidence.
+
+Secret glob construction: case-insensitive-by-character-class POSIX patterns for every case variant, under cwd+'/**/'. Names '.env' and '.env.*' (including placeholders in native layer), '.netrc','.npmrc','.pypirc','auth.json','credentials.json','cookies.json','id_rsa','id_ed25519','id_dsa','id_ecdsa'; suffixes '*.pem','*.key','*.p12','*.pfx'. Directories '.git','.ssh','.aws','.azure','.kube','browser-sessions' need both exact name glob and descendant '/**' glob (to cover files as rgfiles omits directory entries). Preserve literal syntax punctuation, generate [aA] etc only ASCIIletters; path cwd MUSTescape glob metacharacters as POSIX backslash to avoid turning dirname into wildcard. All patterns absolute underroot, no outside root deny relaxation. Exact root/.git deny remains. Native globs mask existingfilematches eachhelperlaunch, including hidden/ignored files; not a prospective ban on AddFile for absent secret names. Native layer can refuse editing placeholderenvs, scoped readtools allow them. Trusted runtime refuses forbidden new artifacts before completion and does not receive real secrets in worktree. OS Minimal/helper-runtime read exception source-defined; no private outside project reads permitted.
+
+Host argv: executable app-server --listen unix://socket followed by -c key=TOML assignments, exactly fixed table/flags/MCP disables. Serialize stringkeys/paths/booleans/arrays/tables as valid TOML (JSON dict colon syntax invalid), preserve literal $/backticks, never shell. Both default_permissions and fullpermissions table MUSThostCLI: thread-only profile initialization succeeds but native routing configreload otherwise fails 'failed to load workspace requirements'.
+
+Thread params: cwd, runtimeWorkspaceRoots=[cwd], ephemeral=false, permissions='control_task', approvalPolicy='on-request', approvalsReviewer='user', selectedCapabilityRoots=[], environments=[{environmentId:'local',cwd:cwd,runtimeWorkspaceRoots:[cwd]}], config=fixed overrides, dynamicTools=exactnative descriptors suppliedbelow. No sandbox/model/reasoningEffort overrides. Descriptor input must contain EXACTLY names task_read/task_search/task_list/task_ask/task_done once each. Each descriptor exactrequired {type:'function',name,description,inputSchema,deferLoading:false}, plainJSONobject schema with typeobject/properties/additionalPropertiesfalse, requiredlist subsetproperties; nonblank boundeddescription <=4096UTF8, entire descriptors <=64KiB defaultJSON. No namespace/modeldefault/executor fields. Existinggenericbridge/file descriptors already canonicaltypefunction/deferLoadingfalse; preserve them. Native normalize_dynamic_tool_specs forbids mixing canonical and legacy descriptors; legacy withouttype refused here. Resume request construction/integration next root (does not accept dynamicTools/environments inRPC); thishelper does not send RPC.
+
+Validator trusts only controller-observed evidence, never model assertions. Calls existing validate_task_policy for persistent UUID/cwd/model/effort/approvals/legacyworkspaceWrite+networkfalse/tmpexclusions/disabled fullypaginatedMCP catalog, effective sandbox field is response['sandbox'] (not sandboxPolicy); then requires exactactivePermissionProfile {id:'control_task',extends:null}, response.thread.environments exactlylocal only, response.runtimeWorkspaceRoots exactly[cwd]. config(read host) must contain same fixed profile table/defaultpermissions/echoable overrides, notifyempty, exactdisabledMCP rows; unknown profileextends/reflex legacy flag projection not proof. Config extra unrelatedkeys okay, no config/rawsaved. Unobservable toolsinput/updateplan keys ifpresent mustmatchfalse; absence allowed ONLY those2 keys. Unknown mcp names in observedconfig all disabled.
+
+registry_names exactuniqueplainstringlist must equalset [apply_patch,clock__curr_time,task_read,task_search,task_list,task_ask,task_done]. This profile intentionally admits the proved current code-mode registry shape; a different inherited model yielding another shape refuses instead of choosing model. Snapshot obtained from exactnativeexec input and correlatedrawcustomtooloutput, not finalmodeltext. It supplements pinnedsourceproof for DirectModelOnly/hidden/toolsexposure and fixed requests; does not itselfproveexhaustiveness/lifetimeceiling.
+
+release_evidence exactobject version='0.160.0', hashes={codex:...,code_mode_host:...,bwrap:...,rg:...}; onlythesehashkeys and builtin lowercase64hex accepted. ExpectedSHA256 pinned release artifacts:
+codex=12eb3e81114588aca3b7998f4f19e8997b056aca08e57a7ca7c8a3ec8c652aad
+code_mode_host=37cab1584302611e9936902219640ab5e7a79fcfccd2504c6e85ea8cb97d0e10
+bwrap=01fb705f067bd5365b63d8ad2323a61c8d007733ca5e649437e086f3fb9935d8
+rg=e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849
+Runtime performs bounded hash/stat/executable resolution and actualownedcgroup checks, not thispurevalidator; testfixture evidence is not productionprovenance. Publishednpmartifactintegrityverified; reproduciblesourcebuildnotproved.
+
+Success returns exactly {thread_id,model,reasoning_effort,permission_profile:'control_task'}. No cost/cleanup/approval/binaryownership/lifecycle/admissioncompletion claims; any malformed/incomplete/mismatched evidence ProfileErrorstatic.
+
+## Приёмка
+
+- INV-CXSEAL-01: exact fixed host+thread overrides/no model changes and valid literal TOML, bounds/plainJSON/deepcopy and canonicalroots; no effects.
+- INV-CXSEAL-02: granularprofile and casefold/glob-path escaping, existing.git exactdeny, all inheritedMCPdisabled, local environment/capabilityroot selection; namespaceconfigsealed.
+- INV-CXSEAL-03: required controller evidence inclregistry/release/fullMCP/policy/config, mismatch/unknownunsupportedrefusal and2documented APIexceptions; staticdiagnostics.
+- INV-CXSEAL-04: independent RED tests beforeimplementation, isolatedsharedmodulemanifest, checks and actualdifferentmodelcompliance; nativebehavioracceptance separately required.
+
+Tests in tests/test-codex-task-profile.py use actual private cwd/.git placeholdermetadata and TOML parser on argv assignments. No reading native config/auth, starting process or native modelturn. No edits to existingpolicy/tests.
