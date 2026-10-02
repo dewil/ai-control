@@ -584,6 +584,28 @@ class CodexTaskHost:
 
     def stop(self, *, deadline, quiescent=False):
         _require(quiescent is True)
+        return self._stop(deadline)
+
+    def abort(self, *, deadline, guard):
+        """Drain owned resources under the caller's durable revocation fence."""
+        try:
+            _deadline(deadline, self.clock)
+            _require(callable(guard))
+            completed = False
+            # TASK locks precede host.lock; release host.lock before fence exit.
+            with guard(self.task_incarnation, deadline=deadline) as revoked:
+                _require(revoked is True)
+                snapshot = self._stop(deadline)
+                completed = True
+            # A context manager may suppress a body exception. That is refusal,
+            # even when it exits normally, rather than an absent/partial receipt.
+            _require(completed)
+            _deadline(deadline, self.clock)
+            return snapshot
+        except Exception:
+            raise HostError('Task host abort evidence is not confirmed') from None
+
+    def _stop(self, deadline):
         with self._locked(deadline):
             journal = self._read()
             _require(journal is not None)
