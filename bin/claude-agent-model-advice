@@ -261,7 +261,7 @@ def main():
                     cost = safe_scalar(answer.get("cost"), 0, 1000)
             except subprocess.TimeoutExpired:
                 status, tier, reason = "unavailable", "unknown", "helper timed out"
-            except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+            except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError, RecursionError):
                 status, tier, reason = "unavailable", "unknown", "helper output invalid"
 
         proposed = None

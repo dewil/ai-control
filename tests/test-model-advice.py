@@ -152,6 +152,12 @@ class ModelAdviceCLITests(unittest.TestCase):
         self.assertIn(value["status"], ("unavailable", "error"))
         self.assertIsNone(value["proposed"])
 
+    def test_deeply_nested_json_yields_failure_receipt(self):
+        result = self.run_cli(HELPER_STDOUT="[" * 2000 + "0" + "]" * 2000)
+        value = self.payload(result)
+        self.assertIn(value["status"], ("unavailable", "error"))
+        self.assertIsNone(value["proposed"])
+
     def test_preflight_rejects_missing_task_and_does_not_call_helper(self):
         before = self.capture_stdin.exists()
         result = subprocess.run(
