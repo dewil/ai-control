@@ -48,3 +48,13 @@ FR-CXDEFAULT-01..05: новые диалоги наследуют эффекти
 - **INV-CXHOST-05:** default environment/config/auth не означают изоляцию capabilities. Process supervisor не подключён к TASK/reconciler и не отвечает на approvals/dynamic tool calls.
 
 Трассируемость host: tests/test-codex-task-host.py, FR-CXHOST-01..05 / INV-CXHOST-01..05. Известные дыры: trusted dynamic bridge, native approvals routing и full persistent-thread admission, runtime wiring и production acceptance остаются незавершёнными.
+
+## Trusted dynamic bridge (02.10.2026)
+
+- **INV-CXBRIDGE-01:** ответ dynamic tool адресуется owned thread/turn и конкретному RPC id; callId отдельно задаёт replay identity. Approval methods никогда не получают ответа от bridge.
+- **INV-CXBRIDGE-02:** model arguments не задают task addressing/engine/permissions; immutable runtime binding и authoritative guard держат task fence на всё действие. Stale/finished binding не вызывает writer и не выдаёт receipt.
+- **INV-CXBRIDGE-03:** durable intent до writer, receipt до response. Replay одного callId/payload не повторяет effect; changed payload conflict, unresolved intent — unknown без retry.
+- **INV-CXBRIDGE-04:** private bounded journal вне agent directory, nofollow/single-link storage и nonblocking local lock; corrupt state не разрешает effects. Journal не сохраняет raw question/summary.
+- **INV-CXBRIDGE-05:** task_done означает requested evidence, не terminal/accepted/cleanup. Bridge generic и injectable; existing evidence writers/locks сохраняют ownership. Same-UID malicious clients вне гарантий.
+
+Трассируемость: tests/test-codex-task-bridge.py, FR-CXBRIDGE-01..05 / INV-CXBRIDGE-01..05. Дыры: trusted backend adapter с atomic task fencing и fail-closed evidence, transport reply wiring, native approvals/dynamic-tool acceptance, persistent-thread admission и TASK/runtime integration остаются открытыми.
