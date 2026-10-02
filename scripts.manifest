@@ -16,6 +16,7 @@ _codex_rc.py
 _codex_task_lifecycle.py
 _codex_task_transport.py
 _codex_task_policy.py
+_codex_task_profile.py
 _codex_task_host.py
 _codex_task_bridge.py
 _codex_task_backend.py
