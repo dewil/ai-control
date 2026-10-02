@@ -355,6 +355,38 @@ class BridgeContract(unittest.TestCase):
         with self.assertRaises(BridgeError): self.handle(bridge=self.make_bridge())
         self.assertEqual(len(self.calls), 1)
 
+    def test_existing_lock_with_missing_journal_rejects_same_and_new_calls(self):
+        self.handle()
+        journal = self.journal()
+        lock_candidates = [path for path in self.state.iterdir() if path != journal]
+        self.assertEqual(len(lock_candidates), 1, 'one observed non-JSON lock')
+        lock = lock_candidates[0]
+        with self.assertRaises((ValueError, UnicodeError)):
+            json.loads(lock.read_text())
+        journal.unlink()
+        for call in ['call', 'new-call']:
+            with self.subTest(call=call), self.assertRaises(BridgeError):
+                self.handle(self.request(call=call), bridge=self.make_bridge())
+            self.assertEqual(len(self.calls), 1)
+            self.assertTrue(lock.exists())
+            self.assertFalse(journal.exists())
+
+    def test_existing_journal_with_missing_lock_rejects_same_and_new_calls(self):
+        self.handle()
+        journal = self.journal()
+        lock_candidates = [path for path in self.state.iterdir() if path != journal]
+        self.assertEqual(len(lock_candidates), 1, 'one observed non-JSON lock')
+        lock = lock_candidates[0]
+        with self.assertRaises((ValueError, UnicodeError)):
+            json.loads(lock.read_text())
+        lock.unlink()
+        for call in ['call', 'new-call']:
+            with self.subTest(call=call), self.assertRaises(BridgeError):
+                self.handle(self.request(call=call), bridge=self.make_bridge())
+            self.assertEqual(len(self.calls), 1)
+            self.assertTrue(journal.exists())
+            self.assertFalse(lock.exists())
+
     def test_changed_binding_cannot_reuse_journal(self):
         self.handle()
         for field in ['task_incarnation', 'event_key', 'thread_id', 'turn_id']:
