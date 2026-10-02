@@ -6,6 +6,7 @@ import math
 import os
 from pathlib import Path
 import socket
+import signal
 import subprocess
 import sys
 import tempfile
@@ -39,7 +40,8 @@ class Manager:
         self.status = dict(invocation_id='a' * 32,
             description='claude-control task ' + token, kill_mode='control-group',
             active_state='active', sub_state='running', main_pid=123,
-            control_group='/user.slice/task')
+            control_group='/user.slice/task', type='exec', exit_type='main', restart='no',
+            remain_after_exit=False, send_sigkill=True)
         if self.launch_error:
             raise self.launch_error
 
@@ -49,8 +51,8 @@ class Manager:
             raise self.inspect_error
         return self.status
 
-    def stop(self, unit, *, deadline):
-        self.calls.append(('stop', unit, deadline))
+    def stop(self, unit, *, invocation_id, main_pid, token, deadline):
+        self.calls.append(('stop', unit, invocation_id, main_pid, token, deadline))
         if self.on_stop:
             self.on_stop()
         if self.stop_error:
@@ -191,7 +193,8 @@ class HostTests(unittest.TestCase):
         for changes in ({'invocation_id': 'b' * 32}, {'description': 'foreign'},
                         {'kill_mode': 'process'}, {'active_state': 'activating'},
                         {'sub_state': 'start'}, {'main_pid': 0}, {'main_pid': True},
-                        {'invocation_id': 'A' * 32}):
+                        {'invocation_id': 'A' * 32}, {'type': 'simple'}, {'exit_type': 'cgroup'},
+                        {'restart': 'always'}, {'remain_after_exit': True}, {'send_sigkill': False}):
             self.manager.status = dict(original, **changes)
             snap = self.host.inspect(deadline=200)
             self.assertEqual(snap.phase, 'unknown')
@@ -432,7 +435,8 @@ class AdapterTests(unittest.TestCase):
     def status(self, **changes):
         fields = dict(LoadState='loaded', Description='claude-control task ' + self.token,
                       InvocationID='a' * 32, ActiveState='active', SubState='running',
-                      MainPID='123', ControlGroup='/task', KillMode='control-group')
+                      MainPID='123', ControlGroup='/task', KillMode='control-group',
+                      Type='exec', ExitType='main', Restart='no', RemainAfterExit='no', SendSIGKILL='yes')
         fields.update(changes)
         return ''.join(k + '=' + v + '\n' for k, v in fields.items())
 
@@ -453,8 +457,10 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(argv[argv.index('--') + 1:], ['/bin/true', 'app-server'])
         self.assertFalse(any('UNTRUSTED_VARIABLE' in arg for arg in argv))
         self.assertFalse(any(arg in argv for arg in ('--collect', '--scope', '--shell')))
-        self.manager.stop(self.unit, deadline=200)
-        self.assertEqual(self.calls[-1][0], ['systemctl', '--user', '--no-ask-password', 'stop', self.unit])
+        # Updated spec replaces unit-name stop with anchored handle signalling.
+        for prop in ('--property=ExitType=main', '--property=RemainAfterExit=no',
+                     '--property=SendSIGKILL=yes'):
+            self.assertIn(prop, argv)
         for _, kwargs in self.calls:
             self.assertTrue(kwargs['capture_output'])
             self.assertTrue(kwargs['text'])
@@ -464,6 +470,18 @@ class AdapterTests(unittest.TestCase):
             self.assertLessEqual(kwargs['timeout'], 100)
             self.assertFalse(kwargs.get('shell', False))
 
+    def test_FR05_environment_values_never_enter_launch_argv(self):
+        secret_url = 'http://fixture-user:fixture-password@example.invalid:8080'
+        with patch.dict(os.environ, {'HOME': '/tmp/home', 'PATH': '/bin', 'CODEX_HOME': '/tmp/config',
+                                     'HTTPS_PROXY': secret_url, 'UNRELATED_ENV': secret_url}, clear=True):
+            self.manager.start(self.unit, ['/bin/true', 'app-server'], '/tmp', self.token, deadline=200)
+        argv = self.calls[-1][0]
+        for name in ('HOME', 'PATH', 'CODEX_HOME', 'HTTPS_PROXY'):
+            self.assertIn('--setenv=' + name, argv)
+        self.assertNotIn('--setenv=UNRELATED_ENV', argv)
+        self.assertFalse(any(secret_url in arg or 'fixture-password' in arg for arg in argv))
+        self.assertFalse(any(arg.startswith('--setenv=') and '=' in arg[len('--setenv='):] for arg in argv))
+
     def test_FR05_strict_version_and_redacted_errors(self):
         for output in ('codex-cli 0.160.1\n', 'banner\ncodex-cli 0.160.0\n', 'SECRET-PAYLOAD'):
             self.output = output
@@ -472,7 +490,7 @@ class AdapterTests(unittest.TestCase):
             self.assertNotIn('SECRET-PAYLOAD', str(ctx.exception))
         self.returncode = 1
         with self.assertRaises(HostError) as ctx:
-            self.manager.stop(self.unit, deadline=200)
+            self.manager.stop(self.unit, invocation_id='a' * 32, main_pid=123, token=self.token, deadline=200)
         self.assertNotIn('SECRET-PAYLOAD', str(ctx.exception))
 
     def test_FR05_show_fields_and_strict_parsing(self):
@@ -485,7 +503,8 @@ class AdapterTests(unittest.TestCase):
         self.assertIn(self.unit, argv)
         for output in (self.status() + 'MainPID=123\n', self.status(MainPID='-1'),
                        self.status(InvocationID='A' * 32), 'LoadState=loaded\n',
-                       self.status() + 'malformed\n'):
+                       self.status() + 'malformed\n', self.status(RemainAfterExit='true'),
+                       self.status(SendSIGKILL='1'), self.status().replace('Type=exec\n', '')):
             self.output = output
             with self.subTest(output=output), self.assertRaises(HostError):
                 self.manager.inspect(self.unit, deadline=200)
@@ -519,10 +538,10 @@ class AdapterTests(unittest.TestCase):
     def test_FR05_invalid_syntax_and_expired_deadline_no_runner(self):
         for unit in ('foreign.service', '../bad.service', self.unit + '\n'):
             with self.assertRaises(HostError):
-                self.manager.stop(unit, deadline=200)
+                self.manager.stop(unit, invocation_id='a' * 32, main_pid=123, token=self.token, deadline=200)
         for deadline in (True, float('nan'), float('inf'), 100):
             with self.assertRaises(HostError):
-                self.manager.stop(self.unit, deadline=deadline)
+                self.manager.stop(self.unit, invocation_id='a' * 32, main_pid=123, token=self.token, deadline=deadline)
         self.assertEqual(self.calls, [])
 
 
@@ -627,6 +646,202 @@ class AliasAdapterTests(unittest.TestCase):
         self.mutate = change_target
         with self.assertRaises(HostError):
             self.validate()
+
+
+class FencedStopTests(unittest.TestCase):
+    """FR-CXHOST-04 / FR-CXHOST-05 / INV-CXHOST-04 / INV-CXHOST-05."""
+    def setUp(self):
+        self.unit = 'cctask-' + str(uuid.uuid4()) + '.service'
+        self.token = str(uuid.uuid4())
+        self.invocation = 'a' * 32
+        self.commands = []
+        self.open_calls = []
+        self.now = 100.0
+        self.state = dict(LoadState='loaded', Description='claude-control task ' + self.token,
+            InvocationID=self.invocation, ActiveState='active', SubState='running', MainPID='123',
+            ControlGroup='/owned/task', KillMode='control-group', Type='exec', ExitType='main',
+            Restart='no', RemainAfterExit='no', SendSIGKILL='yes')
+        self.on_open = None
+        self.on_signal = None
+        self.opener_error = None
+        self.handle_error = None
+        self.signals = []
+        self.closed = 0
+        self.has_exited = False
+        self.has_drained = False
+        self.exit_on_term = True
+        self.drain_on_exit = True
+        outer = self
+        class Handle:
+            pid = 123
+            uid = os.getuid()
+            cgroup = '/owned/task'
+            def signal(self, sig):
+                outer.signals.append(sig)
+                if outer.on_signal:
+                    outer.on_signal(sig)
+                if sig == signal.SIGKILL or outer.exit_on_term:
+                    outer.has_exited = True
+                    outer.has_drained = outer.drain_on_exit
+                    if outer.state is not None and outer.state['InvocationID'] == outer.invocation:
+                        outer.state.update(ActiveState='inactive', SubState='dead', MainPID='0', ControlGroup='')
+            def exited(self):
+                if outer.handle_error:
+                    raise outer.handle_error
+                return outer.has_exited
+            def drained(self):
+                return outer.has_drained
+            def close(self):
+                outer.closed += 1
+        self.handle = Handle()
+        def clock():
+            self.now += 0.2
+            return self.now
+        def opener(pid, group, *, deadline):
+            self.open_calls.append((pid, group, deadline))
+            if self.opener_error:
+                raise self.opener_error
+            if self.on_open:
+                self.on_open()
+            return self.handle
+        def runner(argv, **kwargs):
+            self.commands.append((argv, kwargs))
+            self.assertEqual(argv[:4], ['systemctl', '--user', '--no-ask-password', 'show'])
+            if self.state is None:
+                fields = dict(LoadState='not-found', Description=self.unit, InvocationID='',
+                    ActiveState='inactive', SubState='dead', MainPID='0', ControlGroup='',
+                    KillMode='control-group', Type='simple', ExitType='main', Restart='no',
+                    RemainAfterExit='no', SendSIGKILL='yes')
+            else:
+                fields = self.state
+            return subprocess.CompletedProcess(argv, 0, ''.join(k+'='+v+'\n' for k,v in fields.items()), '')
+        self.manager = SystemdTaskManager(runner=runner, clock=clock, process_opener=opener)
+
+    def stop(self, **changes):
+        args = dict(invocation_id=self.invocation, main_pid=123, token=self.token, deadline=110)
+        args.update(changes)
+        return self.manager.stop(self.unit, **args)
+
+    def foreign(self):
+        self.state.update(InvocationID='b' * 32, MainPID='456', Description='foreign')
+
+    def test_FR05_fenced_stop_only_original_handle_and_cleanup(self):
+        self.assertIsNone(self.stop())
+        self.assertEqual(self.signals, [signal.SIGTERM])
+        self.assertEqual(self.open_calls, [(123, '/owned/task', 110)])
+        self.assertEqual(self.closed, 1)
+        self.assertGreaterEqual(len(self.commands), 3)
+        for argv, kwargs in self.commands:
+            self.assertNotIn('stop', argv)
+            self.assertNotIn('kill', argv)
+            self.assertGreater(kwargs['timeout'], 0)
+            self.assertLessEqual(kwargs['timeout'], 10)
+
+    def test_FR05_wrong_identity_or_cleanup_never_opens_or_signals(self):
+        original = dict(self.state)
+        for changes in ({'InvocationID': 'b' * 32}, {'MainPID': '456'}, {'Description': 'foreign'},
+                        {'Type': 'simple'}, {'ExitType': 'cgroup'}, {'Restart': 'always'},
+                        {'RemainAfterExit': 'yes'}, {'SendSIGKILL': 'no'}):
+            self.now = 100
+            self.state = dict(original, **changes)
+            with self.subTest(changes=changes), self.assertRaises(HostError):
+                self.stop()
+            self.assertEqual(self.open_calls, [])
+            self.assertEqual(self.signals, [])
+
+    def test_FR05_replacement_at_opener_prevents_signal_and_closes_handle(self):
+        self.on_open = self.foreign
+        with self.assertRaises(HostError):
+            self.stop()
+        self.assertEqual(self.signals, [])
+        self.assertEqual(self.closed, 1)
+
+    def test_FR05_replacement_during_signal_cannot_stop_foreign_invocation(self):
+        self.on_signal = lambda sig: self.foreign()
+        with self.assertRaises(HostError):
+            self.stop()
+        self.assertEqual(self.signals, [signal.SIGTERM])
+        self.assertEqual(self.closed, 1)
+        self.assertTrue(all('stop' not in argv and 'kill' not in argv for argv, _ in self.commands))
+
+    def test_FR05_wrong_handle_identity_is_closed_without_signal(self):
+        for attr, value in (('pid', 456), ('uid', os.getuid() + 1), ('cgroup', '/owned/task-sibling')):
+            original = getattr(self.handle, attr)
+            setattr(self.handle, attr, value)
+            self.closed = 0
+            self.now = 100
+            with self.subTest(attr=attr), self.assertRaises(HostError):
+                self.stop()
+            self.assertEqual(self.signals, [])
+            self.assertEqual(self.closed, 1)
+            setattr(self.handle, attr, original)
+
+    def test_FR05_main_exit_without_cgroup_drain_times_out(self):
+        self.drain_on_exit = False
+        with self.assertRaises(HostError):
+            self.stop()
+        self.assertTrue(self.has_exited)
+        self.assertFalse(self.has_drained)
+        self.assertEqual(self.signals, [signal.SIGTERM])
+        self.assertEqual(self.closed, 1)
+
+    def test_FR05_missing_unit_requires_both_pinned_anchor_proofs(self):
+        for exited, drained in ((False, True), (True, False), (False, False)):
+            self.now = 100
+            self.closed = 0
+            self.signals.clear()
+            self.state.update(ActiveState='active', SubState='running', MainPID='123', ControlGroup='/owned/task')
+            self.exit_on_term = False
+            def vanish(sig, exited=exited, drained=drained):
+                self.state = None
+                self.has_exited, self.has_drained = exited, drained
+                if not exited:
+                    raise ProcessLookupError()
+            self.on_signal = vanish
+            with self.subTest(exited=exited, drained=drained), self.assertRaises(HostError):
+                self.stop()
+            self.assertEqual(self.closed, 1)
+            self.state = dict(LoadState='loaded', Description='claude-control task ' + self.token,
+                InvocationID=self.invocation, ActiveState='active', SubState='running', MainPID='123',
+                ControlGroup='/owned/task', KillMode='control-group', Type='exec', ExitType='main',
+                Restart='no', RemainAfterExit='no', SendSIGKILL='yes')
+
+    def test_FR05_shutdown_anchors_and_authoritative_missing_succeed(self):
+        self.on_signal = lambda sig: setattr(self, 'state', None)
+        self.assertIsNone(self.stop())
+        self.assertTrue(self.has_exited and self.has_drained)
+        self.assertEqual(self.closed, 1)
+
+    def test_FR05_escalates_only_same_handle_before_deadline(self):
+        self.exit_on_term = False
+        self.assertIsNone(self.stop())
+        self.assertEqual(self.signals, [signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual(len(self.open_calls), 1)
+        self.assertEqual(self.closed, 1)
+        self.assertLess(self.now, 110)
+
+    def test_FR05_opener_and_handle_errors_are_redacted_and_closed(self):
+        self.opener_error = OSError('SECRET-PAYLOAD')
+        with self.assertRaises(HostError) as ctx:
+            self.stop()
+        self.assertNotIn('SECRET-PAYLOAD', str(ctx.exception))
+        self.assertEqual(self.signals, [])
+        self.opener_error = None
+        self.handle_error = OSError('SECRET-PAYLOAD')
+        with self.assertRaises(HostError) as ctx:
+            self.stop()
+        self.assertNotIn('SECRET-PAYLOAD', str(ctx.exception))
+        self.assertEqual(self.closed, 1)
+
+    def test_FR05_expired_or_invalid_stop_parameters_no_commands(self):
+        for changes in ({'deadline': 100}, {'invocation_id': 'A' * 32}, {'main_pid': True},
+                        {'main_pid': 0}, {'token': 'invalid'}):
+            self.now = 100
+            with self.subTest(changes=changes), self.assertRaises(HostError):
+                self.stop(**changes)
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.open_calls, [])
+
 
 
 if __name__ == '__main__':
