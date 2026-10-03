@@ -181,6 +181,30 @@ class RecoveryCompliance(unittest.TestCase):
     def test_direct_shutdown_barrier_expires_genuine_pending_permission(self):
         self.admin_permission_barrier('shutdown')
 
+    def test_quiescent_shutdown_barrier_under_existing_done_lock_does_not_reenter_it(self):
+        # Shared destructive entries already own done.lock before calling their
+        # native barrier. A drained tombstone with no questions must remain
+        # usable under that real lock, rather than self-block until deadline.
+        f = self.f
+        store = f.publish_registry()
+        operation = store.prepare('event-1', 7, 'attempt-1', deadline=time.monotonic() + 2)
+        controller = f.make()
+        drained = controller.revoke_and_drain('recovery', deadline=time.monotonic() + 2)
+        self.assertIs(drained['drained'], True)
+        self.assertIn(operation['operation_id'], drained['operations'])
+        self.assertIs(controller.require_drained(deadline=time.monotonic() + 2), True)
+        self.assertFalse(list((f.agent / 'questions').glob('*.json')))
+        head = f.git('rev-parse', 'HEAD', cwd=f.agent / 'work')
+        started = time.monotonic()
+        with (f.agent / 'done.lock').open('a') as done_lock:
+            fcntl.flock(done_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = controller.revoke_and_drain('shutdown', deadline=time.monotonic() + 1)
+        self.assertIs(result['drained'], True)
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(f.git('rev-parse', 'HEAD', cwd=f.agent / 'work'), head)
+        self.assertFalse((f.agent / 'done.json').exists())
+        self.assertEqual(f.effects, [])
+
     def test_late_actual_approve_and_reject_refuse_before_question_or_spool_mutation(self):
         path, question = self.expire_pending()
         before = path.read_bytes()
