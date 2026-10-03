@@ -8,7 +8,9 @@ No native/model/systemd/network operation is permitted by the fixture binaries.
 import importlib.machinery
 import importlib.util
 import json
+import fcntl
 import os
+import sys
 from pathlib import Path
 import shutil
 import subprocess
@@ -413,6 +415,159 @@ print(json.dumps(result,ensure_ascii=False))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertRegex(result.stdout.lower(), r'неизвест|unknown|null')
                 self.assertNotRegex(result.stdout, r'cost=\$0(?:\s|$)')
+
+    def bot_render(self, function, *args):
+        script = """import importlib.machinery,importlib.util,json,sys
+loader=importlib.machinery.SourceFileLoader('wiring_renderer',sys.argv[1])
+spec=importlib.util.spec_from_loader(loader.name,loader)
+bot=importlib.util.module_from_spec(spec);loader.exec_module(bot)
+print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii=False))
+"""
+        result = subprocess.run(['python3', '-c', script, str(self.bin / 'claude-agent-tgbot'),
+                                 function, json.dumps(args)], env=self.env, capture_output=True,
+                                text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_task_done_cards_show_codex_phase_operation_thread_turn_and_unknown_usd(self):
+        # INV-CXRUN-08. Existing TASK done-card entry, separate interactive sessions UI.
+        detail = dict(kind='done', agent='task-fixture', project='fixture',
+            summary='owned done', commit_sha='a' * 40, branch='task/task-fixture',
+            changes=None, empty=False, engine='codex',
+            operation_id='12345678-1234-4000-8000-000000000001',
+            thread_id='native-thread-fixture', turn_id='native-turn-fixture',
+            cost_usd=None, reason='native bounded refusal')
+        for phase in ('bootstrap', 'running', 'waiting_approval', 'asked', 'draining', 'blocked'):
+            with self.subTest(phase=phase):
+                detail['phase'] = phase
+                text, keyboard = self.bot_render('question_card', detail)
+                self.assertIsInstance(text, str)
+                for value in ('codex', phase, detail['operation_id'], detail['thread_id'], detail['turn_id']):
+                    self.assertIn(value, text.lower())
+                self.assertRegex(text.lower(), r'неизвест|unknown|null')
+                buttons = [button for row in keyboard['inline_keyboard'] for button in row]
+                self.assertFalse(any('model' in button.get('callback_data', '').lower() or
+                                     'модель' in button.get('text', '').lower() for button in buttons))
+
+    def test_actual_task_menu_routes_from_agents_and_preserves_codex_identity(self):
+        # INV-CXRUN-08. Level obtained from real public menu callback, no invented /tasks command.
+        agent = self.hook_fixture()
+        text, keyboard = self.bot_render('menu_view', 'agents')
+        buttons = [button for row in keyboard['inline_keyboard'] for button in row]
+        entry = next(button for button in buttons if button['text'] == agent.name)
+        self.assertTrue(entry['callback_data'].startswith('m:'))
+        text, keyboard = self.bot_render('menu_view', entry['callback_data'][2:])
+        self.assertIn('codex', text.lower())
+        self.assertRegex(text.lower(), r'неизвест|unknown|null')
+        buttons = [button for row in keyboard['inline_keyboard'] for button in row]
+        self.assertFalse(any('model' in button.get('callback_data', '').lower() or
+                             'модель' in button.get('text', '').lower() for button in buttons))
+
+    def isolated_installer(self):
+        # Existing test-install-idempotent.sh public Darwin harness. Never live install.
+        launchctl = self.mockbin / 'launchctl'
+        launchctl.write_text('#!/bin/sh\nexit 0\n')
+        launchctl.chmod(0o700)
+        for name in ('curl', 'wget', 'pip', 'pip3'):
+            guard = self.mockbin / name
+            guard.write_text('#!/bin/sh\nexit 91\n')
+            guard.chmod(0o700)
+        (self.home / 'Library/LaunchAgents').mkdir(parents=True, exist_ok=True)
+        env = dict(self.env, CLAUDE_CONTROL_OS='Darwin')
+        return subprocess.run([str(ROOT / 'install.sh'), '--prefix', str(self.base / 'installed'),
+                               '--label', 'com.test.codex-task-wiring'], env=env,
+                              capture_output=True, text=True, timeout=30)
+
+    def test_install_seeds_dedicated_codex_template_and_is_idempotent(self):
+        # INV-CXRUN-01/08
+        result = self.isolated_installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        template = self.home / '.claude-control/task-codex-template.yaml'
+        self.assertTrue(template.is_file(), 'installer did not seed dedicated Codex template')
+        before = template.read_bytes()
+        legacy = self.home / '.claude-control/task-template.yaml'
+        legacy_before = legacy.read_bytes()
+        result = self.isolated_installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(template.read_bytes(), before)
+        self.assertEqual(legacy.read_bytes(), legacy_before)
+        for name in ('codex-task-runtime', '_codex_task_runtime.py'):
+            self.assertTrue((self.base / 'installed/bin' / name).is_file(), name)
+
+    def test_install_preserves_custom_codex_and_legacy_templates(self):
+        # INV-CXRUN-01/08
+        directory = self.home / '.claude-control'
+        directory.mkdir()
+        codex = directory / 'task-codex-template.yaml'
+        legacy = directory / 'task-template.yaml'
+        codex.write_text('# user custom Codex template\ncustom: codex-sentinel\n')
+        legacy.write_text('# user custom Claude template\ncustom: claude-sentinel\n')
+        before = codex.read_bytes(), legacy.read_bytes()
+        result = self.isolated_installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((codex.read_bytes(), legacy.read_bytes()), before)
+
+    def dependency_fixture(self, agent, with_venv):
+        # Public Python dependency discovery boundary. No production bypass added.
+        import venv
+        hookdir = self.base / 'python-startup-fixture'
+        hookdir.mkdir()
+        interpreter = self.home / '.local/share/claude-control/codex-venv/bin/python'
+        venv_root = interpreter.parent.parent
+        if with_venv:
+            venv.EnvBuilder(with_pip=False).create(venv_root)
+            site = next((venv_root / 'lib').glob('python*/site-packages'))
+            package = site / 'websockets'
+            package.mkdir()
+            (package / '__init__.py').write_text('__version__ = "15.0.1"\n')
+            metadata = site / 'websockets-15.0.1.dist-info'
+            metadata.mkdir()
+            (metadata / 'METADATA').write_text('Metadata-Version: 2.1\nName: websockets\nVersion: 15.0.1\n')
+        self.reexec_log = self.base / 'reexec.jsonl'
+        # Record native interpreter startup before the shared command dispatcher.
+        # Missing dependency applies only to original interpreter; the private
+        # venv has a versioned dependency fixture. Real transport is never called.
+        source = ('import sys,json,importlib.util\n'
+            f'if sys.prefix == {str(venv_root)!r}:\n'
+            f' with open({str(self.reexec_log)!r},"a") as f: f.write(json.dumps(sys.argv)+"\\n")\n'
+            'else:\n'
+            ' original=importlib.util.find_spec\n'
+            ' importlib.util.find_spec=lambda name,*a,**k: None if name=="websockets" else original(name,*a,**k)\n')
+        (hookdir / 'sitecustomize.py').write_text(source)
+        compile(source, 'sitecustomize.py', 'exec')
+        self.env['PYTHONPATH'] = str(hookdir)
+        self.env.pop('CODEX_RC_PYTHON', None)
+
+    def test_missing_websockets_is_visible_refusal_before_executor_flock(self):
+        # INV-CXRUN-02
+        agent = self.hook_fixture()
+        self.dependency_fixture(agent, with_venv=False)
+        lockpath = agent / 'inbox/.executor.lock'
+        with lockpath.open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            result = self.run_cmd('claude-agent-run', 'drain', agent)
+        self.assertNotEqual(result.returncode, 5, 'missing dependency was checked after executor flock')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertRegex((result.stderr + result.stdout).lower(), r'websockets|dependenc|venv')
+        self.assertFalse(self.reexec_log.exists())
+        self.assertFalse(self.effects.exists(), 'dependency refusal must precede unit/model effects')
+
+    def test_codex_venv_reexec_precedes_flock_and_preserves_loop_and_drain_argv(self):
+        # INV-CXRUN-02
+        agent = self.hook_fixture()
+        self.dependency_fixture(agent, with_venv=True)
+        lockpath = agent / 'inbox/.executor.lock'
+        with lockpath.open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            for mode in ('loop', 'drain'):
+                with self.subTest(mode=mode):
+                    self.reexec_log.unlink(missing_ok=True)
+                    result = self.run_cmd('claude-agent-run', mode, agent)
+                    self.assertTrue(self.reexec_log.is_file(),
+                                    'verified venv must start before executor flock; ' + result.stderr)
+                    calls = [json.loads(line) for line in self.reexec_log.read_text().splitlines()]
+                    self.assertTrue(any(call[1:] == [mode, str(agent)] for call in calls), calls)
+                    self.assertFalse(self.effects.exists())
 
     def test_actual_barrier_refuses_missing_registry_and_keeps_dirty_worktree(self):
         # INV-CXRUN-07. Actual controller/shim, NOT the refusal routing stub.
