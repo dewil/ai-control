@@ -287,3 +287,6 @@ Ordinary turn/start native0.160.0 возвращает inProgress с пусты�
 
 
 Stale unanswered permission fencing относится также к successful direct revoke_and_drain для pause/cancel/shutdown: после подтверждённого all-host drain оставшийся genuine pending вопрос без human send intent помечается expired/stale под question lock. Административный барьер не отправляет native reply и не делает checkpoint/finalization; late human decision не создаёт spool или ответ. Lone intent/confirmed receipt uncertainty semantics сохраняются. Failed drain не выдаётся за success/expired callback proof.
+
+
+Historical finished ordinary operation с matching done envelope/terminal/store receipt остаётся finished при последующих commits других операций того же persistent thread. Reconcile не пересоздаёт старый checkpoint и не требует HEAD == старый commit; exact исторический receipt проверяется как принадлежащий original operation/commit, не превращается в permission переписать текущий HEAD/index/worktree. Несколько последовательных ordinary events и asked→answer не блокируются историческим checkpoint; каждый original архивируется/dedup один раз, no native replay.
