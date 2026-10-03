@@ -761,6 +761,11 @@ PY
   "$BIN_DIR/claude-agent-run" spool-put "$name" --text "$text" \
     --producer tgbot --id "tg:$name" >/dev/null
 
+  # Creation/spool publication is durable; start takes this same name lock
+  # itself. Release before entering it rather than recursively flocking.
+  flock -u "$lockfd"
+  exec {lockfd}>&-
+
   # --- 5. start: CAS paused->running; уже running - ok, без повторного CAS
   # (§1 шаг4) ---
   local started
@@ -768,7 +773,7 @@ PY
   if [[ "$cur_desired" == "running" ]]; then
     started="running"
   else
-    cmd_start "$name" >/dev/null
+    cmd_start "$name" idempotent >/dev/null
     started="started"
   fi
   echo "$name $created $started"
@@ -778,9 +783,26 @@ PY
 
 read_control() { "$IO" control-read "$1"; }
 
-cmd_start() {
-  local dir; dir=$(agent_dir "$1")
-  local c; c=$(read_control "$dir")
+cmd_start() (
+  local dir identity incarnation lockfd c; dir=$(agent_dir "$1")
+  c=$(read_control "$dir") || return 3
+  incarnation=$(jget "$c" 'd.get("incarnation")')
+  identity=$(stat -Lc '%d:%i' "$dir") || return 3
+  mkdir -p "$AGENTS_DIR/.locks"
+  exec {lockfd}>"$AGENTS_DIR/.locks/new-task-$1.lock"
+  flock -x "$lockfd"
+  [[ -d "$dir" && "$(stat -Lc '%d:%i' "$dir" 2>/dev/null)" == "$identity" ]] \
+    || fail "agent incarnation changed before start" 4
+  [[ ! -f "$(dirname "$AGENTS_DIR")/tombstones/$1.json" ]] \
+    || fail "задача архивирована" 4
+  c=$(read_control "$dir") || return 3
+  [[ "$(jget "$c" 'd.get("incarnation")')" == "$incarnation" ]] \
+    || fail "agent incarnation changed before start" 4
+  # Concurrent /new publishers can both observe paused before entering this
+  # lock. Only that internal idempotent path accepts an already-running task.
+  if [[ "${2:-}" == "idempotent" && "$(jget "$c" 'd["desired"]')" == "running" ]]; then
+    return 0
+  fi
   local acc att
   acc=$(jget "$c" 'd["acceptance"]["status"]')
   att=$(jget "$c" 'd["attention"]["reason"] if d["attention"] else ""')
@@ -805,7 +827,7 @@ cmd_start() {
     --set 'desired="running"' --event agent_start --actor operator >/dev/null \
     || fail "недопустимый переход (desired не paused / attention сменился?)" 4
   echo "$1: desired=running (reconciler поднимет в ближайший проход)"
-}
+)
 
 cmd_pause() {
   local dir; dir=$(agent_dir "$1")

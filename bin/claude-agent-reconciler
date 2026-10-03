@@ -38,6 +38,26 @@ ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { echo "$(ts) $*" >> "$LOG"; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# Cached registry paths are not identities. Capture inode AND immutable control
+# incarnation before any wait, then recheck under the stable parent name lock.
+agent_identity() {
+  python3 - "${1%/}" <<'PYIDENT'
+import json, os, sys
+try:
+    path = sys.argv[1]
+    st = os.stat(path)
+except OSError:
+    sys.exit(1)
+try:
+    control = json.load(open(path + "/control.json"))
+    incarnation = control.get("incarnation")
+except (OSError, ValueError, AttributeError):
+    # Invalid registries must still reach the existing diagnostic/alert path.
+    incarnation = None
+print(json.dumps([st.st_dev, st.st_ino, incarnation]))
+PYIDENT
+}
+
 # ---------------------------------------------------------------- alerts
 # Ledger + dedup per {agent, reason}: one push per episode, re-push after
 # 6h while open (§16.2). Push = log line + optional hook (TG bot -- stage 3).
@@ -423,7 +443,9 @@ shutdown_agent() { # <dir> <name>; 0 = lease освобожден
 # Возврат: 0 = active; 1 = реальная неудача (считается в resume_fails);
 # 2 = hold-условие (ожидаемое состояние среды, ретраи НЕ растит - §16.3/C9).
 acquire_agent() { # <dir> <name>; вызывается под admission
-  local dir="$1" name="$2" unit; unit=$(unit_of "$name")
+  local dir="${1%/}" name="$2" unit identity; unit=$(unit_of "$name")
+  identity="${3:-$(agent_identity "$dir")}"
+  [[ -n "$identity" && "$(agent_identity "$dir")" == "$identity" ]] || return 2
   local atype; atype=$(spec_get "$dir" .type); atype="${atype:-mission}"
   local engine; engine=$(task_engine_of "$dir") || return 2
   if [[ "$engine" == "codex" ]]; then
@@ -431,6 +453,26 @@ acquire_agent() { # <dir> <name>; вызывается под admission
     native_barrier "$dir" shutdown || return 2
   elif [[ "$engine" != "claude" ]]; then return 2; fi
 
+  acquire_agent_locked "$dir" "$name" "$identity"
+  local rc=$?
+  [[ $rc -eq 0 ]] || return "$rc"
+  # Gate B can call shutdown/native expiry (done -> name -> control locks).
+  # Actual launch is complete: release name before that recovery path.
+  local attempt
+  attempt=$("$IO" control-read "$dir" | python3 -c 'import json,sys; print(json.load(sys.stdin)["lease"]["start_attempt_id"])') || return 2
+  [[ "$(agent_identity "$dir")" == "$identity" ]] || return 2
+  gate_b "$dir" "$name" "$attempt" "$identity"
+}
+
+acquire_agent_locked() ( # name lock covers Gate A and ACTUAL systemd-run.
+  local dir="$1" name="$2" identity="$3" unit; unit=$(unit_of "$name")
+  local lockfd
+  mkdir -p "$AGENTS_DIR/.locks"
+  exec {lockfd}>"$AGENTS_DIR/.locks/new-task-$name.lock"
+  flock -x "$lockfd"
+  [[ "$(agent_identity "$dir")" == "$identity" ]] || return 2
+  [[ ! -f "$(dirname "$AGENTS_DIR")/tombstones/$name.json" ]] || return 2
+  local atype; atype=$(spec_get "$dir" .type); atype="${atype:-mission}"
   # PRE-FLIGHT (1): реестр валиден (проверено раньше), маунт, worktree.
   # event-агент по умолчанию живет целиком на корне (Д2/Д3: inbox, spool,
   # run/) - маунт и worktree ему не нужны, при запертом LUKS он работает.
@@ -538,10 +580,10 @@ acquire_agent() { # <dir> <name>; вызывается под admission
   [[ -n "${CLAUDE_CONFIG_DIR:-}" ]] \
     && run_args+=(--setenv "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
   [[ -n "${CLAUDE_BIN:-}" ]] && run_args+=(--setenv "CLAUDE_BIN=$CLAUDE_BIN")
-  local sid
-  sid=$("$IO" control-read "$dir" | python3 -c \
+  local task_session_id
+  task_session_id=$("$IO" control-read "$dir" | python3 -c \
     'import json,sys; print(json.load(sys.stdin).get("session_id") or "")')
-  [[ -n "$sid" ]] && run_args+=(--setenv "CLAUDE_AGENT_SESSION_ID=$sid")
+  [[ -n "$task_session_id" ]] && run_args+=(--setenv "CLAUDE_AGENT_SESSION_ID=$task_session_id")
   [[ -n "${CLAUDE_AGENT_RUNTIME_CMD:-}" ]] \
     && run_args+=(--setenv "CLAUDE_AGENT_RUNTIME_CMD=$CLAUDE_AGENT_RUNTIME_CMD")
   # env-нобы event-слоя: тестовые оверрайды, алерт-хук прогонов и
@@ -573,14 +615,16 @@ acquire_agent() { # <dir> <name>; вызывается под admission
     return 1
   fi
 
-  # GATE B (5): подтверждение владельца
-  gate_b "$dir" "$name" "$attempt"
-}
+  return 0
+)
 
 gate_b() { # <dir> <name> <attempt>; R2 тоже сюда
-  local dir="$1" name="$2" attempt="$3"
+  local dir="${1%/}" name="$2" attempt="$3" identity
+  identity="${4:-$(agent_identity "$dir")}"
+  [[ -n "$identity" && "$(agent_identity "$dir")" == "$identity" ]] || return 1
   local pid pstart started
   pid=$(unit_mainpid "$name")
+  [[ "$(agent_identity "$dir")" == "$identity" ]] || return 1
   if [[ ! "$pid" -gt 0 ]]; then
     # v2 §4.3 (major 2): drain может отработать и выйти раньше фиксации
     # MainPID - inactive/success ЮНИТА = штатный fast-exit, не провал
@@ -1372,8 +1416,9 @@ run_pass() {
   local used=0 candidates=()
   for dir in "$AGENTS_DIR"/*/; do
     [[ -d "$dir" ]] || continue
-    local name; name=$(basename "$dir")
+    local name identity; name=$(basename "$dir")
     [[ "$name" =~ $NAME_RE ]] || continue
+    identity=$(agent_identity "$dir") || continue
     # v2.6 §2: лесенка напоминаний по вопросам - на каждом тике, для
     # каждого агента; bulkhead - сбой одного агента не валит проход, вывод
     # (построчно <qid> sent|skip|fail) идет в лог reconciler'а.
@@ -1385,6 +1430,7 @@ run_pass() {
     # вызов, тот же шов и та же дисциплина (свой лок, идемпотентный no-op,
     # бульхед - провал одного агента не валит проход по остальным).
     "$BIN_DIR/claude-agent-run" done-advance "$dir" >>"$LOG" 2>&1 || true
+    [[ "$(agent_identity "$dir")" == "$identity" ]] || continue
     # V2.8 §5: расписание -> событие в spool по слоту, тот же шов - свой
     # лок, идемпотентный no-op без блока schedule в спеке или в том же слоте.
     "$BIN_DIR/claude-agent-run" schedule-tick "$dir" >>"$LOG" 2>&1 || true
@@ -1406,11 +1452,13 @@ except Exception: print("none")' 2>/dev/null || echo none)
   local started_this_pass=0
   for dir in "$AGENTS_DIR"/*/; do
     [[ -d "$dir" ]] || continue
-    local name; name=$(basename "$dir")
+    local name identity; name=$(basename "$dir")
     [[ "$name" =~ $NAME_RE ]] || continue
+    identity=$(agent_identity "$dir") || continue
     local out
     # bulkhead: сбой одного агента не валит проход (§2.2)
     out=$(process_agent "$dir" 2>>"$LOG") || log "$name: process_agent error"
+    [[ "$(agent_identity "$dir")" == "$identity" ]] || continue
     if [[ "$out" == WANT_START* ]]; then
       local mb="${out#WANT_START }"
       if [[ "$started_this_pass" -ge 1 ]]; then
@@ -1420,7 +1468,7 @@ except Exception: print("none")' 2>/dev/null || echo none)
         log "$name: admission queue (used=${used}MB +${mb}MB > ${RAM_BUDGET}MB)"
       else
         # T1: один захват за проход (stagger, C8/C12)
-        acquire_agent "$dir" "$name"; local rc=$?
+        acquire_agent "$dir" "$name" "$identity"; local rc=$?
         if [[ $rc -eq 0 ]]; then
           used=$((used + mb)); started_this_pass=1
         elif [[ $rc -eq 1 ]]; then

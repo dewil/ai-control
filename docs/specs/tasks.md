@@ -132,7 +132,7 @@
 
 **INV-TASK-43.** Уборка снимает ровно то, что поставил `create`: worktree - только при чистом дереве, без `--force`; ветка удаляется только при `merge`, только если принятый коммит содержится в **текущей** целевой ветке, только если ветка все еще указывает на него, и только без разыменования ссылки. *Почему:* в грязном worktree лежит несохраненная работа; ветку могли откатить после мержа; агент мог дописать в нее новое после приемки; а разыменование сносит ветку, на которую указывает символическая ссылка, а не саму ссылку.
 
-**INV-TASK-44.** Архив не забирает бегущего агента (живость определяется fail-closed), надгробие пишется **до** переименования, само переименование атомарно. *Почему:* каталог нельзя уводить из-под работающего процесса; после успешного rename доигрывать уже не с чего, и дубль по освободившемуся имени не остановить ничем.
+**INV-TASK-44.** Каждая попытка архива из `cleaned` и `archived` подтверждает остановку и `desired=stopped` fail-closed. Архиватор, принятие `start` и фактический reconciler launch используют общий именной лок со свежей проверкой идентичности; архив не забирает бегущего агента. Надгробие пишется **до** атомарного переименования, а retry сохраняет `archived_at`. *Почему:* каталог нельзя уводить из-под работающего процесса; после успешного rename доигрывать уже не с чего, и дубль по освободившемуся имени не остановить ничем.
 
 **INV-TASK-45.** Отказ - не конец задачи: вердикт `rejected` дописывает документ в историю, кладет событие-доработку с дедуп-идентификатором и снимает `done.json`, после чего агент вправе предъявиться заново. *Почему:* отклоненная задача обязана иметь возможность доделаться; каждый из трех шагов переисполним, поэтому крах между ними безопасен.
 
@@ -286,7 +286,7 @@
 | INV-TASK-03 | `test-agent-task-lifecycle.sh` N5a, N5b |
 | INV-TASK-04 | `test-agent-task-lifecycle.sh` N4a, N4b, N25 |
 | INV-TASK-05 | `test-agent-task-lifecycle.sh` N4b, N18a-c |
-| INV-TASK-06 | `test-agent-task-lifecycle.sh` B28, B29 |
+| INV-TASK-06 | `test-agent-task-lifecycle.sh` B28, B29; `test-task-archive-recovery.py` (tombstone and stable retry) |
 | INV-TASK-07 | `test-agent-drain.sh` T1-T6; `tests/fault/run-fault-tests.sh` S20a-c |
 | INV-TASK-08 | `test-agent-drain.sh` T7, T9; fault S20a, S20d |
 | INV-TASK-09 | fault S20a, S20d |
@@ -324,7 +324,7 @@
 | INV-TASK-41 | `test-agent-task-lifecycle.sh` B14, B80, B81 (позднюю пересверку перед самим шагом ни один кейс не пинит - см. дыру 9) |
 | INV-TASK-42 | `test-agent-task-lifecycle.sh` B12, B13, B15-B17, B20-B22 |
 | INV-TASK-43 | `test-agent-task-lifecycle.sh` B23, B24a, B24b, B25, B26 |
-| INV-TASK-44 | `test-agent-task-lifecycle.sh` B27, B28 |
+| INV-TASK-44 | `test-agent-task-lifecycle.sh` B27, B28; `test-task-archive-recovery.py` (tagged CLI/reconciler race and recovery tests) |
 | INV-TASK-45 | `test-agent-task-lifecycle.sh` B30-B33 |
 | INV-TASK-46 | `test-agent-lessons.sh` L1-L5 |
 | INV-TASK-47 | `test-agent-lessons.sh` L6, L29 |
