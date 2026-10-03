@@ -589,8 +589,8 @@ class RuntimeContract(unittest.TestCase):
                         history.append(created)
                         call_id = str(uuid.uuid4())
                         diagnostic = len(hosts) == 2
-                        names = registry + (['exec_command'] if native_mode == 'extra_registry' else [])
-                        if native_mode == 'final_prose_registry':
+                        names = registry + (['exec_command'] if native_mode == 'extra_registry' or (not diagnostic and native_mode == 'ordinary_registry_extra') else [])
+                        if native_mode == 'final_prose_registry' or (not diagnostic and native_mode == 'ordinary_registry_missing'):
                             created['items'].append({'type': 'agentMessage', 'id': str(uuid.uuid4()),
                                 'text': json.dumps(sorted(registry)), 'phase': 'final', 'memoryCitation': None})
                         else:
@@ -602,8 +602,12 @@ class RuntimeContract(unittest.TestCase):
                                 {'method': 'rawResponseItem/completed', 'params': {
                                     'threadId': thread_id, 'turnId': turn_id, 'item': {
                                         'type': 'custom_tool_call_output',
-                                        'call_id': 'foreign' if native_mode == 'uncorrelated_registry' else call_id,
+                                        'call_id': 'foreign' if native_mode == 'uncorrelated_registry' or (not diagnostic and native_mode == 'ordinary_registry_uncorrelated') else call_id,
                                         'output': 'Script completed\nOutput:\n' + json.dumps(sorted(names))}}}])
+                        if not diagnostic and native_mode in ('ordinary_registry_extra', 'ordinary_registry_missing', 'ordinary_registry_uncorrelated'):
+                            self.events.append({'id': 0, 'method': 'item/tool/call', 'params': {
+                                'threadId': thread_id, 'turnId': turn_id, 'callId': 'ordinary-call',
+                                'tool': 'task_read', 'arguments': {'path': 'tracked.txt'}, 'namespace': None}})
                         if diagnostic and native_mode == 'bootstrap_dirty':
                             (case.agent / 'work/tracked.txt').write_text('unexpected bootstrap edit\n')
                         if diagnostic and native_mode == 'bootstrap_ask':
@@ -1635,6 +1639,24 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['thread_id'])
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
+
+    def test_ordinary_turn_requires_its_own_exact_correlated_registry_before_task_authority(self):
+        for mode in ('ordinary_registry_extra', 'ordinary_registry_missing', 'ordinary_registry_uncorrelated'):
+            with self.subTest(mode=mode):
+                case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
+                case.setUp()
+                try:
+                    case.publish_registry()
+                    controller, hosts, calls, order = case.discovery_fixture(native_mode=mode)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+                    self.assertIn(result['outcome'], ('blocked', 'unknown'))
+                    self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
+                    self.assertNotIn('reply_dynamic', order)
+                    self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+                    self.assertEqual((case.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+                    self.assertFalse((case.agent / 'done.json').exists())
+                finally:
+                    case.doCleanups()
 
     def test_unwritable_confirmed_receipt_refuses_before_native_answer(self):
         self.publish_registry()
