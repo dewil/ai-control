@@ -284,3 +284,6 @@ Verified native approval reply означает successful once-only local send 
 
 
 Ordinary turn/start native0.160.0 возвращает inProgress с пустым items до materialization (pinned turn_processor.rs706). После единственного may-send controller ограниченно сверяет original lifecycle через thread/read/reconcile до exact correlated full userMessage/clientUserMessageId/text; неизвестный snapshot не означает новую отправку. Accepted lifecycle full-history validation не ослабляется; reservation activation/TASK callback authority ждут exact native owned evidence. При timeout, чужом clientId/turn/text либо missing materialization — hold/revoke/drain, без второго turn/start/newhost/fallback. Queued native frames обрабатываются после authoritative binding, не теряются и не выдаются за authorization.
+
+
+Stale unanswered permission fencing относится также к successful direct revoke_and_drain для pause/cancel/shutdown: после подтверждённого all-host drain оставшийся genuine pending вопрос без human send intent помечается expired/stale под question lock. Административный барьер не отправляет native reply и не делает checkpoint/finalization; late human decision не создаёт spool или ответ. Lone intent/confirmed receipt uncertainty semantics сохраняются. Failed drain не выдаётся за success/expired callback proof.
