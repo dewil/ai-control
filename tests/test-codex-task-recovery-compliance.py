@@ -240,6 +240,62 @@ class RecoveryCompliance(unittest.TestCase):
         self.assertTrue(all(value is not None and value <= deadline for value in observed),
                         'trusted recovery Git checks must inherit the operation deadline')
 
+    def test_dirty_after_confirmed_done_written_preserves_retryable_shared_finalization(self):
+        # Later crash window: checkpoint/receipt/store finish are already real;
+        # only shared finalization and original archival remain to be recovered.
+        f = self.f
+        f.publish_registry()
+        controller, hosts, calls, order = f.discovery_fixture(native_mode='done_dirty', default_checkpoint=True)
+        executed = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 5)
+        self.assertEqual(executed['outcome'], 'done_requested')
+        done_path = f.agent / 'done.json'
+        done = json.loads(done_path.read_text())
+        self.assertIs(done['finalized'], False)
+        completions = list((f.state / f.control['codex_state_id'] / 'operations').glob('*/completion.json'))
+        self.assertEqual(len(completions), 1)
+        completion_path = completions[0]
+        completion = json.loads(completion_path.read_text())
+        self.assertEqual(completion['phase'], 'done_written')
+        head = f.git('rev-parse', 'HEAD', cwd=f.agent / 'work').strip()
+        self.assertEqual(completion['checkpoint']['commit_sha'], head)
+        operation = completion['operation_id']
+        index_path = f.state / f.control['codex_state_id'] / 'index.json'
+        before_status = json.loads(index_path.read_text())['operations'][operation]['status']
+        self.assertEqual(before_status, 'finished')
+        envelope = f.agent / 'inbox/inflight/event-1.json'
+        before_envelope = envelope.read_bytes()
+        before_done, before_completion = done_path.read_bytes(), completion_path.read_bytes()
+        before_calls = list(calls)
+        count = f.git('rev-list', '--count', 'HEAD', cwd=f.agent / 'work')
+        tracked = f.agent / 'work/tracked.txt'
+        content = tracked.read_bytes()
+        tracked.write_text('own late temporary edit after confirmed done_written\n')
+        try:
+            result = controller.reconcile(deadline=time.monotonic() + 3)
+        except fixture_module.runtime_module.RuntimeError:
+            pass
+        else:
+            self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertEqual(done_path.read_bytes(), before_done)
+        self.assertEqual(completion_path.read_bytes(), before_completion)
+        self.assertEqual(envelope.read_bytes(), before_envelope)
+        self.assertEqual(json.loads(index_path.read_text())['operations'][operation]['status'], before_status)
+        self.assertFalse((f.agent / 'inbox/done/event-1.json').exists())
+        self.assertEqual(calls, before_calls)
+        tracked.write_bytes(content)
+        recovered = controller.reconcile(deadline=time.monotonic() + 5)
+        self.assertEqual(recovered['outcome'], 'recovered')
+        finalized = json.loads(done_path.read_text())
+        self.assertIs(finalized['finalized'], True)
+        self.assertEqual(finalized['commit_sha'], head)
+        self.assertFalse(envelope.exists())
+        self.assertTrue((f.agent / 'inbox/done/event-1.json').is_file())
+        rows = [json.loads(line) for line in (f.agent / 'inbox/dedup.jsonl').read_text().splitlines()]
+        self.assertEqual(sum(row['key'] == 'event-1' for row in rows), 1)
+        self.assertEqual(calls, before_calls)
+        self.assertEqual(f.git('rev-parse', 'HEAD', cwd=f.agent / 'work').strip(), head)
+        self.assertEqual(f.git('rev-list', '--count', 'HEAD', cwd=f.agent / 'work'), count)
+
     def pending_permission(self):
         f = self.f
         f.publish_registry()
