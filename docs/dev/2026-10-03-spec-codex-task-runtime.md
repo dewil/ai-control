@@ -204,7 +204,7 @@ Hook tests Python shared runner используют публичные function
 
 ## Уточнения public fixture boundary — 2026-10-03
 
-Executor ownership принадлежит trusted runner/CLI: он держит настоящий exclusive `.executor.lock` flock весь execute, приобретённый после venv reexec. Library execute вызывается этим владельцем; PID в JSON, envelope meta или содержимое lockfile не создают authority. Native-controller fixture держит настоящий flock; CLI сам acquire nonblocking и отказывает при конкурирующем владельце. Дополнительный owner nonce/IPC не вводится.
+Executor ownership принадлежит trusted runner/CLI: он держит настоящий exclusive `<agent>/inbox/.executor.lock` flock весь execute, приобретённый после venv reexec. Library execute вызывается этим владельцем; PID в JSON, envelope meta или содержимое lockfile не создают authority. Native-controller fixture держит настоящий flock; CLI сам acquire nonblocking и отказывает при конкурирующем владельце. Дополнительный owner nonce/IPC не вводится.
 
 Минимальный claimed envelope `{key,meta:{}}` валиден для registry, но ordinary prompt использует проверенный TASK `spec.goal` и optional envelope `payload` (при отсутствии пустой объект). Fixture meaningful ordinary event может иметь `payload:{text:"own fixture work"}`. Payload передаётся как ограниченные JSON данные с обозначением источника, не исполняемые инструкции controller; genuine human answer берётся только из shared question resolver. Другие стандартные поля source/native_id/received_at допустимы, но не являются permission evidence. Runner строит prompt и controller считывает goal/envelope; публичного prompt argument или произвольного RPC не добавляется.
 
