@@ -117,3 +117,5 @@ revoked_guard(operation_id, task_incarnation, *, deadline) — full control→in
 ## Уточнение после независимой сверки — 2026-10-03
 
 Trusted prepare создаёт и fsyncs private operations/<operation>/host до публикации prepared record. not_launched требует intact pinned operations/op/host directories и отсутствующий journal; потерянный/заменённый каталог не является доказательством отсутствия процесса. Exact повтор record_drained после index-first/inflight-last crash восстанавливает только matching projection с прежним drain_evidence=None, без нового native effect; несовпадающий receipt и любые другие расхождения отказывают.
+
+Исходная identity private operations/op/host сохраняется долговечно при prepare; новый корректный0700 каталог по тому же пути не заменяет исходное доказательство. Проверка сохраняется после открытия нового Store instance. Missing/conflicting identity отказывает, без backfill из текущего каталога. Это private registry evidence; публичные operation projection/fixture API не расширяются произвольной caller authority.
