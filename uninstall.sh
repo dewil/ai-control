@@ -70,6 +70,10 @@ fi
 
 say() { echo "==> $*"; }
 
+# shellcheck source=lib/retire-canon-maintainer.sh
+source "$REPO_DIR/lib/retire-canon-maintainer.sh"
+retire_canon_maintainer
+
 if [[ "$OS_KIND" == "darwin" ]]; then
 
   remove_launchd_unit() {
