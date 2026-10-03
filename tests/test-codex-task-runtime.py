@@ -5,6 +5,7 @@ from collections import deque
 import socket
 import hashlib
 import fcntl
+import shutil
 import importlib
 import json
 import os
@@ -355,7 +356,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -369,6 +370,7 @@ class RuntimeContract(unittest.TestCase):
         checkpoint_calls = []
         approval_replies = []
         waiting_heartbeats = []
+        transports = []
         answered = set()
         from _codex_task_files import CodexTaskFiles
         from _codex_task_bridge import dynamic_tools
@@ -469,6 +471,9 @@ class RuntimeContract(unittest.TestCase):
                 return self.snapshot()
 
         def factory(directory, incarnation, cwd, *, executable, argv_factory, budget, clock):
+            for existing in hosts:
+                if str(existing.directory) == directory:
+                    return existing
             host = Host(directory, incarnation, cwd, executable, argv_factory, budget)
             hosts.append(host)
             return host
@@ -521,6 +526,8 @@ class RuntimeContract(unittest.TestCase):
                                 'excludeTmpdirEnvVar': True, 'excludeSlashTmp': True,
                                 'writableRoots': [str(case.agent / 'work')]}}
                     if method == 'thread/read':
+                        if native_mode == 'lost_start' and history:
+                            raise ConnectionError('PRIVATE_HISTORY_UNAVAILABLE')
                         case.assertIs(params['includeTurns'], True)
                         return {'thread': thread()}
                     if method == 'turn/start':
@@ -557,15 +564,17 @@ class RuntimeContract(unittest.TestCase):
                                 'threadId': thread_id, 'turnId': turn_id, 'callId': 'bootstrap-ask',
                                 'tool': 'task_ask', 'arguments': {'question': 'Forbidden bootstrap question?'},
                                 'namespace': None}})
-                        if not diagnostic and native_mode in ('read', 'ask', 'done', 'done_dirty'):
-                            tool = {'read': 'task_read', 'ask': 'task_ask', 'done': 'task_done', 'done_dirty': 'task_done'}[native_mode]
+                        if not diagnostic and native_mode in ('read', 'ask', 'done', 'done_dirty', 'checkpoint_crash', 'ask_duplicate', 'done_duplicate'):
+                            tool = {'read': 'task_read', 'ask': 'task_ask', 'done': 'task_done', 'done_dirty': 'task_done', 'checkpoint_crash': 'task_done', 'ask_duplicate': 'task_ask', 'done_duplicate': 'task_done'}[native_mode]
                             args = {'read': {'path': 'tracked.txt'}, 'ask': {'question': 'Proceed?'},
-                                    'done': {'summary': 'Ready <& unchanged'}, 'done_dirty': {'summary': 'Ready <& dirty'}}[native_mode]
-                            if native_mode == 'done_dirty':
+                                    'done': {'summary': 'Ready <& unchanged'}, 'done_dirty': {'summary': 'Ready <& dirty'}, 'checkpoint_crash': {'summary': 'Commit then crash'}, 'ask_duplicate': {'question': 'Proceed?'}, 'done_duplicate': {'summary': 'Ready <& unchanged'}}[native_mode]
+                            if native_mode in ('done_dirty', 'checkpoint_crash'):
                                 (case.agent / 'work/tracked.txt').write_text('native dirty task change\n')
                             self.events.append({'id': 0, 'method': 'item/tool/call', 'params': {
                                 'threadId': thread_id, 'turnId': turn_id, 'callId': 'ordinary-call',
                                 'tool': tool, 'arguments': args, 'namespace': None}})
+                            if native_mode in ('ask_duplicate', 'done_duplicate'):
+                                self.events.append(copy.deepcopy(self.events[-1]))
                         if not diagnostic and native_mode in ('approval_reason_only', 'command_approval'):
                             method = 'item/fileChange/requestApproval' if native_mode == 'approval_reason_only' else 'item/commandExecution/requestApproval'
                             params = {'threadId': thread_id, 'turnId': turn_id, 'itemId': 'unproved-item',
@@ -590,6 +599,13 @@ class RuntimeContract(unittest.TestCase):
                                 {'method': 'item/started', 'params': {'threadId': thread_id, 'turnId': turn_id,
                                     'item': {'id': 'full-item', 'type': 'fileChange',
                                         'changes': [change], 'status': 'inProgress'}}}])
+                            if approval_state in ('resolved', 'typed_other'):
+                                self.events.append({'method': 'serverRequest/resolved', 'params': {
+                                    'threadId': thread_id, 'requestId': 7 if approval_state == 'resolved' else '7'}})
+                            if approval_state == 'changed':
+                                self.events.append({'id': 7, 'method': 'item/fileChange/requestApproval', 'params': {
+                                    'threadId': thread_id, 'turnId': turn_id, 'itemId': 'full-item',
+                                    'startedAtMs': 1, 'reason': 'CHANGED_UNTRUSTED_REASON', 'grantRoot': None}})
                         if created['status'] == 'completed':
                             self.events.append({'method': 'turn/completed', 'params': {
                                 'threadId': thread_id, 'turn': copy.deepcopy(created)}})
@@ -598,6 +614,8 @@ class RuntimeContract(unittest.TestCase):
                             'history_mode': 'legacy', 'roots': [str(case.agent / 'work')],
                             'dynamic_tools': copy.deepcopy(descriptors)}})
                         order.append('callbacks_queued_before_start_response')
+                        if native_mode == 'lost_start':
+                            raise ConnectionError('PRIVATE_START_REPLY_LOST')
                         return {'turn': copy.deepcopy(created)}
                     if method == 'turn/interrupt':
                         return {}
@@ -632,9 +650,9 @@ class RuntimeContract(unittest.TestCase):
                     with path.open('r+') as other:
                         with case.assertRaises(BlockingIOError):
                             fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                if native_mode == 'ask':
+                if native_mode in ('ask', 'ask_duplicate'):
                     case.assertEqual(len(list((case.agent / 'questions').glob('*.json'))), 1)
-                if native_mode in ('done', 'done_dirty'):
+                if native_mode in ('done', 'done_dirty', 'checkpoint_crash', 'done_duplicate'):
                     case.assertFalse((case.agent / 'done.json').exists())
                     operation = active[0]['operation_id']
                     intent = json.loads((index_path / 'operations' / operation / 'completion.json').read_text())
@@ -656,7 +674,12 @@ class RuntimeContract(unittest.TestCase):
                     case.assertNotEqual(result['decision'], 'accept')
                 case.assertEqual(len(answered), 1)
                 case.assertEqual(approval_replies, [])
+                if approval_state in ('resolved', 'changed', 'patch_changed'):
+                    raise RuntimeError('Captured native request is no longer replyable')
                 index_path = case.state / case.control['codex_state_id']
+                records = json.loads((index_path / 'index.json').read_text())['operations'].values()
+                case.assertEqual(len([r for r in records if r['status'] == 'active' and
+                    r['thread_id'] == thread_id and r['turn_id'] == turn_id]), 1)
                 for path in (case.agent / 'questions/.lock', case.agent / 'done.lock',
                              case.agent.parent / '.locks/new-task-taskone.lock', case.agent / '.lock',
                              case.agent / 'inbox/.inbox.lock', index_path / 'store.lock'):
@@ -665,6 +688,11 @@ class RuntimeContract(unittest.TestCase):
                             fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 approval_replies.append((request_id, copy.deepcopy(result)))
                 order.append('reply_approval')
+                if approval_state == 'uncertain':
+                    self.closed = True
+                    raise ConnectionError('PRIVATE_UNCERTAIN_SEND')
+                if result['decision'] == 'accept':
+                    (case.agent / 'work/tracked.txt').write_text('approved change\n')
                 history[-1].update(status='completed', completedAt=2)
                 self.events.append({'method': 'turn/completed', 'params': {
                     'threadId': thread_id, 'turn': copy.deepcopy(history[-1])}})
@@ -678,7 +706,9 @@ class RuntimeContract(unittest.TestCase):
 
         def transport_factory(endpoint, *, deadline, clock):
             case.assertEqual(endpoint, hosts[-1].socket)
-            return Transport()
+            client = Transport()
+            transports.append(client)
+            return client
 
         def child(snapshot, companion_paths, *, deadline):
             host = next(h for h in hosts if h.unit == snapshot.unit)
@@ -716,6 +746,31 @@ class RuntimeContract(unittest.TestCase):
             tree = case.git('rev-parse', 'HEAD^{tree}', cwd=case.agent / 'work').strip()
             completion = case.state / case.control['codex_state_id'] / 'operations' / operation_id / 'completion.json'
             digest = json.loads(completion.read_text())['request_digest'] if completion.exists() else hashlib.sha256(summary.encode()).hexdigest()
+            if checkpoint_crash and completion.exists():
+                from _agent_worktree import git_run
+                private_index = completion.parent / 'checkpoint.index'
+                if prepared_receipt is None:
+                    path = Path(case.git('rev-parse', '--git-path', 'index', cwd=case.agent / 'work').strip())
+                    if not path.is_absolute():
+                        path = case.agent / 'work' / path
+                    shutil.copyfile(path, private_index)
+                    private_index.chmod(0o600)
+                    for args in (['read-tree', 'HEAD'], ['add', '--all']):
+                        git_run(args, str(case.agent / 'work'), str(case.project),
+                            index_file=str(private_index), deadline=deadline)
+                    tree = git_run(['write-tree'], str(case.agent / 'work'), str(case.project),
+                        index_file=str(private_index), deadline=deadline).stdout.strip()
+                    return dict(branch='task/taskone-' + INC[:8], parent_sha=head,
+                        tree_sha=tree, commit_sha=None, trailer='Codex-Task-Operation: ' + operation_id,
+                        intent_trailer='Codex-Task-Intent: ' + digest, no_commit=False)
+                case.assertEqual(json.loads(completion.read_text())['checkpoint'], prepared_receipt)
+                case.assertIsNone(prepared_receipt['commit_sha'])
+                git_run(['commit', '--no-gpg-sign', '-m', 'Isolated TASK checkpoint',
+                    '-m', prepared_receipt['trailer'], '-m', prepared_receipt['intent_trailer']],
+                    str(case.agent / 'work'), str(case.project),
+                    index_file=str(private_index), deadline=deadline)
+                order.append('actual_commit_before_controller_crash')
+                raise ConnectionError('PRIVATE_COMMIT_CRASH')
             if prepared_receipt is None:
                 return dict(branch='task/taskone-' + INC[:8], parent_sha=head,
                     tree_sha=tree, commit_sha=None, trailer='Codex-Task-Operation: ' + operation_id,
@@ -750,6 +805,15 @@ class RuntimeContract(unittest.TestCase):
             case.assertEqual(completed.returncode, 0, 'Genuine isolated answer writer rejected fixture')
             answered.add(question['qid'])
             order.append('genuine_human_answer')
+            if approval_state == 'patch_changed':
+                transports[-1].events.append({'method': 'item/fileChange/patchUpdated', 'params': {
+                    'threadId': thread_id, 'turnId': history[-1]['id'], 'itemId': 'full-item',
+                    'changes': [{'path': str(case.root / 'outside-candidate.txt'),
+                        'kind': {'type': 'add'}, 'diff': '+ changed scope after question publication'}]}})
+            if approval_state == 'revoked':
+                module = importlib.import_module('_codex_task_store')
+                module.CodexTaskOperationStore(str(case.agent), state_root=str(case.state)).revoke(deadline=deadline)
+                order.append('authority_revoked_after_answer')
             return None
 
         adapters = {'verify_release': self.verify,
@@ -758,6 +822,7 @@ class RuntimeContract(unittest.TestCase):
             'checkpoint': checkpoint if native_mode is not None else self.native_forbidden, 'heartbeat': heartbeat}
         if default_checkpoint:
             adapters.pop('checkpoint')
+        self.runtime_native_adapters = dict(adapters)
         controller = self.make(adapters=adapters)
         return controller, hosts, calls, order
 
@@ -964,6 +1029,15 @@ class RuntimeContract(unittest.TestCase):
         self.assertEqual(done['summary'], 'Ready <& unchanged')
         operation_dir = self.state / self.control['codex_state_id'] / 'operations' / result['operation_id']
         completion = json.loads((operation_dir / 'completion.json').read_text())
+        self.assertEqual(set(completion), {'schema', 'operation_id', 'task_incarnation',
+            'generation', 'attempt_id', 'event_key', 'thread_id', 'turn_id', 'request_id',
+            'call_id', 'request_digest', 'summary', 'phase', 'checkpoint', 'done_receipt'})
+        self.assertEqual(completion['schema'], 1)
+        self.assertEqual(completion['operation_id'], result['operation_id'])
+        self.assertEqual(completion['task_incarnation'], INC)
+        self.assertEqual((completion['generation'], completion['attempt_id']), (7, 'attempt-1'))
+        self.assertEqual(completion['event_key'], 'event-1')
+        self.assertEqual(completion['call_id'], 'ordinary-call')
         self.assertEqual(completion['summary'], 'Ready <& unchanged')
         self.assertEqual(completion['phase'], 'done_written')
         self.assertIs(type(completion['request_id']), int)
@@ -1100,6 +1174,177 @@ class RuntimeContract(unittest.TestCase):
                     self.assertTrue(all(h.phase == 'stopped' for h in hosts))
                 finally:
                     case.doCleanups()
+
+    def test_in_scope_human_approval_sends_exact_typed_accept_once(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_full',
+            human_decision='accept', default_checkpoint=True)
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 5)
+        self.assertEqual(result['outcome'], 'ran')
+        self.assertEqual(order.count('reply_approval'), 1)
+        self.assertLess(order.index('genuine_human_answer'), order.index('reply_approval'))
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'approved change\n')
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+        self.assertEqual(self.git('show', 'HEAD:tracked.txt', cwd=self.agent / 'work'), 'approved change\n')
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.project).strip(), self.base)
+
+    def test_resolved_or_changed_native_request_never_sends_human_approval(self):
+        for state in ('resolved', 'changed'):
+            with self.subTest(state=state):
+                case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
+                case.setUp()
+                try:
+                    case.publish_registry()
+                    controller, hosts, calls, order = case.discovery_fixture(native_mode='approval_full',
+                        human_decision='accept', approval_state=state)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 2)
+                    self.assertIn(result['outcome'], ('blocked', 'unknown'))
+                    self.assertNotIn('reply_approval', order)
+                    self.assertEqual((case.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+                    self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+                finally:
+                    case.doCleanups()
+
+    def test_string_resolved_id_does_not_cancel_distinct_integer_request(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_full',
+            human_decision='decline', approval_state='typed_other')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
+        self.assertEqual(result['outcome'], 'ran')
+        self.assertEqual(order.count('reply_approval'), 1)
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+
+    def test_uncertain_native_approval_send_drains_and_never_retries(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_full',
+            human_decision='decline', approval_state='uncertain')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
+        self.assertEqual(result['outcome'], 'unknown')
+        self.assertEqual(order.count('reply_approval'), 1)
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+        self.assertFalse((self.agent / 'done.json').exists())
+        before = len(calls)
+        controller.reconcile(deadline=time.monotonic() + 2)
+        self.assertEqual(len(calls), before)
+        self.assertEqual(order.count('reply_approval'), 1)
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+
+    def completion_crash_fixture(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='checkpoint_crash', checkpoint_crash=True)
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 5)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertIn('actual_commit_before_controller_crash', order)
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+        completions = list((self.state / self.control['codex_state_id'] / 'operations').glob('*/completion.json'))
+        self.assertEqual(len(completions), 1)
+        completion = json.loads(completions[0].read_text())
+        self.assertEqual(completion['phase'], 'drained')
+        self.assertIsNone(completion['checkpoint']['commit_sha'])
+        self.assertFalse((self.agent / 'done.json').exists())
+        adapters = dict(self.runtime_native_adapters)
+        adapters.pop('checkpoint')
+        recovered = self.make(adapters=adapters)
+        return recovered, calls, completions[0]
+
+    def test_commit_crash_recovers_exact_owned_head_without_second_commit(self):
+        controller, calls, completion_path = self.completion_crash_fixture()
+        head = self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip()
+        before_count = self.git('rev-list', '--count', 'HEAD', cwd=self.agent / 'work')
+        before_calls = len(calls)
+        result = controller.reconcile(deadline=time.monotonic() + 5)
+        self.assertEqual(result['outcome'], 'recovered')
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip(), head)
+        self.assertEqual(self.git('rev-list', '--count', 'HEAD', cwd=self.agent / 'work'), before_count)
+        self.assertEqual(len(calls), before_calls)
+        completion = json.loads(completion_path.read_text())
+        self.assertEqual(completion['phase'], 'done_written')
+        self.assertEqual(completion['checkpoint']['commit_sha'], head)
+        done = json.loads((self.agent / 'done.json').read_text())
+        self.assertEqual(done['state'], 'requested')
+        self.assertIs(done['finalized'], False)
+        self.assertEqual(done['summary'], 'Commit then crash')
+        controller.reconcile(deadline=time.monotonic() + 3)
+        self.assertEqual(self.git('rev-list', '--count', 'HEAD', cwd=self.agent / 'work'), before_count)
+
+    def test_commit_crash_unrelated_head_is_hold_without_guessed_acceptance(self):
+        controller, calls, completion_path = self.completion_crash_fixture()
+        self.git('commit', '--allow-empty', '-m', 'unrelated later HEAD', cwd=self.agent / 'work')
+        changed_head = self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip()
+        before = completion_path.read_bytes()
+        before_calls = len(calls)
+        result = controller.reconcile(deadline=time.monotonic() + 3)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip(), changed_head)
+        self.assertEqual(completion_path.read_bytes(), before)
+        self.assertEqual(len(calls), before_calls)
+        self.assertFalse((self.agent / 'done.json').exists())
+
+    def test_corrupt_completion_after_commit_crash_never_creates_done(self):
+        controller, calls, completion_path = self.completion_crash_fixture()
+        before_head = self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip()
+        before_calls = len(calls)
+        completion_path.write_text('{"schema":1,"schema":2}')
+        result = controller.reconcile(deadline=time.monotonic() + 3)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertEqual(completion_path.read_text(), '{"schema":1,"schema":2}')
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip(), before_head)
+        self.assertEqual(len(calls), before_calls)
+        self.assertFalse((self.agent / 'done.json').exists())
+
+    def test_lost_native_start_reply_does_not_resend_or_dispatch_queued_callbacks(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='lost_start')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 2)
+        self.assertEqual(result['outcome'], 'unknown')
+        self.assertEqual(sum(m == 'turn/start' for m, p in calls), 1)
+        self.assertEqual(len(hosts), 2)
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+        self.assertFalse((self.agent / 'done.json').exists())
+        self.assertEqual(list((self.agent / 'questions').glob('*.json')), [])
+        controller.reconcile(deadline=time.monotonic() + 2)
+        self.assertEqual(sum(m == 'turn/start' for m, p in calls), 1)
+        self.assertEqual(len(hosts), 2)
+
+    def test_task_outcome_duplicate_callback_never_writes_or_replies_twice(self):
+        for mode, expected in (('ask_duplicate', 'asked'), ('done_duplicate', 'done_requested')):
+            with self.subTest(mode=mode):
+                case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
+                case.setUp()
+                try:
+                    case.publish_registry()
+                    controller, hosts, calls, order = case.discovery_fixture(native_mode=mode)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+                    self.assertEqual(result['outcome'], expected)
+                    self.assertEqual(order.count('reply_dynamic'), 1)
+                    self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+                    self.assertEqual(len(list((case.agent / 'questions').glob('*.json'))), 1 if mode == 'ask_duplicate' else 0)
+                    self.assertEqual((case.agent / 'done.json').exists(), mode == 'done_duplicate')
+                finally:
+                    case.doCleanups()
+
+    def test_patch_scope_change_after_question_invalidates_old_human_acceptance(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_full',
+            human_decision='accept', approval_state='patch_changed')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 2)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertIn('genuine_human_answer', order)
+        self.assertNotIn('reply_approval', order)
+        self.assertFalse((self.root / 'outside-candidate.txt').exists())
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+
+    def test_actual_store_revocation_after_answer_wins_before_native_reply(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_full',
+            human_decision='accept', approval_state='revoked')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 2)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertIn('authority_revoked_after_answer', order)
+        self.assertNotIn('reply_approval', order)
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
 
     def test_idle_reconcile_cannot_create_task_question_or_done_evidence(self):
         self.publish_registry()
