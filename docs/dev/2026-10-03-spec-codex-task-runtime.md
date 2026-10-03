@@ -307,3 +307,10 @@ Shared done FSM уже держит настоящий done.lock в некото
 
 
 Resumed operation может после fixed diagnostic первым действием вызвать apply_patch, без промежуточного dynamic TASK callback. Controller проверяет доступный exact current owned rollout proof в начале обработки каждой batch/перед fileChange либо terminal, не только при item/tool/call. Если proof уже физически предшествует effects в проверенном native журнале, actual child аттестуется и допустимы нормальные post-proof file events. Если при file effect доказательства нет либо журнал показывает pre-proof exec/effect, немедленный quarantine сохраняется: file events не ждут будущую registry для ретроактивного разрешения.
+
+
+### Follow-up acceptance: effect ordering and shared done recovery
+
+Owned rollout proof must precede every native TASK effect in the same current-turn raw record order. A native `apply_patch` or other effectful custom/function call before the fixed diagnostic pair is a refusal even if the pair is already present by the time the queued file event is dispatched; a later snapshot cannot retrospectively authorize that effect. Only benign non-tool prose/usage/metadata before the diagnostic may be skipped. Current admitted canonical thread_path must exactly equal the resume response path before ordinary turn/start, independently of matching thread ID.
+
+Completion recovery must perform the existing exact idempotent shared `finalize_worktree_done` with the recovered verified checkpoint before original envelope archival/store completion. A crash after task_done or request_done cannot leave requested/finalized:false with empty inflight; conflicts remain held and unarchived. Full normal path and replay preserve finalized content.
