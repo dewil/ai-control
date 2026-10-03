@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bin'))
@@ -366,7 +367,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False, native_history_default=False):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False, native_history_default=False, approval_resolution=None):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -818,7 +819,16 @@ class RuntimeContract(unittest.TestCase):
                 if self.late_events is not None and asynchronous_bootstrap == 'late':
                     self.materialize_bootstrap()
                 if self.events:
-                    return self.events.popleft()
+                    event = self.events.popleft()
+                    if event['method'] == 'serverRequest/resolved' and approval_replies:
+                        questions = list((case.agent / 'questions').glob('*.json'))
+                        case.assertEqual(len(questions), 1)
+                        question = json.loads(questions[0].read_text())
+                        confirmed = list((case.state / case.control['codex_state_id']).rglob(
+                            'approval-' + question['qid'] + '.json'))
+                        case.assertEqual(confirmed, [], 'Confirmed receipt preceded native resolution')
+                        order.append('native_resolution_delivered')
+                    return event
                 raise TimeoutError('offline fixture empty')
 
             def reply_dynamic(self, request_id, result, *, thread_id, turn_id, call_id, deadline):
@@ -891,6 +901,14 @@ class RuntimeContract(unittest.TestCase):
                     os.link(questions[0], case.root / 'answered-question-sidefault.json')
                     order.append('question_close_hardlink_fault')
                 history[-1].update(status='completed', completedAt=2)
+                if approval_resolution != 'missing':
+                    if approval_resolution == 'delayed':
+                        self.events.extend({'method': 'item/agentMessage/delta', 'params': {
+                            'threadId': thread_id, 'turnId': turn_id, 'itemId': 'resolution-wait',
+                            'delta': 'waiting for native resolution ' + str(i)}} for i in range(3))
+                    self.events.append({'method': 'serverRequest/resolved', 'params': {
+                        'threadId': 'foreign-thread' if approval_resolution == 'wrong_thread' else thread_id,
+                        'requestId': '7' if approval_resolution == 'wrong_type' else request_id}})
                 self.events.append({'method': 'turn/completed', 'params': {
                     'threadId': thread_id, 'turn': copy.deepcopy(history[-1])}})
 
@@ -1817,6 +1835,64 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
 
+    def test_permission_confirmed_receipt_requires_matching_resolution_after_once_only_send(self):
+        for resolution in (None, 'delayed'):
+            with self.subTest(resolution=resolution):
+                case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
+                case.setUp()
+                try:
+                    case.publish_registry()
+                    controller, hosts, calls, order = case.discovery_fixture(native_mode='approval_full',
+                        human_decision='decline', approval_resolution=resolution)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
+                    self.assertEqual(result['outcome'], 'ran')
+                    self.assertEqual(order.count('reply_approval'), 1)
+                    questions = list((case.agent / 'questions').glob('*.json'))
+                    self.assertEqual(len(questions), 1)
+                    question = json.loads(questions[0].read_text())
+                    self.assertEqual(question['status'], 'closed')
+                    self.assertEqual(question['native_callback']['status'], 'answered')
+                    receipts = list((case.state / case.control['codex_state_id']).rglob('approval-' + question['qid'] + '.json'))
+                    self.assertEqual(len(receipts), 1)
+                    receipt = json.loads(receipts[0].read_text())
+                    self.assertEqual(receipt['question_id'], question['qid'])
+                    self.assertEqual(receipt['decision'], 'reject')
+                    self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+                finally:
+                    case.doCleanups()
+
+    def test_missing_or_conflicting_native_resolution_never_confirms_closes_or_resends(self):
+        for resolution in ('missing', 'wrong_type', 'wrong_thread'):
+            with self.subTest(resolution=resolution):
+                case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
+                case.setUp()
+                try:
+                    case.publish_registry()
+                    controller, hosts, calls, order = case.discovery_fixture(native_mode='approval_full',
+                        human_decision='decline', approval_resolution=resolution)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 1)
+                    self.assertIn(result['outcome'], ('blocked', 'unknown'))
+                    self.assertEqual(order.count('reply_approval'), 1)
+                    questions = list((case.agent / 'questions').glob('*.json'))
+                    self.assertEqual(len(questions), 1)
+                    question = json.loads(questions[0].read_text())
+                    self.assertNotEqual(question['status'], 'closed')
+                    self.assertNotEqual(question['native_callback']['status'], 'answered')
+                    receipts = list((case.state / case.control['codex_state_id']).rglob('approval-' + question['qid'] + '.json'))
+                    self.assertEqual(receipts, [])
+                    intents = list((case.state / case.control['codex_state_id']).rglob('approval-' + question['qid'] + '-intent.json'))
+                    self.assertEqual(len(intents), 1)
+                    intent = json.loads(intents[0].read_text())
+                    self.assertEqual(intent['phase'], 'send_intent')
+                    before_calls = list(calls)
+                    controller.reconcile(deadline=time.monotonic() + 2)
+                    self.assertEqual(calls, before_calls)
+                    self.assertEqual(order.count('reply_approval'), 1)
+                    self.assertFalse((case.agent / 'done.json').exists())
+                    self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+                finally:
+                    case.doCleanups()
+
     def test_new_thread_explicitly_selects_legacy_history_against_native_paginated_default(self):
         self.publish_registry()
         controller, hosts, calls, order = self.discovery_fixture(native_mode='read', native_history_default=True)
@@ -2078,7 +2154,8 @@ class RuntimeContract(unittest.TestCase):
         self.assertFalse((self.agent / 'done.json').exists())
         self.assertIs(controller.require_drained(deadline=time.monotonic() + 2), True)
 
-    def test_confirmed_native_answer_recovers_question_close_without_second_reply(self):
+    def test_question_hardlink_after_local_send_is_preconfirmation_hold_without_receipt_or_resend(self):
+        # Spec 1d317d5: local send is not ACK; hardlink predates native resolution and its revalidation.
         self.publish_registry()
         controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_full',
             human_decision='decline', approval_state='question_close_fault')
@@ -2089,9 +2166,47 @@ class RuntimeContract(unittest.TestCase):
         questions = list((self.agent / 'questions').glob('*.json'))
         self.assertEqual(len(questions), 1)
         question = json.loads(questions[0].read_text())
-        self.assertEqual(question['status'], 'open')
+        self.assertNotEqual(question['native_callback']['status'], 'answered')
         self.assertEqual(question['decision'], 'reject')
         self.assertEqual(questions[0].stat().st_nlink, 2)
+        receipts = list((self.state / self.control['codex_state_id']).rglob('approval-' + question['qid'] + '.json'))
+        self.assertEqual(receipts, [])
+        (self.root / 'answered-question-sidefault.json').unlink()
+        before_calls = list(calls)
+        controller.reconcile(deadline=time.monotonic() + 3)
+        self.assertEqual(calls, before_calls)
+        self.assertEqual(order.count('reply_approval'), 1)
+        self.assertEqual(list((self.state / self.control['codex_state_id']).rglob(
+            'approval-' + question['qid'] + '.json')), [])
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+
+    def test_confirmed_native_resolution_receipt_recovers_failed_question_close_without_second_reply(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_full',
+            human_decision='decline')
+        genuine_replace = os.replace
+        faulted = []
+        def fail_only_question_replace_after_durable_confirmation(source, destination, *args, **kwargs):
+            destination = Path(destination)
+            if destination.parent == self.agent / 'questions' and destination.suffix == '.json':
+                current = json.loads(destination.read_text()) if destination.exists() else None
+                if current is not None:
+                    receipts = list((self.state / self.control['codex_state_id']).rglob(
+                        'approval-' + current['qid'] + '.json'))
+                    if receipts and current['status'] == 'open':
+                        faulted.append(current['qid'])
+                        raise OSError('OWN_FIXTURE_QUESTION_REPLACE_CRASH_AFTER_CONFIRMED_RECEIPT')
+            return genuine_replace(source, destination, *args, **kwargs)
+        with patch('os.replace', side_effect=fail_only_question_replace_after_durable_confirmation):
+            result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertTrue(faulted)
+        self.assertEqual(order.count('reply_approval'), 1)
+        self.assertIn('native_resolution_delivered', order)
+        questions = list((self.agent / 'questions').glob('*.json'))
+        self.assertEqual(len(questions), 1)
+        question = json.loads(questions[0].read_text())
+        self.assertEqual(question['status'], 'open')
         receipts = list((self.state / self.control['codex_state_id']).rglob('approval-' + question['qid'] + '.json'))
         self.assertEqual(len(receipts), 1)
         receipt = json.loads(receipts[0].read_text())
@@ -2105,7 +2220,6 @@ class RuntimeContract(unittest.TestCase):
         digest = hashlib.sha256(json.dumps(callback, sort_keys=True, separators=(',', ':'),
             ensure_ascii=False).encode('utf-8')).hexdigest()
         self.assertEqual(receipt['callback_digest'], digest)
-        (self.root / 'answered-question-sidefault.json').unlink()
         before_calls = list(calls)
         controller.reconcile(deadline=time.monotonic() + 3)
         closed = json.loads(questions[0].read_text())
