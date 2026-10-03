@@ -99,6 +99,17 @@ class NativeRegistryReader(unittest.TestCase):
             events=[dict(method='rawResponseItem/completed', params=dict(threadId=self.thread,
                 turnId=self.turn, item=copy.deepcopy(item))) for item in (self.call, self.output)])
 
+    def test_effectful_raw_call_before_available_fixed_pair_cannot_be_retroactively_authorized(self):
+        for effect in (
+            dict(type='custom_tool_call', name='apply_patch', call_id='premature-patch',
+                 input='*** Begin Patch\n*** Add File: owned-candidate.txt\n+fixture\n*** End Patch'),
+            dict(type='function_call', name='apply_patch', call_id='premature-patch',
+                 arguments='*** Begin Patch\n*** Add File: owned-candidate.txt\n+fixture\n*** End Patch')):
+            with self.subTest(kind=effect['type']):
+                # The valid pair already exists in this same snapshot, but follows the effect.
+                self.write(self.rows[:4] + [row('response_item', effect)] + self.rows[4:])
+                self.refused()
+
     def test_exact_native_raw_pair_has_only_bound_normalized_events(self):
         self.assertEqual(self.read(), self.expected())
 

@@ -367,7 +367,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False, native_history_default=False, approval_resolution=None, ordinary_materialization=None, rollout_registry=None):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False, native_history_default=False, approval_resolution=None, ordinary_materialization=None, rollout_registry=None, resume_path_mismatch=False):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -377,6 +377,7 @@ class RuntimeContract(unittest.TestCase):
         thread_id = str(uuid.uuid4())
         native_path = self.root / 'native-sessions/session.jsonl'
         native_path.parent.mkdir(mode=0o700)
+        alternate_path = native_path.parent / 'alternate-valid-session.jsonl'
         history = []
         checkpoint_calls = []
         approval_replies = []
@@ -629,7 +630,12 @@ class RuntimeContract(unittest.TestCase):
                             case.assertNotIn('dynamicTools', params)
                             case.assertNotIn('environments', params)
                             case.assertEqual(params['threadId'], thread_id)
-                        return {'thread': thread(), 'cwd': str(case.agent / 'work'),
+                        response_thread = thread()
+                        if method == 'thread/resume' and resume_path_mismatch:
+                            shutil.copyfile(native_path, alternate_path)
+                            alternate_path.chmod(0o600)
+                            response_thread['path'] = str(alternate_path)
+                        return {'thread': response_thread, 'cwd': str(case.agent / 'work'),
                             'runtimeWorkspaceRoots': [str(case.agent / 'work')],
                             'model': 'inherited-model', 'reasoningEffort': None,
                             'approvalPolicy': 'on-request', 'approvalsReviewer': 'user',
@@ -966,10 +972,10 @@ class RuntimeContract(unittest.TestCase):
             return proof
 
         def metadata(path, owned_id, cwd, *, deadline):
-            case.assertEqual(path, str(native_path))
+            case.assertIn(path, [str(native_path), str(alternate_path)] if resume_path_mismatch else [str(native_path)])
             case.assertEqual(owned_id, thread_id)
             case.assertEqual(cwd, str(case.agent / 'work'))
-            decoded = json.loads(native_path.read_text())['payload']
+            decoded = json.loads(Path(path).read_text())['payload']
             retained = copy.deepcopy(decoded['dynamic_tools'])
             if native_mode == 'descriptor_loss':
                 retained.pop()
@@ -1887,6 +1893,22 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['thread_id'])
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
+
+    def test_resume_same_thread_with_different_valid_path_refuses_before_ordinary_start(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='read', resume_path_mismatch=True)
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertEqual(sum(method == 'thread/resume' for method, params in calls), 1)
+        self.assertEqual(sum(method == 'turn/start' for method, params in calls), 1)
+        self.assertNotIn('reply_dynamic', order)
+        self.assertNotIn('checkpoint_commit', order)
+        paths = list((self.root / 'native-sessions').glob('*.jsonl'))
+        self.assertEqual(len(paths), 2)
+        self.assertEqual(paths[0].read_bytes(), paths[1].read_bytes())
+        self.assertTrue(all(path.stat().st_nlink == 1 and (path.stat().st_mode & 0o777) == 0o600 for path in paths))
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'baseline\n')
 
     def test_resumed_turn_missing_wire_raw_waits_for_delayed_owned_rollout_registry_before_callback(self):
         self.assertTrue(callable(getattr(runtime_module, 'read_registry_evidence', None)),
