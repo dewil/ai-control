@@ -329,3 +329,5 @@ A fresh-registry read/materialization wait is bounded to ten seconds from its fi
 ### Retryable completion recovery finalization
 
 Strict native completion recovery passes the operation deadline through trusted worktree/Git checks and finalizer writes. If the recovered checkpoint exists but the worktree is temporarily dirty or Git guard/facts cannot be established, preserve the original requested done/completion/envelope exactly without invalidating or marking it finalized. Hold with no archive/finish/native replay; after the operator resolves the same temporary conflict, reconcile may finish the exact original checkpoint once. This strict recovery behavior does not change legacy ordinary-run finalization policy for dirty worktrees.
+
+A completed ordinary turn with no TASK callbacks/file effects is also valid when its exact current-turn fixed proof is available and owned: observe it before trusted terminal checkpoint/drain completion; no-op worktree needs no invented edit or extra turn. The same model-latency distinction applies to a first terminal notification. Missing/unsafe proof holds without checkpoint or native replay.
