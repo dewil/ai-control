@@ -72,24 +72,7 @@ class RetirementEdges(unittest.TestCase):
 
     def active_after_successful_stop(self, script):
         self.legacy()
-        ctl = self.p/'stub/systemctl'
-        # This fixture reports stop success yet independent state remains active.
-        # Support both public systemctl state interfaces, without constraining args.
-        source = ctl.read_text().replace("active=is_old and bool(os.environ.get('RETIRE_FAIL_STOP'))", "active=is_old")
-        source += """
-if 'show' in args and is_old:
-    fields={'ActiveState':'active','SubState':'running','LoadState':'loaded'}
-    requested=[]
-    for i,arg in enumerate(args):
-        if arg in ('-p','--property') and i+1<len(args):
-            requested.extend(args[i+1].split(','))
-        elif arg.startswith('--property='):
-            requested.extend(arg.split('=',1)[1].split(','))
-    for key in requested or fields:
-        if key in fields:
-            print(fields[key] if '--value' in args else key+'='+fields[key])
-"""
-        ctl.write_text(source)
+        self.env['RETIRE_STICKY_ACTIVE'] = '1'
         before_binary = (self.prefix/'bin'/base.OLD).read_bytes()
         before_service = (self.units/f'{base.OLD}.service').read_bytes()
         result = subprocess.run([str(base.ROOT/script), '--prefix', str(self.prefix)], env=self.env, capture_output=True, text=True, timeout=180)
