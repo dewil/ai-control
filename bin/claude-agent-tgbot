@@ -585,6 +585,9 @@ def question_card(detail):
     kind=="done" (V2.7b §3) - карточка заявки о готовности, см. _done_card."""
     if not isinstance(detail, dict):
         return None, None
+    if detail.get('engine')=='codex' and type(detail.get('native_callback')) is dict and (
+            detail.get('status') in ('expired','stale') or detail['native_callback'].get('status') in ('expired','stale')):
+        return 'Codex: запрос подтверждения истёк', {'inline_keyboard': []}
     if detail.get("kind") == "done":
         text,kb = _done_card(detail)
         if detail.get("engine")=="codex":
@@ -606,6 +609,8 @@ def question_card(detail):
                [("отклонить", "p:%s:r" % qid)],
                snooze]
         if detail.get('engine') == 'codex' and detail.get('native_callback') is not None:
+            if detail.get('status') != 'open' or detail['native_callback'].get('status') != 'pending':
+                return 'Codex '+header, {'inline_keyboard': []}
             allowed = detail['native_callback'].get('allowed_decisions',[])
             rows = ([rows[0]] if 'approve' in allowed else []) + ([rows[1]] if 'reject' in allowed else []) + [snooze]
             header = 'Codex '+header

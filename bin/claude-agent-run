@@ -3303,7 +3303,9 @@ def codex_cycle(agent_dir,ib,name,runs):
                 durable_json(env_path(ib,'pending',answer_key),answer_env)
                 env_move(ib,answer_key,'pending','done')
                 dedup_add(ib,answer_key)
-    if list_keys(ib,'inflight'): return 'infra_wait'
+    if list_keys(ib,'inflight'):
+        recovery = codex_runtime(agent_dir).reconcile(deadline=time.monotonic()+30)
+        if recovery.get('outcome') not in ('recovered','idle') or list_keys(ib,'inflight'): return 'infra_wait'
     key = pick_ready(ib,agent_dir)
     if key is None: return 'idle'
     controller = codex_runtime(agent_dir)
