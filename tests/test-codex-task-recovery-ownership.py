@@ -7,6 +7,7 @@ native process boundary are fakes. No Git checkpoint/model/native call occurs.
 import fcntl
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 import subprocess
 import time
@@ -37,21 +38,33 @@ class RecoveryOwnership(unittest.TestCase):
         self.before = self.completion.read_bytes()
         self.log = f.root / 'recovery-controller-calls.jsonl'
         self.effect = f.root / 'checkpoint-done-effect'
-        module = f.bin / '_codex_task_runtime.py'
-        module.write_text('import json,pathlib\nclass RuntimeError(Exception): pass\n'
-            'class CodexTaskRuntime:\n'
-            ' def __init__(self,agent_dir,**kwargs): self.agent_dir=str(agent_dir)\n'
-            ' def static_preflight(self,*,deadline): return dict(ready=True,version="0.160.0",permission_profile="control_task",release_hashes={})\n'
-            ' def reconcile(self,*,deadline):\n'
-            f'  with open({str(self.log)!r},"a") as f: f.write(json.dumps(["reconcile",self.agent_dir])+"\\n")\n'
-            f'  pathlib.Path({str(self.effect)!r}).write_text("trusted checkpoint/done continuation invoked")\n'
-            f'  return dict(outcome="recovered",operations=[{f.operation!r}],reason=None)\n'
-            ' def execute(self,event_key,generation,attempt_id,*,deadline):\n'
-            f'  with open({str(self.log)!r},"a") as f: f.write(json.dumps(["execute",self.agent_dir])+"\\n")\n'
-            '  raise RuntimeError("unexpected competing execute")\n'
-            ' def require_drained(self,*,deadline): raise RuntimeError("fixture drain not granted")\n'
-            ' def revoke_and_drain(self,reason,*,deadline): raise RuntimeError("fixture drain not granted")\n')
-        compile(module.read_text(), str(module), 'exec')
+        # Preserve the real module and CLI main/parser/flock implementation.
+        # NativeAnswerContract's unrelated controller-only seam is replaced
+        # here by a test executable driver overriding ONLY public runtime_for.
+        actual_runtime = ROOT / 'bin/_codex_task_runtime.py'
+        if actual_runtime.is_file():
+            shutil.copyfile(actual_runtime, f.bin / '_codex_task_runtime.py')
+            driver = f.bin / 'codex-task-runtime'
+            source = ('#!/usr/bin/env python3\nimport sys,json,pathlib\n'
+                'import _codex_task_runtime as runtime\n'
+                'RuntimeError=runtime.RuntimeError\n'
+                'class FakeRecoveryController:\n'
+                ' def __init__(self,agent_dir,**kwargs): self.agent_dir=str(agent_dir)\n'
+                ' def static_preflight(self,*,deadline): return dict(ready=True,version="0.160.0",permission_profile="control_task",release_hashes={})\n'
+                ' def reconcile(self,*,deadline):\n'
+                f'  with open({str(self.log)!r},"a") as f: f.write(json.dumps(["reconcile",self.agent_dir])+"\\n")\n'
+                f'  pathlib.Path({str(self.effect)!r}).write_text("trusted checkpoint/done continuation invoked")\n'
+                f'  return dict(outcome="recovered",operations=[{f.operation!r}],reason=None)\n'
+                ' def execute(self,event_key,generation,attempt_id,*,deadline):\n'
+                f'  with open({str(self.log)!r},"a") as f: f.write(json.dumps(["execute",self.agent_dir])+"\\n")\n'
+                '  raise RuntimeError("unexpected competing execute")\n'
+                ' def require_drained(self,*,deadline): raise RuntimeError("fixture drain not granted")\n'
+                ' def revoke_and_drain(self,reason,*,deadline): raise RuntimeError("fixture drain not granted")\n'
+                'runtime.runtime_for=lambda agent_dir,*args,**kwargs: FakeRecoveryController(agent_dir,**kwargs)\n'
+                'if __name__ == "__main__": sys.exit(runtime.main())\n')
+            compile(source, str(driver), 'exec')
+            driver.write_text(source)
+            driver.chmod(0o700)
         # Existing verified-venv launcher path, actual offline Python venv. The
         # versioned dependency is only a discovery fixture; no transport runs.
         f.env.pop('CODEX_RC_PYTHON', None)
