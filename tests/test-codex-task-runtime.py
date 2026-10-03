@@ -2016,6 +2016,41 @@ class RuntimeContract(unittest.TestCase):
         self.assert_original_finished_archived_once(parent.name)
         self.assertEqual(calls, before_calls)
 
+    def test_archived_finished_operation_remains_historical_after_later_owned_task_commit(self):
+        controller, hosts, calls, parent = self.precheckpoint_crash_fixture()
+        recovered = controller.reconcile(deadline=time.monotonic() + 5)
+        self.assertEqual(recovered['outcome'], 'recovered')
+        self.assert_original_finished_archived_once(parent.name)
+        historical_checkpoint = (parent / 'checkpoint.json').read_bytes()
+        historical_head = self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip()
+        historical_envelope = (self.agent / 'inbox/done/event-1.json').read_bytes()
+        # A subsequent fixture-owned TASK commit changes tree while preserving the task branch/base.
+        tracked = self.agent / 'work/tracked.txt'
+        tracked.write_text('later legitimate owned TASK change\n')
+        self.git('add', 'tracked.txt', cwd=self.agent / 'work')
+        self.git('commit', '-m', 'Later legitimate owned TASK checkpoint', cwd=self.agent / 'work')
+        later_head = self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip()
+        self.assertNotEqual(later_head, historical_head)
+        self.assertEqual(self.git('rev-parse', 'HEAD^', cwd=self.agent / 'work').strip(), historical_head)
+        index_path = Path(self.git('rev-parse', '--git-path', 'index', cwd=self.agent / 'work').strip())
+        if not index_path.is_absolute():
+            index_path = self.agent / 'work' / index_path
+        later_index = index_path.read_bytes()
+        later_worktree = tracked.read_bytes()
+        before_calls = list(calls)
+        before_starts = [host.starts for host in hosts]
+        reconciled = controller.reconcile(deadline=time.monotonic() + 3)
+        self.assertNotIn(reconciled['outcome'], ('blocked', 'unknown'))
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip(), later_head)
+        self.assertEqual(index_path.read_bytes(), later_index)
+        self.assertEqual(tracked.read_bytes(), later_worktree)
+        self.assertEqual((parent / 'checkpoint.json').read_bytes(), historical_checkpoint)
+        self.assertEqual((self.agent / 'inbox/done/event-1.json').read_bytes(), historical_envelope)
+        self.assert_original_finished_archived_once(parent.name)
+        self.assertEqual(calls, before_calls)
+        self.assertEqual([host.starts for host in hosts], before_starts)
+        self.assertFalse((self.agent / 'done.json').exists())
+
     def test_missing_terminal_before_first_checkpoint_holds_dirty_candidate_without_retry(self):
         controller, hosts, calls, parent = self.precheckpoint_crash_fixture()
         (parent / 'terminal.json').unlink()
