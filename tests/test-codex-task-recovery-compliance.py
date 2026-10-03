@@ -140,6 +140,47 @@ class RecoveryCompliance(unittest.TestCase):
         # INV-CXRUN-06: no human answer/intent does not leave late authority.
         self.expire_pending()
 
+    def admin_permission_barrier(self, reason):
+        # A genuine policy-drained pending callback still carries stale UI
+        # authority until the explicit administrative barrier fences it.
+        controller, hosts, calls, order, path = self.pending_permission()
+        before_calls = list(calls)
+        head = self.f.git('rev-parse', 'HEAD', cwd=self.f.agent / 'work')
+        result = controller.revoke_and_drain(reason, deadline=time.monotonic() + 3)
+        self.assertIs(result['drained'], True)
+        question = json.loads(path.read_text())
+        self.assertIn(question['status'], ('expired', 'stale'))
+        self.assertIn(question['native_callback']['status'], ('expired', 'stale'))
+        self.assertIsNone(question['decision'])
+        self.assertIsNone(question['answered_at'])
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+        before_question = path.read_bytes()
+        spool = self.f.root / 'spool/taskone'
+        before_spool = {p.name: p.read_bytes() for p in spool.glob('*.json')}
+        for decision in ('approve', 'reject'):
+            result = subprocess.run([str(ROOT / 'bin/claude-agent-answer'), str(self.f.agent),
+                '--qid', question['qid'], '--' + decision, '--by', 'fixture-late-human'],
+                env=self.env, text=True, capture_output=True, timeout=5)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(path.read_bytes(), before_question)
+            self.assertEqual({p.name: p.read_bytes() for p in spool.glob('*.json')}, before_spool)
+        repeated = controller.revoke_and_drain(reason, deadline=time.monotonic() + 3)
+        self.assertIs(repeated['drained'], True)
+        self.assertEqual(path.read_bytes(), before_question)
+        self.assertEqual(calls, before_calls)
+        self.assertNotIn('reply_approval', order)
+        self.assertEqual(self.f.git('rev-parse', 'HEAD', cwd=self.f.agent / 'work'), head)
+        self.assertFalse((self.f.agent / 'done.json').exists())
+
+    def test_direct_pause_barrier_expires_genuine_pending_permission(self):
+        self.admin_permission_barrier('pause')
+
+    def test_direct_cancel_barrier_expires_genuine_pending_permission(self):
+        self.admin_permission_barrier('cancel')
+
+    def test_direct_shutdown_barrier_expires_genuine_pending_permission(self):
+        self.admin_permission_barrier('shutdown')
+
     def test_late_actual_approve_and_reject_refuse_before_question_or_spool_mutation(self):
         path, question = self.expire_pending()
         before = path.read_bytes()
