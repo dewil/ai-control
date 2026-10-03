@@ -366,7 +366,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -539,6 +539,41 @@ class RuntimeContract(unittest.TestCase):
                 self.replies = []
                 self.late_events = None
                 self.bootstrap_polls = 0
+                self.noise_remaining = 0
+                self.noise_final = None
+
+            def publish_noise_batch(self):
+                if self.events or self.noise_final is None:
+                    return
+                if self.noise_remaining:
+                    batch = min(16, self.noise_remaining)
+                    offset = 320 - self.noise_remaining
+                    self.events.extend({'method': 'item/agentMessage/delta', 'params': {
+                        'threadId': thread_id, 'turnId': history[-1]['id'], 'itemId': 'benign-message',
+                        'delta': 'ordinary native progress ' + str(offset + i)}} for i in range(batch))
+                    self.noise_remaining -= batch
+                    order.append('benign_noise_batch_' + str(offset))
+                    if offset == 160 and bootstrap_noise == 'callback':
+                        self.events.append({'id': 7, 'method': 'item/tool/call', 'params': {
+                            'threadId': thread_id, 'turnId': history[-1]['id'], 'callId': 'noisy-bootstrap-ask',
+                            'tool': 'task_ask', 'arguments': {'question': 'Forbidden amid native noise?'},
+                            'namespace': None}})
+                        order.append('critical_callback_amid_noise')
+                    if offset == 160 and bootstrap_noise == 'file_effect':
+                        candidate = case.agent / 'work/tracked.txt'
+                        candidate.write_text('native noisy bootstrap candidate\n')
+                        self.events.append({'method': 'item/started', 'params': {
+                            'threadId': thread_id, 'turnId': history[-1]['id'], 'item': {
+                                'id': 'noisy-file-effect', 'type': 'fileChange', 'status': 'inProgress',
+                                'changes': [{'path': str(candidate), 'kind': {'type': 'update', 'move_path': None},
+                                    'diff': '-baseline\n+native noisy bootstrap candidate\n'}]}}})
+                        order.append('critical_file_effect_amid_noise')
+                    case.assertLess(len(self.events), 32)
+                else:
+                    self.events.extend(self.noise_final)
+                    self.noise_final = None
+                    history[-1].update(status='completed', completedAt=2)
+                    order.append('noisy_bootstrap_registry_terminal_published')
 
             def materialize_bootstrap(self):
                 case.assertIsNotNone(self.late_events)
@@ -595,6 +630,7 @@ class RuntimeContract(unittest.TestCase):
                                 'excludeTmpdirEnvVar': True, 'excludeSlashTmp': True,
                                 'writableRoots': [str(case.agent / 'work')]}}
                     if method == 'thread/read':
+                        self.publish_noise_batch()
                         if self.late_events is not None:
                             self.bootstrap_polls += 1
                             if self.bootstrap_polls == 1 or asynchronous_bootstrap == 'never':
@@ -721,6 +757,12 @@ class RuntimeContract(unittest.TestCase):
                             'id': thread_id, 'cwd': str(case.agent / 'work'), 'cli_version': '0.160.0',
                             'history_mode': 'legacy', 'roots': [str(case.agent / 'work')],
                             'dynamic_tools': copy.deepcopy(descriptors)}})
+                        if diagnostic and bootstrap_noise is not None:
+                            self.noise_final = list(self.events)
+                            self.events.clear()
+                            self.noise_remaining = 320
+                            created.update(status='inProgress', completedAt=None)
+                            order.append('noisy_bootstrap_start_returned')
                         if diagnostic and asynchronous_bootstrap is not None:
                             self.late_events = [event for event in self.events
                                 if event['method'] == 'rawResponseItem/completed']
@@ -743,6 +785,7 @@ class RuntimeContract(unittest.TestCase):
                 order.append('bind_operation')
 
             def receive(self, *, deadline):
+                self.publish_noise_batch()
                 if self.late_events is not None and asynchronous_bootstrap == 'late':
                     self.materialize_bootstrap()
                 if self.events:
@@ -1728,6 +1771,43 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['thread_id'])
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
+
+    def test_bootstrap_long_benign_stream_in_small_batches_does_not_exhaust_lifetime_event_cap(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='read', bootstrap_noise='benign')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 5)
+        self.assertEqual(result['outcome'], 'ran')
+        self.assertEqual(sum(value.startswith('benign_noise_batch_') for value in order), 20)
+        self.assertIn('noisy_bootstrap_registry_terminal_published', order)
+        self.assertLess(order.index('noisy_bootstrap_registry_terminal_published'), order.index('reply_dynamic'))
+        self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
+        self.assertEqual(order.count('reply_dynamic'), 1)
+        self.assertTrue(all(host.starts == 1 and host.phase == 'stopped' for host in hosts))
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+
+    def test_bootstrap_critical_callback_or_file_effect_amid_noise_is_immediate_refusal(self):
+        for noise in ('callback', 'file_effect'):
+            with self.subTest(noise=noise):
+                case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
+                case.setUp()
+                try:
+                    case.publish_registry()
+                    controller, hosts, calls, order = case.discovery_fixture(native_mode='read', bootstrap_noise=noise)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+                    self.assertIn(result['outcome'], ('blocked', 'unknown'))
+                    self.assertIn('critical_' + noise + '_amid_noise', order)
+                    self.assertNotIn('noisy_bootstrap_registry_terminal_published', order)
+                    self.assertNotIn('reply_dynamic', order)
+                    self.assertNotIn('checkpoint_commit', order)
+                    self.assertEqual(sum(method == 'turn/start' for method, params in calls), 1)
+                    self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+                    self.assertEqual(list((case.agent / 'questions').glob('*.json')), [])
+                    self.assertFalse((case.state / case.control['codex_state_id'] / 'admission.json').exists())
+                    expected = 'native noisy bootstrap candidate\n' if noise == 'file_effect' else 'baseline\n'
+                    self.assertEqual((case.agent / 'work/tracked.txt').read_text(), expected)
+                    self.assertEqual(case.git('rev-parse', 'HEAD', cwd=case.agent / 'work').strip(), case.base)
+                finally:
+                    case.doCleanups()
 
     def test_registry_fixed_js_whitespace_and_bounded_text_blocks_prove_each_turn(self):
         for wire in ('newline', 'semicolon', 'text_blocks'):
