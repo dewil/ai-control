@@ -519,7 +519,7 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((codex.read_bytes(), legacy.read_bytes()), before)
 
-    def dependency_fixture(self, agent, with_venv, *, symlinks=False):
+    def dependency_fixture(self, agent, with_venv, *, symlinks=False, original_has_websockets=False):
         # Public Python dependency discovery boundary. No production bypass added.
         import venv
         hookdir = self.base / 'python-startup-fixture'
@@ -535,6 +535,13 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
             metadata = site / 'websockets-15.0.1.dist-info'
             metadata.mkdir()
             (metadata / 'METADATA').write_text('Metadata-Version: 2.1\nName: websockets\nVersion: 15.0.1\n')
+        if original_has_websockets:
+            outside_package = hookdir / 'websockets'
+            outside_package.mkdir()
+            (outside_package / '__init__.py').write_text('__version__ = "15.0.1"\n')
+            outside_metadata = hookdir / 'websockets-15.0.1.dist-info'
+            outside_metadata.mkdir()
+            (outside_metadata / 'METADATA').write_text('Metadata-Version: 2.1\nName: websockets\nVersion: 15.0.1\n')
         self.reexec_log = self.base / 'reexec.jsonl'
         # Record native interpreter startup before the shared command dispatcher.
         # Missing dependency applies only to original interpreter; the private
@@ -543,8 +550,9 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
             f'if sys.prefix == {str(venv_root)!r}:\n'
             f' with open({str(self.reexec_log)!r},"a") as f: f.write(json.dumps(sys.argv)+"\\n")\n'
             'else:\n'
-            ' original=importlib.util.find_spec\n'
-            ' importlib.util.find_spec=lambda name,*a,**k: None if name=="websockets" else original(name,*a,**k)\n')
+            + (' pass\n' if original_has_websockets else
+               ' original=importlib.util.find_spec\n'
+               ' importlib.util.find_spec=lambda name,*a,**k: None if name=="websockets" else original(name,*a,**k)\n'))
         (hookdir / 'sitecustomize.py').write_text(source)
         compile(source, 'sitecustomize.py', 'exec')
         self.env['PYTHONPATH'] = str(hookdir)
@@ -598,6 +606,34 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
                     result = self.run_cmd('claude-agent-run', mode, agent)
                     self.assertTrue(self.reexec_log.is_file(),
                                     'shared-ELF native venv must start before executor flock; ' + result.stderr)
+                    calls = [json.loads(line) for line in self.reexec_log.read_text().splitlines()]
+                    self.assertTrue(any(call[1:] == [mode, str(agent)] for call in calls), calls)
+                    self.assertFalse(self.effects.exists())
+
+    def test_importable_websockets_outside_verified_venv_still_reexecs_before_flock(self):
+        # INV-CXRUN-02. Correct importable dependency version alone does not
+        # establish the verified interpreter/prefix required by the launcher.
+        agent = self.hook_fixture()
+        self.dependency_fixture(agent, with_venv=True, symlinks=True, original_has_websockets=True)
+        venv_root = self.home / '.local/share/claude-control/codex-venv'
+        probe = subprocess.run([sys.executable, '-c',
+            'import json,sys,websockets;print(json.dumps(dict(version=websockets.__version__,prefix=sys.prefix,path=websockets.__file__)))'],
+            env=self.env, text=True, capture_output=True, timeout=5)
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        dependency = json.loads(probe.stdout)
+        self.assertEqual(dependency['version'], '15.0.1')
+        self.assertNotEqual(Path(dependency['prefix']).resolve(), venv_root.resolve())
+        self.assertFalse(Path(dependency['path']).is_relative_to(venv_root))
+        self.assertFalse(self.reexec_log.exists(), 'original dependency probe must not impersonate verified venv')
+        lockpath = agent / 'inbox/.executor.lock'
+        with lockpath.open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            for mode in ('loop', 'drain'):
+                with self.subTest(mode=mode):
+                    self.reexec_log.unlink(missing_ok=True)
+                    result = self.run_cmd('claude-agent-run', mode, agent)
+                    self.assertTrue(self.reexec_log.is_file(),
+                        'importable correct websockets outside verified venv cannot bypass reexec; ' + result.stderr)
                     calls = [json.loads(line) for line in self.reexec_log.read_text().splitlines()]
                     self.assertTrue(any(call[1:] == [mode, str(agent)] for call in calls), calls)
                     self.assertFalse(self.effects.exists())
