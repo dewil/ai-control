@@ -4039,6 +4039,39 @@ def _lessons_exempt_rel(worktree_path, lessons_rel):
     return norm
 
 
+def _worktree_entries(project_path):
+    """Свежий разобранный список (path, branch|None), неизвестный - None."""
+    r = git_run(["worktree", "list", "--porcelain"], project_path)
+    if r.returncode != 0:
+        return None
+    entries = []
+    records = r.stdout.strip().split("\n\n")
+    for record in records:
+        lines = record.splitlines()
+        if (not lines or not lines[0].startswith("worktree ")
+                or not lines[0][len("worktree "):]
+                or any(not (line.startswith(("worktree ", "HEAD ",
+                                            "branch ", "locked ", "prunable "))
+                            or line in ("bare", "detached", "locked", "prunable"))
+                       for line in lines)
+                or sum(line.startswith("worktree ") for line in lines) != 1
+                or any(line.startswith("HEAD ")
+                       and not re.fullmatch(r"HEAD [0-9a-f]{40,64}", line)
+                       for line in lines)
+                or any(line.startswith("branch ")
+                       and not line.startswith("branch refs/heads/")
+                       for line in lines)
+                or ("bare" not in lines
+                    and (sum(line.startswith("HEAD ") for line in lines) != 1
+                         or sum(line.startswith("branch ") or line == "detached"
+                                for line in lines) != 1))):
+            return None
+        branch = next((line[len("branch "):] for line in lines
+                       if line.startswith("branch ")), None)
+        entries.append((lines[0][len("worktree "):], branch))
+    return entries
+
+
 def _branch_worktree_status(project_path, target, lessons_path=None):
     """(path|None|MULTIPLE|UNKNOWN, dirty) - ветка target вычекаучена в
     каком-то worktree проекта (§4 порядок п.1/п.2). path=None - ветка
@@ -4063,37 +4096,9 @@ def _branch_worktree_status(project_path, target, lessons_path=None):
     запись в статусе с этим путем (относительно корня ЭТОГО worktree)
     вычитается из грязи ПЕРЕД подсчетом dirty (§3.1) - не распространяется
     на каталог зеркала целиком, только на сам файл (§3.3)."""
-    r = git_run(["worktree", "list", "--porcelain"], project_path)
-    if r.returncode != 0:
+    entries = _worktree_entries(project_path)
+    if entries is None:
         return WORKTREE_UNKNOWN, True
-    entries = []
-    cur_path = None
-    records = r.stdout.strip().split("\n\n")
-    for record in records:
-        lines = record.splitlines()
-        if (not lines or not lines[0].startswith("worktree ")
-                or not lines[0][len("worktree "):]
-                or any(not (line.startswith(("worktree ", "HEAD ",
-                                            "branch ", "locked ", "prunable "))
-                            or line in ("bare", "detached", "locked", "prunable"))
-                       for line in lines)
-                or sum(line.startswith("worktree ") for line in lines) != 1
-                or any(line.startswith("HEAD ")
-                       and not re.fullmatch(r"HEAD [0-9a-f]{40,64}", line)
-                       for line in lines)
-                or any(line.startswith("branch ")
-                       and not line.startswith("branch refs/heads/")
-                       for line in lines)
-                or ("bare" not in lines
-                    and (sum(line.startswith("HEAD ") for line in lines) != 1
-                         or sum(line.startswith("branch ") or line == "detached"
-                                for line in lines) != 1))):
-            return WORKTREE_UNKNOWN, True
-    for line in r.stdout.split("\n"):
-        if line.startswith("worktree "):
-            cur_path = line[len("worktree "):]
-        elif line.startswith("branch ") and cur_path:
-            entries.append((cur_path, line[len("branch "):]))
     matches = [p for p, b in entries if b == "refs/heads/%s" % target]
     if len(matches) > 1:
         return WORKTREE_MULTIPLE, True
@@ -4181,6 +4186,13 @@ def _integrate_tmp_cleanup(project_path, tmp):
                            timeout=30)
         except (OSError, subprocess.TimeoutExpired):
             pass  # исходная ошибка фазы сохранена; следующая попытка повторит
+    try:
+        entries = _worktree_entries(project_path)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return (not os.path.lexists(tmp) and entries is not None
+            and all(os.path.abspath(path) != os.path.abspath(tmp)
+                    for path, _branch in entries))
 
 
 def _integrate_merge_worktree(project_path, tmp, target, old_sha, commit_sha,
@@ -4226,13 +4238,15 @@ def _integrate_merge_worktree(project_path, tmp, target, old_sha, commit_sha,
         if upd.returncode != 0:
             return "fail", ("update-ref мержа не прошел - параллельное движение "
                             "целевой ветки")
-        d["state"] = "integrated"
-        d["integrated_at"] = now_iso()
-        d["integrate_mode"] = "merge"
-        d["integrate_ref"] = merged_sha
-        return "ok", None
     finally:
-        _integrate_tmp_cleanup(project_path, tmp)
+        cleaned = _integrate_tmp_cleanup(project_path, tmp)
+    if not cleaned:
+        return "fail", "временный worktree не снят подтвержденно - повторим уборку"
+    d["state"] = "integrated"
+    d["integrated_at"] = now_iso()
+    d["integrate_mode"] = "merge"
+    d["integrate_ref"] = merged_sha
+    return "ok", None
 
 
 def _integrate_merge_checked_out(work_path, old_sha, commit_sha, d,
@@ -4303,7 +4317,8 @@ def _integrate_merge(agent_dir, name, d, project_path, branch, commit_sha):
     # серьезная 6).
     proj_name = (control or {}).get("project_name")
     tmp = os.path.join(agent_dir, ".integrate-worktree")
-    _integrate_tmp_cleanup(project_path, tmp)  # хвост от возможной разбитой попытки
+    if not _integrate_tmp_cleanup(project_path, tmp):
+        return "fail", "временный worktree прошлой попытки не снят подтвержденно"
 
     tgt = git_run(["rev-parse", "refs/heads/%s" % target], project_path)
     if tgt.returncode != 0:
