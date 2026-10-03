@@ -175,6 +175,15 @@ class NativeRegistryReader(unittest.TestCase):
                 self.write(self.rows[:4] + [row('response_item', item)] + self.rows[4:])
                 self.refused()
 
+    def test_preproof_native_apply_patch_or_function_effect_cannot_gain_later_registry_authority(self):
+        for item in (dict(type='custom_tool_call', name='apply_patch', call_id='early-patch',
+                          input='*** Begin Patch\n*** Add File: owned.txt\n+fixture\n*** End Patch'),
+                     dict(type='function_call', name='apply_patch', call_id='early-function',
+                          arguments=json.dumps({'patch': 'owned fixture patch'}))):
+            with self.subTest(type=item['type']):
+                self.write(self.rows[:4] + [row('response_item', item)] + self.rows[4:])
+                self.refused()
+
     def test_fixed_program_and_call_output_correlation_are_exact(self):
         for field, value in [('input', FIXED + '; text(1)'), ('call_id', 'foreign')]:
             with self.subTest(field=field):
