@@ -632,6 +632,11 @@ class CodexTaskRuntime:
             life.prepare(op['operation_id'],text,deadline=deadline)
             with self.store.reserve_start(op['operation_id'],deadline=deadline) as reservation:
                 started=life.submit(op['operation_id'],deadline=deadline)
+                history_deadline=min(deadline,self.clock()+10)
+                while started.phase=='unknown':
+                    self._deadline(history_deadline)
+                    time.sleep(min(.05,max(0,history_deadline-self.clock())))
+                    started=life.reconcile(op['operation_id'],deadline=history_deadline)
                 require(started.turn_id is not None and started.phase!='unknown')
                 turn_id=started.turn_id; op=reservation.activate(thread_id,turn_id)
             transport.bind_operation(thread_id,turn_id)
