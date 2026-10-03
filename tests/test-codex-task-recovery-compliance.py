@@ -106,6 +106,63 @@ class RecoveryCompliance(unittest.TestCase):
         self.assertFalse((f.agent / 'inbox/done/event-1.json').exists())
         self.assertFalse((f.agent / 'done.json').exists())
 
+    def test_completion_recovery_finalizes_exact_shared_done_before_archive_and_replay(self):
+        f = self.f
+        controller, calls, completion_path = f.completion_crash_fixture()
+        before_calls = list(calls)
+        head = f.git('rev-parse', 'HEAD', cwd=f.agent / 'work').strip()
+        result = controller.reconcile(deadline=time.monotonic() + 5)
+        self.assertEqual(result['outcome'], 'recovered')
+        done_path = f.agent / 'done.json'
+        done = json.loads(done_path.read_text())
+        self.assertEqual(done['state'], 'requested')
+        self.assertIs(done['finalized'], True, 'archived completion must finalize shared worktree done')
+        self.assertEqual(done['envelope_key'], 'event-1')
+        self.assertEqual(done['commit_sha'], head)
+        completion = json.loads(completion_path.read_text())
+        self.assertEqual(completion['checkpoint']['commit_sha'], head)
+        self.assertFalse((f.agent / 'inbox/inflight/event-1.json').exists())
+        archived = f.agent / 'inbox/done/event-1.json'
+        self.assertTrue(archived.is_file())
+        done_before, archived_before = done_path.read_bytes(), archived.read_bytes()
+        controller.reconcile(deadline=time.monotonic() + 3)
+        self.assertEqual(done_path.read_bytes(), done_before)
+        self.assertEqual(archived.read_bytes(), archived_before)
+        self.assertEqual(f.git('rev-parse', 'HEAD', cwd=f.agent / 'work').strip(), head)
+        self.assertEqual(calls, before_calls)
+
+    def test_completion_recovery_shared_finalization_conflict_holds_original(self):
+        f = self.f
+        controller, calls, completion_path = f.completion_crash_fixture()
+        before_calls = list(calls)
+        # Public shared writer creates the real requested done shape. Simulate
+        # a conflicting previously finalized shared receipt in this own fixture.
+        from _agent_done_io import request_done_locked
+        with (f.agent / 'done.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            request_done_locked(str(f.agent), 'event-1', 'owned conflicting completion',
+                                deadline=time.monotonic() + 2)
+            done_path = f.agent / 'done.json'
+            done = json.loads(done_path.read_text())
+            done.update(finalized=True, commit_sha='f' * 40, empty=False, changes=['tracked.txt'])
+            fixture_module.save(done_path, done)
+        before_done = done_path.read_bytes()
+        head = f.git('rev-parse', 'HEAD', cwd=f.agent / 'work')
+        try:
+            result = controller.reconcile(deadline=time.monotonic() + 5)
+        except fixture_module.runtime_module.RuntimeError:
+            pass
+        else:
+            self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertEqual(done_path.read_bytes(), before_done)
+        self.assertTrue((f.agent / 'inbox/inflight/event-1.json').is_file())
+        self.assertFalse((f.agent / 'inbox/done/event-1.json').exists())
+        completion = json.loads(completion_path.read_text())
+        index = json.loads((f.state / f.control['codex_state_id'] / 'index.json').read_text())
+        self.assertNotEqual(index['operations'][completion['operation_id']]['status'], 'finished')
+        self.assertEqual(f.git('rev-parse', 'HEAD', cwd=f.agent / 'work'), head)
+        self.assertEqual(calls, before_calls)
+
     def pending_permission(self):
         f = self.f
         f.publish_registry()
