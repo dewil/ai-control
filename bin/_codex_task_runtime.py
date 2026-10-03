@@ -332,6 +332,8 @@ class CodexTaskRuntime:
                     phase='stopped', unit=journal['unit'], token=journal['token'], invocation_id=journal['invocation_id'], drained=True)
                 self.store.record_drained(op['operation_id'], evidence, deadline=deadline)
             self.require_drained(deadline=deadline)
+            if reason in ('pause','cancel','shutdown'):
+                for op in self.store.snapshot(deadline=deadline)['operations'].values():self._expire_questions(op,deadline)
             return dict(drained=True, operations=[op['operation_id'] for op in records])
         except Exception:
             raise RuntimeError('Codex TASK runtime refused') from None
@@ -454,6 +456,9 @@ class CodexTaskRuntime:
                 require(permitted is True)
                 yield backend
 
+    def _registry_input(self,value):
+        return type(value) is str and re.fullmatch(r'\s*text\s*\(\s*ALL_TOOLS\s*\.\s*map\s*\(\s*t\s*=>\s*t\s*\.\s*name\s*\)\s*\.\s*sort\s*\(\s*\)\s*\)\s*;?\s*',value) is not None
+
     def _registry(self, events, thread, turn):
         inputs={}; names=None
         for event in events:
@@ -461,10 +466,13 @@ class CodexTaskRuntime:
             if method in ('rawResponseItem/completed','item/rawResponseItem/completed'):
                 require(params.get('threadId')==thread and params.get('turnId')==turn)
                 item=params.get('item',{})
-                if item.get('type')=='custom_tool_call' and item.get('name') in ('exec','functions.exec'):
-                    if type(item.get('input')) is str and re.fullmatch(r'\s*text\s*\(\s*ALL_TOOLS\s*\.\s*map\s*\(\s*t\s*=>\s*t\s*\.\s*name\s*\)\s*\.\s*sort\s*\(\s*\)\s*\)\s*;?\s*',item['input']):
-                        inputs[item['call_id']]=True
-                elif item.get('type')=='custom_tool_call_output' and item.get('call_id') in inputs:
+                if item.get('type')=='custom_tool_call':
+                    require(item.get('name') in ('exec','functions.exec') and self._registry_input(item.get('input'))
+                        and type(item.get('call_id')) is str and item['call_id'])
+                    require(not inputs or item['call_id'] in inputs)
+                    inputs[item['call_id']]=True
+                elif item.get('type')=='custom_tool_call_output':
+                    require(item.get('call_id') in inputs)
                     output=item['output']
                     if type(output) is list:
                         require(1<=len(output)<=100)
@@ -685,12 +693,20 @@ class CodexTaskRuntime:
             events=list(transport.events); transport.events.clear()
             for event in events:
                 if event.get('method') in ('rawResponseItem/completed','item/rawResponseItem/completed'):
-                    if not registry_proven:registry_events.append(event)
-                    require(len(registry_events)<=256 and len(json.dumps(registry_events).encode())<=1024*1024)
+                    item=event.get('params',{}).get('item',{})
                     if not registry_proven:
-                        item=event.get('params',{}).get('item',{})
+                        registry_events.append(event)
+                        require(len(registry_events)<=256 and len(json.dumps(registry_events).encode())<=1024*1024)
+                        if item.get('type')=='custom_tool_call':
+                            require(item.get('name') in ('exec','functions.exec') and self._registry_input(item.get('input')))
                         if item.get('type')=='custom_tool_call_output':
                             self._registry(registry_events,binding.thread_id,binding.turn_id);self._child(snapshot,deadline);registry_proven=True
+                    elif item.get('type')=='custom_tool_call' and self._registry_input(item.get('input')):
+                        originals=[row for row in registry_events if row.get('params',{}).get('item',{}).get('type')=='custom_tool_call']
+                        require(any(_equal(event,row) for row in originals))
+                    elif item.get('type')=='custom_tool_call_output':
+                        originals=[row for row in registry_events if row.get('params',{}).get('item',{}).get('type')=='custom_tool_call' and row['params']['item']['call_id']==item.get('call_id')]
+                        if originals:self._registry([originals[0],event],binding.thread_id,binding.turn_id)
                 if 'id' in event or event.get('method')=='item/started' and event.get('params',{}).get('item',{}).get('type')=='fileChange':
                     require(registry_proven)
             for event in events:
@@ -796,8 +812,14 @@ class CodexTaskRuntime:
                                 durable_json(intent,dict(schema=1,phase='send_intent',**receipt),deadline=deadline,clock=self.clock)
                                 transport.reply_approval(event['id'],dict(decision='accept' if question['decision']=='approve' else 'decline'),method=event['method'],
                                     thread_id=binding.thread_id,turn_id=binding.turn_id,item_id=params['itemId'],deadline=deadline)
-                                durable_json(confirmed,receipt,deadline=deadline,clock=self.clock)
+                            self._approval_resolution(transport,event,binding,patch,generation,attempt,iteration,deadline)
+                            with self._guard(binding,op,generation,attempt,deadline=deadline):
                                 require(_equal(read_json(self.agent_dir+'/questions/'+qid+'.json'),question))
+                                self._child(snapshot,deadline)
+                                self._capture_patch(patch)
+                                if question['decision']=='approve':self._validate_patch(patch)
+                                require(_equal(read_json(intent),dict(schema=1,phase='send_intent',**receipt)) and not os.path.lexists(confirmed))
+                                durable_json(confirmed,receipt,deadline=deadline,clock=self.clock)
                                 question['status']='closed'
                                 question['native_callback']=future_callback
                                 durable_json(self.agent_dir+'/questions/'+qid+'.json',question,deadline=deadline,clock=self.clock)
@@ -812,6 +834,32 @@ class CodexTaskRuntime:
                 require(registry_proven and turn[0]['status']=='completed')
                 return 'terminal'
             time.sleep(min(.05,max(0,deadline-self.clock())))
+
+    def _approval_resolution(self,transport,event,binding,patch,generation,attempt,iteration,deadline):
+        deferred=[];resolved=False
+        while not resolved:
+            self._deadline(deadline)
+            self.adapters['heartbeat'](self.agent_dir,generation,attempt,'waiting_input',iteration,deadline=deadline)
+            require(len(transport.events)<=256)
+            while transport.events:
+                notification=transport.receive(deadline=deadline);_plain(notification)
+                require(len(json.dumps(notification).encode())<=1024*1024)
+                params=notification.get('params',{});item=params.get('item',{})
+                if notification.get('method')=='serverRequest/resolved':
+                    require(not resolved and type(params.get('requestId')) is type(event['id'])
+                        and params['requestId']==event['id'] and params.get('threadId')==binding.thread_id)
+                    resolved=True
+                else:
+                    require(notification.get('method')!='item/fileChange/patchUpdated')
+                    if item.get('type')=='fileChange':
+                        require(params.get('threadId')==binding.thread_id and params.get('turnId')==binding.turn_id
+                            and item.get('id')==event['params']['itemId'] and _equal(item.get('changes'),patch))
+                    deferred.append(notification)
+                    require(len(deferred)<=256 and len(json.dumps(deferred).encode())<=1024*1024)
+            if not resolved:
+                transport.call('thread/read',dict(threadId=binding.thread_id,includeTurns=True),deadline=deadline)
+                time.sleep(min(.05,max(0,deadline-self.clock())))
+        transport.events.extend(deferred)
 
     def _capture_patch(self,patch):
         _plain(patch)
@@ -1029,6 +1077,26 @@ class CodexTaskRuntime:
                     question['status']='closed';question['native_callback']=callback
                     durable_json(question_path,question,deadline=deadline,clock=self.clock)
 
+    def _expire_questions(self,op,deadline):
+        parent=Path(op['host_state_dir']).parent
+        with self._locks(all_locks=True,deadline=deadline), self.store._context(deadline,locked=True) as context:
+            current=context['index']['operations'][op['operation_id']]
+            require(current['status'] in ('revoked','finished'))
+            for known in context['index']['operations'].values():self.store._drain_gate(context,known,deadline)
+            for path in Path(self.agent_dir+'/questions').glob('*.json'):
+                question=read_json(str(path));callback=question.get('native_callback')
+                if callback is None:continue
+                require(type(callback) is dict)
+                if callback.get('operation_id')!=op['operation_id']:continue
+                require(question.get('engine')=='codex' and question.get('kind')=='permission'
+                    and question.get('qid')==path.stem and all(_equal(callback.get(key),op[key]) for key in
+                        ('operation_id','task_incarnation','generation','attempt_id','thread_id','turn_id')))
+                if question.get('status')=='open' and callback.get('status')=='pending':
+                    require(not os.path.lexists(str(parent/('approval-'+question['qid']+'.json')))
+                        and not os.path.lexists(str(parent/('approval-'+question['qid']+'-intent.json'))))
+                    question['status']='expired';callback['status']='expired'
+                    durable_json(str(path),question,deadline=deadline,clock=self.clock)
+
     def _recover_bootstrap(self,op,deadline):
         parent=Path(op['host_state_dir']).parent
         source=self.agent_dir+'/inbox/inflight/'+op['event_key']+'.json'
@@ -1063,6 +1131,30 @@ class CodexTaskRuntime:
         else:durable_json(admission_path,admission,deadline=deadline,clock=self.clock)
         return True
 
+    def _historical_checkpoint(self,op,parent,deadline):
+        checkpoint=parent+'/checkpoint.json';completion=parent+'/completion.json'
+        if os.path.lexists(completion):
+            value=read_json(completion)
+            require(value['phase'] in ('done_written','finalized') and all(_equal(value[key],op[key]) for key in
+                ('operation_id','task_incarnation','generation','attempt_id','event_key','thread_id','turn_id')))
+            receipt=value['checkpoint']
+        else:receipt=read_json(checkpoint)
+        self._receipt(receipt,op);require(receipt['commit_sha'] is not None)
+        spec=self._spec(deadline)
+        def git(args):
+            result=git_run(args,self.cwd,spec['project'],deadline=deadline,clock=self.clock)
+            require(result.returncode==0);return result.stdout.strip()
+        require(receipt['branch']=='task/'+os.path.basename(self.agent_dir)+'-'+op['task_incarnation'][:8]
+            and git(['symbolic-ref','--short','HEAD'])==receipt['branch'])
+        commit=receipt['commit_sha'];require(git(['rev-parse',commit+'^{tree}'])==receipt['tree_sha'])
+        git(['merge-base','--is-ancestor',commit,'HEAD'])
+        if receipt['no_commit']:require(commit==receipt['parent_sha'])
+        else:
+            require(git(['rev-parse',commit+'^'])==receipt['parent_sha'])
+            message=git(['show','-s','--format=%B',commit])
+            for label,expected in (('Codex-Task-Operation:',receipt['trailer']),('Codex-Task-Intent:',receipt['intent_trailer'])):
+                require([line for line in message.splitlines() if line.startswith(label)]==[expected])
+
     def reconcile(self,*,deadline):
         try:
             self._deadline(deadline); self._executor_owner(); snapshot=self.store.snapshot(deadline=deadline)
@@ -1071,26 +1163,35 @@ class CodexTaskRuntime:
             recovered=False
             for op in snapshot['operations'].values():
                 self._recover_questions(op,deadline)
+                self._expire_questions(op,deadline)
                 if self._recover_bootstrap(op,deadline): recovered=True;continue
-                path=str(Path(op['host_state_dir']).parent/'completion.json')
+                source=self.agent_dir+'/inbox/inflight/'+op['event_key']+'.json'
+                envelope=read_json(source if os.path.lexists(source) else self.agent_dir+'/inbox/done/'+op['event_key']+'.json')
+                if envelope.get('meta',{}).get('internal')=='codex_config_discovery':continue
+                parent=str(Path(op['host_state_dir']).parent)
+                terminal=read_json(parent+'/terminal.json')
+                require(set(terminal)=={'operation_id','task_incarnation','thread_id','turn_id','terminal','terminal_proven','quiescent'}
+                    and all(_equal(terminal[key],op[key]) for key in ('operation_id','task_incarnation','thread_id','turn_id'))
+                    and terminal['terminal'] in ('completed','interrupted') and terminal['terminal_proven'] is True and terminal['quiescent'] is True)
+                if op['status']=='finished':
+                    require(_equal(op['terminal_evidence'],terminal))
+                    self._historical_checkpoint(op,parent,deadline)
+                    self._archive_ordinary(op,deadline)
+                    continue
+                path=parent+'/completion.json'
                 if os.path.lexists(path):
-                    value=read_json(path)
-                    if value['phase'] not in ('done_written','finalized'):
-                        self._complete(op,deadline); recovered=True
+                    self._complete(op,deadline)
                 else:
-                    parent=str(Path(op['host_state_dir']).parent);checkpoint=parent+'/checkpoint.json'
+                    checkpoint=parent+'/checkpoint.json'
                     if os.path.lexists(checkpoint):
-                        terminal=read_json(parent+'/terminal.json')
-                        require(set(terminal)=={'operation_id','task_incarnation','thread_id','turn_id','terminal','terminal_proven','quiescent'}
-                            and all(_equal(terminal[key],op[key]) for key in ('operation_id','task_incarnation','thread_id','turn_id'))
-                            and terminal['terminal'] in ('completed','interrupted') and terminal['terminal_proven'] is True and terminal['quiescent'] is True)
                         prepared=read_json(checkpoint);self._receipt(prepared,op)
                         receipt=self.adapters['checkpoint'](self.agent_dir,op['operation_id'],op['event_key'],'TASK checkpoint',prepared,deadline=deadline)
                         self._receipt(receipt,op);require(receipt['commit_sha'] is not None)
-                        if not _equal(prepared,receipt): durable_json(checkpoint,receipt,deadline=deadline,clock=self.clock)
-                        self.store.finish(op['operation_id'],terminal,deadline=deadline)
-                        self._archive_ordinary(op,deadline)
-                        recovered=True
+                        if not _equal(prepared,receipt):durable_json(checkpoint,receipt,deadline=deadline,clock=self.clock)
+                    else:self._checkpoint_twice(op,op['event_key'],'TASK checkpoint',deadline)
+                self.store.finish(op['operation_id'],terminal,deadline=deadline)
+                self._archive_ordinary(op,deadline)
+                recovered=True
             return dict(outcome='recovered' if recovered else 'idle',operations=list(snapshot['operations']),reason=None)
         except Exception:
             return dict(outcome='blocked',operations=[],reason='native_evidence_unconfirmed')
