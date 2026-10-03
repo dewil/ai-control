@@ -499,7 +499,8 @@ class CodexTaskOperationStore:
                 self._authority(ctx, op)
                 env = self._envelope(ctx, op, deadline)
                 require('codex_operation' not in env['meta'])
-                for directory in (ctx['dir'] + '/operations', ctx['dir'] + '/operations/' + opid):
+                for directory in (ctx['dir'] + '/operations', ctx['dir'] + '/operations/' + opid,
+                                  op['host_state_dir']):
                     if not os.path.lexists(directory):
                         os.mkdir(directory, 0o700)
                     self._pin(directory, ctx['pins'])
@@ -660,10 +661,16 @@ class CodexTaskOperationStore:
             with self._context(deadline) as ctx:
                 op = self._operation(ctx, operation_id)
                 self._drain_receipt(ctx, op, evidence, deadline)
-                require(self._envelope(ctx, op, deadline)['meta'].get('codex_operation') == op)
+                envop = self._envelope(ctx, op, deadline)['meta'].get('codex_operation')
                 require(op['drain_evidence'] in (None, evidence))
                 if op['drain_evidence'] == evidence:
+                    if envop != op:
+                        previous = clone(op)
+                        previous['drain_evidence'] = None
+                        require(envop == previous)
+                        self._write_op(ctx, op, deadline)
                     return clone(op)
+                require(envop == op)
                 op['drain_evidence'] = evidence
                 # Drain receipt changes no callback authority; keep envelope projection exact.
                 self._write_index(ctx, deadline)
@@ -673,6 +680,9 @@ class CodexTaskOperationStore:
             raise StoreError('Owned host drain receipt refused') from None
 
     def _drain_gate(self, ctx, op, deadline):
+        host = op['host_state_dir']
+        for path in (ctx['dir'] + '/operations', os.path.dirname(host), host):
+            self._pin(path, ctx['pins'])
         if op['drain_evidence'] is not None:
             self._drain_receipt(ctx, op, op['drain_evidence'], deadline)
         else:
