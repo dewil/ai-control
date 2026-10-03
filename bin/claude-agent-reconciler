@@ -350,7 +350,48 @@ cgroup_wait_empty() { # <name>
   done
 }
 
+task_engine_of() {
+  if [[ -f "$1/spec.yaml" ]]; then
+    local engine; engine=$(yq -r '.engine // "claude"' "$1/spec.yaml") || return 1
+    if [[ "$engine" != "codex" ]] && [[ "$(yq -r '.codex_state_id // ""' "$1/control.json")" != "" ]]; then return 1; fi
+    echo "$engine"
+  else
+    python3 - "$1/control.json" <<'PYENGINE'
+import json,sys
+try:
+    value=json.load(open(sys.argv[1]))
+    if 'codex_state_id' in value: sys.exit(1)
+    print('claude')
+except Exception: sys.exit(1)
+PYENGINE
+  fi
+}
+
+native_barrier() {
+  local engine; engine=$(task_engine_of "$1") || return 1
+  if [[ "$engine" == "codex" ]]; then
+    "$BIN_DIR/codex-task-runtime" barrier "$1" --reason "$2" >/dev/null
+  elif [[ "$engine" != "claude" ]]; then return 1; fi
+}
+
+admission_mb() {
+  local dir="$1" mb engine native
+  mb=$(spec_get "$dir" .memory_max_mb); mb="${mb:-700}"
+  engine=$(task_engine_of "$dir") || return 1
+  if [[ "$engine" == "codex" ]]; then
+    native=$(spec_get "$dir" .host_budget.memory_max_mb); native="${native:-1024}"
+    [[ "$mb" =~ ^[0-9]+$ && "$native" =~ ^[0-9]+$ ]] || return 1
+    (( native >= 256 && native <= 8192 )) || return 1
+    mb=$((mb + native))
+  elif [[ "$engine" != "claude" ]]; then return 1; fi
+  echo "$mb"
+}
+
 shutdown_agent() { # <dir> <name>; 0 = lease освобожден
+  local engine; engine=$(task_engine_of "$1")
+  if [[ "$engine" == "codex" ]]; then
+    "$BIN_DIR/codex-task-runtime" barrier "$1" --reason shutdown >/dev/null || return 1
+  elif [[ "$engine" != "claude" ]]; then return 1; fi
   local dir="$1" name="$2" unit; unit=$(unit_of "$name")
   local lstate
   lstate=$("$IO" control-read "$dir" | python3 -c \
@@ -384,6 +425,11 @@ shutdown_agent() { # <dir> <name>; 0 = lease освобожден
 acquire_agent() { # <dir> <name>; вызывается под admission
   local dir="$1" name="$2" unit; unit=$(unit_of "$name")
   local atype; atype=$(spec_get "$dir" .type); atype="${atype:-mission}"
+  local engine; engine=$(task_engine_of "$dir") || return 2
+  if [[ "$engine" == "codex" ]]; then
+    "$BIN_DIR/codex-task-runtime" preflight "$dir" >/dev/null || return 2
+    native_barrier "$dir" shutdown || return 2
+  elif [[ "$engine" != "claude" ]]; then return 2; fi
 
   # PRE-FLIGHT (1): реестр валиден (проверено раньше), маунт, worktree.
   # event-агент по умолчанию живет целиком на корне (Д2/Д3: inbox, spool,
@@ -1039,6 +1085,7 @@ PY
 
   # --- 5.4 п.2: FOREIGN_WRITER -> T13 (в 1b: гасим свой юнит-сироту) ---
   if [[ "$cls" == "FOREIGN_WRITER" ]]; then
+    native_barrier "$dir" shutdown || return 1
     systemctl --user stop "$(unit_of "$name")" >/dev/null 2>&1 || true
     set_attention "$dir" "$name" double_owner
     return 0
@@ -1178,7 +1225,7 @@ PY
         fi
       fi
       # T1 через admission: заявка на слот (stagger в run_pass)
-      local mb; mb=$(spec_get "$dir" .memory_max_mb); mb="${mb:-700}"
+      local mb; mb=$(admission_mb "$dir") || return 1
       echo "WANT_START $mb"
       ;;
     STARTING)   # T2: ждать grace + start-kick для живой сессии (13.1):
@@ -1347,7 +1394,12 @@ run_pass() {
 try: print(json.load(sys.stdin)["lease"]["state"])
 except Exception: print("none")' 2>/dev/null || echo none)
     if [[ "$lstate" == "active" || "$lstate" == "acquiring" ]]; then
-      mb=$(spec_get "$dir" .memory_max_mb); used=$((used + ${mb:-700}))
+      mb=$(admission_mb "$dir") || return 1; used=$((used + mb))
+    elif [[ "$(task_engine_of "$dir")" == "codex" ]]; then
+      # An orphan native cgroup still owns its reservation until proven drained.
+      if ! native_barrier "$dir" shutdown; then
+        mb=$(admission_mb "$dir") || return 1; used=$((used + mb))
+      fi
     fi
   done
 

@@ -104,7 +104,7 @@ class CodexTaskBackend:
         if self.spec_reader is not None:
             value = self.spec_reader(self.binding.agent_dir, deadline=deadline)
         else:
-            result = subprocess.run(['yq', '-c', '.', path], capture_output=True,
+            result = subprocess.run(['yq', '-o=json', '-I=0', '.', path], capture_output=True,
                                     timeout=self._budget(deadline))
             require(result.returncode == 0 and len(result.stdout) <= 1024 * 1024)
             def pairs(items):

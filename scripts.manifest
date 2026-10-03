@@ -67,3 +67,6 @@ _agent_worktree.py
 claude-control-session
 claude-control-watchdog
 claude-control-project-watchdog
+
+_codex_task_runtime.py
+codex-task-runtime

@@ -586,7 +586,10 @@ def question_card(detail):
     if not isinstance(detail, dict):
         return None, None
     if detail.get("kind") == "done":
-        return _done_card(detail)
+        text,kb = _done_card(detail)
+        if detail.get("engine")=="codex":
+            text += "\nCodex USD: неизвестно\n" + "\n".join(html.escape(str(detail.get(key) or "")) for key in ("phase","operation_id","thread_id","turn_id","reason"))
+        return text,kb
     if detail.get("kind") != "question":
         return None, None
     agent = detail.get("agent") or "?"
@@ -602,6 +605,10 @@ def question_card(detail):
         rows = [[("разрешить", "p:%s:a" % qid)],
                [("отклонить", "p:%s:r" % qid)],
                snooze]
+        if detail.get('engine') == 'codex' and detail.get('native_callback') is not None:
+            allowed = detail['native_callback'].get('allowed_decisions',[])
+            rows = ([rows[0]] if 'approve' in allowed else []) + ([rows[1]] if 'reject' in allowed else []) + [snooze]
+            header = 'Codex '+header
         return header, _inline(rows)
     # info (§4): подсказка про reply всегда, кнопки по options - при наличии
     header = ("агент %s: вопрос\n%s\n\nответь reply-ем на это сообщение "
@@ -1465,7 +1472,12 @@ def parse_command(text):
         # аудит blocker 1). Имя задачи выводится из update_id в new_task(),
         # не здесь - проект известен только по имени из projects.yaml.
         p3 = text.split(None, 2)
-        if len(p3) == 3:
+        if len(p3) == 3 and p3[1] == '--engine':
+            parts = text.split(None, 4)
+            if len(parts)==5 and parts[2]=='codex' and not parts[3].startswith('--') and not parts[4].startswith('--'):
+                return cmd,(parts[3],parts[4],'codex')
+            return '/new-bad',None
+        if len(p3) == 3 and not p3[1].startswith('--'):
             return cmd, (p3[1], p3[2])
         return "/new-bad", None
     return None, None
@@ -1698,7 +1710,7 @@ def spool_task(arg, update_id, from_id):
                               % (r.returncode, r.stderr.strip()[:200]))
 
 
-def new_task(project, text, update_id):
+def new_task(project, text, update_id, engine=None):
     """Продюсер /new (V2.7a §1, аудит blocker 1): claude-rc agent new-task,
     вся цепочка (create/spool-put/start) идемпотентна по update_id - имя
     задачи выводится из него (task-tg<update_id>), redelivery того же
@@ -1707,7 +1719,7 @@ def new_task(project, text, update_id):
     try:
         r = subprocess.run(
             [os.path.join(BIN_DIR, "claude-rc"), "agent", "new-task",
-             "--name", name, "--project", project, "--text", text],
+             "--name", name, "--project", project, "--text", text] + (["--engine",engine] if engine else []),
             capture_output=True, text=True, timeout=60)
     except Exception as e:  # noqa: BLE001
         raise TransientSpoolError(str(e))
@@ -2158,8 +2170,8 @@ def handle(cmd, arg, update_id=0, from_id=0):
     if cmd == "/task":
         return spool_task(arg, update_id, from_id)
     if cmd == "/new":
-        project, text = arg
-        return new_task(project, text, update_id)
+        project, text = arg[:2]
+        return new_task(project, text, update_id, arg[2] if len(arg)>2 else None)
     return None, False
 
 
