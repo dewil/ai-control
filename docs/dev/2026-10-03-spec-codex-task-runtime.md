@@ -281,3 +281,6 @@ Verified native approval reply означает successful once-only local send 
 
 
 После введения matching native resolution старый fault hardlink question прямо внутри reply относится к PRE-confirmation uncertainty: secure question reread/fence отказывает без confirmed receipt. Confirmed receipt-before-close crash проверяется отдельно generic filesystem atomic-replace/fsync отказом только после durable confirmed receipt, до question close. Это меняет прежнее fixture ожидание по явному контракту, не ослабляет recovered receipt validation.
+
+
+Ordinary turn/start native0.160.0 возвращает inProgress с пустым items до materialization (pinned turn_processor.rs706). После единственного may-send controller ограниченно сверяет original lifecycle через thread/read/reconcile до exact correlated full userMessage/clientUserMessageId/text; неизвестный snapshot не означает новую отправку. Accepted lifecycle full-history validation не ослабляется; reservation activation/TASK callback authority ждут exact native owned evidence. При timeout, чужом clientId/turn/text либо missing materialization — hold/revoke/drain, без второго turn/start/newhost/fallback. Queued native frames обрабатываются после authoritative binding, не теряются и не выдаются за authorization.
