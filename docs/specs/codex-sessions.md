@@ -117,3 +117,5 @@ Dedicated host и thread используют один control_task profile: sco
 - **INV-CXSTORE-04..05:** все known host tombstones сохраняются, previous-attempt drain требуется до нового attempt и cleanup; strict private pins/finite JSON/bounds/deadlines. Native/kernel evidence проверяет trusted caller, store сверяет owned journal identity.
 
 Трассируемость tests/test-codex-task-operation-store.py, FR/INV-CXSTORE01..05. Единственный spec parse использует установленный mikefarah yq `-o=json -I=0 .`; runtime integration должна передавать тот же strict reader backend через spec_reader, чей прежний default `-c` несовместим с YAML на mikefarah yq. Store сам не выполняет native RPC, control writes, TASK commit/finalization; runner/reconciler/create/approvals/install E2E остаются отдельными gates.
+
+Operation-store helper завершён: durable original directory identity и exact partial-drain replay закреплены tests/test-codex-task-operation-store.py (64 tests), независимая compliance PASS. Full TASK runtime остаётся отдельным открытым изменением.
