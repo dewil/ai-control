@@ -1230,7 +1230,7 @@ class CodexTaskRuntime:
                 if done.get('finalized') is True:
                     require(all(_equal(done.get(key),expected[key]) for key in expected))
                 else:
-                    self._shared_runner().finalize_worktree_done_locked(self.agent_dir,op['event_key'],os.path.basename(self.agent_dir),spec['project'])
+                    self._shared_runner().finalize_worktree_done_locked(self.agent_dir,op['event_key'],os.path.basename(self.agent_dir),spec['project'],strict=True,deadline=deadline,clock=self.clock)
                 finalized=read_json(done_path)
                 require(finalized['state']=='requested' and finalized['finalized'] is True
                     and finalized['envelope_key']==op['event_key'] and finalized['summary']==value['summary']

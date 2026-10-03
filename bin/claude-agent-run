@@ -1160,7 +1160,8 @@ def finalize_worktree_done(agent_dir, key, ws, name, project):
         finalize_worktree_done_locked(agent_dir, key, name, project)
 
 
-def finalize_worktree_done_locked(agent_dir, key, name, project):
+def finalize_worktree_done_locked(agent_dir, key, name, project, *,
+                                 strict=False, deadline=None, clock=time.monotonic):
     """Trusted caller owns done/control/inbox fences and proves native drain."""
     done_path = os.path.join(agent_dir, "done.json")
     try:
@@ -1175,8 +1176,10 @@ def finalize_worktree_done_locked(agent_dir, key, name, project):
     facts = None
     if base and BASE_SHA_RE.match(base) and project:
         work = os.path.join(agent_dir, "work")
-        facts = _worktree_facts(work, base, name, project)
+        facts = _worktree_facts(work, base, name, project, deadline=deadline, clock=clock)
     if facts is None:
+        if strict:
+            raise GitGuardError("native completion worktree facts unavailable")
         dd["state"] = "invalid"
         dd["invalid_reason"] = (
             "worktree грязное, HEAD не на своей ветке, не потомок "
@@ -1196,7 +1199,11 @@ def finalize_worktree_done_locked(agent_dir, key, name, project):
     # V2.10 §3c, аудит блокер 2: только теперь заявка финализирована -
     # done-notify молчит, пока finalized не true (см. cmd_done_notify).
     dd["finalized"] = True
-    durable_json(done_path, dd)
+    if strict:
+        from _agent_question_io import durable_json as bounded_durable_json
+        bounded_durable_json(done_path, dd, deadline=deadline, clock=clock)
+    else:
+        durable_json(done_path, dd)
 
 
 def dedup_add(ib, key):
