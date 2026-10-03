@@ -161,7 +161,7 @@ At base d6744ed no `cmd_delete`/agent-delete API was found by repository search;
 
 В списках/карточках/tasks/menu/status/history видно engine Codex, native operation/thread/turn, phase bootstrap/running/waiting_approval/asked/draining/blocked, reason без raw prompt/config. Native token usage и elapsed показываются когда observed; USD всегда null/«неизвестно» без verified tariff. Strict USD cap для Codex отказывает до claim, не считает неизвестное нулём и не подставляет Claude pricing. Token/time/host limits enforce действительно измеряемые величины; numeric overflow/missing terminalusage не превращаются в zero. UI не предлагает Claude model switch либо engine migration существующей live TASK.
 
-Manifest включает controller, shim, store и все helpers; installer проверяет completeness и executable artifacts. Deployment производится из verified merged commit, production scripts остаются coherent одной версии. Controlled smoke uses own private project/agent/state IDs and dedicated cgroups; существующие TASK/bots/services не останавливаются. Никаких secret/config dumps или общих daemon kills. User authorized deployment этой задачи в текущей сессии; отдельные gate/model changes в эту авторизацию не входят.
+Manifest включает controller, shim, store и все helpers; installer проверяет completeness и executable artifacts. Deployment производится из verified merged commit, production scripts остаются coherent одной версии. Controlled smoke uses own private project/agent/state IDs and dedicated cgroups; существующие TASK/bots/services не останавливаются. Никаких secret/config dumps или общих daemon kills.
 
 ## Инварианты и независимые проверки
 
