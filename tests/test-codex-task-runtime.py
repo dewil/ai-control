@@ -616,6 +616,7 @@ class RuntimeContract(unittest.TestCase):
                                 change['kind']['move_path'] = str(case.root / 'outside-candidate.txt')
                             if native_mode == 'approval_outside':
                                 change['kind'] = {'type': 'add'}
+                                change['diff'] = '+outside fixture candidate\n'
                             self.events.extend([
                                 {'id': 7, 'method': 'item/fileChange/requestApproval', 'params': {
                                     'threadId': thread_id, 'turnId': turn_id, 'itemId': 'full-item',
@@ -823,6 +824,19 @@ class RuntimeContract(unittest.TestCase):
                 CLAUDE_AGENT_SPOOL_BASE=str(case.root / 'spool'),
                 CLAUDE_AGENT_GENERATION='7', CLAUDE_AGENT_ATTEMPT='attempt-1')
             executable = Path(__file__).resolve().parents[1] / 'bin/claude-agent-answer'
+            if native_mode == 'approval_outside':
+                case.assertEqual(question['native_callback']['allowed_decisions'], ['reject'])
+                before_question = questions[0].read_bytes()
+                spool = case.root / 'spool/taskone'
+                before_spool = {path.name: path.read_bytes() for path in spool.glob('*.json')}
+                denied = subprocess.run([str(executable), str(case.agent), '--qid', question['qid'],
+                    '--approve', '--by', 'fixture-programmatic-operator'], env=environment,
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, timeout=1)
+                case.assertNotEqual(denied.returncode, 0, 'Outside native question accepted a programmatic approve')
+                case.assertEqual(questions[0].read_bytes(), before_question)
+                case.assertEqual({path.name: path.read_bytes() for path in spool.glob('*.json')}, before_spool)
+                order.append('outside_programmatic_approve_refused')
             command = [str(executable), str(case.agent), '--qid', question['qid'],
                 '--approve' if human_decision == 'accept' else '--reject', '--by', 'fixture-operator']
             completed = subprocess.run(command, env=environment, stdin=subprocess.DEVNULL,
@@ -1186,6 +1200,24 @@ class RuntimeContract(unittest.TestCase):
         self.assertNotIn('genuine_human_answer', order)
         self.assertTrue(all(h.phase == 'stopped' for h in hosts))
         self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+
+    def test_outside_full_add_routes_genuine_reject_only_human_decline_once(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_outside',
+            human_decision='decline')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
+        self.assertEqual(result['outcome'], 'ran')
+        self.assertIn('outside_programmatic_approve_refused', order)
+        self.assertIn('genuine_human_answer', order)
+        self.assertEqual(order.count('reply_approval'), 1)
+        self.assertLess(order.index('outside_programmatic_approve_refused'), order.index('genuine_human_answer'))
+        self.assertLess(order.index('genuine_human_answer'), order.index('reply_approval'))
+        self.assertEqual(len(hosts), 3)
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+        self.assertFalse((self.root / 'outside-candidate.txt').exists())
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+        self.assertFalse((self.agent / 'done.json').exists())
+        self.assertIs(controller.require_drained(deadline=time.monotonic() + 2), True)
 
     def test_outside_add_and_move_never_expand_baseline_after_human_approval(self):
         for mode in ('approval_outside', 'approval_move_outside'):
