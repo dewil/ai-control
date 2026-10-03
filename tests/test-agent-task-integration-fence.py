@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.environ.get('FENCE_CLI_ROOT', Path(__file__).resolve().parents[1]))
 os.umask(0o077)
 TMP = Path(tempfile.mkdtemp(prefix='control-integration-fence-', dir='/var/tmp'))
 REAL_GIT = shutil.which('git')
@@ -91,6 +91,12 @@ import json,os,subprocess,sys
 from pathlib import Path
 c=json.load(open(os.environ['FENCE_CONFIG'])); a=sys.argv[1:]
 with open(c['log'],'a') as f: f.write(json.dumps(a)+'\\n')
+if c['action']=='timeout-worktree' and Path(c['marker']).exists() and 'worktree' in a and 'list' in a:
+ used=Path(c['marker']+'.timeout-used')
+ if not used.exists():
+  used.write_text('first fresh worktree query after temporary merge')
+  import time
+  time.sleep(35)
 if Path(c['marker']).exists() and ((c['action'].startswith('unknown-worktree') and 'worktree' in a and 'list' in a) or (c['action'].startswith('unknown-status') and 'status' in a and c['repo'] in a)):
  if c['action'].endswith('malformed'): print('unparseable git output'); sys.exit(0)
  sys.exit(1)
@@ -186,6 +192,18 @@ for action in ('delete','registry','dirty'):
         if action=='dirty': assert (f['repo']/'late-dirty.txt').read_text()=='human data'
         if action=='delete': assert cmd(REAL_GIT,'-C',f['repo'],'show-ref','--verify','refs/heads/'+f['branch'],check=False).returncode!=0,'deleted task branch recreated'
     case('already-integrated-'+action,test)
+
+# INV-TASK-39/42: a timed-out fresh query must still clean owned temporary state.
+def temporary_query_timeout_cleanup():
+    f=fixture('temporary-query-timeout','unchecked-divergent')
+    p=advance(f,'timeout-worktree','temporary')
+    assert (f['base']/'triggered').exists(),'completed temporary merge barrier not reached'
+    assert (f['base']/'triggered.timeout-used').exists(),'fresh post-merge worktree query timeout not injected'
+    refused(f,p); unchanged(f)
+    listing=git(f['repo'],'worktree','list','--porcelain')
+    assert listing.count('worktree ')==2, f'owned temporary worktree leaked after query timeout: {listing}'
+    assert not (f['agent']/'.integrate-worktree').exists(),'owned .integrate-worktree directory leaked'
+case('temporary-query-timeout-cleanup',temporary_query_timeout_cleanup)
 
 # Valid paths establish fixtures and guard against blanket refusal.
 for kind in ('checked-ff','checked-divergent','unchecked-ff','unchecked-divergent'):
