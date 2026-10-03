@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -367,7 +368,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False, native_history_default=False, approval_resolution=None, ordinary_materialization=None, rollout_registry=None, resume_path_mismatch=False):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False, native_history_default=False, approval_resolution=None, ordinary_materialization=None, rollout_registry=None, resume_path_mismatch=False, answer_lock_contention=None):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -893,6 +894,8 @@ class RuntimeContract(unittest.TestCase):
 
             def reply_approval(self, request_id, result, *, method, thread_id, turn_id, item_id, deadline):
                 case.assertIn(native_mode, ('approval_full', 'approval_outside', 'approval_move_outside'))
+                if answer_lock_contention is not None:
+                    case.assertIn('genuine_answer_lock_released', order, 'Native reply occurred during writer lock contention')
                 case.assertEqual(self.bound, (thread_id, turn_id))
                 case.assertIs(type(request_id), int)
                 case.assertEqual(request_id, 7)
@@ -1097,6 +1100,33 @@ class RuntimeContract(unittest.TestCase):
             case.assertEqual(stored['answered_by'], 'fixture-operator')
             answered.add(question['qid'])
             order.append('genuine_human_answer')
+            if answer_lock_contention is not None:
+                acquired = threading.Event()
+                release = threading.Event()
+                failures = []
+                def hold_question_writer_lock():
+                    try:
+                        with (case.agent / 'questions/.lock').open('r+') as writer_lock:
+                            fcntl.flock(writer_lock, fcntl.LOCK_EX)
+                            order.append('genuine_answer_lock_held')
+                            acquired.set()
+                            release.wait(0.15 if answer_lock_contention == 'brief' else 5)
+                            fcntl.flock(writer_lock, fcntl.LOCK_UN)
+                            order.append('genuine_answer_lock_released')
+                    except BaseException as exc:
+                        failures.append(exc)
+                        acquired.set()
+                holder = threading.Thread(target=hold_question_writer_lock, daemon=True)
+                holder.start()
+                case.assertTrue(acquired.wait(1), 'Fixture question writer failed to acquire real lock')
+                case.assertEqual(failures, [])
+                case.question_contention_release = release
+                case.question_contention_thread = holder
+                case.question_contention_failures = failures
+                def close_holder():
+                    release.set()
+                    holder.join(1)
+                case.addCleanup(close_holder)
             if approval_state == 'patch_changed':
                 transports[-1].events.append({'method': 'item/fileChange/patchUpdated', 'params': {
                     'threadId': thread_id, 'turnId': history[-1]['id'], 'itemId': 'full-item',
@@ -1893,6 +1923,57 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['thread_id'])
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
+
+    def test_genuine_answer_brief_question_flock_contention_waits_and_revalidates_before_reply(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_outside',
+            human_decision='decline', answer_lock_contention='brief')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
+        self.assertTrue(hasattr(self, 'question_contention_thread'), 'Controller never reached genuine answer contention')
+        self.question_contention_thread.join(1)
+        self.assertFalse(self.question_contention_thread.is_alive())
+        self.assertEqual(self.question_contention_failures, [])
+        self.assertEqual(result['outcome'], 'ran')
+        self.assertIn('genuine_answer_lock_held', order)
+        self.assertLess(order.index('genuine_answer_lock_held'), order.index('genuine_answer_lock_released'))
+        self.assertLess(order.index('genuine_answer_lock_released'), order.index('reply_approval'))
+        self.assertEqual(order.count('reply_approval'), 1)
+        self.assertIn('native_resolution_delivered', order)
+        questions = list((self.agent / 'questions').glob('*.json'))
+        self.assertEqual(len(questions), 1)
+        question = json.loads(questions[0].read_text())
+        self.assertEqual(question['status'], 'closed')
+        self.assertEqual(question['native_callback']['status'], 'answered')
+        receipts = list((self.state / self.control['codex_state_id']).rglob('approval-' + question['qid'] + '.json'))
+        self.assertEqual(len(receipts), 1)
+        self.assertFalse((self.root / 'outside-candidate.txt').exists())
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+
+    def test_genuine_answer_question_flock_deadline_expires_without_native_send(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_full',
+            human_decision='decline', answer_lock_contention='deadline')
+        try:
+            result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 1)
+            self.assertIn(result['outcome'], ('blocked', 'unknown'))
+            self.assertIn('genuine_answer_lock_held', order)
+            self.assertNotIn('genuine_answer_lock_released', order)
+            self.assertNotIn('reply_approval', order)
+            self.assertNotIn('checkpoint_commit', order)
+            questions = list((self.agent / 'questions').glob('*.json'))
+            self.assertEqual(len(questions), 1)
+            question = json.loads(questions[0].read_text())
+            receipts = list((self.state / self.control['codex_state_id']).rglob('approval-' + question['qid'] + '.json'))
+            self.assertEqual(receipts, [])
+        finally:
+            if hasattr(self, 'question_contention_release'):
+                self.question_contention_release.set()
+                self.question_contention_thread.join(1)
+        self.assertEqual(self.question_contention_failures, [])
+        controller.revoke_and_drain('recovery', deadline=time.monotonic() + 3)
+        self.assertNotIn('reply_approval', order)
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'baseline\n')
 
     def test_resume_same_thread_with_different_valid_path_refuses_before_ordinary_start(self):
         self.publish_registry()
