@@ -3943,6 +3943,20 @@ def git_run(args, cwd, timeout=30):
                           capture_output=True, text=True, timeout=timeout)
 
 
+def _integration_fence(project_path, proj_name, branch, commit_sha):
+    """Свежий INV-TASK-41 перед эффектом: реестр и принятый SHA."""
+    drift_ok, drift_msg = _registry_drift_ok(proj_name, project_path)
+    if not drift_ok:
+        return False, drift_msg
+    cur = git_run(["rev-parse", "refs/heads/%s" % branch], project_path)
+    if cur.returncode != 0:
+        return False, "ветка задачи %r не найдена" % branch
+    if cur.stdout.strip() != commit_sha:
+        return False, ("ветка задачи уехала: сейчас %s, в заявке %s"
+                       % (cur.stdout.strip()[:8], commit_sha[:8]))
+    return True, None
+
+
 WORKTREE_MULTIPLE = "MULTIPLE"
 WORKTREE_UNKNOWN = "UNKNOWN"
 
@@ -4025,6 +4039,39 @@ def _lessons_exempt_rel(worktree_path, lessons_rel):
     return norm
 
 
+def _worktree_entries(project_path):
+    """Свежий разобранный список (path, branch|None), неизвестный - None."""
+    r = git_run(["worktree", "list", "--porcelain"], project_path)
+    if r.returncode != 0:
+        return None
+    entries = []
+    records = r.stdout.strip().split("\n\n")
+    for record in records:
+        lines = record.splitlines()
+        if (not lines or not lines[0].startswith("worktree ")
+                or not lines[0][len("worktree "):]
+                or any(not (line.startswith(("worktree ", "HEAD ",
+                                            "branch ", "locked ", "prunable "))
+                            or line in ("bare", "detached", "locked", "prunable"))
+                       for line in lines)
+                or sum(line.startswith("worktree ") for line in lines) != 1
+                or any(line.startswith("HEAD ")
+                       and not re.fullmatch(r"HEAD [0-9a-f]{40,64}", line)
+                       for line in lines)
+                or any(line.startswith("branch ")
+                       and not line.startswith("branch refs/heads/")
+                       for line in lines)
+                or ("bare" not in lines
+                    and (sum(line.startswith("HEAD ") for line in lines) != 1
+                         or sum(line.startswith("branch ") or line == "detached"
+                                for line in lines) != 1))):
+            return None
+        branch = next((line[len("branch "):] for line in lines
+                       if line.startswith("branch ")), None)
+        entries.append((lines[0][len("worktree "):], branch))
+    return entries
+
+
 def _branch_worktree_status(project_path, target, lessons_path=None):
     """(path|None|MULTIPLE|UNKNOWN, dirty) - ветка target вычекаучена в
     каком-то worktree проекта (§4 порядок п.1/п.2). path=None - ветка
@@ -4049,16 +4096,9 @@ def _branch_worktree_status(project_path, target, lessons_path=None):
     запись в статусе с этим путем (относительно корня ЭТОГО worktree)
     вычитается из грязи ПЕРЕД подсчетом dirty (§3.1) - не распространяется
     на каталог зеркала целиком, только на сам файл (§3.3)."""
-    r = git_run(["worktree", "list", "--porcelain"], project_path)
-    if r.returncode != 0:
+    entries = _worktree_entries(project_path)
+    if entries is None:
         return WORKTREE_UNKNOWN, True
-    entries = []
-    cur_path = None
-    for line in r.stdout.split("\n"):
-        if line.startswith("worktree "):
-            cur_path = line[len("worktree "):]
-        elif line.startswith("branch ") and cur_path:
-            entries.append((cur_path, line[len("branch "):]))
     matches = [p for p, b in entries if b == "refs/heads/%s" % target]
     if len(matches) > 1:
         return WORKTREE_MULTIPLE, True
@@ -4095,15 +4135,28 @@ def _worktree_current_branch(path):
     return r.stdout.strip()
 
 
-def _target_checked_out_now(project_path, target):
-    """True - target вычекаучена хоть где-то ПРЯМО СЕЙЧАС (аудит блокер 2,
-    §4 п.3: "отсутствие чекаута перепроверяется непосредственно перед
-    перестановкой ссылки"). Используется как рекап-проверка на самом краю,
-    между окончанием мержа/ff-проверки и update-ref: мерж во временном
-    дереве - не мгновение, и за это время чекаут мог появиться, оставив
-    индекс/файлы под перенесенной веткой на старом коммите."""
-    checked_out_at, _dirty = _branch_worktree_status(project_path, target)
-    return bool(checked_out_at)
+def _integration_target_fence(project_path, proj_name, target, old_sha,
+                              expected_path):
+    """INV-TASK-42: свежие checkout, lessons, чистота и ожидаемый HEAD."""
+    lessons_path = None
+    if proj_name:
+        lp, lp_ok = _lessons_mirror_relpath(proj_name)
+        if lp_ok:
+            lessons_path = lp
+    path, dirty = _branch_worktree_status(project_path, target, lessons_path)
+    if path != expected_path or dirty:
+        return False, ("целевая ветка %r: чекаут изменился, неизвестен "
+                       "или дерево грязное - не трогаем" % target)
+    head = git_run(["rev-parse", "refs/heads/%s" % target], project_path)
+    if head.returncode != 0 or head.stdout.strip() != old_sha:
+        return False, "целевая ветка %r уехала - не трогаем" % target
+    if path:
+        if _worktree_current_branch(path) != target:
+            return False, "чекаут в %s больше не на целевой ветке %r" % (path, target)
+        head = git_run(["rev-parse", "HEAD"], path)
+        if head.returncode != 0 or head.stdout.strip() != old_sha:
+            return False, "HEAD целевого чекаута изменился - не трогаем"
+    return True, None
 
 
 def _integrate_tmp_cleanup(project_path, tmp):
@@ -4113,56 +4166,82 @@ def _integrate_tmp_cleanup(project_path, tmp):
     SIGKILL, поэтому хвост от разбитой попытки убирает СЛЕДУЮЩИЙ вызов, путь
     детерминирован per-agent - agent_dir/.integrate-worktree)."""
     if os.path.exists(tmp) or os.path.islink(tmp):
-        subprocess.run(["git", "-C", project_path, "worktree", "remove",
-                       "--force", tmp], capture_output=True, text=True,
-                      timeout=30)
-        subprocess.run(["git", "-C", project_path, "worktree", "prune"],
-                      capture_output=True, text=True, timeout=30)
+        for args in (["remove", "--force", tmp], ["prune"]):
+            try:
+                subprocess.run(["git", "-C", project_path, "worktree"] + args,
+                               capture_output=True, text=True, timeout=30)
+            except (OSError, subprocess.TimeoutExpired):
+                # Как при ненулевом rc: продолжаем прежнюю уборку только
+                # собственного tmp, не подменяя исходную ошибку фазы.
+                pass
         if os.path.exists(tmp):
             shutil.rmtree(tmp, ignore_errors=True)
+    # Filesystem fallback может оставить свежую регистрацию, которую
+    # обычный prune не удаляет. Git умеет снять ровно этот отсутствующий
+    # owned path; повторяем и при восстановлении следующей попыткой.
+    if not os.path.exists(tmp) and not os.path.islink(tmp):
+        try:
+            subprocess.run(["git", "-C", project_path, "worktree", "remove",
+                            "--force", tmp], capture_output=True, text=True,
+                           timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # исходная ошибка фазы сохранена; следующая попытка повторит
+    try:
+        entries = _worktree_entries(project_path)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return (not os.path.lexists(tmp) and entries is not None
+            and all(os.path.abspath(path) != os.path.abspath(tmp)
+                    for path, _branch in entries))
 
 
 def _integrate_merge_worktree(project_path, tmp, target, old_sha, commit_sha,
-                              d, proj_name):
+                              d, proj_name, branch):
     """Настоящий мерж НЕ в рабочем дереве dwl (§4 п.3): временный detached
     worktree, мерж там, переставляем ссылку CAS-обновлением (update-ref со
     старым sha третьим аргументом) только при успехе."""
-    add = subprocess.run(
-        ["git", "-C", project_path, "worktree", "add", "--detach", tmp,
-         old_sha], capture_output=True, text=True, timeout=60)
-    if add.returncode != 0:
-        return "fail", "временный worktree не поднялся: %s" \
-            % add.stderr.strip()
-    merge = subprocess.run(
-        ["git", "-C", tmp, "merge", "--no-edit", commit_sha],
-        capture_output=True, text=True, timeout=120)
-    if merge.returncode != 0:
-        subprocess.run(["git", "-C", tmp, "merge", "--abort"],
-                       capture_output=True, text=True, timeout=30)
-        _integrate_tmp_cleanup(project_path, tmp)
-        return "fail", ("конфликт при мерже - нужен ручной мерж (состояние "
-                        "остается accepted)")
-    merged_sha = git_run(["rev-parse", "HEAD"], tmp).stdout.strip()
-    # перепроверка НЕПОСРЕДСТВЕННО перед перестановкой ссылки (аудит
-    # блокер 2): мерж выше - не мгновение, за это время чекаут мог
-    # появиться - переставлять ссылку под ним нельзя (§4 п.2/п.3).
-    if _target_checked_out_now(project_path, target):
-        _integrate_tmp_cleanup(project_path, tmp)
-        return "fail", ("целевая ветка %r вычекаучена, пока шел мерж - "
-                        "следующий тик пойдет через рабочее дерево" % target)
-    # дрейф реестра (§3c, серьезная 6, TOCTOU) - та же перепроверка, той же
-    # причиной: мерж выше мог идти до 120с, реестр мог переехать за это
-    # время заново уже ПОСЛЕ проверки в _phase_integrate.
-    drift_ok, drift_msg = _registry_drift_ok(proj_name, project_path)
-    if not drift_ok:
-        _integrate_tmp_cleanup(project_path, tmp)
-        return "fail", drift_msg
-    upd = git_run(["update-ref", "refs/heads/%s" % target, merged_sha,
-                  old_sha], project_path)
-    _integrate_tmp_cleanup(project_path, tmp)
-    if upd.returncode != 0:
-        return "fail", ("update-ref мержа не прошел - параллельное движение "
-                        "целевой ветки")
+    try:
+        add = subprocess.run(
+            ["git", "-C", project_path, "worktree", "add", "--detach", tmp,
+             old_sha], capture_output=True, text=True, timeout=60)
+        if add.returncode != 0:
+            return "fail", "временный worktree не поднялся: %s" \
+                % add.stderr.strip()
+        merge = subprocess.run(
+            ["git", "-C", tmp, "merge", "--no-edit", commit_sha],
+            capture_output=True, text=True, timeout=120)
+        if merge.returncode != 0:
+            subprocess.run(["git", "-C", tmp, "merge", "--abort"],
+                           capture_output=True, text=True, timeout=30)
+            return "fail", ("конфликт при мерже - нужен ручной мерж (состояние "
+                            "остается accepted)")
+        merged = git_run(["rev-parse", "HEAD"], tmp)
+        if merged.returncode != 0 or not merged.stdout.strip():
+            return "fail", "не удалось прочитать результат временного мержа"
+        merged_sha = merged.stdout.strip()
+        # перепроверка НЕПОСРЕДСТВЕННО перед перестановкой ссылки (аудит
+        # блокер 2): мерж выше - не мгновение, за это время чекаут мог
+        # появиться - переставлять ссылку под ним нельзя (§4 п.2/п.3).
+        safe, msg = _integration_target_fence(project_path, proj_name, target,
+                                               old_sha, None)
+        if not safe:
+            return "fail", msg
+        # дрейф реестра (§3c, серьезная 6, TOCTOU) - та же перепроверка, той же
+        # причиной: мерж выше мог идти до 120с, реестр мог переехать за это
+        # время заново уже ПОСЛЕ проверки в _phase_integrate.
+        drift_ok, drift_msg = _integration_fence(project_path, proj_name, branch,
+                                                 commit_sha)
+        if not drift_ok:
+            return "fail", drift_msg
+        upd = git_run(["update-ref", "refs/heads/%s" % target, merged_sha,
+                      old_sha], project_path)
+        if upd.returncode != 0:
+            return "fail", ("update-ref мержа не прошел - параллельное движение "
+                            "целевой ветки")
+    finally:
+        cleaned = _integrate_tmp_cleanup(project_path, tmp)
+    if not cleaned:
+        return "fail", "временный worktree не снят подтвержденно - повторим уборку"
     d["state"] = "integrated"
     d["integrated_at"] = now_iso()
     d["integrate_mode"] = "merge"
@@ -4171,7 +4250,7 @@ def _integrate_merge_worktree(project_path, tmp, target, old_sha, commit_sha,
 
 
 def _integrate_merge_checked_out(work_path, old_sha, commit_sha, d,
-                                 proj_name, project_path):
+                                 proj_name, project_path, branch, target):
     """Целевая ветка вычекаучена (и чиста) - работаем через это самое дерево
     (§4 п.2), а не через update-ref под чекаутом (см. _branch_worktree_status).
     Перемотка - `merge --ff-only`; иначе обычный merge, тем же деревом.
@@ -4179,11 +4258,17 @@ def _integrate_merge_checked_out(work_path, old_sha, commit_sha, d,
     Мерж здесь - НЕПОСРЕДСТВЕННО необратимый шаг (без временного worktree,
     коммит ложится прямо в целевую ветку) - поэтому дрейф-recheck (§3c,
     серьезная 6) на самом входе, ДО git merge, а не после."""
-    drift_ok, drift_msg = _registry_drift_ok(proj_name, project_path)
-    if not drift_ok:
-        return "fail", drift_msg
     ff = git_run(["merge-base", "--is-ancestor", old_sha, commit_sha],
                 work_path)
+    if ff.returncode not in (0, 1):
+        return "fail", "не удалось определить возможность перемотки"
+    safe, msg = _integration_target_fence(project_path, proj_name, target,
+                                           old_sha, work_path)
+    if not safe:
+        return "fail", msg
+    safe, msg = _integration_fence(project_path, proj_name, branch, commit_sha)
+    if not safe:
+        return "fail", msg
     if ff.returncode == 0:
         m = git_run(["merge", "--ff-only", commit_sha], work_path, timeout=60)
         if m.returncode != 0:
@@ -4232,7 +4317,8 @@ def _integrate_merge(agent_dir, name, d, project_path, branch, commit_sha):
     # серьезная 6).
     proj_name = (control or {}).get("project_name")
     tmp = os.path.join(agent_dir, ".integrate-worktree")
-    _integrate_tmp_cleanup(project_path, tmp)  # хвост от возможной разбитой попытки
+    if not _integrate_tmp_cleanup(project_path, tmp):
+        return "fail", "временный worktree прошлой попытки не снят подтвержденно"
 
     tgt = git_run(["rev-parse", "refs/heads/%s" % target], project_path)
     if tgt.returncode != 0:
@@ -4267,7 +4353,16 @@ def _integrate_merge(agent_dir, name, d, project_path, branch, commit_sha):
     # Только теперь, ПОСЛЕ осмотра дерева выше - см. докстрок.
     already = git_run(["merge-base", "--is-ancestor", commit_sha, old_sha],
                       project_path)
+    if already.returncode not in (0, 1):
+        return "fail", "не удалось проверить, влит ли принятый коммит"
     if already.returncode == 0:
+        safe, msg = _integration_target_fence(project_path, proj_name, target,
+                                               old_sha, checked_out_at)
+        if not safe:
+            return "fail", msg
+        safe, msg = _integration_fence(project_path, proj_name, branch, commit_sha)
+        if not safe:
+            return "fail", msg
         d["state"] = "integrated"
         d["integrated_at"] = now_iso()
         d["integrate_mode"] = "merge"
@@ -4284,21 +4379,24 @@ def _integrate_merge(agent_dir, name, d, project_path, branch, commit_sha):
                             % (checked_out_at, target))
         return _integrate_merge_checked_out(checked_out_at, old_sha,
                                             commit_sha, d, proj_name,
-                                            project_path)
+                                            project_path, branch, target)
 
     ff = git_run(["merge-base", "--is-ancestor", old_sha, commit_sha],
                 project_path)
+    if ff.returncode not in (0, 1):
+        return "fail", "не удалось определить возможность перемотки"
     if ff.returncode == 0:
         # та же перепроверка, что в _integrate_merge_worktree (аудит
         # блокер 2, симметрично §4 п.3): между осмотром дерева выше и
         # этим местом мог появиться чекаут.
-        if _target_checked_out_now(project_path, target):
-            return "fail", ("целевая ветка %r вычекаучена перед "
-                            "перемоткой - следующий тик пойдет через "
-                            "рабочее дерево" % target)
+        safe, msg = _integration_target_fence(project_path, proj_name, target,
+                                               old_sha, None)
+        if not safe:
+            return "fail", msg
         # дрейф реестра (§3c, серьезная 6, TOCTOU) - непосредственно перед
         # update-ref, тем же поводом, что и recheck выше в этой ветке.
-        drift_ok, drift_msg = _registry_drift_ok(proj_name, project_path)
+        drift_ok, drift_msg = _integration_fence(project_path, proj_name, branch,
+                                                 commit_sha)
         if not drift_ok:
             return "fail", drift_msg
         upd = git_run(["update-ref", "refs/heads/%s" % target, commit_sha,
@@ -4313,7 +4411,18 @@ def _integrate_merge(agent_dir, name, d, project_path, branch, commit_sha):
         return "ok", None
 
     return _integrate_merge_worktree(project_path, tmp, target, old_sha,
-                                     commit_sha, d, proj_name)
+                                     commit_sha, d, proj_name, branch)
+
+
+def _pr_accepted_head(item, branch, commit_sha):
+    """URL только при полном доказательстве принятого head, иначе None."""
+    if (not isinstance(item, dict)
+            or not isinstance(item.get("url"), str)
+            or not item["url"].strip()
+            or item.get("headRefName") != branch
+            or item.get("headRefOid") != commit_sha):
+        return None
+    return item["url"].strip()
 
 
 def _integrate_pr(agent_dir, name, d, project_path, branch, commit_sha):
@@ -4345,15 +4454,19 @@ def _integrate_pr(agent_dir, name, d, project_path, branch, commit_sha):
     # следующем тике привели бы к повторному push и второму PR.
     lst = subprocess.run(
         ["gh", "pr", "list", "--head", branch, "--state", "all",
-         "--json", "url"],
+         "--json", "url,headRefName,headRefOid"],
         cwd=project_path, capture_output=True, text=True, timeout=30)
     if lst.returncode != 0:
         return "fail", "gh pr list упал: %s" % lst.stderr.strip()
     try:
-        items = json.loads(lst.stdout.strip() or "[]")
-        url = (items[0].get("url") or "") if items else ""
+        items = json.loads(lst.stdout)
     except (ValueError, AttributeError, IndexError, TypeError) as e:
         return "fail", "gh pr list вернул не разобранный ответ: %s" % e
+    if not isinstance(items, list) or len(items) > 1:
+        return "fail", "gh pr list вернул неизвестный или неоднозначный результат"
+    url = _pr_accepted_head(items[0], branch, commit_sha) if items else None
+    if items and not url:
+        return "fail", "найденный PR не подтверждает принятый head"
     try:
         control = load_json(os.path.join(agent_dir, "control.json"))
     except (OSError, ValueError):
@@ -4363,11 +4476,13 @@ def _integrate_pr(agent_dir, name, d, project_path, branch, commit_sha):
         # НАЙДЕННЫЙ ЧУЖОЙ PR тоже требует сверки (аудит r3, серьезная 8):
         # без нее задача помечалась бы integrated по PR проекта, который
         # реестр уже не считает этим именем, - молча и необратимо.
-        drift_ok, drift_msg = _registry_drift_ok(proj_name, project_path)
+        drift_ok, drift_msg = _integration_fence(project_path, proj_name, branch,
+                                                 commit_sha)
         if not drift_ok:
             return "fail", drift_msg
     else:
-        drift_ok, drift_msg = _registry_drift_ok(proj_name, project_path)
+        drift_ok, drift_msg = _integration_fence(project_path, proj_name, branch,
+                                                 commit_sha)
         if not drift_ok:
             return "fail", drift_msg
         push = git_run(["push", "origin", "%s:refs/heads/%s"
@@ -4377,7 +4492,8 @@ def _integrate_pr(agent_dir, name, d, project_path, branch, commit_sha):
         # push мог идти до минуты - за это время реестр мог переехать, а
         # `gh pr create` заводит PR уже в текущем каталоге (аудит r3,
         # серьезная 8): сверяем еще раз непосредственно перед ним.
-        drift_ok, drift_msg = _registry_drift_ok(proj_name, project_path)
+        drift_ok, drift_msg = _integration_fence(project_path, proj_name, branch,
+                                                 commit_sha)
         if not drift_ok:
             return "fail", drift_msg
         cr = subprocess.run(
@@ -4389,6 +4505,22 @@ def _integrate_pr(agent_dir, name, d, project_path, branch, commit_sha):
         url = lines[-1] if lines else ""
         if not url:
             return "fail", "gh pr create не вернул URL"
+        proof = subprocess.run(
+            ["gh", "pr", "view", url, "--json", "url,headRefName,headRefOid"],
+            cwd=project_path, capture_output=True, text=True, timeout=30)
+        if proof.returncode != 0:
+            return "fail", "gh pr view не подтвердил созданный PR"
+        try:
+            proven_url = _pr_accepted_head(json.loads(proof.stdout), branch,
+                                           commit_sha)
+        except (ValueError, TypeError):
+            proven_url = None
+        if proven_url != url:
+            return "fail", "созданный PR не подтверждает принятый head"
+        drift_ok, drift_msg = _integration_fence(project_path, proj_name, branch,
+                                                 commit_sha)
+        if not drift_ok:
+            return "fail", drift_msg
     d["state"] = "integrated"
     d["integrated_at"] = now_iso()
     d["integrate_mode"] = "pr"
