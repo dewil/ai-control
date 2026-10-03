@@ -174,9 +174,10 @@ class RecoveryCompliance(unittest.TestCase):
         f.git('read-tree', 'HEAD', cwd=f.agent / 'work')
         self.assertEqual(f.git('status', '--porcelain', cwd=f.agent / 'work'), '')
         from _agent_done_io import request_done_locked
+        staged = json.loads(completion_path.read_text())
         with (f.agent / 'done.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            request_done_locked(str(f.agent), 'event-1', 'owned pending completion',
+            request_done_locked(str(f.agent), staged['event_key'], staged['summary'],
                                 deadline=time.monotonic() + 2)
         done_path = f.agent / 'done.json'
         self.assertIs(json.loads(done_path.read_text())['finalized'], False)
