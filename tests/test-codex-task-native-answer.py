@@ -132,8 +132,9 @@ class NativeAnswerContract(unittest.TestCase):
         self.callback = dict(operation_id=self.operation, task_incarnation=INC, generation=7,
             attempt_id='attempt-1', thread_id='native-thread', turn_id='native-turn',
             request_id=31, method='item/fileChange/requestApproval', item_id='native-item',
-            payload_fingerprint='b' * 64, changes_digest='c' * 64, status='waiting')
-        self.question = dict(qid=self.qid, envelope_key=EVENT, asked_at='2026-10-03T00:00:00Z',
+            payload_fingerprint='b' * 64, changes_digest='c' * 64, status='pending',
+            allowed_decisions=['approve', 'reject'])
+        self.question = dict(qid=self.qid, envelope_key=EVENT, engine='codex', asked_at='2026-10-03T00:00:00Z',
             kind='permission', question='May apply this own fixture patch?', options=None, context=None,
             status='open', answer=None, answered_at=None, answered_by=None, decision=None,
             closed_by_envelope=None, native_callback=self.callback,
