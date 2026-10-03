@@ -519,7 +519,7 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((codex.read_bytes(), legacy.read_bytes()), before)
 
-    def dependency_fixture(self, agent, with_venv):
+    def dependency_fixture(self, agent, with_venv, *, symlinks=False):
         # Public Python dependency discovery boundary. No production bypass added.
         import venv
         hookdir = self.base / 'python-startup-fixture'
@@ -527,7 +527,7 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
         interpreter = self.home / '.local/share/claude-control/codex-venv/bin/python'
         venv_root = interpreter.parent.parent
         if with_venv:
-            venv.EnvBuilder(with_pip=False).create(venv_root)
+            venv.EnvBuilder(with_pip=False, symlinks=symlinks).create(venv_root)
             site = next((venv_root / 'lib').glob('python*/site-packages'))
             package = site / 'websockets'
             package.mkdir()
@@ -577,6 +577,27 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
                     result = self.run_cmd('claude-agent-run', mode, agent)
                     self.assertTrue(self.reexec_log.is_file(),
                                     'verified venv must start before executor flock; ' + result.stderr)
+                    calls = [json.loads(line) for line in self.reexec_log.read_text().splitlines()]
+                    self.assertTrue(any(call[1:] == [mode, str(agent)] for call in calls), calls)
+                    self.assertFalse(self.effects.exists())
+
+    def test_standard_symlink_venv_reexec_precedes_flock_and_preserves_argv(self):
+        # INV-CXRUN-02. Standard installed venv shares the system Python ELF;
+        # matching realpath is not evidence that sys.prefix already is the venv.
+        agent = self.hook_fixture()
+        self.dependency_fixture(agent, with_venv=True, symlinks=True)
+        interpreter = self.home / '.local/share/claude-control/codex-venv/bin/python'
+        self.assertTrue(interpreter.is_symlink(), 'fixture must exercise actual shared-ELF venv')
+        self.assertEqual(interpreter.resolve(), Path(sys.executable).resolve())
+        lockpath = agent / 'inbox/.executor.lock'
+        with lockpath.open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            for mode in ('loop', 'drain'):
+                with self.subTest(mode=mode):
+                    self.reexec_log.unlink(missing_ok=True)
+                    result = self.run_cmd('claude-agent-run', mode, agent)
+                    self.assertTrue(self.reexec_log.is_file(),
+                                    'shared-ELF native venv must start before executor flock; ' + result.stderr)
                     calls = [json.loads(line) for line in self.reexec_log.read_text().splitlines()]
                     self.assertTrue(any(call[1:] == [mode, str(agent)] for call in calls), calls)
                     self.assertFalse(self.effects.exists())
