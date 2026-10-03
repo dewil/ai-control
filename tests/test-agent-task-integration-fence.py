@@ -100,6 +100,9 @@ if c['action']=='timeout-worktree' and Path(c['marker']).exists() and 'worktree'
 if Path(c['marker']).exists() and ((c['action'].startswith('unknown-worktree') and 'worktree' in a and 'list' in a) or (c['action'].startswith('unknown-status') and 'status' in a and c['repo'] in a)):
  if c['action'].endswith('malformed'): print('unparseable git output'); sys.exit(0)
  sys.exit(1)
+if c['action']=='persistent-worktree-remove-error' and 'worktree' in a and 'remove' in a and str(Path(c['agent'])/'.integrate-worktree') in a:
+ with open(c['marker'],'a') as mark: mark.write('owned remove refused before effect\\n')
+ print('fixture: persistent owned temporary worktree remove failure',file=sys.stderr); sys.exit(1)
 if c['action']=='failed-worktree-remove' and 'worktree' in a and 'remove' in a and '--force' in a and str(Path(c['agent'])/'.integrate-worktree') in a and not Path(c['marker']).exists():
  Path(c['marker']).write_text('owned temporary worktree remove returned error without effect')
  print('fixture: owned temporary worktree remove failed',file=sys.stderr); sys.exit(1)
@@ -237,6 +240,30 @@ def failed_temporary_worktree_remove_cleanup():
     listing=git(f['repo'],'worktree','list','--porcelain')
     assert listing.count('worktree ')==2, f'owned detached registration leaked after remove error: {listing}'
 case('failed-temporary-worktree-remove-cleanup',failed_temporary_worktree_remove_cleanup)
+
+# INV-TASK-39/42: unresolved owned cleanup refuses success and is retryable.
+def persistent_temporary_remove_failure_recovery():
+    f=fixture('persistent-temporary-remove','unchecked-divergent')
+    p=advance(f,'persistent-worktree-remove-error','none')
+    assert (f['base']/'triggered').exists(),'owned temporary remove failure was not injected'
+    refused(f,p)
+    published=git(f['repo'],'rev-parse','main')
+    before=[json.loads(line) for line in (f['base']/'git.log').read_text().splitlines()]
+    effects=lambda calls: [args for args in calls if 'update-ref' in args and 'refs/heads/main' in args]
+    publication_count=len(effects(before))
+    # Disable the fault while keeping transparent public command observation.
+    retry=advance(f,'observe','none')
+    assert retry.returncode==0,retry.stderr
+    assert data(f['agent']/'done.json')['state']=='integrated','retry did not recover integration'
+    assert cmd(REAL_GIT,'-C',f['repo'],'merge-base','--is-ancestor',f['sha'],'main',check=False).returncode==0,'recovery lost accepted SHA'
+    after=[json.loads(line) for line in (f['base']/'git.log').read_text().splitlines()]
+    if published!=f['target']:
+        assert git(f['repo'],'rev-parse','main')==published,'retry republished an already integrated result'
+        assert len(effects(after))==publication_count,'retry repeated target publication'
+    assert not (f['agent']/'.integrate-worktree').exists(),'retry left owned temporary directory'
+    listing=git(f['repo'],'worktree','list','--porcelain')
+    assert listing.count('worktree ')==2,f'retry left owned detached registration: {listing}'
+case('persistent-temporary-remove-failure-recovery',persistent_temporary_remove_failure_recovery)
 
 # Valid paths establish fixtures and guard against blanket refusal.
 for kind in ('checked-ff','checked-divergent','unchecked-ff','unchecked-divergent'):
