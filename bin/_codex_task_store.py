@@ -399,6 +399,7 @@ class CodexTaskOperationStore:
                 require(op['start_reserved'] and op['thread_id'] is not None and op['turn_id'] is not None)
             expected = ctx['dir'] + '/operations/' + opid + '/host'
             require(op['host_state_dir'] == expected)
+            self._directory_identity(ctx, op, deadline)
             for evidence in ('drain_evidence', 'terminal_evidence'):
                 if op[evidence] is not None:
                     plain(op[evidence])
@@ -509,6 +510,15 @@ class CodexTaskOperationStore:
                         os.fsync(parent_fd)
                     finally:
                         os.close(parent_fd)
+                directories = {}
+                for directory in (ctx['dir'] + '/operations', os.path.dirname(op['host_state_dir']),
+                                  op['host_state_dir']):
+                    info = os.lstat(directory)
+                    directories[directory] = [info.st_dev, info.st_ino]
+                identity_path = os.path.dirname(op['host_state_dir']) + '/directory-identity.json'
+                require(not os.path.lexists(identity_path))
+                self._write(identity_path, dict(schema=1, operation_id=opid,
+                    task_incarnation=op['task_incarnation'], directories=directories), ctx, deadline)
                 operations[opid] = op
                 self._write_index(ctx, deadline)
                 self._write_op(ctx, op, deadline)
@@ -613,6 +623,25 @@ class CodexTaskOperationStore:
                     and binding.turn_id == op['turn_id'])
             require(self._envelope(ctx, op, deadline)['meta'].get('codex_operation') == op)
             yield True
+
+    def _directory_identity(self, ctx, op, deadline):
+        host = op['host_state_dir']
+        paths = (ctx['dir'] + '/operations', os.path.dirname(host), host)
+        for path in paths:
+            self._pin(path, ctx['pins'])
+        identity = self._read(os.path.dirname(host) + '/directory-identity.json', ctx, deadline)
+        require(set(identity) == {'schema', 'operation_id', 'task_incarnation', 'directories'}
+                and type(identity['schema']) is int and identity['schema'] == 1
+                and identity['operation_id'] == op['operation_id']
+                and identity['task_incarnation'] == op['task_incarnation'])
+        directories = identity['directories']
+        require(type(directories) is dict and set(directories) == set(paths))
+        for path in paths:
+            original = directories[path]
+            require(type(original) is list and len(original) == 2
+                    and all(type(v) is int and v >= 0 for v in original))
+            info = os.lstat(path)
+            require(original == [info.st_dev, info.st_ino])
 
     def _journal(self, ctx, op, deadline):
         host = op['host_state_dir']
