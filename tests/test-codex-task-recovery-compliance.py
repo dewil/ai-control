@@ -181,7 +181,7 @@ class RecoveryCompliance(unittest.TestCase):
 
     def test_confirmed_receipt_positive_closes_without_native_resend(self):
         # Retain the already accepted positive counterexample to lone intent.
-        self.f.test_confirmed_native_answer_recovers_question_close_without_second_reply()
+        self.f.test_confirmed_native_resolution_receipt_recovers_failed_question_close_without_second_reply()
 
 
 if __name__ == '__main__':
