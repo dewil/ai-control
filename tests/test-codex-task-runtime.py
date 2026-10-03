@@ -366,7 +366,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -626,6 +626,26 @@ class RuntimeContract(unittest.TestCase):
                                     'changes': [{'path': str(candidate), 'kind': {'type': 'update', 'move_path': None},
                                         'diff': '-baseline\n+native before registry candidate\n'}]}}})
                         names = registry + (['exec_command'] if native_mode == 'extra_registry' or (not diagnostic and native_mode == 'ordinary_registry_extra') else [])
+                        registry_input = 'text(ALL_TOOLS.map(t=>t.name).sort())'
+                        registry_output = 'Script completed\nOutput:\n' + json.dumps(sorted(names))
+                        if registry_wire in ('newline', 'semicolon', 'text_blocks'):
+                            registry_input = (' \t' + registry_input + '; \n') if registry_wire == 'semicolon' else registry_input + '\n'
+                            registry_output = [
+                                {'type': 'input_text', 'text': 'Script completed successfully; duration: 0.001 s'},
+                                {'type': 'text' if registry_wire == 'text_blocks' else 'input_text',
+                                 'text': json.dumps(sorted(names))}]
+                        if registry_wire == 'extra_js':
+                            registry_input += ';text("UNTRUSTED_EXTRA_EXECUTION")'
+                        if registry_wire == 'image_block':
+                            registry_output = [{'type': 'input_image', 'image_url': 'data:image/png;base64,AA=='},
+                                {'type': 'input_text', 'text': json.dumps(sorted(names))}]
+                        if registry_wire == 'unknown_block_field':
+                            registry_output = [{'type': 'input_text', 'text': json.dumps(sorted(names)), 'unknown': True}]
+                        if registry_wire == 'truncated':
+                            registry_output = [{'type': 'input_text', 'text': json.dumps(sorted(names))[:-1]}]
+                        if registry_wire == 'conflicting_arrays':
+                            registry_output = [{'type': 'input_text', 'text': json.dumps(sorted(names))},
+                                {'type': 'input_text', 'text': json.dumps(sorted(names + ['exec_command']))}]
                         if native_mode == 'final_prose_registry' or (not diagnostic and native_mode == 'ordinary_registry_missing'):
                             created['items'].append({'type': 'agentMessage', 'id': str(uuid.uuid4()),
                                 'text': json.dumps(sorted(registry)), 'phase': 'final', 'memoryCitation': None})
@@ -634,12 +654,12 @@ class RuntimeContract(unittest.TestCase):
                                 {'method': 'rawResponseItem/completed', 'params': {
                                     'threadId': thread_id, 'turnId': turn_id, 'item': {
                                         'type': 'custom_tool_call', 'call_id': call_id,
-                                        'name': 'exec', 'input': 'text(ALL_TOOLS.map(t=>t.name).sort())'}}},
+                                        'name': 'exec', 'input': registry_input}}},
                                 {'method': 'rawResponseItem/completed', 'params': {
                                     'threadId': thread_id, 'turnId': turn_id, 'item': {
                                         'type': 'custom_tool_call_output',
                                         'call_id': 'foreign' if native_mode == 'uncorrelated_registry' or (not diagnostic and native_mode == 'ordinary_registry_uncorrelated') else call_id,
-                                        'output': 'Script completed\nOutput:\n' + json.dumps(sorted(names))}}}])
+                                        'output': registry_output}}}])
                         if not diagnostic and native_mode in ('ordinary_registry_extra', 'ordinary_registry_missing', 'ordinary_registry_uncorrelated', 'ordinary_pre_registry_effect'):
                             self.events.append({'id': 0, 'method': 'item/tool/call', 'params': {
                                 'threadId': thread_id, 'turnId': turn_id, 'callId': 'ordinary-call',
@@ -1708,6 +1728,43 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['thread_id'])
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
+
+    def test_registry_fixed_js_whitespace_and_bounded_text_blocks_prove_each_turn(self):
+        for wire in ('newline', 'semicolon', 'text_blocks'):
+            with self.subTest(wire=wire):
+                case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
+                case.setUp()
+                try:
+                    case.publish_registry()
+                    controller, hosts, calls, order = case.discovery_fixture(native_mode='read', registry_wire=wire)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
+                    self.assertEqual(result['outcome'], 'ran')
+                    self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
+                    self.assertEqual(order.count('reply_dynamic'), 1)
+                    self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+                    admission = json.loads((case.state / case.control['codex_state_id'] / 'admission.json').read_text())
+                    self.assertEqual(sorted(admission['registry']), sorted([
+                        'apply_patch', 'clock__curr_time', 'task_read', 'task_search', 'task_list', 'task_ask', 'task_done']))
+                finally:
+                    case.doCleanups()
+
+    def test_registry_extra_js_and_unsafe_or_conflicting_output_blocks_refuse(self):
+        for wire in ('extra_js', 'image_block', 'unknown_block_field', 'truncated', 'conflicting_arrays'):
+            with self.subTest(wire=wire):
+                case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
+                case.setUp()
+                try:
+                    case.publish_registry()
+                    controller, hosts, calls, order = case.discovery_fixture(native_mode='read', registry_wire=wire)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+                    self.assertIn(result['outcome'], ('blocked', 'unknown'))
+                    self.assertEqual(sum(method == 'turn/start' for method, params in calls), 1)
+                    self.assertNotIn('reply_dynamic', order)
+                    self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+                    self.assertFalse((case.state / case.control['codex_state_id'] / 'admission.json').exists())
+                    self.assertEqual((case.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+                finally:
+                    case.doCleanups()
 
     def test_bootstrap_waits_for_late_registry_and_v8_before_admission_without_restart(self):
         self.publish_registry()
