@@ -5292,6 +5292,7 @@ def cmd_done_verdict(argv):
             print("terminal")
             die(4, "done-verdict: агент уже архивирован (agents/%s "
                    "отсутствует) - отменять нечего" % name)
+        codex_barrier(agent_dir)
         with FLock(os.path.join(agent_dir, "done.lock")):
             _apply_cancel(agent_dir, name,
                           os.path.join(agent_dir, "done.json"), comment)
