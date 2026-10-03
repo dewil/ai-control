@@ -5,9 +5,9 @@
 [![shellcheck](https://github.com/dewil/claude-control/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/dewil/claude-control/actions/workflows/shellcheck.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-Автономная инфраструктура поверх [Claude Code](https://claude.com/claude-code): control-плоскость в Telegram, которая (1) раздаёт с телефона удалённые Claude-сессии по всем твоим проектам - включая возврат в любую прошлую сессию по её имени - и (2) держит парк фоновых агентов - с событийной очередью, бюджетами, кросс-машинным handoff, независимой приёмкой результата и детерминированной раскаткой канона через pull request'ы.
+Автономная инфраструктура поверх [Claude Code](https://claude.com/claude-code): control-плоскость в Telegram, которая (1) раздаёт с телефона удалённые Claude-сессии по всем твоим проектам - включая возврат в любую прошлую сессию по её имени - и (2) держит парк фоновых агентов - с событийной очередью, бюджетами, кросс-машинным handoff, независимой приёмкой результата.
 
-> Часть системы из двух репозиториев. Второй - [**claude-toolkit**](https://github.com/dewil/claude-toolkit): канон правил/агентов/скиллов и транзакционный движок его упаковки в immutable-релизы. `claude-control` эти релизы раскатывает по парку (см. [Слой 2 -> canon fleet-reconciler](#canon-fleet-reconciler)).
+> Связанный проект [**claude-toolkit**](https://github.com/dewil/claude-toolkit) содержит правила, роли и навыки. Обновление выполняется вручную через SHA-pinned AI sync; harvest сохраняет обратную доставку брифов.
 
 > [!NOTE]
 > Ядро (remote-control) стоит поверх фичи [`claude remote-control`](https://code.claude.com/docs/en/remote-control.md) - на момент написания в статусе **research preview**. Нужен Claude Code CLI **≥ 2.1.51** и логин через Claude-подписку (`claude /login`); API-ключи Anthropic для remote-control не работают.
@@ -32,26 +32,21 @@ flowchart TB
       subgraph L2["Слой 2 - автономный агентный слой (Linux)"]
         recon["reconciler<br/>event-spool + бюджеты"]
         tgbot["tgbot<br/>дашборд + /new /task /limits"]
-        canon["canon-maintainer<br/>fleet-reconciler канона"]
         takeover["takeover<br/>Mac → VM handoff"]
         harvest["acceptor + harvester<br/>приёмка + правила ролей"]
       end
     end
 
-    toolkit["claude-toolkit<br/>канон + движок релизов"]
-    fleet["git-парк проектов<br/>(PR-раскатка канона)"]
+    toolkit["claude-toolkit<br/>правила + навыки"]
 
     phone <--> tgbot
     tgbot --> menu
     rc --> projA["ccsession-&lt;uuid&gt;: сессия A"]
     rc --> projB["ccsession-&lt;uuid&gt;: сессия B"]
-    toolkit -. "canon.lock.json (immutable)" .-> canon
-    canon -- "PR canon/vN" --> fleet
-    recon --> canon
 ```
 
 - **Слой 1 - сессии из бота** (Linux; на macOS доступен CLI, но без транзиентных юнитов). В Telegram `/sessions`: проекты -> сессии проекта под их собственными именами -> поднять, положить, создать новую. Поднятая сессия живёт транзиентным `systemd`-юнитом и появляется в приложении Claude Code. Доступ к любому репо и к любой прошлой сессии без SSH и ручного `cd`.
-- **Слой 2 - автономный агентный слой** (Linux/systemd на VM). Фоновые агенты под надзором reconciler'а: событийная очередь, контур задач `/new` с телефона (worktree, карточки, приёмка тапом), бюджеты по запускам, circuit breaker, кросс-машинный takeover, независимая ролевая приёмка, harvester операторских поправок и детерминированный fleet-reconciler канона.
+- **Слой 2 - автономный агентный слой** (Linux/systemd на VM). Фоновые агенты под надзором reconciler'а: событийная очередь, контур задач `/new` с телефона (worktree, карточки, приёмка тапом), бюджеты по запускам, circuit breaker, кросс-машинный takeover, независимая ролевая приёмка, harvester операторских поправок.
 
 Оба слоя - **stdlib Python + shell, ноль внешних зависимостей**, только пользовательские юниты (никакого `sudo`, никаких системных сервисов), идемпотентная установка/снос.
 
@@ -122,15 +117,6 @@ claude-rc reap [--dry-run]                # погасить зомби: юни�
 ### tgbot - дашборд парка
 Long-poll Telegram-бот (getUpdates, не webhook - webhooks режет DPI в ряде сетей). Команды `/agents`, `/agent <name>`, `/new <проект> <текст>` (родить задачу), `/task <name> <текст>` (событие существующему агенту), `/menu` и `/limits` (остатки подписочных лимитов Claude/Codex/Kimi Code); карточки вопросов и приёмки - с inline-кнопками, ответ тапом или reply-ем. Приватные чаты + whitelist по `from.id`; весь вывод агентов - недоверенные данные, эскейпится и шлётся как `<pre>`.
 
-### <a id="canon-fleet-reconciler"></a>canon-maintainer - fleet-reconciler канона
-Раскатывает ревизии канона из [claude-toolkit](https://github.com/dewil/claude-toolkit) по парку git-проектов **через pull request'ы**, детерминированно и без LLM в data-plane. Потребляет транзакционный дельта-движок toolkit'а (`canon-delta.py`). Инженерно самая плотная часть:
-
-- **Модель B**: reconciler на VM держит клоны парка, канон едет веткой `canon/<vN>` + PR; `applied` фиксируется только по факту присутствия байт канона в post-merge default-ветке (post-merge truth). Mac-чекауты и не-git vault'ы не мутируются никогда - только observe.
-- **Immutable-релизы**: identity ревизии = git commit_sha аннотированного тега `canon-vN`; отклонённый релиз (закрытый PR) суперсидится следующей версией, не пересобирается.
-- **Кольца раскатки** canary -> snapshot -> rest + **circuit breaker** (защёлка на incompat/error/smoke, снятие только явным `ack`).
-- **Semantic smoke** кандидата до push, **budget** применений на проход, **break-glass rollback** на предыдущую ревизию, **observe-first** (первые проходы только наблюдают) и мгновенный kill-switch `disarm`.
-- Полный [runbook](./docs/runbook-canon-maintainer.md) и [дизайн этапа 8](./docs/design-2026-07-14-stage8-canon-sync.md).
-
 ### takeover - кросс-машинный handoff
 Перенос живой миссии Mac -> VM **не переносом транскрипта** (фундаментально небезопасно - утащил бы чужой контекст), а fresh brief-seeded сессией: новый агент поднимается на VM с самодостаточным брифом от base-commit. [Дизайн этапа 5](./docs/design-2026-07-13-stage5-takeover.md).
 
@@ -159,10 +145,9 @@ Long-poll Telegram-бот (getUpdates, не webhook - webhooks режет DPI в
 
 Что делает это не "скриптами на коленке":
 
-- **Детерминизм в data-plane.** Канон-раскатка - чистый дельта-движок над immutable release-дескриптором; LLM поднимается только on-demand на разрешение конфликтов. Метрика: 0 вызовов LLM на no-op проходе.
-- **Транзакционная безопасность.** WAL с crash-матрицей (prepare/commit/recovery roll-forward/back), CAS перед rename, no-clobber на чужие файлы, containment записи в пределах проекта. Доказывается fault-injection тестами, а не "на бумаге".
-- **Автономность с тормозами.** Бюджеты по запускам, circuit breaker с durable-защёлкой, кольца раскатки, observe-first, kill-switch. Автономный агент не может уйти в разнос молча.
-- **Состязательная верификация.** Каждый крупный слой проходит несколько раундов adversarial-ревью **второй моделью** (другой класс ошибок, чем у основного агента); каждая находка закрывается фиксом **плюс регресс-тестом**. Стек этапов накопил десятки закрытых blocker'ов; канон-движок toolkit'а - ~100 stdlib-тестов и 4 раунда adversarial до GO.
+- **Транзакционная безопасность.** Durable event-spool, recovery задач, no-clobber на чужие файлы и containment записи в пределах проекта. Доказывается fault-injection тестами, а не "на бумаге".
+- **Автономность с тормозами.** Бюджеты по запускам, circuit breaker с durable-защёлкой, kill-switch. Автономный агент не может уйти в разнос молча.
+- **Состязательная верификация.** Каждый крупный слой проходит несколько раундов adversarial-ревью **второй моделью** (другой класс ошибок, чем у основного агента); каждая находка закрывается фиксом **плюс регресс-тестом**. Стек этапов накопил десятки закрытых blocker'ов.
 - **Модель угроз явная.** Доверенная VM, durable-state наш, канон из нашего git-зеркала; границы (TOCTOU под flock, symlink-родители, secret-handling) отработаны и задокументированы, остаточные риски приняты письменно.
 - **Ноль зависимостей, user-level.** Только stdlib Python + shell, только пользовательские launchd/systemd-юниты, идемпотентные install/uninstall.
 
@@ -192,7 +177,7 @@ cd claude-control
 $EDITOR ~/.claude-control/projects.yaml   # вписать свои проекты
 ```
 
-Готово. Управление сессиями живёт в Telegram-боте: **`/sessions` -> проект -> сессия -> поднять**; бот, reconciler, canon-maintainer и limits-digest поднимаются тем же `install.sh` при наличии `~/.config/claude-control/env` с нужными переменными (см. runbook'и в `docs/`). Без бота те же действия доступны с машины: `claude-rc sessions <проект> --porcelain`, `claude-rc up <проект> <uuid>`.
+Готово. Управление сессиями живёт в Telegram-боте: **`/sessions` -> проект -> сессия -> поднять**; бот, reconciler и limits-digest поднимаются тем же `install.sh` при наличии `~/.config/claude-control/env` с нужными переменными (см. runbook'и в `docs/`). Без бота те же действия доступны с машины: `claude-rc sessions <проект> --porcelain`, `claude-rc up <проект> <uuid>`.
 
 Правишь сам репо - ставь `./install.sh --link` (скрипты в `~/.local/bin/` станут симлинками на `bin/`, `git pull` сразу обновляет рабочий код).
 
@@ -230,7 +215,6 @@ $EDITOR ~/.claude-control/projects.yaml   # вписать свои проект
 
   Озвучка под тумблером - кнопка `Голос: вкл/выкл` во втором ряду клавиатуры, состояние прямо в подписи (в дороге видно режим, не нажимая). Режим общий для всех сессий, живет в `~/.claude-control/tgbot.voice.json`, по умолчанию ВЫКЛЮЧЕН. Входящий голос расшифровывается всегда независимо от тумблера: распознавание локальное, а реплай голосом нужен и в текстовом режиме.
 - [`bin/claude-agent-done`](./bin/claude-agent-done), [`claude-agent-ask`](./bin/claude-agent-ask), [`claude-agent-answer`](./bin/claude-agent-answer), [`claude-agent-permit`](./bin/claude-agent-permit) - протокол задачи V2: заявка "готово", вопрос из прогона, доверенный писатель ответов, гейт подтверждений.
-- [`bin/claude-agent-canon-maintainer`](./bin/claude-agent-canon-maintainer) - fleet-reconciler канона.
 - [`bin/claude-agent-limits-digest`](./bin/claude-agent-limits-digest) - дайджест лимитов LLM.
 - [`bin/claude-agent-harvest`](./bin/claude-agent-harvest), [`claude-agent-review`](./bin/claude-agent-review), [`claude-agent-checkrun`](./bin/claude-agent-checkrun) - приёмка/ревью/проверки.
 - [`bin/claude-rc-takeover`](./bin/claude-rc-takeover), [`claude-rc-agent`](./bin/claude-rc-agent) - кросс-машинный takeover.
@@ -241,7 +225,7 @@ $EDITOR ~/.claude-control/projects.yaml   # вписать свои проект
 Общее:
 - [`launchd/`](./launchd/) / [`systemd/`](./systemd/) - шаблоны юнитов; `install.sh` их рендерит.
 - [`examples/`](./examples/) - стартовые `projects.yaml`, `CLAUDE.md`, `settings.local.json`.
-- [`docs/`](./docs/) - `architecture.md`, дизайн-доки этапов, runbook'и (canon-maintainer, limits-digest), troubleshooting.
+- [`docs/`](./docs/) - `architecture.md`, дизайн-доки этапов, runbook'и (limits-digest), troubleshooting.
 - [`tests/`](./tests/) - offline-тесты компонентов агентного слоя.
 - [`install.sh`](./install.sh) / [`uninstall.sh`](./uninstall.sh); что именно ставится и снимается - в [`scripts.manifest`](./scripts.manifest), общем на оба скрипта (модуль бэкапа - `scripts.manifest.backup`).
 

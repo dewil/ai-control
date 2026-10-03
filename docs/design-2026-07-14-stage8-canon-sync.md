@@ -1,3 +1,5 @@
+> **Архив / historical (2026-10-03).** Версионная раскатка Toolkit удалена. Команды, timer и оператор ниже больше не поставляются и не являются инструкцией по эксплуатации. Ручной SHA-pinned AI sync и harvest delivery/pending сохранены.
+
 # Этап 8: редизайн canon-sync - v5 (release-descriptor + транзакционная FSM + контракт реализации)
 
 Дизайн-дельта к механике canon-sync. План: [plan-2026-07-10](plan-2026-07-10-autonomous-agents.md) строка 197 (этап 8), граница слоев - строки 199-203. Кормится от harvester этапа 7b ([design-2026-07-13-stage7b-harvester.md](design-2026-07-13-stage7b-harvester.md)) через `toolkit-log/upstream-pending`.

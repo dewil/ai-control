@@ -79,8 +79,6 @@ LOGROTATE_TIMER_UNIT="claude-control-logrotate.timer"
 # Agent layer (Linux only: transient units + cgroups need systemd --user).
 RECONCILER_UNIT="claude-agent-reconciler.service"
 TGBOT_UNIT="claude-agent-tgbot.service"
-CANON_MAINTAINER_SERVICE_UNIT="claude-agent-canon-maintainer.service"
-CANON_MAINTAINER_TIMER_UNIT="claude-agent-canon-maintainer.timer"
 LIMITS_DIGEST_SERVICE_UNIT="claude-agent-limits-digest.service"
 LIMITS_DIGEST_TIMER_UNIT="claude-agent-limits-digest.timer"
 # Optional backup module (Linux only; installed with --with-backup).
@@ -161,6 +159,10 @@ if [[ "$OS_KIND" == "linux" ]]; then
        without lingering on a server that's been rebooted."
   fi
 fi
+
+# shellcheck source=lib/retire-canon-maintainer.sh
+source "$REPO_DIR/lib/retire-canon-maintainer.sh"
+retire_canon_maintainer
 
 # --- layout ------------------------------------------------------------------
 
@@ -656,13 +658,6 @@ else  # linux
   TGBOT_UNIT_PATH="$UNIT_DIR/$TGBOT_UNIT"
   render_template "$REPO_DIR/systemd/claude-agent-tgbot.service.tmpl" "$TGBOT_UNIT_PATH"
 
-  # Canon fleet-reconciler (этап 8c): oneshot + 12h-timer. До `arm` проходы
-  # observe-only (и 0 проектов без fleet.yaml) - ставить безопасно всегда.
-  CANON_MAINTAINER_SERVICE_PATH="$UNIT_DIR/$CANON_MAINTAINER_SERVICE_UNIT"
-  CANON_MAINTAINER_TIMER_PATH="$UNIT_DIR/$CANON_MAINTAINER_TIMER_UNIT"
-  render_template "$REPO_DIR/systemd/claude-agent-canon-maintainer.service.tmpl" "$CANON_MAINTAINER_SERVICE_PATH"
-  render_template "$REPO_DIR/systemd/claude-agent-canon-maintainer.timer.tmpl"   "$CANON_MAINTAINER_TIMER_PATH"
-
   # Дайджест лимитов LLM: oneshot + 30min-timer; шлет через tgbot notify,
   # поэтому включается по тому же условию, что и tgbot (токен в env).
   LIMITS_DIGEST_SERVICE_PATH="$UNIT_DIR/$LIMITS_DIGEST_SERVICE_UNIT"
@@ -702,8 +697,6 @@ else  # linux
   verify_unit "$LOGROTATE_TIMER_PATH"
   verify_unit "$RECONCILER_UNIT_PATH"
   verify_unit "$TGBOT_UNIT_PATH"
-  verify_unit "$CANON_MAINTAINER_SERVICE_PATH"
-  verify_unit "$CANON_MAINTAINER_TIMER_PATH"
   verify_unit "$LIMITS_DIGEST_SERVICE_PATH"
   verify_unit "$LIMITS_DIGEST_TIMER_PATH"
   if [[ $WITH_BACKUP -eq 1 ]]; then
@@ -731,7 +724,6 @@ else  # linux
   # диске новые, а проход шел по старому коду. try-restart не поднимает то,
   # что намеренно остановлено.
   run systemctl --user try-restart "$RECONCILER_UNIT"
-  run systemctl --user enable --now "$CANON_MAINTAINER_TIMER_UNIT"
   if grep -q '^CLAUDE_AGENT_TG_TOKEN=' \
        "${XDG_CONFIG_HOME:-$HOME/.config}/claude-control/env" 2>/dev/null; then
     run systemctl --user enable --now "$TGBOT_UNIT"
