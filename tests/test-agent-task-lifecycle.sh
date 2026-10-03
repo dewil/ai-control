@@ -1320,6 +1320,8 @@ EOF
   echo "$CLAUDE_AGENTS_DIR/$name"
 }
 mk_gh_mock() { # <bindir> <log> [existing-pr-url] -> создает $bindir/gh (реальный внешний бинарь-подмена, git не мокается)
+  # INV-TASK-39: URL-only fixture противоречит контракту принятого head.
+  # Возвращаем реальные branch/SHA собственного Git fixture, включая view после create.
   local bindir="$1" log="$2" existing="${3:-}"
   mkdir -p "$bindir"
   cat > "$bindir/gh" <<EOF
@@ -1327,10 +1329,20 @@ mk_gh_mock() { # <bindir> <log> [existing-pr-url] -> создает $bindir/gh (
 printf '%s\n' "\$*" >> "$log"
 printf '%s\n' "\$@" >> "$log"
 printf '===\n' >> "$log"
+branch=""
+for ((i=1; i<=\$#; i++)); do
+  if [[ "\${!i}" == "--head" ]]; then j=\$((i+1)); branch="\${!j}"; fi
+done
 case "\$1 \$2" in
-  "pr create") echo "https://github.com/x/y/pull/1" ;;
+  "pr create") printf '%s' "\$branch" > "$bindir/created-head"; echo "https://github.com/x/y/pull/1" ;;
   "pr list")
-    if [[ -n "$existing" ]]; then echo '[{"url":"$existing"}]'; else echo '[]'; fi
+    if [[ -n "$existing" ]]; then
+      python3 -c 'import json,sys; print(json.dumps([dict(url=sys.argv[1],headRefName=sys.argv[2],headRefOid=sys.argv[3])]))' "$existing" "\$branch" "\$(git rev-parse "refs/heads/\$branch")"
+    else echo '[]'; fi
+    ;;
+  "pr view")
+    branch=\$(cat "$bindir/created-head")
+    python3 -c 'import json,sys; print(json.dumps(dict(url=sys.argv[1],headRefName=sys.argv[2],headRefOid=sys.argv[3])))' "\$3" "\$branch" "\$(git rev-parse "refs/heads/\$branch")"
     ;;
   *) exit 1 ;;
 esac
