@@ -304,3 +304,6 @@ Default reader использует exact admitted resume thread.path внутр
 
 
 Shared done FSM уже держит настоящий done.lock в некоторых nested finalization/cleanup/cancel вызовах. Повторный all-host barrier для known quiescent operation без eligible unanswered permission не должен сам пытаться занять этот lock или блокироваться; это bounded идемпотентная проверка без question mutations. Expiration требующего записи pending вопроса выполняется административным входом до outer done.lock, сохраняя question→done/control/inbox/store порядок; nested phase не создаёт обратный порядок. Direct CLI/native barriers не обходят отказ drain/authority ради lock convenience.
+
+
+Resumed operation может после fixed diagnostic первым действием вызвать apply_patch, без промежуточного dynamic TASK callback. Controller проверяет доступный exact current owned rollout proof в начале обработки каждой batch/перед fileChange либо terminal, не только при item/tool/call. Если proof уже физически предшествует effects в проверенном native журнале, actual child аттестуется и допустимы нормальные post-proof file events. Если при file effect доказательства нет либо журнал показывает pre-proof exec/effect, немедленный quarantine сохраняется: file events не ждут будущую registry для ретроактивного разрешения.
