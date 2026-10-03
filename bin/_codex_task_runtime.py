@@ -559,6 +559,7 @@ class CodexTaskRuntime:
                 config,_=self._config(transport,names,deadline)
                 start_params=sealed_thread_params(self.cwd,names,tools)
                 start_params['experimentalRawEvents']=True
+                start_params['historyMode']='legacy'
                 response=transport.call('thread/start',start_params,deadline=deadline)
                 thread_id=response['thread']['id']; self.store.record_thread(op['operation_id'],thread_id,deadline=deadline)
                 text='text(ALL_TOOLS.map(t=>t.name).sort())'
