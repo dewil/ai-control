@@ -4161,11 +4161,14 @@ def _integrate_tmp_cleanup(project_path, tmp):
     SIGKILL, поэтому хвост от разбитой попытки убирает СЛЕДУЮЩИЙ вызов, путь
     детерминирован per-agent - agent_dir/.integrate-worktree)."""
     if os.path.exists(tmp) or os.path.islink(tmp):
-        subprocess.run(["git", "-C", project_path, "worktree", "remove",
-                       "--force", tmp], capture_output=True, text=True,
-                      timeout=30)
-        subprocess.run(["git", "-C", project_path, "worktree", "prune"],
-                      capture_output=True, text=True, timeout=30)
+        for args in (["remove", "--force", tmp], ["prune"]):
+            try:
+                subprocess.run(["git", "-C", project_path, "worktree"] + args,
+                               capture_output=True, text=True, timeout=30)
+            except (OSError, subprocess.TimeoutExpired):
+                # Как при ненулевом rc: продолжаем прежнюю уборку только
+                # собственного tmp, не подменяя исходную ошибку фазы.
+                pass
         if os.path.exists(tmp):
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -4175,53 +4178,51 @@ def _integrate_merge_worktree(project_path, tmp, target, old_sha, commit_sha,
     """Настоящий мерж НЕ в рабочем дереве dwl (§4 п.3): временный detached
     worktree, мерж там, переставляем ссылку CAS-обновлением (update-ref со
     старым sha третьим аргументом) только при успехе."""
-    add = subprocess.run(
-        ["git", "-C", project_path, "worktree", "add", "--detach", tmp,
-         old_sha], capture_output=True, text=True, timeout=60)
-    if add.returncode != 0:
-        return "fail", "временный worktree не поднялся: %s" \
-            % add.stderr.strip()
-    merge = subprocess.run(
-        ["git", "-C", tmp, "merge", "--no-edit", commit_sha],
-        capture_output=True, text=True, timeout=120)
-    if merge.returncode != 0:
-        subprocess.run(["git", "-C", tmp, "merge", "--abort"],
-                       capture_output=True, text=True, timeout=30)
+    try:
+        add = subprocess.run(
+            ["git", "-C", project_path, "worktree", "add", "--detach", tmp,
+             old_sha], capture_output=True, text=True, timeout=60)
+        if add.returncode != 0:
+            return "fail", "временный worktree не поднялся: %s" \
+                % add.stderr.strip()
+        merge = subprocess.run(
+            ["git", "-C", tmp, "merge", "--no-edit", commit_sha],
+            capture_output=True, text=True, timeout=120)
+        if merge.returncode != 0:
+            subprocess.run(["git", "-C", tmp, "merge", "--abort"],
+                           capture_output=True, text=True, timeout=30)
+            return "fail", ("конфликт при мерже - нужен ручной мерж (состояние "
+                            "остается accepted)")
+        merged = git_run(["rev-parse", "HEAD"], tmp)
+        if merged.returncode != 0 or not merged.stdout.strip():
+            return "fail", "не удалось прочитать результат временного мержа"
+        merged_sha = merged.stdout.strip()
+        # перепроверка НЕПОСРЕДСТВЕННО перед перестановкой ссылки (аудит
+        # блокер 2): мерж выше - не мгновение, за это время чекаут мог
+        # появиться - переставлять ссылку под ним нельзя (§4 п.2/п.3).
+        safe, msg = _integration_target_fence(project_path, proj_name, target,
+                                               old_sha, None)
+        if not safe:
+            return "fail", msg
+        # дрейф реестра (§3c, серьезная 6, TOCTOU) - та же перепроверка, той же
+        # причиной: мерж выше мог идти до 120с, реестр мог переехать за это
+        # время заново уже ПОСЛЕ проверки в _phase_integrate.
+        drift_ok, drift_msg = _integration_fence(project_path, proj_name, branch,
+                                                 commit_sha)
+        if not drift_ok:
+            return "fail", drift_msg
+        upd = git_run(["update-ref", "refs/heads/%s" % target, merged_sha,
+                      old_sha], project_path)
+        if upd.returncode != 0:
+            return "fail", ("update-ref мержа не прошел - параллельное движение "
+                            "целевой ветки")
+        d["state"] = "integrated"
+        d["integrated_at"] = now_iso()
+        d["integrate_mode"] = "merge"
+        d["integrate_ref"] = merged_sha
+        return "ok", None
+    finally:
         _integrate_tmp_cleanup(project_path, tmp)
-        return "fail", ("конфликт при мерже - нужен ручной мерж (состояние "
-                        "остается accepted)")
-    merged = git_run(["rev-parse", "HEAD"], tmp)
-    if merged.returncode != 0 or not merged.stdout.strip():
-        _integrate_tmp_cleanup(project_path, tmp)
-        return "fail", "не удалось прочитать результат временного мержа"
-    merged_sha = merged.stdout.strip()
-    # перепроверка НЕПОСРЕДСТВЕННО перед перестановкой ссылки (аудит
-    # блокер 2): мерж выше - не мгновение, за это время чекаут мог
-    # появиться - переставлять ссылку под ним нельзя (§4 п.2/п.3).
-    safe, msg = _integration_target_fence(project_path, proj_name, target,
-                                           old_sha, None)
-    if not safe:
-        _integrate_tmp_cleanup(project_path, tmp)
-        return "fail", msg
-    # дрейф реестра (§3c, серьезная 6, TOCTOU) - та же перепроверка, той же
-    # причиной: мерж выше мог идти до 120с, реестр мог переехать за это
-    # время заново уже ПОСЛЕ проверки в _phase_integrate.
-    drift_ok, drift_msg = _integration_fence(project_path, proj_name, branch,
-                                             commit_sha)
-    if not drift_ok:
-        _integrate_tmp_cleanup(project_path, tmp)
-        return "fail", drift_msg
-    upd = git_run(["update-ref", "refs/heads/%s" % target, merged_sha,
-                  old_sha], project_path)
-    _integrate_tmp_cleanup(project_path, tmp)
-    if upd.returncode != 0:
-        return "fail", ("update-ref мержа не прошел - параллельное движение "
-                        "целевой ветки")
-    d["state"] = "integrated"
-    d["integrated_at"] = now_iso()
-    d["integrate_mode"] = "merge"
-    d["integrate_ref"] = merged_sha
-    return "ok", None
 
 
 def _integrate_merge_checked_out(work_path, old_sha, commit_sha, d,
