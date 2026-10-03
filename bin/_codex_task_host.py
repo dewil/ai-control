@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
 import fcntl
+from decimal import Decimal
 import errno
 import json
 import math
@@ -349,16 +350,17 @@ class SystemdTaskManager:
 
     def inspect(self, unit, *, deadline):
         _unit(unit)
+        observed_fields=self._fields + (('MemoryMax','TasksMax','CPUQuotaPerSecUSec') if self.host_budget is not None else ())
         result = self._run(['systemctl', '--user', '--no-ask-password', 'show', unit,
-                            '--property=' + ','.join(self._fields)], deadline)
+                            '--property=' + ','.join(observed_fields)], deadline)
         _require(isinstance(result.stdout, str) and len(result.stdout) <= 65536)
         fields = {}
         for line in result.stdout.splitlines():
             _require('=' in line)
             key, value = line.split('=', 1)
-            _require(key in self._fields and key not in fields)
+            _require(key in observed_fields and key not in fields)
             fields[key] = value
-        _require(set(fields) == set(self._fields))
+        _require(set(fields) == set(observed_fields))
         _require(re.fullmatch('[0-9]+', fields['MainPID']) is not None)
         pid = int(fields['MainPID'])
         if fields['LoadState'] == 'not-found':
@@ -366,6 +368,15 @@ class SystemdTaskManager:
                      and pid == 0 and fields['ActiveState'] == 'inactive' and fields['SubState'] == 'dead')
             return None
         _require(result.returncode == 0 and fields['LoadState'] == 'loaded')
+        if self.host_budget is not None:
+            _require(re.fullmatch('[0-9]+',fields['MemoryMax']) is not None
+                and int(fields['MemoryMax'])==self.host_budget['memory_max_mb']*1024*1024)
+            _require(re.fullmatch('[0-9]+',fields['TasksMax']) is not None
+                and int(fields['TasksMax'])==self.host_budget['tasks_max'])
+            quota=re.fullmatch(r'([0-9]+(?:\.[0-9]{1,6})?)(us|ms|s)',fields['CPUQuotaPerSecUSec'])
+            _require(quota is not None)
+            microseconds=Decimal(quota[1])*{'us':1,'ms':1000,'s':1000000}[quota[2]]
+            _require(microseconds==self.host_budget['cpu_quota_percent']*10000)
         _require(fields['RemainAfterExit'] in ('yes', 'no') and fields['SendSIGKILL'] in ('yes', 'no'))
         return _status(dict(invocation_id=fields['InvocationID'], description=fields['Description'],
                             kill_mode=fields['KillMode'], active_state=fields['ActiveState'],
