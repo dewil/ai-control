@@ -27,3 +27,9 @@ INV-TASK-44 действует на каждую попытку archive из cle
 При неизвестном состоянии безопасное ожидание предпочтительнее автоматического архива. Новые зависимости не нужны. Интеграция результата, Telegram delivery, общий cleanup/redesign, Toolkit и другие backlog roots не входят в изменение. Тесты используют собственные fixtures и mock systemd, без сети; TMPDIR — приватный /var/tmp, umask077. Живые агенты и production данные не используются для разрушительных тестов.
 
 Доменные источники: docs/specs/tasks.md (INV-TASK-06/44), docs/specs/reconciler.md.
+
+## Уточнение 04.10.2026: отсутствующий systemd-юнит
+
+Read-only probe собственного заведомо отсутствующего имени подтвердил `is-active`: inactive/4, а успешный `show`: LoadState=not-found, ActiveState=inactive, MainPID=0, ControlGroup пуст. Это штатный случай после GC transient unit. Он не должен навсегда удерживать завершённую задачу. Только для пары inactive/4 архиватор запрашивает отдельный `systemctl show`; отсутствие доказано лишь при exit0 и всех четырёх согласованных полях. Ошибка/timeout/недостающие или противоречивые поля (loaded, active, PID>0, непустой cgroup) сохраняют ожидание. Для inactive/0 или inactive/1 такого исключения нет. Codex all-host proof остаётся обязательным.
+
+Приёмка INV-TASK-44: cleaned и archived с доказанным отсутствующим unit завершаются; отрицательные show-сценарии удерживают каталог. Новые blind RED фиксируются до правки.
