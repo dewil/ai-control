@@ -207,6 +207,123 @@ def read_thread_metadata(thread_path, thread_id, cwd, *, deadline):
         roots=meta.get('roots', [cwd]), dynamic_tools=tools, dynamic_tools_digest=digest(tools))
 
 
+def _registry_input(value):
+    return type(value) is str and re.fullmatch(r'\s*text\s*\(\s*ALL_TOOLS\s*\.\s*map\s*\(\s*t\s*=>\s*t\s*\.\s*name\s*\)\s*\.\s*sort\s*\(\s*\)\s*\)\s*;?\s*',value) is not None
+
+def _registry(events, thread, turn):
+    inputs={}; names=None
+    for event in events:
+        method=event.get('method'); params=event.get('params',{})
+        if method in ('rawResponseItem/completed','item/rawResponseItem/completed'):
+            require(params.get('threadId')==thread and params.get('turnId')==turn)
+            item=params.get('item',{})
+            if item.get('type')=='custom_tool_call':
+                require(item.get('name') in ('exec','functions.exec') and _registry_input(item.get('input'))
+                    and type(item.get('call_id')) is str and item['call_id'])
+                require(not inputs or item['call_id'] in inputs)
+                inputs[item['call_id']]=True
+            elif item.get('type')=='custom_tool_call_output':
+                require(item.get('call_id') in inputs)
+                output=item['output']
+                if type(output) is list:
+                    require(1<=len(output)<=100)
+                    require(all(type(block) is dict and set(block)=={'type','text'} and block['type'] in ('input_text','text') and type(block['text']) is str for block in output))
+                    output='\n'.join(block['text'] for block in output)
+                require(type(output) is str and len(output.encode())<=65536 and names is None)
+                offset=output.find('[')
+                require(offset>=0)
+                names=json.loads(output[offset:]); _plain(names)
+    require(type(names) is list and len(names)==7 and set(names)=={'apply_patch','clock__curr_time','task_read','task_search','task_list','task_ask','task_done'})
+    return names
+
+
+def read_registry_evidence(thread_path, thread_id, turn_id, cwd, operation_id, *, deadline):
+    """Read only an immutable prefix of the admitted, owned native rollout."""
+    root=os.path.join(os.environ.get('CODEX_HOME',os.path.expanduser('~/.codex')),'sessions')
+    require(os.path.isabs(root) and os.path.realpath(root)==root and os.path.commonpath((root,thread_path))==root)
+    for value in (thread_id,turn_id,operation_id):
+        require(type(value) is str and str(UUID(value))==value)
+    before=file_info(thread_path)
+    require(before.st_size<=32*1024*1024)
+    identity=lambda info:(info.st_dev,info.st_ino,info.st_uid,info.st_gid,info.st_mode,info.st_nlink)
+    ancestors={};parent=os.path.dirname(thread_path)
+    while True:
+        info=os.lstat(parent)
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid==os.getuid() and not info.st_mode & 0o022)
+        ancestors[parent]=identity(info)
+        if parent==root:break
+        parent=os.path.dirname(parent)
+    fd=os.open(thread_path,os.O_RDONLY|os.O_NOFOLLOW)
+    def prefix():
+        data=bytearray()
+        while len(data)<before.st_size:
+            require(time.monotonic()<deadline)
+            chunk=os.read(fd,min(1024*1024,before.st_size-len(data)))
+            require(bool(chunk));data.extend(chunk)
+        return bytes(data)
+    try:
+        require(identity(os.fstat(fd))==identity(before))
+        raw=prefix();os.lseek(fd,0,os.SEEK_SET)
+        require(hashlib.sha256(prefix()).digest()==hashlib.sha256(raw).digest())
+        require(identity(os.fstat(fd))==identity(before) and os.fstat(fd).st_size>=before.st_size
+            and identity(os.lstat(thread_path))==identity(before) and os.lstat(thread_path).st_size>=before.st_size
+            and os.path.realpath(thread_path)==thread_path)
+        require(all(identity(os.lstat(path))==pin for path,pin in ancestors.items()))
+    finally:os.close(fd)
+    lines=raw.split(b'\n')
+    require(len(lines)-1<=100000 and all(len(line)<=1024*1024 for line in lines))
+    def pairs(entries):
+        result={}
+        for key,value in entries:
+            require(key not in result);result[key]=value
+        return result
+    stage=0;current=None;found=False;evidence=[];proven=False
+    for index,line in enumerate(lines[:-1]):
+        require(time.monotonic()<deadline)
+        row=json.loads(line,object_pairs_hook=pairs,parse_constant=lambda _:require(False));_plain(row)
+        require(type(row) is dict and type(row.get('payload')) is dict)
+        kind=row.get('type');item=row['payload']
+        if index==0:
+            require(kind=='session_meta' and item.get('id')==thread_id and item.get('cwd')==cwd
+                and item.get('cli_version')=='0.160.0' and item.get('history_mode')=='legacy')
+            continue
+        require(kind!='session_meta')
+        if kind=='event_msg' and item.get('type')=='task_started':
+            current=item.get('turn_id')
+            if current==turn_id:
+                require(not found);found=True;stage=1
+            continue
+        if kind=='turn_context' and item.get('turn_id')==turn_id:
+            require(current==turn_id and stage==1 and item.get('cwd')==cwd);stage=2
+            continue
+        if kind=='event_msg' and item.get('type')=='user_message' and current==turn_id:
+            require(stage==2 and item.get('client_id')==operation_id);stage=3
+            continue
+        if kind!='response_item' or item.get('type') not in ('custom_tool_call','custom_tool_call_output'):continue
+        require(current is not None)
+        if current!=turn_id:continue
+        require(stage==3)
+        call=item['type']=='custom_tool_call'
+        if proven and call and not _registry_input(item.get('input')):continue
+        if proven and not call and item.get('call_id')!=evidence[0]['params']['item']['call_id']:continue
+        keys=('type','name','call_id','input') if call else ('type','call_id','output')
+        normalized={key:copy.deepcopy(item[key]) for key in keys}
+        frame=dict(method='rawResponseItem/completed',params=dict(threadId=thread_id,turnId=turn_id,item=normalized))
+        if proven:
+            if call:require(_equal(frame,evidence[0]))
+            else:_registry([evidence[0],frame],thread_id,turn_id)
+            continue
+        evidence.append(frame)
+        require(len(evidence)<=256 and len(json.dumps(evidence).encode())<=1024*1024)
+        if call:
+            require(normalized['name'] in ('exec','functions.exec') and _registry_input(normalized['input']))
+        else:
+            _registry(evidence,thread_id,turn_id);proven=True
+    require(found or not any(line for line in lines[1:-1]))
+    if not proven:return None
+    return dict(schema=1,thread_id=thread_id,turn_id=turn_id,operation_id=operation_id,events=evidence)
+
+
 def heartbeat(agent_dir, generation, attempt_id, phase, iteration_started_at, *, deadline):
     control = read_json(agent_dir + '/control.json')
     require(control['generation'] == generation and control['lease']['start_attempt_id'] == attempt_id)
@@ -221,7 +338,7 @@ def heartbeat(agent_dir, generation, attempt_id, phase, iteration_started_at, *,
 
 
 _DEFAULTS = dict(host_factory=host_factory, transport_factory=transport_factory, verify_release=verify_release,
-    verify_child=verify_child, read_thread_metadata=read_thread_metadata, heartbeat=heartbeat)
+    verify_child=verify_child, read_thread_metadata=read_thread_metadata, read_registry_evidence=read_registry_evidence, heartbeat=heartbeat)
 
 
 class CodexTaskRuntime:
@@ -457,33 +574,10 @@ class CodexTaskRuntime:
                 yield backend
 
     def _registry_input(self,value):
-        return type(value) is str and re.fullmatch(r'\s*text\s*\(\s*ALL_TOOLS\s*\.\s*map\s*\(\s*t\s*=>\s*t\s*\.\s*name\s*\)\s*\.\s*sort\s*\(\s*\)\s*\)\s*;?\s*',value) is not None
+        return _registry_input(value)
 
-    def _registry(self, events, thread, turn):
-        inputs={}; names=None
-        for event in events:
-            method=event.get('method'); params=event.get('params',{})
-            if method in ('rawResponseItem/completed','item/rawResponseItem/completed'):
-                require(params.get('threadId')==thread and params.get('turnId')==turn)
-                item=params.get('item',{})
-                if item.get('type')=='custom_tool_call':
-                    require(item.get('name') in ('exec','functions.exec') and self._registry_input(item.get('input'))
-                        and type(item.get('call_id')) is str and item['call_id'])
-                    require(not inputs or item['call_id'] in inputs)
-                    inputs[item['call_id']]=True
-                elif item.get('type')=='custom_tool_call_output':
-                    require(item.get('call_id') in inputs)
-                    output=item['output']
-                    if type(output) is list:
-                        require(1<=len(output)<=100)
-                        require(all(type(block) is dict and set(block)=={'type','text'} and block['type'] in ('input_text','text') and type(block['text']) is str for block in output))
-                        output='\n'.join(block['text'] for block in output)
-                    require(type(output) is str and len(output.encode())<=65536 and names is None)
-                    offset=output.find('[')
-                    require(offset>=0)
-                    names=json.loads(output[offset:]); _plain(names)
-        require(type(names) is list and len(names)==7 and set(names)=={'apply_patch','clock__curr_time','task_read','task_search','task_list','task_ask','task_done'})
-        return names
+    def _registry(self,events,thread,turn):
+        return _registry(events,thread,turn)
 
     def _bootstrap_events(self,transport,evidence,thread,turn):
         batch=list(transport.events);transport.events.clear()
@@ -648,6 +742,7 @@ class CodexTaskRuntime:
                 require(started.turn_id is not None and started.phase!='unknown')
                 turn_id=started.turn_id; op=reservation.activate(thread_id,turn_id)
             transport.bind_operation(thread_id,turn_id)
+            self.current_thread_path=response['thread']['path']
             binding=TaskBinding(control['incarnation'],event_key,self.agent_dir,thread_id,turn_id)
             self.heartbeat_binding,self.heartbeat_operation=binding,op
             outcome=self._dispatch(transport,snapshot,binding,op,generation,attempt_id,deadline)
@@ -687,10 +782,13 @@ class CodexTaskRuntime:
 
     def _dispatch(self,transport,snapshot,binding,op,generation,attempt,deadline):
         waiting=[]; changes={}; seen={}; resolved=set(); iteration=self.clock();registry_events=[];registry_proven=False
+        pending=[];proof_deadline=min(deadline,self.clock()+10)
         while True:
             self._deadline(deadline)
             self.adapters['heartbeat'](self.agent_dir,generation,attempt,'running',iteration,deadline=deadline)
             events=list(transport.events); transport.events.clear()
+            _plain(events)
+            require(len(events)<=256 and len(json.dumps(events).encode())<=1024*1024)
             for event in events:
                 if event.get('method') in ('rawResponseItem/completed','item/rawResponseItem/completed'):
                     item=event.get('params',{}).get('item',{})
@@ -707,8 +805,46 @@ class CodexTaskRuntime:
                     elif item.get('type')=='custom_tool_call_output':
                         originals=[row for row in registry_events if row.get('params',{}).get('item',{}).get('type')=='custom_tool_call' and row['params']['item']['call_id']==item.get('call_id')]
                         if originals:self._registry([originals[0],event],binding.thread_id,binding.turn_id)
-                if 'id' in event or event.get('method')=='item/started' and event.get('params',{}).get('item',{}).get('type')=='fileChange':
-                    require(registry_proven)
+                if not registry_proven:
+                    require(event.get('method')!='item/fileChange/patchUpdated'
+                        and not (event.get('method') in ('item/started','item/completed') and event.get('params',{}).get('item',{}).get('type') in ('fileChange','commandExecution')))
+                    if 'id' in event:
+                        params=event.get('params',{})
+                        require(event.get('method')=='item/tool/call' and params.get('tool') in ('task_read','task_search','task_list','task_ask','task_done')
+                            and params.get('threadId')==binding.thread_id and params.get('turnId')==binding.turn_id)
+            if not registry_proven:
+                self._deadline(proof_deadline)
+                proof=None
+                if pending or any('id' in event for event in events):
+                    proof=self.adapters['read_registry_evidence'](self.current_thread_path,binding.thread_id,binding.turn_id,self.cwd,op['operation_id'],deadline=proof_deadline)
+                if proof is not None:
+                    _plain(proof)
+                    require(type(proof) is dict and set(proof)=={'schema','thread_id','turn_id','operation_id','events'}
+                        and type(proof['schema']) is int and proof['schema']==1 and proof['thread_id']==binding.thread_id
+                        and proof['turn_id']==binding.turn_id and proof['operation_id']==op['operation_id']
+                        and type(proof['events']) is list and len(proof['events'])<=256 and len(json.dumps(proof['events']).encode())<=1024*1024)
+                    require(all(type(frame) is dict and set(frame)=={'method','params'} and frame['method'] in ('rawResponseItem/completed','item/rawResponseItem/completed')
+                        and type(frame['params']) is dict and set(frame['params'])=={'threadId','turnId','item'}
+                        and type(frame['params']['item']) is dict and frame['params']['item'].get('type') in ('custom_tool_call','custom_tool_call_output')
+                        for frame in proof['events']))
+                    self._registry(proof['events'],binding.thread_id,binding.turn_id)
+                    for captured in registry_events:
+                        item=captured.get('params',{}).get('item',{})
+                        if item.get('type')=='custom_tool_call':
+                            require(any(all(_equal(item.get(key),candidate['params']['item'].get(key)) for key in ('type','name','call_id','input'))
+                                for candidate in proof['events'] if candidate.get('params',{}).get('item',{}).get('type')=='custom_tool_call'))
+                        elif item.get('type')=='custom_tool_call_output':
+                            self._registry([proof['events'][0],captured],binding.thread_id,binding.turn_id)
+                    self._child(snapshot,deadline);registry_events=copy.deepcopy(proof['events']);registry_proven=True
+                else:
+                    pending.extend(event for event in events if 'id' in event)
+                    require(len(pending)<=256 and len(json.dumps(pending).encode())<=1024*1024)
+                    transport.call('thread/read',dict(threadId=binding.thread_id,includeTurns=True),deadline=proof_deadline)
+                    time.sleep(min(.05,max(0,proof_deadline-self.clock())))
+                    continue
+            if pending:
+                events=pending+events;pending=[]
+                require(len(events)<=256 and len(json.dumps(events).encode())<=1024*1024)
             for event in events:
                 _plain(event)
                 method=event.get('method'); params=event.get('params',{})

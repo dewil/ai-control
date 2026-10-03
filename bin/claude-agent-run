@@ -4493,7 +4493,10 @@ def _phase_cleanup(agent_dir, name, d):
     кого), а ветка задачи удаляется при ЛЮБОЙ политике проекта и без CAS на
     принятый коммит (мержа не было, PR не будет, смотреть на нее некому -
     в отличие от принятой задачи под integrate:pr)."""
-    codex_barrier(agent_dir)
+    try:
+        codex_barrier(agent_dir)
+    except Exception:
+        return "fail", "native runtime barrier refused"
     cancelled = d.get("state") == "cancelled"
     ws = d.get("workspace")
     if ws != "worktree":
@@ -5262,7 +5265,6 @@ def cmd_done_verdict(argv):
         die(2, "done-verdict: usage <agent_dir> --accept|--reject "
                "[--comment T] --expect-sha <sha8>")
     agent_dir, name = check_dir(argv[0], must_exist=False)
-    codex_barrier(agent_dir)
     verdict = comment = expect_sha = None
     args = argv[1:]
     while args:
@@ -5306,6 +5308,7 @@ def cmd_done_verdict(argv):
         print("stale")
         die(3, "done-verdict: агент архивирован (agents/%s отсутствует)"
             % name)
+    codex_barrier(agent_dir)
     dp = os.path.join(agent_dir, "done.json")
     with FLock(os.path.join(agent_dir, "done.lock")):
         if not os.path.isfile(dp):
