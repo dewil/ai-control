@@ -4624,7 +4624,27 @@ def _agent_active(name):
         r = subprocess.run(
             ["systemctl", "--user", "is-active", "agent-%s.service" % name],
             capture_output=True, text=True, timeout=10)
-        return not (r.returncode == 3 and r.stdout.strip() in ("inactive", "failed"))
+        if r.returncode == 3 and r.stdout.strip() in ("inactive", "failed"):
+            return False
+        if r.returncode != 4 or r.stdout.strip() != "inactive":
+            return True
+        # A collected transient unit is inactive/4. That is NOT proof alone:
+        # require a separate successful query with all four absent-unit facts.
+        # Keep this extra query below the control CAS lock's wait budget.
+        proof = subprocess.run(
+            ["systemctl", "--user", "show", "-p", "LoadState", "-p", "ActiveState",
+             "-p", "MainPID", "-p", "ControlGroup", "agent-%s.service" % name],
+            capture_output=True, text=True, timeout=5)
+        if proof.returncode != 0:
+            return True
+        facts = {}
+        for line in proof.stdout.splitlines():
+            key, separator, value = line.partition("=")
+            if not separator or key in facts:
+                return True
+            facts[key] = value
+        return facts != {"LoadState": "not-found", "ActiveState": "inactive",
+                         "MainPID": "0", "ControlGroup": ""}
     except Exception:
         return True
 
