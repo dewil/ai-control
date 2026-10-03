@@ -366,7 +366,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -700,6 +700,32 @@ class RuntimeContract(unittest.TestCase):
                             self.events.append({'id': 0, 'method': 'item/tool/call', 'params': {
                                 'threadId': thread_id, 'turnId': turn_id, 'callId': 'ordinary-call',
                                 'tool': 'task_read', 'arguments': {'path': 'tracked.txt'}, 'namespace': None}})
+                        if registry_sequence is not None and ((registry_sequence[0] == 'bootstrap') == diagnostic):
+                            sequence = registry_sequence[1]
+                            raw = lambda item: {'method': 'rawResponseItem/completed', 'params': {
+                                'threadId': thread_id, 'turnId': turn_id, 'item': item}}
+                            ordinary_exec = raw({'type': 'custom_tool_call', 'call_id': 'other-exec',
+                                'name': 'exec', 'input': 'text(await task_read({path:"tracked.txt"}))'})
+                            ordinary_output = raw({'type': 'custom_tool_call_output', 'call_id': 'other-exec',
+                                'output': 'baseline'})
+                            if sequence == 'pre_exec':
+                                self.events.appendleft(ordinary_output)
+                                self.events.appendleft(ordinary_exec)
+                            elif sequence == 'pre_output':
+                                self.events.appendleft(ordinary_output)
+                            elif sequence == 'pre_uncorrelated':
+                                self.events.appendleft(raw({'type': 'custom_tool_call_output', 'call_id': 'wrong-call',
+                                    'output': json.dumps(sorted(registry))}))
+                                self.events.appendleft(raw({'type': 'custom_tool_call', 'call_id': 'unmatched-diagnostic',
+                                    'name': 'exec', 'input': 'text(ALL_TOOLS.map(t=>t.name).sort())'}))
+                            elif sequence == 'post_exec':
+                                self.events.extend([ordinary_exec, ordinary_output])
+                            elif sequence == 'repeated_conflict':
+                                self.events.extend([
+                                    raw({'type': 'custom_tool_call', 'call_id': 'second-diagnostic', 'name': 'exec',
+                                        'input': 'text(ALL_TOOLS.map(t=>t.name).sort())'}),
+                                    raw({'type': 'custom_tool_call_output', 'call_id': 'second-diagnostic',
+                                        'output': json.dumps(sorted(registry + ['exec_command']))})])
                         if diagnostic and native_mode == 'bootstrap_dirty':
                             (case.agent / 'work/tracked.txt').write_text('unexpected bootstrap edit\n')
                         if diagnostic and native_mode == 'bootstrap_ask':
@@ -914,6 +940,22 @@ class RuntimeContract(unittest.TestCase):
             case.assertTrue(all(r['status'] in ('revoked', 'finished') and
                 (r['drain_evidence'] is not None or not r['launch_reserved'])
                 for r in index['operations'].values()))
+            if checkpoint_prepare_crash and event_key == 'event-1' and prepared_receipt is None:
+                parent = case.state / case.control['codex_state_id'] / 'operations' / operation_id
+                terminal = json.loads((parent / 'terminal.json').read_text())
+                case.assertEqual(set(terminal), {'operation_id', 'task_incarnation', 'thread_id', 'turn_id',
+                    'terminal', 'terminal_proven', 'quiescent'})
+                case.assertEqual(terminal['operation_id'], operation_id)
+                case.assertEqual(terminal['terminal'], 'completed')
+                case.assertIs(terminal['terminal_proven'], True)
+                case.assertIs(terminal['quiescent'], True)
+                case.assertFalse((parent / 'checkpoint.json').exists())
+                if native_mode == 'done_dirty':
+                    completion_intent = json.loads((parent / 'completion.json').read_text())
+                    case.assertIsNone(completion_intent['checkpoint'])
+                    case.assertIsNone(completion_intent['done_receipt'])
+                order.append('crash_before_first_checkpoint_receipt')
+                raise ConnectionError('PRIVATE_CHECKPOINT_PREPARATION_CRASH')
             checkpoint_calls.append(copy.deepcopy(prepared_receipt))
             order.append('checkpoint_prepare' if prepared_receipt is None else 'checkpoint_commit')
             head = case.git('rev-parse', 'HEAD', cwd=case.agent / 'work').strip()
@@ -1771,6 +1813,134 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['thread_id'])
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
+
+    def precheckpoint_crash_fixture(self, *, completion=False):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(
+            native_mode='done_dirty' if completion else 'ordinary_checkpoint_crash', checkpoint_prepare_crash=True)
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertEqual(order.count('crash_before_first_checkpoint_receipt'), 1)
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+        self.assertFalse((self.agent / 'done.json').exists())
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip(), self.base)
+        projection = json.loads((self.agent / 'inbox/inflight/event-1.json').read_text())['meta']['codex_operation']
+        parent = self.state / self.control['codex_state_id'] / 'operations' / projection['operation_id']
+        self.assertTrue((parent / 'terminal.json').is_file())
+        self.assertFalse((parent / 'checkpoint.json').exists())
+        adapters = dict(self.runtime_native_adapters)
+        adapters.pop('checkpoint')
+        return self.make(adapters=adapters), hosts, calls, parent
+
+    def assert_original_finished_archived_once(self, operation_id):
+        self.assertFalse((self.agent / 'inbox/inflight/event-1.json').exists())
+        archived = json.loads((self.agent / 'inbox/done/event-1.json').read_text())
+        projection = archived['meta']['codex_operation']
+        self.assertEqual(projection['operation_id'], operation_id)
+        self.assertEqual(projection['status'], 'finished')
+        self.assertEqual(archived['meta']['history'][-1]['outcome'], 'ok')
+        index = json.loads((self.state / self.control['codex_state_id'] / 'index.json').read_text())
+        record = index['operations'][operation_id]
+        self.assertEqual(record['status'], 'finished')
+        self.assertEqual((record['thread_id'], record['turn_id']),
+            (projection['thread_id'], projection['turn_id']))
+        dedup = [json.loads(line) for line in (self.agent / 'inbox/dedup.jsonl').read_text().splitlines()]
+        self.assertEqual(sum(row['key'] == 'event-1' for row in dedup), 1)
+
+    def test_exact_terminal_before_first_checkpoint_recovers_commit_and_original_without_native_retry(self):
+        controller, hosts, calls, parent = self.precheckpoint_crash_fixture()
+        before_calls = list(calls)
+        before_starts = [host.starts for host in hosts]
+        result = controller.reconcile(deadline=time.monotonic() + 5)
+        self.assertEqual(result['outcome'], 'recovered')
+        self.assertEqual(calls, before_calls)
+        self.assertEqual([host.starts for host in hosts], before_starts)
+        self.assert_original_finished_archived_once(parent.name)
+        head = self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip()
+        self.assertNotEqual(head, self.base)
+        self.assertEqual(self.git('rev-parse', 'HEAD^', cwd=self.agent / 'work').strip(), self.base)
+        self.assertEqual(self.git('show', 'HEAD:tracked.txt', cwd=self.agent / 'work'), 'native dirty task change\n')
+        self.assertEqual(self.git('status', '--porcelain', cwd=self.agent / 'work'), '')
+        self.assertFalse((self.agent / 'done.json').exists())
+        controller.reconcile(deadline=time.monotonic() + 3)
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip(), head)
+        self.assert_original_finished_archived_once(parent.name)
+        self.assertEqual(calls, before_calls)
+
+    def test_missing_terminal_before_first_checkpoint_holds_dirty_candidate_without_retry(self):
+        controller, hosts, calls, parent = self.precheckpoint_crash_fixture()
+        (parent / 'terminal.json').unlink()
+        before_calls = list(calls)
+        before_starts = [host.starts for host in hosts]
+        inflight = (self.agent / 'inbox/inflight/event-1.json').read_bytes()
+        result = controller.reconcile(deadline=time.monotonic() + 3)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertEqual(calls, before_calls)
+        self.assertEqual([host.starts for host in hosts], before_starts)
+        self.assertEqual((self.agent / 'inbox/inflight/event-1.json').read_bytes(), inflight)
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip(), self.base)
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'native dirty task change\n')
+        self.assertFalse((self.agent / 'inbox/done/event-1.json').exists())
+        self.assertFalse((self.agent / 'done.json').exists())
+
+    def test_staged_completion_after_drain_recovers_requested_done_and_original_exactly_once(self):
+        controller, hosts, calls, parent = self.precheckpoint_crash_fixture(completion=True)
+        before_calls = list(calls)
+        before_starts = [host.starts for host in hosts]
+        before = json.loads((parent / 'completion.json').read_text())
+        self.assertIsNone(before['checkpoint'])
+        self.assertIsNone(before['done_receipt'])
+        result = controller.reconcile(deadline=time.monotonic() + 5)
+        self.assertEqual(result['outcome'], 'recovered')
+        self.assertEqual(calls, before_calls)
+        self.assertEqual([host.starts for host in hosts], before_starts)
+        done_path = self.agent / 'done.json'
+        done = json.loads(done_path.read_text())
+        self.assertEqual(done['state'], 'requested')
+        self.assertIs(done['finalized'], False)
+        self.assertEqual(done['summary'], before['summary'])
+        self.assert_original_finished_archived_once(parent.name)
+        completion = json.loads((parent / 'completion.json').read_text())
+        self.assertEqual(completion['phase'], 'done_written')
+        head = self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip()
+        self.assertEqual(completion['checkpoint']['commit_sha'], head)
+        original_done = done_path.read_bytes()
+        controller.reconcile(deadline=time.monotonic() + 3)
+        self.assertEqual(done_path.read_bytes(), original_done)
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip(), head)
+        self.assert_original_finished_archived_once(parent.name)
+        self.assertEqual(calls, before_calls)
+
+    def test_unrelated_raw_before_registry_and_conflicting_repeat_never_grant_task_authority(self):
+        for scope in ('bootstrap', 'ordinary'):
+            for sequence in ('pre_exec', 'pre_output', 'pre_uncorrelated', 'repeated_conflict'):
+                with self.subTest(scope=scope, sequence=sequence):
+                    case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
+                    case.setUp()
+                    try:
+                        case.publish_registry()
+                        controller, hosts, calls, order = case.discovery_fixture(native_mode='read',
+                            registry_sequence=(scope, sequence))
+                        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+                        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+                        self.assertEqual(sum(method == 'turn/start' for method, params in calls),
+                            1 if scope == 'bootstrap' else 2)
+                        self.assertNotIn('reply_dynamic', order)
+                        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+                        self.assertFalse((case.agent / 'done.json').exists())
+                        self.assertEqual((case.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+                    finally:
+                        case.doCleanups()
+
+    def test_ordinary_task_exec_after_fixed_registry_proof_remains_allowed(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='read',
+            registry_sequence=('ordinary', 'post_exec'))
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
+        self.assertEqual(result['outcome'], 'ran')
+        self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
+        self.assertEqual(order.count('reply_dynamic'), 1)
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
 
     def test_bootstrap_long_benign_stream_in_small_batches_does_not_exhaust_lifetime_event_cap(self):
         self.publish_registry()
