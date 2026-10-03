@@ -1931,6 +1931,30 @@ class RuntimeContract(unittest.TestCase):
                 finally:
                     case.doCleanups()
 
+    def test_resumed_first_file_approval_uses_already_available_owned_registry_without_task_callback(self):
+        self.assertTrue(callable(getattr(runtime_module, 'read_registry_evidence', None)),
+            'Accepted native registry evidence boundary absent')
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_full',
+            human_decision='decline', rollout_registry='ready')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
+        self.assertEqual(result['outcome'], 'ran')
+        self.assertIn('ordinary_wire_raw_channel_absent', order)
+        self.assertIn('owned_rollout_registry_proof_returned', order)
+        self.assertLess(order.index('owned_rollout_registry_proof_returned'), order.index('genuine_human_answer'))
+        self.assertEqual(order.count('reply_approval'), 1)
+        self.assertNotIn('reply_dynamic', order)
+        self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
+        self.assertEqual(len(hosts), 3)
+        self.assertTrue(all(host.starts == 1 and host.phase == 'stopped' for host in hosts))
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+        self.assertFalse((self.agent / 'done.json').exists())
+        questions = list((self.agent / 'questions').glob('*.json'))
+        self.assertEqual(len(questions), 1)
+        question = json.loads(questions[0].read_text())
+        self.assertEqual(question['status'], 'closed')
+        self.assertEqual(question['native_callback']['status'], 'answered')
+
     def test_resumed_turn_file_effect_before_delayed_rollout_proof_is_immediate_quarantine(self):
         self.assertTrue(callable(getattr(runtime_module, 'read_registry_evidence', None)),
             'Accepted native registry evidence boundary absent')
