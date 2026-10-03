@@ -53,7 +53,15 @@ if 'show' in args:
     for i,a in enumerate(args):
         if a in ('-p','--property') and i+1<len(args): props.extend(args[i+1].split(','))
     vals={'LoadState':'not-found','ActiveState':'inactive','ControlGroup':'','MainPID':'0','SubState':'dead'}
-    for p in props: print(vals.get(p,'') if '--value' in args else p+'='+vals.get(p,''))
+    override=b/'show-state'
+    if override.exists():
+        scenario=json.loads(override.read_text())
+        if scenario.get('delay'): time.sleep(scenario['delay'])
+        if scenario.get('code'): sys.exit(scenario['code'])
+        vals=scenario['fields']
+    if not props: props=list(vals)
+    for p in props:
+        if p in vals: print(vals[p] if '--value' in args else p+'='+vals[p])
 sys.exit(0)
 '''
         (self.mock/'systemctl').write_text(script)
@@ -125,6 +133,38 @@ workspace: none
                     self.system_state(state,code)
                     self.cli('claude-agent-run','done-advance',agent)
                     self.assertTrue(agent.is_dir(), 'archive moved an unsafe agent directory')
+                    if phase=='archived':
+                        self.assertEqual(json.loads((agent/'done.json').read_text())['archived_at'],STAMP)
+
+    def test_INV_TASK_44_proved_absent_unit_archives_both_phases(self):
+        for phase in ('cleaned','archived'):
+            with self.subTest(phase=phase):
+                agent=self.fixture(phase,name='absent'+phase)
+                self.system_state('inactive',4)
+                self.cli('claude-agent-run','done-advance',agent,check=True)
+                self.assertFalse(agent.exists(),'proved absent transient unit held archive forever')
+                tomb=self.base/'tombstones'/(agent.name+'.json')
+                self.assertTrue(tomb.exists(),'archive omitted tombstone')
+                if phase=='archived':
+                    self.assertEqual(json.loads(tomb.read_text())['archived_at'],STAMP)
+
+    def test_INV_TASK_44_absent_unit_requires_complete_consistent_show(self):
+        valid={'LoadState':'not-found','ActiveState':'inactive','MainPID':'0','ControlGroup':''}
+        scenarios=[('error',{'code':1,'fields':valid}),
+                   ('timeout',{'delay':6,'fields':valid})]
+        for key in valid:
+            scenarios.append(('missing'+key,{'fields':{k:v for k,v in valid.items() if k!=key}}))
+        for key,value in [('LoadState','loaded'),('ActiveState','active'),
+                          ('MainPID','17'),('ControlGroup','/user.slice/fixture')]:
+            scenarios.append(('contradict'+key,{'fields':dict(valid,**{key:value})}))
+        for phase in ('cleaned','archived'):
+            for index,(label,scenario) in enumerate(scenarios):
+                with self.subTest(phase=phase,scenario=label):
+                    agent=self.fixture(phase,name='absent'+phase+str(index))
+                    self.system_state('inactive',4)
+                    (self.base/'show-state').write_text(json.dumps(scenario))
+                    self.cli('claude-agent-run','done-advance',agent)
+                    self.assertTrue(agent.is_dir(),'unproved missing unit allowed archive')
                     if phase=='archived':
                         self.assertEqual(json.loads((agent/'done.json').read_text())['archived_at'],STAMP)
 
