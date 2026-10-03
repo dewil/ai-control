@@ -18,6 +18,7 @@ grep-проверка не видела, аудит r3 блокер 1).
 
 import os
 import re
+import stat
 import subprocess
 import time
 from _agent_question_io import remaining
@@ -59,14 +60,17 @@ _CLEAN_GIT_FLAGS = [
 ]
 
 
-def _raw_git(args, cwd, timeout=30, text=True, input=None):
+def _raw_git(args, cwd, timeout=30, text=True, input=None, *, index_file=None):
     """Хардened, но БЕЗ fail-closed предпроверки - только для внутреннего
     использования guard'ом (иначе его собственный `check-attr` рекурсивно
     требовал бы сам себя). Не экспортируется как публичный API модуля -
     вызывающие обязаны идти через git_run()."""
+    env = _clean_git_env()
+    if index_file is not None:
+        env["GIT_INDEX_FILE"] = index_file
     return subprocess.run(
         ["git", "-C", cwd] + _CLEAN_GIT_FLAGS + args,
-        cwd=cwd, env=_clean_git_env(), capture_output=True,
+        cwd=cwd, env=env, capture_output=True,
         text=text, timeout=timeout, input=input)
 
 
@@ -219,7 +223,41 @@ def _guard(cwd, project_path, *, deadline=None, clock=time.monotonic):
         raise GitGuardError(reason)
 
 
-def git_run(args, cwd, project_path, timeout=30, text=True, input=None, *, deadline=None, clock=time.monotonic):
+def _private_index(path, cwd, project):
+    try:
+        if (type(path) is not str or not os.path.isabs(path)
+                or os.path.normpath(path) != path or os.path.realpath(path) != path):
+            raise ValueError()
+        for root in (cwd, project):
+            if os.path.commonpath((path, root)) == root:
+                raise ValueError()
+        info = os.lstat(path)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+            raise ValueError()
+        parent = os.path.dirname(path)
+        pins = []
+        first = True
+        while True:
+            info = os.lstat(parent)
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError()
+            if first and (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700):
+                raise ValueError()
+            if info.st_mode & 0o022 and not (info.st_uid == 0 and info.st_mode & stat.S_ISVTX):
+                raise ValueError()
+            pins.append((parent, info.st_dev, info.st_ino))
+            first = False
+            upper = os.path.dirname(parent)
+            if upper == parent:
+                break
+            parent = upper
+        return pins
+    except (OSError, ValueError, TypeError):
+        raise GitGuardError("Invalid private Git index") from None
+
+
+def git_run(args, cwd, project_path, timeout=30, text=True, input=None, *, deadline=None, clock=time.monotonic, index_file=None):
     """ЕДИНАЯ точка вызова git в присутствии агентского worktree (V2.10
     §3d.2): коммит рантайма, факты ветки (worktree_facts ниже), статус для
     фазы интеграции (_branch_worktree_status в claude-agent-run). project_path
@@ -232,7 +270,12 @@ def git_run(args, cwd, project_path, timeout=30, text=True, input=None, *, deadl
     остается как есть)."""
     remaining(deadline, clock)
     _guard(cwd, project_path, deadline=deadline, clock=clock)
-    result = _raw_git(args, cwd, timeout=remaining(deadline, clock, timeout), text=text, input=input)
+    pins = _private_index(index_file, cwd, project_path) if index_file is not None else None
+    result = _raw_git(args, cwd, timeout=remaining(deadline, clock, timeout), text=text, input=input, index_file=index_file)
+    if pins is not None:
+        fresh = _private_index(index_file, cwd, project_path)
+        if fresh != pins:
+            raise GitGuardError("Private index parent changed")
     remaining(deadline, clock)
     return result
 

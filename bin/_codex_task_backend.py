@@ -21,6 +21,11 @@ class BackendError(Exception):
     pass
 
 
+class BackendBusyError(BackendError):
+    """Canonical lock acquisition refused before any authority/effect."""
+    pass
+
+
 def require(condition):
     if not condition:
         raise BackendError('TASK backend refused')
@@ -104,7 +109,7 @@ class CodexTaskBackend:
         if self.spec_reader is not None:
             value = self.spec_reader(self.binding.agent_dir, deadline=deadline)
         else:
-            result = subprocess.run(['yq', '-c', '.', path], capture_output=True,
+            result = subprocess.run(['yq', '-o=json', '-I=0', '.', path], capture_output=True,
                                     timeout=self._budget(deadline))
             require(result.returncode == 0 and len(result.stdout) <= 1024 * 1024)
             def pairs(items):
@@ -167,12 +172,17 @@ class CodexTaskBackend:
                 fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
                 pins.append((path, fd, False, True))
                 require((before.st_dev, before.st_ino) == (os.fstat(fd).st_dev, os.fstat(fd).st_ino))
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    raise BackendBusyError('TASK backend busy') from None
                 self._check_pins(pins, deadline)
             self._authority(deadline)
             self._check_pins(pins, deadline)
             self._active = (threading.get_ident(), deadline, pins)
             yield True
+        except BackendBusyError:
+            raise
         except Exception:
             raise BackendError('TASK backend refused') from None
         finally:

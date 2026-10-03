@@ -266,3 +266,8 @@ $EDITOR ~/.claude-control/projects.yaml   # вписать свои проект
 ## Сессии Codex из Telegram
 
 «Сессии → проект» открывает Codex. Кнопка «➕ Codex» создаёт отдельный диалог, который продолжается через подключённый клиент Codex. «Claude» открывает прежнее управление Claude. Новые сессии наследуют актуальные model и effort эффективного config общего сервера для проекта; карточка показывает известные значения API. Настройки Mac или текущего диалога не копируются. Мобильная приёмка остаётся незавершённой. Реестр проектов общий. Установка и диагностика: [runbook-codex-sessions.md](docs/runbook-codex-sessions.md).
+
+
+## Фоновые задачи Codex
+
+`claude-rc agent new-task --engine codex --name task-example --project example --text 'Задача'` создаёт отдельную event/drain задачу в worktree. В Telegram: `/new --engine codex example Задача`. Модель и effort наследуются от Codex; вопросы, приёмка и отмена используют общую TASK-процедуру. Без `--engine codex` используется Claude. Требования, ограничения и восстановление: [runbook-codex-tasks.md](docs/runbook-codex-tasks.md).
