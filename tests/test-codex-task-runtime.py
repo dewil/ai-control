@@ -368,7 +368,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False, native_history_default=False, approval_resolution=None, ordinary_materialization=None, rollout_registry=None, resume_path_mismatch=False, answer_lock_contention=None):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False, native_history_default=False, approval_resolution=None, ordinary_materialization=None, rollout_registry=None, resume_path_mismatch=False, answer_lock_contention=None, slow_ordinary_callback=False):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -389,6 +389,9 @@ class RuntimeContract(unittest.TestCase):
         native_history_mode = ['legacy']
         rollout_frames = []
         rollout_reads = []
+        clock_offset = [0.0]
+        fixture_clock = lambda: time.monotonic() + clock_offset[0]
+        case.registry_observation_deadlines = []
         from _codex_task_files import CodexTaskFiles
         from _codex_task_bridge import dynamic_tools
         descriptors = CodexTaskFiles.dynamic_tools() + dynamic_tools()
@@ -549,6 +552,15 @@ class RuntimeContract(unittest.TestCase):
                 self.noise_final = None
                 self.ordinary_pending_items = None
                 self.ordinary_history_polls = 0
+                self.slow_events = None
+
+            def deliver_slow_ordinary_callback(self):
+                if self.slow_events is not None:
+                    clock_offset[0] += 20
+                    self.events.extend(self.slow_events)
+                    self.slow_events = None
+                    history[-1].update(status='completed', completedAt=2)
+                    order.append('ordinary_first_callback_after_twenty_seconds')
 
             def publish_noise_batch(self):
                 if self.events or self.noise_final is None:
@@ -645,6 +657,7 @@ class RuntimeContract(unittest.TestCase):
                                 'excludeTmpdirEnvVar': True, 'excludeSlashTmp': True,
                                 'writableRoots': [str(case.agent / 'work')]}}
                     if method == 'thread/read':
+                        self.deliver_slow_ordinary_callback()
                         if self.ordinary_pending_items is not None:
                             self.ordinary_history_polls += 1
                             if self.ordinary_history_polls == 1 or ordinary_materialization == 'never':
@@ -832,6 +845,10 @@ class RuntimeContract(unittest.TestCase):
                             self.ordinary_pending_items = copy.deepcopy(created['items'])
                             created.update(status='inProgress', completedAt=None, items=[], itemsView='notLoaded')
                             order.append('ordinary_start_returned_before_user_message')
+                        if not diagnostic and slow_ordinary_callback:
+                            self.slow_events = list(self.events)
+                            self.events.clear()
+                            created.update(status='inProgress', completedAt=None)
                         order.append('callbacks_queued_before_start_response')
                         if native_mode == 'lost_start':
                             raise ConnectionError('PRIVATE_START_REPLY_LOST')
@@ -847,6 +864,7 @@ class RuntimeContract(unittest.TestCase):
                 order.append('bind_operation')
 
             def receive(self, *, deadline):
+                self.deliver_slow_ordinary_callback()
                 self.publish_noise_batch()
                 if self.late_events is not None and asynchronous_bootstrap == 'late':
                     self.materialize_bootstrap()
@@ -1150,7 +1168,13 @@ class RuntimeContract(unittest.TestCase):
             case.assertEqual(owned_turn, history[-1]['id'])
             case.assertEqual(cwd, str(case.agent / 'work'))
             case.assertEqual(operation, history[-1]['items'][0]['clientId'])
-            case.assertGreater(deadline, time.monotonic())
+            if slow_ordinary_callback and clock_offset[0] == 0:
+                return None  # Native model has not yet produced the current proof/effect sequence.
+            case.assertGreater(deadline, fixture_clock() if slow_ordinary_callback else time.monotonic(),
+                'Fresh proof deadline expired during model latency before first callback')
+            case.registry_observation_deadlines.append((fixture_clock(), deadline))
+            if slow_ordinary_callback and rollout_registry == 'absent':
+                clock_offset[0] += 2
             rollout_reads.append((owned_thread, owned_turn, operation))
             order.append('read_owned_current_registry_evidence')
             if rollout_registry == 'absent' or (rollout_registry == 'delayed' and len(rollout_reads) == 1):
@@ -1179,7 +1203,7 @@ class RuntimeContract(unittest.TestCase):
         if default_checkpoint:
             adapters.pop('checkpoint')
         self.runtime_native_adapters = dict(adapters)
-        controller = self.make(adapters=adapters)
+        controller = self.make(adapters=adapters, clock=fixture_clock)
         return controller, hosts, calls, order
 
     def test_running_host_socket_becomes_ready_by_inspection_without_relaunch(self):
@@ -1935,6 +1959,56 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['thread_id'])
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
+
+    def test_late_first_native_callback_uses_fresh_observation_deadline_with_available_ordered_proof(self):
+        self.assertTrue(callable(getattr(runtime_module, 'read_registry_evidence', None)),
+            'Accepted native registry evidence boundary absent')
+        for mode in ('read', 'approval_full'):
+            with self.subTest(mode=mode):
+                case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
+                case.setUp()
+                try:
+                    case.publish_registry()
+                    controller, hosts, calls, order = case.discovery_fixture(native_mode=mode,
+                        human_decision='decline' if mode == 'approval_full' else None,
+                        rollout_registry='ready', slow_ordinary_callback=True)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 60)
+                    self.assertEqual(result['outcome'], 'ran')
+                    self.assertIn('ordinary_first_callback_after_twenty_seconds', order)
+                    self.assertLess(order.index('ordinary_first_callback_after_twenty_seconds'),
+                        order.index('owned_rollout_registry_proof_returned'))
+                    self.assertEqual(order.count('reply_approval' if mode == 'approval_full' else 'reply_dynamic'), 1)
+                    self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
+                    self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+                    self.assertEqual((case.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+                    if mode == 'approval_full':
+                        self.assertIn('native_resolution_delivered', order)
+                        question = json.loads(next((case.agent / 'questions').glob('*.json')).read_text())
+                        self.assertEqual(question['status'], 'closed')
+                        self.assertEqual(question['native_callback']['status'], 'answered')
+                finally:
+                    case.doCleanups()
+
+    def test_late_first_task_callback_missing_proof_waits_only_bounded_observation_window(self):
+        self.assertTrue(callable(getattr(runtime_module, 'read_registry_evidence', None)),
+            'Accepted native registry evidence boundary absent')
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='read',
+            rollout_registry='absent', slow_ordinary_callback=True)
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 60)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertIn('ordinary_first_callback_after_twenty_seconds', order)
+        self.assertTrue(self.registry_observation_deadlines)
+        first_observation, first_deadline = self.registry_observation_deadlines[0]
+        self.assertLessEqual(first_deadline - first_observation, 10.01)
+        self.assertTrue(all(deadline <= first_deadline + 0.01
+            for observed, deadline in self.registry_observation_deadlines))
+        self.assertNotIn('reply_dynamic', order)
+        self.assertNotIn('checkpoint_commit', order)
+        self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+        self.assertTrue((self.agent / 'inbox/inflight/event-1.json').is_file())
+        self.assertFalse((self.agent / 'done.json').exists())
 
     def test_genuine_answer_brief_question_flock_contention_waits_and_revalidates_before_reply(self):
         self.publish_registry()
