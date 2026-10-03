@@ -264,3 +264,11 @@ Registry diagnostic допускает только fixed JS expression `text(AL
 
 
 Bootstrap native notification stream может содержать больше256 benign agentMessage/reasoning/tokenUsage deltas за время одного хода. Max events/bytes ограничивает outstanding batch и retained proof, а не lifetime число проигнорированных уведомлений. Controller проверяет каждый bounded batch на запрещённые requests/file effects, затем сохраняет только bounded raw custom-tool input/output, необходимые для registry correlation. Benign deltas не копятся в proof journal/списке и не являются evidence. Late exact registry+terminal+owned V8 допускает completion; hidden unsafe callback/fileChange среди deltas всё равно немедленно отзывает authority, не теряется фильтром.
+
+## Уточнения recovery и raw proof после второго compliance
+
+До fixed registry proof любые custom tool call/output, кроме единственной коррелированной fixed diagnostic пары, отказывают: нельзя пропустить посторонний exec и затем выдать authority. После proof обычные exec для разрешённых TASK tools/apply_patch допустимы; повторный diagnostic с противоречивым registry отказывает. Benign native notifications не создают пожизненный лимит, но каждая bounded batch полностью проверяется.
+
+Durable exact terminal.json после all-host drain достаточен для восстановления обычного checkpoint, даже если crash случился до первого checkpoint.json. Recovery completion.json доводит requested done, store.finish и original envelope done/dedup; replay не вызывает native launch/turn/reply. Shared codex_cycle выполняет reconcile под собственным executor flock до блокировки на существующем inflight; unknown/missing evidence удерживается без requeue или нового model turn.
+
+После recovery revoke/drain genuine native permission question без confirmed reply становится expired/stale под question lock, включая pending без human answer/send intent. Late approve/reject отказывают до изменения question/spool; карточка не показывает активные кнопки. Подтверждённый reply восстанавливается по exact receipt, lone intent не пересылается.
