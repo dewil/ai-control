@@ -4171,6 +4171,16 @@ def _integrate_tmp_cleanup(project_path, tmp):
                 pass
         if os.path.exists(tmp):
             shutil.rmtree(tmp, ignore_errors=True)
+    # Filesystem fallback может оставить свежую регистрацию, которую
+    # обычный prune не удаляет. Git умеет снять ровно этот отсутствующий
+    # owned path; повторяем и при восстановлении следующей попыткой.
+    if not os.path.exists(tmp) and not os.path.islink(tmp):
+        try:
+            subprocess.run(["git", "-C", project_path, "worktree", "remove",
+                            "--force", tmp], capture_output=True, text=True,
+                           timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # исходная ошибка фазы сохранена; следующая попытка повторит
 
 
 def _integrate_merge_worktree(project_path, tmp, target, old_sha, commit_sha,
