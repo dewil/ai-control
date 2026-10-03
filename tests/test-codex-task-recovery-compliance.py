@@ -137,6 +137,11 @@ class RecoveryCompliance(unittest.TestCase):
         before_calls = list(calls)
         # Public shared writer creates the real requested done shape. Simulate
         # a conflicting previously finalized shared receipt in this own fixture.
+        # The crash used its private checkpoint index; reconcile has not yet
+        # synchronized the ordinary index. Arrange the shared writer's genuine
+        # clean-tree precondition against that already committed fixture HEAD.
+        f.git('read-tree', 'HEAD', cwd=f.agent / 'work')
+        self.assertEqual(f.git('status', '--porcelain', cwd=f.agent / 'work'), '')
         from _agent_done_io import request_done_locked
         with (f.agent / 'done.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
