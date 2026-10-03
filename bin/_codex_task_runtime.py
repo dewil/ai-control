@@ -819,7 +819,11 @@ class CodexTaskRuntime:
 
     def _dispatch(self,transport,snapshot,binding,op,generation,attempt,deadline):
         waiting=[]; changes={}; seen={}; resolved=set(); iteration=self.clock();registry_events=[];registry_proven=False
-        pending=[];proof_deadline=min(deadline,self.clock()+10)
+        pending=[];proof_deadline=None
+        def observation_deadline():
+            nonlocal proof_deadline
+            if proof_deadline is None:proof_deadline=min(deadline,self.clock()+10)
+            return proof_deadline
         while True:
             self._deadline(deadline)
             self.adapters['heartbeat'](self.agent_dir,generation,attempt,'running',iteration,deadline=deadline)
@@ -832,12 +836,13 @@ class CodexTaskRuntime:
             file_events=any(event.get('method')=='item/fileChange/patchUpdated' or event.get('method') in ('item/started','item/completed')
                 and event.get('params',{}).get('item',{}).get('type')=='fileChange' for event in events)
             if not registry_proven and not wire and (file_events or pending or any('id' in event for event in events)):
-                proof=self._owned_registry(binding,op,snapshot,registry_events,proof_deadline);sampled=True
+                proof=self._owned_registry(binding,op,snapshot,registry_events,observation_deadline());sampled=True
                 if proof is not None:registry_events=proof;registry_proven=True
             for event in events:
                 if event.get('method') in ('rawResponseItem/completed','item/rawResponseItem/completed'):
                     item=event.get('params',{}).get('item',{})
                     if not registry_proven:
+                        if item.get('type') in ('custom_tool_call','custom_tool_call_output'):observation_deadline()
                         registry_events.append(event)
                         require(len(registry_events)<=256 and len(json.dumps(registry_events).encode())<=1024*1024)
                         if item.get('type')=='custom_tool_call':
@@ -858,25 +863,25 @@ class CodexTaskRuntime:
                         require(event.get('method')=='item/tool/call' and params.get('tool') in ('task_read','task_search','task_list','task_ask','task_done')
                             and params.get('threadId')==binding.thread_id and params.get('turnId')==binding.turn_id)
             if not registry_proven:
-                self._deadline(proof_deadline)
+                if proof_deadline is not None:self._deadline(proof_deadline)
                 if not sampled:
                     proof=None
                     if pending or any('id' in event for event in events):
-                        proof=self._owned_registry(binding,op,snapshot,registry_events,proof_deadline)
+                        proof=self._owned_registry(binding,op,snapshot,registry_events,observation_deadline())
                 if proof is not None:
                     registry_events=proof;registry_proven=True
                 else:
                     pending.extend(event for event in events if 'id' in event)
                     require(len(pending)<=256 and len(json.dumps(pending).encode())<=1024*1024)
-                    observed=transport.call('thread/read',dict(threadId=binding.thread_id,includeTurns=True),deadline=proof_deadline)['thread']
+                    observed=transport.call('thread/read',dict(threadId=binding.thread_id,includeTurns=True),deadline=deadline if proof_deadline is None else proof_deadline)['thread']
                     require(observed['id']==binding.thread_id and observed['cwd']==self.cwd)
                     terminal=any(turn.get('id')==binding.turn_id and turn.get('status') in ('completed','failed','interrupted') for turn in observed['turns'])
                     if terminal and not sampled:
-                        proof=self._owned_registry(binding,op,snapshot,registry_events,proof_deadline)
+                        proof=self._owned_registry(binding,op,snapshot,registry_events,observation_deadline())
                         if proof is not None:
                             registry_events=proof;registry_proven=True
                     if not registry_proven:
-                        time.sleep(min(.05,max(0,proof_deadline-self.clock())))
+                        time.sleep(min(.05,max(0,(deadline if proof_deadline is None else proof_deadline)-self.clock())))
                         continue
             if pending:
                 events=pending+events;pending=[]
@@ -1002,6 +1007,8 @@ class CodexTaskRuntime:
                     continue
             thread=transport.call('thread/read',dict(threadId=binding.thread_id,includeTurns=True),deadline=deadline)['thread']
             turn=[t for t in thread['turns'] if t['id']==binding.turn_id]
+            if transport.events:
+                continue
             if turn and turn[0]['status'] in ('completed','failed','interrupted'):
                 require(not waiting)
                 require(registry_proven and turn[0]['status']=='completed')
