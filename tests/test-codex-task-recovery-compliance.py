@@ -198,7 +198,10 @@ class RecoveryCompliance(unittest.TestCase):
         started = time.monotonic()
         with (f.agent / 'done.lock').open('a') as done_lock:
             fcntl.flock(done_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            result = controller.revoke_and_drain('shutdown', deadline=time.monotonic() + 1)
+            try:
+                result = controller.revoke_and_drain('shutdown', deadline=time.monotonic() + 1)
+            except fixture_module.runtime_module.RuntimeError:
+                self.fail('bounded nested quiescent barrier refused while holding done lock')
         self.assertIs(result['drained'], True)
         self.assertLess(time.monotonic() - started, 1.5)
         self.assertEqual(f.git('rev-parse', 'HEAD', cwd=f.agent / 'work'), head)
