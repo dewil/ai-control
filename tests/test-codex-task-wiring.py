@@ -153,6 +153,78 @@ print(json.dumps(result,ensure_ascii=False))
         self.assertNotIn('session_id', spec)
         self.assertFalse(any('Bash' in str(spec.get(key, '')) for key in ('allow_tools', 'allowed_tools')))
 
+    def creator_snapshot(self, name):
+        # Only disposable fixture files; byte snapshots catch mutations/new events.
+        roots = [self.agents / name, self.base / 'spool' / name, self.base / 'codex-task-state']
+        result = {}
+        for root in roots:
+            for path in root.rglob('*') if root.exists() else []:
+                if path.is_symlink():
+                    result[str(path.relative_to(self.base))] = ('symlink', os.readlink(path))
+                elif path.is_file():
+                    result[str(path.relative_to(self.base))] = ('file', path.read_bytes())
+        return result
+
+    def matching_legacy_worktree_template(self):
+        # Match Codex's type/project/workspace/runtime so a refusal cannot be
+        # explained by an unrelated compatibility mismatch.
+        (self.base / 'task-template.yaml').write_text(self.template('workspace: worktree\nruntime: drain\n'))
+
+    def test_existing_claude_cannot_silently_satisfy_explicit_codex_request(self):
+        # INV-CXRUN-01: absence engine is immutable default Claude, not migration.
+        self.matching_legacy_worktree_template()
+        for stored_engine in (None, 'claude'):
+            name = 'task-engine-default' if stored_engine is None else 'task-engine-explicit'
+            with self.subTest(stored_engine=stored_engine):
+                created = self.create(name=name)
+                self.assertEqual(created.returncode, 0, created.stderr)
+                if stored_engine is not None:
+                    spec_path = self.agents / name / 'spec.yaml'
+                    spec = yaml.safe_load(spec_path.read_text())
+                    spec['engine'] = stored_engine
+                    spec_path.write_text(yaml.safe_dump(spec))
+                agent = self.agents / name
+                (agent / 'work/keep-dirty.txt').write_text('existing private work must survive\n')
+                before = self.creator_snapshot(name)
+                head = self.git('-C', str(agent / 'work'), 'rev-parse', 'HEAD')
+                branches = self.git('-C', str(self.project), 'branch', '--list')
+                result = self.create('codex', name=name)
+                self.assertNotEqual(result.returncode, 0, 'existing Claude must not report Codex request success')
+                self.assertEqual(self.creator_snapshot(name), before)
+                self.assertEqual(self.git('-C', str(agent / 'work'), 'rev-parse', 'HEAD'), head)
+                self.assertEqual(self.git('-C', str(self.project), 'branch', '--list'), branches)
+
+    def test_existing_codex_cannot_silently_satisfy_default_or_explicit_claude(self):
+        # INV-CXRUN-01: reverse request also refuses immutable engine migration.
+        self.matching_legacy_worktree_template()
+        name = 'task-existing-codex'
+        created = self.create('codex', name=name)
+        self.assertEqual(created.returncode, 0, created.stderr)
+        agent = self.agents / name
+        (agent / 'work/keep-dirty.txt').write_text('existing Codex work must survive\n')
+        for requested_engine in (None, 'claude'):
+            with self.subTest(requested_engine=requested_engine):
+                before = self.creator_snapshot(name)
+                head = self.git('-C', str(agent / 'work'), 'rev-parse', 'HEAD')
+                branches = self.git('-C', str(self.project), 'branch', '--list')
+                result = self.create(requested_engine, name=name)
+                self.assertNotEqual(result.returncode, 0, 'existing Codex must not report Claude request success')
+                self.assertEqual(self.creator_snapshot(name), before)
+                self.assertEqual(self.git('-C', str(agent / 'work'), 'rev-parse', 'HEAD'), head)
+                self.assertEqual(self.git('-C', str(self.project), 'branch', '--list'), branches)
+
+    def test_existing_same_engine_creation_remains_idempotent_without_new_events(self):
+        # INV-CXRUN-01: default Claude and explicit Codex each keep positive replay.
+        self.matching_legacy_worktree_template()
+        for engine, name in ((None, 'task-same-claude'), ('codex', 'task-same-codex')):
+            with self.subTest(engine=engine):
+                first = self.create(engine, name=name)
+                self.assertEqual(first.returncode, 0, first.stderr)
+                before = self.creator_snapshot(name)
+                result = self.create(engine, name=name)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.creator_snapshot(name), before)
+
     def test_unknown_engine_has_no_claude_fallback_or_publication(self):
         # INV-CXRUN-01
         result = self.create('unknown-engine')
