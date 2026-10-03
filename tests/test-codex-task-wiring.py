@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import uuid
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,7 +132,8 @@ print(json.dumps(result,ensure_ascii=False))
         self.assertEqual((spec['engine'], spec['type'], spec['runtime'], spec['workspace']),
                          ('codex', 'event', 'drain', 'worktree'))
         control = json.loads((agent / 'control.json').read_text())
-        self.assertRegex(control['codex_state_id'], r'^[0-9a-f]{32}$')
+        self.assertIs(type(control['codex_state_id']), str)
+        self.assertEqual(str(uuid.UUID(control['codex_state_id'])), control['codex_state_id'])
         self.assertTrue((agent / 'work/.git').is_file())
         state_root = self.base / 'codex-task-state'
         self.assertTrue(state_root.is_dir(), 'published Codex TASK has no private registry')
@@ -145,7 +147,7 @@ print(json.dumps(result,ensure_ascii=False))
             self.assertEqual(record.stat().st_mode & 0o777, 0o600)
             self.assertEqual(record.stat().st_uid, os.getuid())
             self.assertEqual(record.stat().st_nlink, 1)
-        for path in (agent / '.lock', agent / 'inbox/.lock'):
+        for path in (agent / '.lock', agent / 'inbox/.inbox.lock'):
             self.assertTrue(path.is_file(), str(path))
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertNotIn('session_id', spec)
@@ -305,7 +307,7 @@ print(json.dumps(result,ensure_ascii=False))
         (agent / 'spec.yaml').write_text(yaml.safe_dump(spec_data))
         control_path = agent / 'control.json'
         control = json.loads(control_path.read_text())
-        control['codex_state_id'] = 'a' * 32
+        control['codex_state_id'] = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
         control['lease']['state'] = lease
         control['desired'] = 'stopped'
         control['attention'] = dict(reason='resume_failed', since='2026-01-01T00:00:00Z', episode='fixture', count=1)
