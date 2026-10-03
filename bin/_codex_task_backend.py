@@ -167,7 +167,14 @@ class CodexTaskBackend:
                 fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
                 pins.append((path, fd, False, True))
                 require((before.st_dev, before.st_ino) == (os.fstat(fd).st_dev, os.fstat(fd).st_ino))
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                while True:
+                    self._budget(deadline)
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        self._check_pins(pins, deadline)
+                        time.sleep(min(.01,self._budget(deadline)))
                 self._check_pins(pins, deadline)
             self._authority(deadline)
             self._check_pins(pins, deadline)
