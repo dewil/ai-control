@@ -369,7 +369,20 @@ class CodexTaskRuntime:
         host=self._host(op,names)
         with self.store.launch_guard(op['operation_id'],deadline=deadline):
             snapshot=host.start(deadline=deadline)
-            require(snapshot.phase=='running' and snapshot.socket_ready and snapshot.control_group)
+            require(snapshot.phase=='running' and type(snapshot.socket_ready) is bool and snapshot.control_group)
+            identity=[snapshot.unit,snapshot.invocation_id,snapshot.main_pid,snapshot.socket,snapshot.control_group]
+            require(type(snapshot.main_pid) is int and snapshot.main_pid>0
+                and all(type(value) is str and value for value in (snapshot.unit,snapshot.invocation_id,snapshot.socket,snapshot.control_group)))
+            token=read_json(op['host_state_dir']+'/journal.json')['token']
+            ready_deadline=min(deadline,self.clock()+10)
+            while not snapshot.socket_ready:
+                self._deadline(ready_deadline)
+                snapshot=host.inspect(deadline=ready_deadline)
+                require(snapshot.phase=='running' and type(snapshot.socket_ready) is bool
+                    and _equal([snapshot.unit,snapshot.invocation_id,snapshot.main_pid,snapshot.socket,snapshot.control_group],identity)
+                    and read_json(op['host_state_dir']+'/journal.json')['token']==token)
+                if not snapshot.socket_ready: time.sleep(min(.05,max(0,ready_deadline-self.clock())))
+            self._deadline(deadline)
         transport=self.adapters['transport_factory'](snapshot.socket,deadline=deadline,clock=self.clock)
         return op,host,snapshot,transport
 
