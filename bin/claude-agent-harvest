@@ -1168,7 +1168,7 @@ USAGE = """usage: claude-agent-harvest <command> [args]
   dismiss <project_key> <role> <cid> --reason ...   терминал
   reject  <project_key> <role> <cid> --reason ...   upstream-rejected
   mark-applied <project_key> <role> <cid>  терминал (канон принял)
-  pending                                  pending-upstream JSON-lines (для maintainer)"""
+  pending                                  pending-upstream JSON-lines (ручная обработка, read-only)"""
 
 COMMANDS = {
     "collect": cmd_collect, "propose": cmd_propose, "digest": cmd_digest,

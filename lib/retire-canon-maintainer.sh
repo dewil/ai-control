@@ -1,6 +1,22 @@
 # shellcheck shell=bash
 # Source-only installer helper. Never runs the retired operator or removes data.
 # Callers supply OS_KIND, BIN_DIR, UNIT_DIR and optional DRY_RUN.
+_retired_canon_units_inactive() {
+  local unit proof load state
+  for unit in "$@"; do
+    if ! proof=$(systemctl --user show "$unit" --property=LoadState,ActiveState); then
+      echo "ERROR: cannot verify retired unit $unit inactive; remaining files preserved" >&2
+      return 1
+    fi
+    load=$(printf '%s\n' "$proof" | sed -n 's/^LoadState=//p')
+    state=$(printf '%s\n' "$proof" | sed -n 's/^ActiveState=//p')
+    case "$load:$state" in
+      loaded:inactive|masked:inactive|not-found:inactive) ;;
+      *) echo "ERROR: retired unit $unit not confirmed inactive ($load/$state)" >&2; return 1 ;;
+    esac
+  done
+}
+
 retire_canon_maintainer() {
   local name=claude-agent-canon-maintainer unit state load proof path present=0
   local -a absent_units=() units=("$name.timer" "$name.service")
@@ -51,16 +67,7 @@ retire_canon_maintainer() {
               return 1
             fi
           fi
-          if ! proof=$(systemctl --user show "$unit" --property=LoadState,ActiveState); then
-            echo "ERROR: cannot verify retired unit $unit stopped; files preserved" >&2
-            return 1
-          fi
-          load=$(printf '%s\n' "$proof" | sed -n 's/^LoadState=//p')
-          state=$(printf '%s\n' "$proof" | sed -n 's/^ActiveState=//p')
-          case "$load:$state" in
-            loaded:inactive|loaded:failed|masked:inactive|not-found:inactive) ;;
-            *) echo "ERROR: retired unit $unit not confirmed stopped ($load/$state)" >&2; return 1 ;;
-          esac
+          _retired_canon_units_inactive "$unit" || return 1
         done
         for unit in "${units[@]}"; do
           # disable rejects masked or missing units on some systemd versions.
@@ -76,6 +83,8 @@ retire_canon_maintainer() {
           fi
           systemctl --user disable "$unit" || return 1
         done
+        # Disabling can race with an external start; refresh both proofs before removal.
+        _retired_canon_units_inactive "${units[@]}" || return 1
         for unit in "${units[@]}"; do
           rm -f "$UNIT_DIR/$unit" || return 1
           for path in "$UNIT_DIR"/*.wants/"$unit" "$UNIT_DIR"/*.requires/"$unit"; do
@@ -84,6 +93,8 @@ retire_canon_maintainer() {
           done
         done
         systemctl --user daemon-reload || return 1
+        # Reload does not prove that a manager-retained process stayed inactive.
+        _retired_canon_units_inactive "${units[@]}" || return 1
       fi
     fi
   fi
