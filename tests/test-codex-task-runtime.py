@@ -366,7 +366,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False, native_history_default=False):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -383,6 +383,7 @@ class RuntimeContract(unittest.TestCase):
         transports = []
         answered = set()
         bootstrap_materialized = [False]
+        native_history_mode = ['legacy']
         from _codex_task_files import CodexTaskFiles
         from _codex_task_bridge import dynamic_tools
         descriptors = CodexTaskFiles.dynamic_tools() + dynamic_tools()
@@ -393,7 +394,7 @@ class RuntimeContract(unittest.TestCase):
 
         def thread():
             return dict(id=thread_id, cwd=str(case.agent / 'work'), ephemeral=False,
-                path=str(native_path), historyMode='legacy', model='inherited-model',
+                path=str(native_path), historyMode=native_history_mode[0], model='inherited-model',
                 reasoningEffort=None, status={'type': 'idle'}, turns=copy.deepcopy(history),
                 environments=[{'environmentId': 'local', 'cwd': str(case.agent / 'work'),
                                'runtimeWorkspaceRoots': [str(case.agent / 'work')]}])
@@ -614,6 +615,8 @@ class RuntimeContract(unittest.TestCase):
                             'tools': {}, 'resources': [], 'resourceTemplates': []}], 'nextCursor': None}
                     if method in ('thread/start', 'thread/resume'):
                         if method == 'thread/start':
+                            if native_history_default:
+                                native_history_mode[0] = params.get('historyMode', 'paginated')
                             case.assertEqual(params['dynamicTools'], descriptors)
                             case.assertNotIn('model', params)
                             case.assertNotIn('reasoningEffort', params)
@@ -1813,6 +1816,18 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['thread_id'])
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
+
+    def test_new_thread_explicitly_selects_legacy_history_against_native_paginated_default(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='read', native_history_default=True)
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
+        self.assertEqual(result['outcome'], 'ran')
+        starts = [params for method, params in calls if method == 'thread/start']
+        self.assertEqual(len(starts), 1)
+        self.assertEqual(starts[0].get('historyMode'), 'legacy')
+        self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
+        self.assertEqual(order.count('reply_dynamic'), 1)
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
 
     def precheckpoint_crash_fixture(self, *, completion=False):
         self.publish_registry()
