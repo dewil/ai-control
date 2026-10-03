@@ -209,13 +209,23 @@ print(json.dumps(result,ensure_ascii=False))
         state_root = self.base / 'codex-task-state'
         wrapper = self.bin / 'claude-agent-io'
         wrapper.write_text('#!/usr/bin/env python3\nimport os,sys,json,pathlib\n'
-            f'root=pathlib.Path({str(state_root)!r})\n'
-            'if any("codex_state_id" in arg for arg in sys.argv[1:]):\n'
-            ' records=list(root.rglob("*.json")) if root.is_dir() else []\n'
-            ' valid=bool(records) and root.stat().st_mode & 0o777 == 0o700\n'
-            f' with open({str(observed)!r},"a") as f: f.write(json.dumps(dict(valid=valid))+"\\n")\n'
-            ' if not valid: sys.exit(2)\n'
-            f'os.execv({str(actual_io)!r},[{str(actual_io)!r},*sys.argv[1:]])\n')
+            'if __name__ != "__main__":\n'
+            ' from importlib.machinery import SourceFileLoader\n'
+            ' import importlib.util\n'
+            f' loader=SourceFileLoader("fixture_real_control_io",{str(actual_io)!r})\n'
+            ' spec=importlib.util.spec_from_loader(loader.name,loader)\n'
+            ' module=importlib.util.module_from_spec(spec)\n'
+            ' sys.modules[loader.name]=module\n'
+            ' loader.exec_module(module)\n'
+            ' validate_control=module.validate_control\n'
+            'else:\n'
+            f' root=pathlib.Path({str(state_root)!r})\n'
+            ' if any("codex_state_id" in arg for arg in sys.argv[1:]):\n'
+            '  records=list(root.rglob("*.json")) if root.is_dir() else []\n'
+            '  valid=bool(records) and root.stat().st_mode & 0o777 == 0o700\n'
+            f'  with open({str(observed)!r},"a") as f: f.write(json.dumps(dict(valid=valid))+"\\n")\n'
+            '  if not valid: sys.exit(2)\n'
+            f' os.execv({str(actual_io)!r},[{str(actual_io)!r},*sys.argv[1:]])\n')
         wrapper.chmod(0o700)
         compile(wrapper.read_text(), str(wrapper), 'exec')
         result = self.create('codex')
