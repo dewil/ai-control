@@ -462,10 +462,15 @@ class CodexTaskRuntime:
                 require(params.get('threadId')==thread and params.get('turnId')==turn)
                 item=params.get('item',{})
                 if item.get('type')=='custom_tool_call' and item.get('name') in ('exec','functions.exec'):
-                    if item.get('input')=='text(ALL_TOOLS.map(t=>t.name).sort())':
+                    if type(item.get('input')) is str and re.fullmatch(r'\s*text\s*\(\s*ALL_TOOLS\s*\.\s*map\s*\(\s*t\s*=>\s*t\s*\.\s*name\s*\)\s*\.\s*sort\s*\(\s*\)\s*\)\s*;?\s*',item['input']):
                         inputs[item['call_id']]=True
                 elif item.get('type')=='custom_tool_call_output' and item.get('call_id') in inputs:
-                    output=item['output']; require(type(output) is str and len(output)<=65536)
+                    output=item['output']
+                    if type(output) is list:
+                        require(1<=len(output)<=100)
+                        require(all(type(block) is dict and set(block)=={'type','text'} and block['type'] in ('input_text','text') and type(block['text']) is str for block in output))
+                        output='\n'.join(block['text'] for block in output)
+                    require(type(output) is str and len(output.encode())<=65536 and names is None)
                     offset=output.find('[')
                     require(offset>=0)
                     names=json.loads(output[offset:]); _plain(names)
