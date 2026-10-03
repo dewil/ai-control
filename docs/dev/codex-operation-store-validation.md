@@ -1,7 +1,7 @@
-# Codex operation-store validation
+# Проверка Codex operation-store
 
-Reviewed implementation3505b0e, base d6744ed. Root actual64 independent store tests GREEN (128.089s), unchanged333 existing Codex/Telegram tests GREEN: total397. Install completeness76/0; ShellCheck and diffcheck GREEN. All fixture processes use private umask077; initial root run without fixture umask was discarded and rerun.
+Проверенная реализация3505b0e, базаd6744ed. Основной агент фактически запустил64 независимых store tests GREEN (128.089s) и333 существующих Codex/Telegram tests GREEN: всего397. Install completeness76/0; ShellCheck и diffcheck GREEN. Фикстуры используют private umask077; первоначальный прогон без нужного umask отброшен и повторён.
 
-Initial blind46 tests committed beforeimplementation; later12 historicalenvelope tests and4 publication/path tests plus2 replacementidentity tests committed before corresponding original-author fixes. Exact partialreceipt replay and original directory replacement are behavioral regression roots.
+Начальные46 blind tests закоммичены до реализации; дополнительные12 historical-envelope,4 publication/path и2 replacement-identity tests — до соответствующих исправлений первоначального автора. Частичная публикация receipt и замена исходных каталогов закреплены отдельными поведенческими регрессиями.
 
-No nativeRPC/controlwriter/runtimewiring/deployment acceptance claimed by this helper.
+Этот helper не заявляет успешную интеграцию runtime, native RPC, TASK control writers или deployment.
