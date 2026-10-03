@@ -865,6 +865,12 @@ class RuntimeContract(unittest.TestCase):
                 case.assertEqual(questions[0].read_bytes(), before_question)
                 case.assertEqual({path.name: path.read_bytes() for path in spool.glob('*.json')}, before_spool)
                 order.append('outside_programmatic_approve_refused')
+            if approval_state == 'receipt_blocked':
+                index = json.loads((case.state / case.control['codex_state_id'] / 'index.json').read_text())
+                record = next(r for r in index['operations'].values() if r['event_key'] == 'event-1')
+                blocker = Path(record['host_state_dir']).parent / ('approval-' + question['qid'] + '.json')
+                blocker.mkdir(mode=0o700)
+                order.append('confirmed_receipt_target_blocked')
             command = [str(executable), str(case.agent), '--qid', question['qid'],
                 '--approve' if human_decision == 'accept' else '--reject', '--by', 'fixture-operator']
             completed = subprocess.run(command, env=environment, stdin=subprocess.DEVNULL,
@@ -1629,6 +1635,52 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['thread_id'])
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
+
+    def test_unwritable_confirmed_receipt_refuses_before_native_answer(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_full',
+            human_decision='accept', approval_state='receipt_blocked')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertIn('confirmed_receipt_target_blocked', order)
+        self.assertIn('genuine_human_answer', order)
+        self.assertNotIn('reply_approval', order)
+        questions = list((self.agent / 'questions').glob('*.json'))
+        self.assertEqual(len(questions), 1)
+        question = json.loads(questions[0].read_text())
+        self.assertEqual(question['status'], 'open')
+        self.assertEqual(question['decision'], 'approve')
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+
+    def test_execute_foreign_kernel_executor_lock_owner_has_zero_effect(self):
+        self.publish_registry()
+        self.executor.close()
+        lock = self.agent / 'inbox/.executor.lock'
+        code = ('import fcntl,sys; '
+                "f=open(sys.argv[1],'r+'); fcntl.flock(f,fcntl.LOCK_EX); "
+                "print('locked',flush=True); sys.stdin.readline()")
+        owner = subprocess.Popen([sys.executable, '-u', '-c', code, str(lock)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=self.git_env)
+        try:
+            self.assertEqual(owner.stdout.readline().strip(), 'locked')
+            before = self.snapshot()
+            control_before = (self.agent / 'control.json').read_bytes()
+            self.refusal(lambda: self.make().execute('event-1', 7, 'attempt-1',
+                                                    deadline=time.monotonic() + 2))
+            self.assertEqual(before, self.snapshot())
+            self.assertEqual((self.agent / 'control.json').read_bytes(), control_before)
+            index = json.loads((self.state / self.control['codex_state_id'] / 'index.json').read_text())
+            self.assertEqual(index['operations'], {})
+        finally:
+            if owner.poll() is None:
+                owner.stdin.write('release\n')
+                owner.stdin.flush()
+            owner.wait(timeout=2)
+            owner.stdin.close()
+            owner.stdout.close()
+            owner.stderr.close()
 
     def test_execute_missing_registry_does_not_initialize_or_send(self):
         self.refusal(lambda: self.make().execute('event-1', 7, 'attempt-1',
