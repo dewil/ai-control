@@ -21,3 +21,7 @@ Generic read-only `pending` JSON CLI и T25 сохраняются. Удаляе
 - INV-CANONRET-04: harvest сохраняет delivery/receipt/pending/manual lifecycle без wake.
 - INV-CANONRET-05: остальные Control компоненты, SHA pinning, история и клиентские данные сохраняются.
 - INV-CANONRET-06: активные CLI/docs/workflows не предлагают старую раскатку, архивные сведения явно исторические.
+
+### Recovery legacy manager state
+
+Systemd может удерживать загруженный старый unit после удаления файлов с диска. Cleanup выполняет read-only проверку обоих фиксированных имён и останавливает обнаруженный загруженный старый unit до удаления оставшихся артефактов. Ошибка state query при наличии legacy binary/unit/enable-link блокирует удаление. При полном отсутствии legacy файлов и недоступном manager чистый профиль не требует удаления и не блокируется. Обычная установка сохраняет собственные прежние preflight-требования.

@@ -12,9 +12,6 @@ trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AGENTS_DIR="$TMP/agents"
 export CLAUDE_HARVEST_DIR="$TMP/harvest"
 export CLAUDE_BIN="$MOCK"
-# T17: canon-trigger в изолированный каталог, пинок systemd мокается штампом
-export CLAUDE_CANON_DIR="$TMP/canon"
-export CLAUDE_CANON_KICK_CMD="touch '$TMP/kick.stamp'"
 AGENTS="$CLAUDE_AGENTS_DIR"
 HARVEST="$CLAUDE_HARVEST_DIR"
 mkdir -p "$AGENTS"
@@ -241,10 +238,8 @@ chk "1 инкарнация -> кластер отброшен" \
 chk "approve -> pending-upstream" "$(cand_status "$KA" coder "$CID")" "pending-upstream"
 BRIEF="$PA/toolkit-log/upstream-pending/harvest-coder-$CID.md"
 [[ -f "$BRIEF" ]] && ok || bad "бриф не создан approve"
-# T17 (§5.3): approve эмитит durable canon-trigger + пинок maintainer-юнита
-[[ -f "$TMP/canon/harvest-trigger.json" ]] && ok || bad "T17: canon-trigger маркер не записан"
-[[ -f "$TMP/kick.stamp" ]] && ok || bad "T17: пинок maintainer не выполнен"
-# T25 (§10.3): pending - машиночитаемый список pending-upstream для maintainer
+# Retirement: approve больше не будит удаленный version rollout operator.
+# T25 (§10.3): pending - машиночитаемый список pending-upstream для ручной обработки и интеграций
 "$HARV" pending > "$TMP/pending.out" 2>/dev/null
 grep -q "\"cid\": \"$CID\"" "$TMP/pending.out" && ok || bad "T25: pending не выдал кандидата"
 python3 -c 'import json,sys
