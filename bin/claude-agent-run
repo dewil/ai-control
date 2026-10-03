@@ -1157,40 +1157,46 @@ def finalize_worktree_done(agent_dir, key, ws, name, project):
     if not os.path.isfile(done_path):
         return
     with FLock(os.path.join(agent_dir, "done.lock")):
-        try:
-            dd = load_json(done_path)
-        except (OSError, ValueError):
-            return
-        if not isinstance(dd, dict) or dd.get("state") != "requested":
-            return
-        if dd.get("envelope_key") != key or dd.get("workspace") != "worktree":
-            return
-        base = dd.get("base")
-        facts = None
-        if base and BASE_SHA_RE.match(base) and project:
-            work = os.path.join(agent_dir, "work")
-            facts = _worktree_facts(work, base, name, project)
-        if facts is None:
-            dd["state"] = "invalid"
-            dd["invalid_reason"] = (
-                "worktree грязное, HEAD не на своей ветке, не потомок "
-                "зафиксированной базы либо база отсутствует - на момент "
-                "завершения прогона предъявлять нечего")
-            # V2.10 §3c, блокер 2: инвалидная заявка тоже финализирована
-            # (решение принято) - state!="requested" все равно блокирует
-            # done-notify отдельно, finalized здесь для единообразия записи.
-            dd["finalized"] = True
-            durable_json(done_path, dd)
-            return
-        commit_sha, base_out, branch, empty = facts
-        dd["commit_sha"] = commit_sha
-        dd["base"] = base_out
-        dd["branch"] = branch
-        dd["empty"] = empty
-        # V2.10 §3c, аудит блокер 2: только теперь заявка финализирована -
-        # done-notify молчит, пока finalized не true (см. cmd_done_notify).
+        finalize_worktree_done_locked(agent_dir, key, name, project)
+
+
+def finalize_worktree_done_locked(agent_dir, key, name, project):
+    """Trusted caller owns done/control/inbox fences and proves native drain."""
+    done_path = os.path.join(agent_dir, "done.json")
+    try:
+        dd = load_json(done_path)
+    except (OSError, ValueError):
+        return
+    if not isinstance(dd, dict) or dd.get("state") != "requested":
+        return
+    if dd.get("envelope_key") != key or dd.get("workspace") != "worktree":
+        return
+    base = dd.get("base")
+    facts = None
+    if base and BASE_SHA_RE.match(base) and project:
+        work = os.path.join(agent_dir, "work")
+        facts = _worktree_facts(work, base, name, project)
+    if facts is None:
+        dd["state"] = "invalid"
+        dd["invalid_reason"] = (
+            "worktree грязное, HEAD не на своей ветке, не потомок "
+            "зафиксированной базы либо база отсутствует - на момент "
+            "завершения прогона предъявлять нечего")
+        # V2.10 §3c, блокер 2: инвалидная заявка тоже финализирована
+        # (решение принято) - state!="requested" все равно блокирует
+        # done-notify отдельно, finalized здесь для единообразия записи.
         dd["finalized"] = True
         durable_json(done_path, dd)
+        return
+    commit_sha, base_out, branch, empty = facts
+    dd["commit_sha"] = commit_sha
+    dd["base"] = base_out
+    dd["branch"] = branch
+    dd["empty"] = empty
+    # V2.10 §3c, аудит блокер 2: только теперь заявка финализирована -
+    # done-notify молчит, пока finalized не true (см. cmd_done_notify).
+    dd["finalized"] = True
+    durable_json(done_path, dd)
 
 
 def dedup_add(ib, key):

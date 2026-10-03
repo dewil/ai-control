@@ -299,10 +299,15 @@ def read_registry_evidence(thread_path, thread_id, turn_id, cwd, operation_id, *
         if kind=='event_msg' and item.get('type')=='user_message' and current==turn_id:
             require(stage==2 and item.get('client_id')==operation_id);stage=3
             continue
-        if kind!='response_item' or item.get('type') not in ('custom_tool_call','custom_tool_call_output'):continue
+        if kind!='response_item':continue
+        effect=item.get('type') not in ('message','reasoning','compaction')
+        if not effect:continue
         require(current is not None)
         if current!=turn_id:continue
         require(stage==3)
+        if item.get('type') not in ('custom_tool_call','custom_tool_call_output'):
+            require(proven)
+            continue
         call=item['type']=='custom_tool_call'
         if proven and call and not _registry_input(item.get('input')):continue
         if proven and not call and item.get('call_id')!=evidence[0]['params']['item']['call_id']:continue
@@ -711,7 +716,8 @@ class CodexTaskRuntime:
             for key in ('dynamicTools','environments','ephemeral','selectedCapabilityRoots'): params.pop(key,None)
             params['threadId']=thread_id
             response=transport.call('thread/resume',params,deadline=deadline)
-            require(response['thread']['id']==thread_id and response['model']==admission['model'] and response['reasoningEffort']==admission['reasoning_effort'])
+            require(response['thread']['id']==thread_id and response['thread']['path']==admission['thread_path']
+                and response['model']==admission['model'] and response['reasoningEffort']==admission['reasoning_effort'])
             self._metadata(response['thread'],tools,deadline)
             pages=self._catalog(transport,thread_id,deadline)
             validate_sealed_policy(response,self.cwd,config,pages,admission['registry'],dict(version='0.160.0',hashes=_HASHES))
@@ -948,7 +954,8 @@ class CodexTaskRuntime:
                                 updated=update['params'];require(updated.get('threadId')==binding.thread_id and updated.get('turnId')==binding.turn_id
                                     and updated['item'].get('type')=='fileChange' and _equal(updated['item'].get('changes'),patch))
                             if 'id' in update and (type(update['id']),update['id'])==key: require(digest(update)==seen[key])
-                        question=read_json(self.agent_dir+'/questions/'+qid+'.json')
+                        with self._guard(binding,op,generation,attempt,deadline=deadline):
+                            question=read_json(self.agent_dir+'/questions/'+qid+'.json')
                         if question.get('answered_at') is not None:
                             require(question.get('answered_by') and question.get('decision') in ('approve','reject') and question.get('answer') is None)
                             with self._guard(binding,op,generation,attempt,deadline=deadline):
@@ -1178,12 +1185,44 @@ class CodexTaskRuntime:
             if question.get(key) is not None:arguments[key]=question[key]
         require(row['fingerprint']==digest(arguments))
 
-    def _dedup_locked(self,key):
-        # Invoke the shared durable ledger writer under the already-held inbox lock.
+    def _shared_runner(self):
         loader=importlib.machinery.SourceFileLoader('_codex_runtime_shared_runner',os.path.join(os.path.dirname(__file__),'claude-agent-run'))
         spec=importlib.util.spec_from_loader(loader.name,loader);module=importlib.util.module_from_spec(spec)
         loader.exec_module(module)
-        module.dedup_add(self.agent_dir+'/inbox',key)
+        return module
+
+    def _dedup_locked(self,key):
+        self._shared_runner().dedup_add(self.agent_dir+'/inbox',key)
+
+    def _finalize_completion(self,op,deadline):
+        parent=str(Path(op['host_state_dir']).parent);path=parent+'/completion.json'
+        value=read_json(path);receipt=value['checkpoint'];self._receipt(receipt,op)
+        require(value['phase'] in ('done_written','finalized') and receipt['commit_sha'] is not None)
+        spec=self._spec(deadline)
+        with self._locks(all_locks=True,deadline=deadline),self.store._context(deadline,locked=True) as context:
+            current=context['index']['operations'][op['operation_id']];control=context['control']
+            require(all(_equal(current[key],op[key]) for key in ('operation_id','task_incarnation','generation','attempt_id','event_key','thread_id','turn_id')))
+            require(current['status'] in ('revoked','finished') and control['generation']==op['generation']
+                and control['lease']['start_attempt_id']==op['attempt_id'] and control['desired']=='running'
+                and control['hold'] is None and control['acceptance']['status'] in ('pending','revise'))
+            for known in context['index']['operations'].values():self.store._drain_gate(context,known,deadline)
+            with self._completion_lock(parent,deadline):
+                require(_equal(read_json(path),value))
+                done_path=self.agent_dir+'/done.json';done=read_json(done_path)
+                require(done['state']=='requested' and done['envelope_key']==op['event_key'] and done['summary']==value['summary'])
+                result=git_run(['rev-parse','HEAD'],self.cwd,spec['project'],deadline=deadline,clock=self.clock)
+                require(result.returncode==0 and result.stdout.strip()==receipt['commit_sha'])
+                expected=dict(commit_sha=receipt['commit_sha'],branch=receipt['branch'],base=control['mission_base'])
+                if done.get('finalized') is True:
+                    require(all(_equal(done.get(key),expected[key]) for key in expected))
+                else:
+                    self._shared_runner().finalize_worktree_done_locked(self.agent_dir,op['event_key'],os.path.basename(self.agent_dir),spec['project'])
+                finalized=read_json(done_path)
+                require(finalized['state']=='requested' and finalized['finalized'] is True
+                    and finalized['envelope_key']==op['event_key'] and finalized['summary']==value['summary']
+                    and all(_equal(finalized.get(key),expected[key]) for key in expected))
+                self._deadline(deadline)
+                value['phase']='finalized';durable_json(path,value,deadline=deadline,clock=self.clock)
 
     def _archive_ordinary(self,op,deadline):
         with self._locks(all_locks=True,deadline=deadline):
@@ -1198,7 +1237,7 @@ class CodexTaskRuntime:
                     return
                 env=read_json(source);require(_equal(env['meta']['codex_operation'],current))
                 outcome='ok'
-                if current['terminal_evidence']['terminal']=='interrupted':
+                if current['terminal_evidence']['terminal']=='interrupted' and not os.path.lexists(str(Path(op['host_state_dir']).parent/'completion.json')):
                     self._ask_proof(op);outcome='asked'
                 env['meta'].setdefault('history',[]).append(dict(outcome=outcome))
                 durable_json(source,env,deadline=deadline,clock=self.clock)
@@ -1349,11 +1388,14 @@ class CodexTaskRuntime:
                 if op['status']=='finished':
                     require(_equal(op['terminal_evidence'],terminal))
                     self._historical_checkpoint(op,parent,deadline)
+                    if os.path.lexists(source) and os.path.lexists(parent+'/completion.json'):
+                        self._finalize_completion(op,deadline)
                     self._archive_ordinary(op,deadline)
                     continue
                 path=parent+'/completion.json'
                 if os.path.lexists(path):
                     self._complete(op,deadline)
+                    self._finalize_completion(op,deadline)
                 else:
                     checkpoint=parent+'/checkpoint.json'
                     if os.path.lexists(checkpoint):
