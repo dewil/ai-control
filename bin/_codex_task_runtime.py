@@ -780,6 +780,30 @@ class CodexTaskRuntime:
         yield True
         self._deadline(deadline)
 
+    def _owned_registry(self,binding,op,snapshot,captured_events,deadline):
+        self._deadline(deadline)
+        proof=self.adapters['read_registry_evidence'](self.current_thread_path,binding.thread_id,binding.turn_id,self.cwd,op['operation_id'],deadline=deadline)
+        if proof is None:return None
+        _plain(proof)
+        require(type(proof) is dict and set(proof)=={'schema','thread_id','turn_id','operation_id','events'}
+            and type(proof['schema']) is int and proof['schema']==1 and proof['thread_id']==binding.thread_id
+            and proof['turn_id']==binding.turn_id and proof['operation_id']==op['operation_id']
+            and type(proof['events']) is list and len(proof['events'])<=256 and len(json.dumps(proof['events']).encode())<=1024*1024)
+        require(all(type(frame) is dict and set(frame)=={'method','params'} and frame['method'] in ('rawResponseItem/completed','item/rawResponseItem/completed')
+            and type(frame['params']) is dict and set(frame['params'])=={'threadId','turnId','item'}
+            and type(frame['params']['item']) is dict and frame['params']['item'].get('type') in ('custom_tool_call','custom_tool_call_output')
+            for frame in proof['events']))
+        self._registry(proof['events'],binding.thread_id,binding.turn_id)
+        for captured in captured_events:
+            item=captured.get('params',{}).get('item',{})
+            if item.get('type')=='custom_tool_call':
+                require(any(all(_equal(item.get(key),candidate['params']['item'].get(key)) for key in ('type','name','call_id','input'))
+                    for candidate in proof['events'] if candidate.get('params',{}).get('item',{}).get('type')=='custom_tool_call'))
+            elif item.get('type')=='custom_tool_call_output':
+                self._registry([proof['events'][0],captured],binding.thread_id,binding.turn_id)
+        self._child(snapshot,deadline)
+        return copy.deepcopy(proof['events'])
+
     def _dispatch(self,transport,snapshot,binding,op,generation,attempt,deadline):
         waiting=[]; changes={}; seen={}; resolved=set(); iteration=self.clock();registry_events=[];registry_proven=False
         pending=[];proof_deadline=min(deadline,self.clock()+10)
@@ -789,6 +813,14 @@ class CodexTaskRuntime:
             events=list(transport.events); transport.events.clear()
             _plain(events)
             require(len(events)<=256 and len(json.dumps(events).encode())<=1024*1024)
+            sampled=False;proof=None
+            wire=any(event.get('method') in ('rawResponseItem/completed','item/rawResponseItem/completed')
+                and event.get('params',{}).get('item',{}).get('type') in ('custom_tool_call','custom_tool_call_output') for event in events)
+            file_events=any(event.get('method')=='item/fileChange/patchUpdated' or event.get('method') in ('item/started','item/completed')
+                and event.get('params',{}).get('item',{}).get('type')=='fileChange' for event in events)
+            if not registry_proven and not wire and (file_events or pending or any('id' in event for event in events)):
+                proof=self._owned_registry(binding,op,snapshot,registry_events,proof_deadline);sampled=True
+                if proof is not None:registry_events=proof;registry_proven=True
             for event in events:
                 if event.get('method') in ('rawResponseItem/completed','item/rawResponseItem/completed'):
                     item=event.get('params',{}).get('item',{})
@@ -814,34 +846,25 @@ class CodexTaskRuntime:
                             and params.get('threadId')==binding.thread_id and params.get('turnId')==binding.turn_id)
             if not registry_proven:
                 self._deadline(proof_deadline)
-                proof=None
-                if pending or any('id' in event for event in events):
-                    proof=self.adapters['read_registry_evidence'](self.current_thread_path,binding.thread_id,binding.turn_id,self.cwd,op['operation_id'],deadline=proof_deadline)
+                if not sampled:
+                    proof=None
+                    if pending or any('id' in event for event in events):
+                        proof=self._owned_registry(binding,op,snapshot,registry_events,proof_deadline)
                 if proof is not None:
-                    _plain(proof)
-                    require(type(proof) is dict and set(proof)=={'schema','thread_id','turn_id','operation_id','events'}
-                        and type(proof['schema']) is int and proof['schema']==1 and proof['thread_id']==binding.thread_id
-                        and proof['turn_id']==binding.turn_id and proof['operation_id']==op['operation_id']
-                        and type(proof['events']) is list and len(proof['events'])<=256 and len(json.dumps(proof['events']).encode())<=1024*1024)
-                    require(all(type(frame) is dict and set(frame)=={'method','params'} and frame['method'] in ('rawResponseItem/completed','item/rawResponseItem/completed')
-                        and type(frame['params']) is dict and set(frame['params'])=={'threadId','turnId','item'}
-                        and type(frame['params']['item']) is dict and frame['params']['item'].get('type') in ('custom_tool_call','custom_tool_call_output')
-                        for frame in proof['events']))
-                    self._registry(proof['events'],binding.thread_id,binding.turn_id)
-                    for captured in registry_events:
-                        item=captured.get('params',{}).get('item',{})
-                        if item.get('type')=='custom_tool_call':
-                            require(any(all(_equal(item.get(key),candidate['params']['item'].get(key)) for key in ('type','name','call_id','input'))
-                                for candidate in proof['events'] if candidate.get('params',{}).get('item',{}).get('type')=='custom_tool_call'))
-                        elif item.get('type')=='custom_tool_call_output':
-                            self._registry([proof['events'][0],captured],binding.thread_id,binding.turn_id)
-                    self._child(snapshot,deadline);registry_events=copy.deepcopy(proof['events']);registry_proven=True
+                    registry_events=proof;registry_proven=True
                 else:
                     pending.extend(event for event in events if 'id' in event)
                     require(len(pending)<=256 and len(json.dumps(pending).encode())<=1024*1024)
-                    transport.call('thread/read',dict(threadId=binding.thread_id,includeTurns=True),deadline=proof_deadline)
-                    time.sleep(min(.05,max(0,proof_deadline-self.clock())))
-                    continue
+                    observed=transport.call('thread/read',dict(threadId=binding.thread_id,includeTurns=True),deadline=proof_deadline)['thread']
+                    require(observed['id']==binding.thread_id and observed['cwd']==self.cwd)
+                    terminal=any(turn.get('id')==binding.turn_id and turn.get('status') in ('completed','failed','interrupted') for turn in observed['turns'])
+                    if terminal and not sampled:
+                        proof=self._owned_registry(binding,op,snapshot,registry_events,proof_deadline)
+                        if proof is not None:
+                            registry_events=proof;registry_proven=True
+                    if not registry_proven:
+                        time.sleep(min(.05,max(0,proof_deadline-self.clock())))
+                        continue
             if pending:
                 events=pending+events;pending=[]
                 require(len(events)<=256 and len(json.dumps(events).encode())<=1024*1024)
@@ -1215,6 +1238,20 @@ class CodexTaskRuntime:
 
     def _expire_questions(self,op,deadline):
         parent=Path(op['host_state_dir']).parent
+        pending=False
+        for path in Path(self.agent_dir+'/questions').glob('*.json'):
+            self._deadline(deadline)
+            question=read_json(str(path));callback=question.get('native_callback')
+            if callback is None:continue
+            require(type(callback) is dict)
+            if callback.get('operation_id')!=op['operation_id']:continue
+            require(question.get('engine')=='codex' and question.get('kind')=='permission'
+                and question.get('qid')==path.stem and all(_equal(callback.get(key),op[key]) for key in
+                    ('operation_id','task_incarnation','generation','attempt_id','thread_id','turn_id')))
+            if question.get('status')=='open' and callback.get('status')=='pending':pending=True
+        if not pending:
+            self.require_drained(deadline=deadline)
+            return
         with self._locks(all_locks=True,deadline=deadline), self.store._context(deadline,locked=True) as context:
             current=context['index']['operations'][op['operation_id']]
             require(current['status'] in ('revoked','finished'))
