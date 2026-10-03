@@ -21,7 +21,7 @@ from _codex_task_store import CodexTaskOperationStore
 from _codex_task_profile import sealed_overrides, sealed_host_argv, sealed_thread_params, validate_sealed_policy, _HASHES, _plain, _equal
 from _codex_task_host import CodexTaskHost, SystemdTaskManager
 from _codex_task_transport import CodexTaskRuntimeTransport
-from _codex_task_backend import CodexTaskBackend
+from _codex_task_backend import CodexTaskBackend, BackendBusyError
 from _codex_task_bridge import TaskBinding, CodexTaskBridge, dynamic_tools
 from _codex_task_files import CodexTaskFiles
 from _codex_task_lifecycle import CodexTaskLifecycle, TaskThread
@@ -572,7 +572,14 @@ class CodexTaskRuntime:
     @contextmanager
     def _guard(self, binding, op, generation, attempt, *, deadline):
         backend=CodexTaskBackend(binding,generation,attempt,op['operation_id'],clock=self.clock)
-        with backend.guard(binding,deadline=deadline) as permitted:
+        with ExitStack() as stack:
+            while True:
+                self._deadline(deadline)
+                try:
+                    permitted=stack.enter_context(backend.guard(binding,deadline=deadline))
+                    break
+                except BackendBusyError:
+                    time.sleep(min(.01,max(0,deadline-self.clock())))
             require(permitted is True)
             with self.store.guard_locked(binding,op['operation_id'],deadline=deadline) as permitted:
                 require(permitted is True)
