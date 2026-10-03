@@ -1320,6 +1320,8 @@ EOF
   echo "$CLAUDE_AGENTS_DIR/$name"
 }
 mk_gh_mock() { # <bindir> <log> [existing-pr-url] -> создает $bindir/gh (реальный внешний бинарь-подмена, git не мокается)
+  # INV-TASK-39: URL-only fixture противоречит контракту принятого head.
+  # Возвращаем реальные branch/SHA собственного Git fixture, включая view после create.
   local bindir="$1" log="$2" existing="${3:-}"
   mkdir -p "$bindir"
   cat > "$bindir/gh" <<EOF
@@ -1327,10 +1329,20 @@ mk_gh_mock() { # <bindir> <log> [existing-pr-url] -> создает $bindir/gh (
 printf '%s\n' "\$*" >> "$log"
 printf '%s\n' "\$@" >> "$log"
 printf '===\n' >> "$log"
+branch=""
+for ((i=1; i<=\$#; i++)); do
+  if [[ "\${!i}" == "--head" ]]; then j=\$((i+1)); branch="\${!j}"; fi
+done
 case "\$1 \$2" in
-  "pr create") echo "https://github.com/x/y/pull/1" ;;
+  "pr create") printf '%s' "\$branch" > "$bindir/created-head"; echo "https://github.com/x/y/pull/1" ;;
   "pr list")
-    if [[ -n "$existing" ]]; then echo '[{"url":"$existing"}]'; else echo '[]'; fi
+    if [[ -n "$existing" ]]; then
+      python3 -c 'import json,sys; print(json.dumps([dict(url=sys.argv[1],headRefName=sys.argv[2],headRefOid=sys.argv[3])]))' "$existing" "\$branch" "\$(git rev-parse "refs/heads/\$branch")"
+    else echo '[]'; fi
+    ;;
+  "pr view")
+    branch=\$(cat "$bindir/created-head")
+    python3 -c 'import json,sys; print(json.dumps(dict(url=sys.argv[1],headRefName=sys.argv[2],headRefOid=sys.argv[3])))' "\$3" "\$branch" "\$(git rev-parse "refs/heads/\$branch")"
     ;;
   *) exit 1 ;;
 esac
@@ -2503,6 +2515,9 @@ DRIFTED_B43=$(git -C "$AGB43/work" rev-parse HEAD)
 # монки-патчем git_run на реальном модуле, как в B48). Без инъекции push
 # адресовал бы тот же коммит что и при обычном push-по-branch, и тест
 # оставался бы зеленым даже при возврате к `git push origin <branch>`.
+# INV-TASK-41: fixed-SHA push остается безопасным при гонке внутри эффекта,
+# но свежий fence после push обязан отказать до create; прежние ожидания
+# integrated/create противоречили принятой спеке поздних сверок.
 echo "=== B44: pr - агент коммитит МЕЖДУ фенсингом и push (внедрено монки-патчем на реальном коде); в origin уезжает принятый commit_sha, а НЕ послегоночный коммит ==="
 PROJ_B44="$TMP/proj-b44"; mkdir -p "$PROJ_B44"
 mk_git_project "$PROJ_B44"
@@ -2535,16 +2550,17 @@ def spy_git_run(args, cwd, timeout=30):
     return real_git_run(args, cwd, timeout)
 mod.git_run = spy_git_run
 status, err = mod._phase_integrate(agent_dir, "wtb44", d)
-print(json.dumps({"status": status, "err": err}, ensure_ascii=False))
+print(json.dumps({"status": status, "err": err, "state": d["state"]}, ensure_ascii=False))
 PY
 )
 STATUS_B44=$(jq_str "$RESULT_B44" 'd.get("status")')
-[[ "$STATUS_B44" == "ok" ]] && ok || fail "B44: интеграция проходит несмотря на гоночный коммит после фенсинга (got: $RESULT_B44)"
+[[ "$STATUS_B44" == "fail" && "$(jq_str "$RESULT_B44" 'd.get("state")')" == "accepted" && -n "$(jq_str "$RESULT_B44" 'd.get("err")')" ]] \
+  && ok || fail "B44: свежий fence после push отказывает с accepted/error при гоночном коммите (got: $RESULT_B44)"
 [[ "$(git -C "$AGB44/work" rev-parse HEAD)" != "$COMMITB44" ]] \
   && ok || fail "B44: fixture - гоночный коммит реально добавлен на ветку задачи после фенсинга"
 [[ "$(git --git-dir="$PROJ_B44.git" rev-parse "refs/heads/$BRANCH_B44" 2>/dev/null)" == "$COMMITB44" ]] \
   && ok || fail "B44: push адресует ЗАФИКСИРОВАННЫЙ commit_sha, а НЕ уехавший после гонки HEAD ветки"
-grep -q 'pr create' "$GHLOG_B44" && ok || fail "B44: gh pr create реально вызван"
+if grep -q 'pr create' "$GHLOG_B44"; then fail "B44: gh pr create не должен вызываться после дрейфа"; else ok; fi
 
 # =============================================================== B45 (блокер 6)
 echo "=== B45: проект исчез из реестра МЕЖДУ приемкой и интеграцией - отказ фазы с attention, НЕ тихий integrate:none ==="
@@ -2642,6 +2658,9 @@ mod = importlib.util.module_from_spec(spec)
 loader.exec_module(mod)
 d = mod.load_json(agent_dir + "/done.json")
 commit_sha = d["commit_sha"]
+# INV-TASK-41: leaf теперь сверяет реальную ветку карточки. Имя агента
+# wtb48 не является Git ref; сохраняем цель теста и все CAS assertions.
+branch = d["branch"]
 real_git_run = mod.git_run
 calls = []
 def spy_git_run(args, cwd, timeout=30):
