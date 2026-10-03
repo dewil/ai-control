@@ -18,7 +18,7 @@ claude-agent-answer <agent-dir> --qid UUID (--text TEXT|--approve|--reject) [--b
 
 Periodic CLI claude-agent-run question-reminders <agent-dir>: привычный проход остальных вопросов/напоминаний сохраняется. Saved unpublished open question вызывает --recover, печатает <qid> recovered либо <qid> fail; ошибка одного не ломает остальные, retry следующим tick. Completed/closed skip. Никаких уведомлений с просьбой повторить уже сохранённый ответ, reminder step не двигается для recovery.
 
-Публичные точки Telegram для offline tests: import module через SourceFileLoader без чтения implementation; mode_poll(), _handle_question_callback(token,proxy,chat_id,message_id,kind,qid,arg,from_id), reply_question(ent,text,from_id) — точное имя reply entry допускается установить inspect без чтения тела; sent_map_register/lookup и mock api getUpdates. Проверять настоящий цикл offset, не тестовую копию его ветвления. Тестовый bindir содержит реальные scripts и transparent wrapper spool-put с fault/crash injection; HOME/agents/spool/map/offset изолированы.
+Публичные точки Telegram для offline tests: import module через SourceFileLoader без чтения implementation; mode_poll(), _handle_question_callback(token,proxy,chat_id,message_id,kind,qid,arg,from_id), _question_reply_text(agent,qid,text,from_id); sent_map_register/lookup и mock api getUpdates. Проверять настоящий цикл offset, не тестовую копию его ветвления. Тестовый bindir содержит реальные scripts и transparent wrapper spool-put с fault/crash injection; HOME/agents/spool/map/offset изолированы.
 
 ## Критерии приёмки
 
