@@ -477,6 +477,20 @@ class CodexTaskRuntime:
         require(type(names) is list and len(names)==7 and set(names)=={'apply_patch','clock__curr_time','task_read','task_search','task_list','task_ask','task_done'})
         return names
 
+    def _bootstrap_events(self,transport,evidence,thread,turn):
+        batch=list(transport.events);transport.events.clear()
+        _plain(batch)
+        require(len(batch)<=256 and len(json.dumps(batch).encode())<=1024*1024)
+        for event in batch:
+            require(type(event) is dict and 'id' not in event)
+            params=event.get('params',{});item=params.get('item',{})
+            require(item.get('type')!='fileChange' and event.get('method')!='item/fileChange/patchUpdated')
+            if event.get('method') in ('rawResponseItem/completed','item/rawResponseItem/completed'):
+                require(params.get('threadId')==thread and params.get('turnId')==turn)
+                if item.get('type') in ('custom_tool_call','custom_tool_call_output'):
+                    evidence.append(event)
+        require(len(evidence)<=256 and len(json.dumps(evidence).encode())<=1024*1024)
+
     def _terminal(self,transport,thread,turn,operation_id,deadline):
         result=transport.call('thread/read',dict(threadId=thread,includeTurns=True),deadline=deadline)['thread']
         require(result['id']==thread and result['cwd']==self.cwd)
@@ -555,9 +569,7 @@ class CodexTaskRuntime:
                 events=[]; registry=None
                 while True:
                     self._deadline(deadline)
-                    events.extend(transport.events); transport.events.clear()
-                    require(len(events)<=256 and len(json.dumps(events).encode())<=1024*1024)
-                    require(not any('id' in event or event.get('method')=='item/started' and event.get('params',{}).get('item',{}).get('type')=='fileChange' for event in events))
+                    self._bootstrap_events(transport,events,thread_id,turn_id)
                     outputs=[event for event in events if event.get('method') in ('rawResponseItem/completed','item/rawResponseItem/completed') and event.get('params',{}).get('item',{}).get('type')=='custom_tool_call_output']
                     if outputs: registry=self._registry(events,thread_id,turn_id)
                     history=transport.call('thread/read',dict(threadId=thread_id,includeTurns=True),deadline=deadline)['thread']
@@ -565,8 +577,7 @@ class CodexTaskRuntime:
                     turns=[row for row in history['turns'] if row['id']==turn_id]
                     require(len(turns)==1)
                     if turns[0]['status'] in ('completed','failed','interrupted'):
-                        events.extend(transport.events); transport.events.clear()
-                        require(not any('id' in event for event in events))
+                        self._bootstrap_events(transport,events,thread_id,turn_id)
                         registry=self._registry(events,thread_id,turn_id)
                         self._child(snapshot,deadline)
                         break
@@ -574,6 +585,8 @@ class CodexTaskRuntime:
                 pages=self._catalog(transport,thread_id,deadline)
                 validate_sealed_policy(response,self.cwd,config,pages,registry,dict(version='0.160.0',hashes=_HASHES))
                 terminal=self._terminal(transport,thread_id,turn_id,op['operation_id'],deadline); require(terminal=='completed')
+                self._bootstrap_events(transport,events,thread_id,turn_id)
+                require(_equal(self._registry(events,thread_id,turn_id),registry))
                 self._metadata(self.last_native_thread,tools,deadline)
                 transport.close(); transport=None
                 self.revoke_and_drain('terminal',deadline=deadline)
