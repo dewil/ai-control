@@ -413,6 +413,7 @@ class RuntimeContract(unittest.TestCase):
                 self.starts = 0
                 self.aborts = 0
                 self.sock = None
+                self.socket_identity = None
 
             def journal(self):
                 self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -420,7 +421,7 @@ class RuntimeContract(unittest.TestCase):
                     task_incarnation=self.incarnation, cwd=self.cwd,
                     executable=self.executable, unit=self.unit, token=self.token,
                     socket=self.socket, phase=self.phase, invocation_id=self.invocation,
-                    socket_identity=None))
+                    socket_identity=copy.deepcopy(self.socket_identity)))
 
             def snapshot(self):
                 return HostSnapshot(self.unit, self.phase, self.invocation,
@@ -448,8 +449,17 @@ class RuntimeContract(unittest.TestCase):
                 self.phase = 'running'
                 self.journal()
                 self.sock = socket.socket(socket.AF_UNIX)
-                self.sock.bind(self.socket)
+                socket_tmp = tempfile.TemporaryDirectory(prefix='cx-sock-', dir='/tmp')
+                case.addCleanup(socket_tmp.cleanup)
+                target = Path(socket_tmp.name) / 'server.sock'
+                self.sock.bind(str(target))
                 case.addCleanup(self.sock.close)
+                Path(self.socket).symlink_to(target)
+                link_stat = Path(self.socket).lstat()
+                target_stat = target.stat()
+                self.socket_identity = {'link': [link_stat.st_dev, link_stat.st_ino],
+                    'target_path': str(target), 'target': [target_stat.st_dev, target_stat.st_ino]}
+                self.journal()
                 order.append('host_start')
                 return self.snapshot()
 
@@ -469,6 +479,8 @@ class RuntimeContract(unittest.TestCase):
                         order.append('retained_cell_not_drained')
                         return self.snapshot()
                     self.phase = 'stopped'
+                    if self.sock is not None:
+                        self.sock.close()
                     self.journal()
                     order.append('host_abort')
                     return self.snapshot()
@@ -476,6 +488,8 @@ class RuntimeContract(unittest.TestCase):
             def stop(self, *, deadline, quiescent=False):
                 case.assertIs(quiescent, True)
                 self.phase = 'stopped'
+                if self.sock is not None:
+                    self.sock.close()
                 self.journal()
                 order.append('host_stop')
                 return self.snapshot()
