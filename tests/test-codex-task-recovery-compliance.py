@@ -168,6 +168,77 @@ class RecoveryCompliance(unittest.TestCase):
         self.assertEqual(f.git('rev-parse', 'HEAD', cwd=f.agent / 'work'), head)
         self.assertEqual(calls, before_calls)
 
+    def requested_completion_fixture(self):
+        f = self.f
+        controller, calls, completion_path = f.completion_crash_fixture()
+        f.git('read-tree', 'HEAD', cwd=f.agent / 'work')
+        self.assertEqual(f.git('status', '--porcelain', cwd=f.agent / 'work'), '')
+        from _agent_done_io import request_done_locked
+        with (f.agent / 'done.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            request_done_locked(str(f.agent), 'event-1', 'owned pending completion',
+                                deadline=time.monotonic() + 2)
+        done_path = f.agent / 'done.json'
+        self.assertIs(json.loads(done_path.read_text())['finalized'], False)
+        return controller, calls, completion_path, done_path
+
+    def test_temporary_dirty_completion_recovery_preserves_request_then_recovers_once(self):
+        f = self.f
+        controller, calls, completion_path, done_path = self.requested_completion_fixture()
+        before_calls = list(calls)
+        head = f.git('rev-parse', 'HEAD', cwd=f.agent / 'work').strip()
+        before_count = f.git('rev-list', '--count', 'HEAD', cwd=f.agent / 'work')
+        tracked = f.agent / 'work/tracked.txt'
+        checkpoint_content = tracked.read_bytes()
+        before_done = done_path.read_bytes()
+        before_completion = completion_path.read_bytes()
+        envelope = f.agent / 'inbox/inflight/event-1.json'
+        before_envelope = envelope.read_bytes()
+        tracked.write_text('own temporary operator edit after verified checkpoint\n')
+        try:
+            result = controller.reconcile(deadline=time.monotonic() + 3)
+        except fixture_module.runtime_module.RuntimeError:
+            pass
+        else:
+            self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertEqual(done_path.read_bytes(), before_done)
+        self.assertIs(json.loads(done_path.read_text())['finalized'], False)
+        self.assertEqual(completion_path.read_bytes(), before_completion)
+        self.assertEqual(envelope.read_bytes(), before_envelope)
+        self.assertFalse((f.agent / 'inbox/done/event-1.json').exists())
+        index = json.loads((f.state / f.control['codex_state_id'] / 'index.json').read_text())
+        operation = json.loads(completion_path.read_text())['operation_id']
+        self.assertNotEqual(index['operations'][operation]['status'], 'finished')
+        self.assertEqual(calls, before_calls)
+        tracked.write_bytes(checkpoint_content)
+        result = controller.reconcile(deadline=time.monotonic() + 5)
+        self.assertEqual(result['outcome'], 'recovered')
+        done = json.loads(done_path.read_text())
+        self.assertIs(done['finalized'], True)
+        self.assertEqual(done['commit_sha'], head)
+        self.assertFalse(envelope.exists())
+        self.assertTrue((f.agent / 'inbox/done/event-1.json').is_file())
+        rows = [json.loads(line) for line in (f.agent / 'inbox/dedup.jsonl').read_text().splitlines()]
+        self.assertEqual(sum(row['key'] == 'event-1' for row in rows), 1)
+        self.assertEqual(f.git('rev-parse', 'HEAD', cwd=f.agent / 'work').strip(), head)
+        self.assertEqual(f.git('rev-list', '--count', 'HEAD', cwd=f.agent / 'work'), before_count)
+        self.assertEqual(calls, before_calls)
+
+    def test_completion_recovery_public_git_checks_share_operation_deadline(self):
+        import _agent_worktree
+        controller, calls, completion_path, done_path = self.requested_completion_fixture()
+        deadline = time.monotonic() + 5
+        observed = []
+        original = _agent_worktree.git_run
+        def bounded_git(*args, **kwargs):
+            observed.append(kwargs.get('deadline'))
+            return original(*args, **kwargs)
+        with mock.patch.object(_agent_worktree, 'git_run', bounded_git):
+            controller.reconcile(deadline=deadline)
+        self.assertTrue(observed, 'public Git deadline spy must actually observe recovery checks')
+        self.assertTrue(all(value is not None and value <= deadline for value in observed),
+                        'trusted recovery Git checks must inherit the operation deadline')
+
     def pending_permission(self):
         f = self.f
         f.publish_registry()
