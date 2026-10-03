@@ -278,3 +278,6 @@ Verified native approval reply означает successful once-only local send 
 
 
 Новый sealed bootstrap thread/start явно выбирает historyMode:"legacy", потому что accepted lifecycle требует full retained legacy history; native0.160.0 при omitted mode вправе выбрать paginated. Existing incompatible paginated admission не мигрируется/не принимается fallback, остаётся refused. Model/effort/account не меняются.
+
+
+После введения matching native resolution старый fault hardlink question прямо внутри reply относится к PRE-confirmation uncertainty: secure question reread/fence отказывает без confirmed receipt. Confirmed receipt-before-close crash проверяется отдельно generic filesystem atomic-replace/fsync отказом только после durable confirmed receipt, до question close. Это меняет прежнее fixture ожидание по явному контракту, не ослабляет recovered receipt validation.
