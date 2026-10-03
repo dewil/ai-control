@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Blind default owned-rollout registry reader contract; own JSONL only."""
 import copy
+import builtins
 import importlib
+import io
 import json
 import os
 from pathlib import Path
@@ -234,6 +236,114 @@ class NativeRegistryReader(unittest.TestCase):
             with self.subTest(records=len(rows)):
                 self.write(rows)
                 self.refused()
+
+    def mid_read(self, mutation, *, allowed=False):
+        # Generic public IO hooks, independent of the reader's implementation.
+        # The first real nonempty read completes, then the owned fixture mutates
+        # before those original bytes are returned to the reader.
+        original_open = builtins.open
+        original_io_open = io.open
+        original_os_read = os.read
+        original_bytes = self.path.read_bytes()
+        identity = self.path.stat()
+        target = (identity.st_dev, identity.st_ino)
+        fired = []
+
+        def target_fd(fd):
+            try:
+                stat = os.fstat(fd)
+            except (OSError, ValueError, TypeError):
+                return False
+            return (stat.st_dev, stat.st_ino) == target
+
+        def after_read(fd, data):
+            if not data or fired or not target_fd(fd):
+                return
+            fired.append(mutation)
+            if mutation == 'rewrite':
+                offset = original_bytes.index(b'0.160.0')
+                write_fd = os.open(self.path, os.O_WRONLY)
+                try:
+                    os.pwrite(write_fd, b'0.160.1', offset)
+                    os.fsync(write_fd)
+                finally:
+                    os.close(write_fd)
+            elif mutation == 'truncate':
+                with original_open(self.path, 'r+b') as stream:
+                    stream.truncate(len(original_bytes) // 2)
+            elif mutation == 'replace':
+                replacement = self.path.with_name('owned-replacement.jsonl')
+                with original_open(replacement, 'wb') as stream:
+                    stream.write(original_bytes)
+                replacement.chmod(0o600)
+                os.replace(replacement, self.path)
+            elif mutation == 'append':
+                benign = row('event_msg', dict(type='agent_message', message='owned appended metadata'))
+                with original_open(self.path, 'ab') as stream:
+                    stream.write(json.dumps(benign).encode() + b'\n')
+            else:
+                raise AssertionError('unknown fixture mutation')
+
+        class FileIO:
+            def __init__(self, stream):
+                self.stream = stream
+            def __getattr__(self, name):
+                return getattr(self.stream, name)
+            def __enter__(self):
+                self.stream.__enter__()
+                return self
+            def __exit__(self, *args):
+                return self.stream.__exit__(*args)
+            def read(self, *args, **kwargs):
+                data = self.stream.read(*args, **kwargs)
+                after_read(self.stream.fileno(), data)
+                return data
+            def readline(self, *args, **kwargs):
+                data = self.stream.readline(*args, **kwargs)
+                after_read(self.stream.fileno(), data)
+                return data
+            def readinto(self, *args, **kwargs):
+                count = self.stream.readinto(*args, **kwargs)
+                after_read(self.stream.fileno(), count)
+                return count
+            def __iter__(self):
+                return self
+            def __next__(self):
+                data = next(self.stream)
+                after_read(self.stream.fileno(), data)
+                return data
+
+        def wrap_open(opener):
+            def wrapped(*args, **kwargs):
+                stream = opener(*args, **kwargs)
+                return FileIO(stream) if target_fd(stream.fileno()) else stream
+            return wrapped
+
+        def wrapped_read(fd, *args):
+            data = original_os_read(fd, *args)
+            after_read(fd, data)
+            return data
+
+        with mock.patch.object(builtins, 'open', wrap_open(original_open)), \
+             mock.patch.object(io, 'open', wrap_open(original_io_open)), \
+             mock.patch.object(os, 'read', wrapped_read):
+            if allowed:
+                self.assertEqual(self.read(), self.expected())
+            else:
+                self.refused()
+        self.assertEqual(fired, [mutation], 'generic IO fault must actually fire; no timing-based false PASS')
+
+    def test_mid_read_same_length_prefix_rewrite_refuses(self):
+        self.mid_read('rewrite')
+
+    def test_mid_read_truncation_refuses(self):
+        self.mid_read('truncate')
+
+    def test_mid_read_same_content_path_inode_replacement_refuses(self):
+        self.mid_read('replace')
+
+    def test_mid_read_append_preserves_current_proof(self):
+        self.mid_read('append', allowed=True)
 
 
 if __name__ == '__main__':
