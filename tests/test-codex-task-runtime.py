@@ -367,7 +367,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False, native_history_default=False, approval_resolution=None):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False, native_history_default=False, approval_resolution=None, ordinary_materialization=None):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -543,6 +543,8 @@ class RuntimeContract(unittest.TestCase):
                 self.bootstrap_polls = 0
                 self.noise_remaining = 0
                 self.noise_final = None
+                self.ordinary_pending_items = None
+                self.ordinary_history_polls = 0
 
             def publish_noise_batch(self):
                 if self.events or self.noise_final is None:
@@ -634,6 +636,17 @@ class RuntimeContract(unittest.TestCase):
                                 'excludeTmpdirEnvVar': True, 'excludeSlashTmp': True,
                                 'writableRoots': [str(case.agent / 'work')]}}
                     if method == 'thread/read':
+                        if self.ordinary_pending_items is not None:
+                            self.ordinary_history_polls += 1
+                            if self.ordinary_history_polls == 1 or ordinary_materialization == 'never':
+                                order.append('ordinary_user_message_not_materialized')
+                            else:
+                                history[-1]['items'] = copy.deepcopy(self.ordinary_pending_items)
+                                self.ordinary_pending_items = None
+                                if ordinary_materialization == 'wrong_client':
+                                    history[-1]['items'][0]['clientId'] = str(uuid.uuid4())
+                                history[-1].update(status='completed', completedAt=2, itemsView='full')
+                                order.append('ordinary_user_message_materialized')
                         self.publish_noise_batch()
                         if self.late_events is not None:
                             self.bootstrap_polls += 1
@@ -800,6 +813,10 @@ class RuntimeContract(unittest.TestCase):
                             created.update(status='inProgress', completedAt=None)
                             native_path.unlink()
                             order.append('bootstrap_start_returned_before_registry')
+                        if not diagnostic and ordinary_materialization is not None:
+                            self.ordinary_pending_items = copy.deepcopy(created['items'])
+                            created.update(status='inProgress', completedAt=None, items=[], itemsView='notLoaded')
+                            order.append('ordinary_start_returned_before_user_message')
                         order.append('callbacks_queued_before_start_response')
                         if native_mode == 'lost_start':
                             raise ConnectionError('PRIVATE_START_REPLY_LOST')
@@ -1834,6 +1851,47 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['thread_id'])
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
+
+    def test_early_ordinary_start_waits_for_exact_owned_user_message_without_resend(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='read',
+            ordinary_materialization='late')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
+        self.assertEqual(result['outcome'], 'ran')
+        self.assertIn('ordinary_start_returned_before_user_message', order)
+        self.assertIn('ordinary_user_message_materialized', order)
+        self.assertLess(order.index('ordinary_user_message_materialized'), order.index('reply_dynamic'))
+        self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
+        self.assertEqual(order.count('reply_dynamic'), 1)
+        self.assertEqual(len(hosts), 3)
+        self.assertTrue(all(host.starts == 1 and host.phase == 'stopped' for host in hosts))
+
+    def test_early_ordinary_start_missing_or_conflicting_owned_message_holds_without_authority(self):
+        for materialization in ('never', 'wrong_client'):
+            with self.subTest(materialization=materialization):
+                case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
+                case.setUp()
+                try:
+                    case.publish_registry()
+                    controller, hosts, calls, order = case.discovery_fixture(native_mode='read',
+                        ordinary_materialization=materialization)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 1)
+                    self.assertIn(result['outcome'], ('blocked', 'unknown'))
+                    self.assertIn('ordinary_start_returned_before_user_message', order)
+                    self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
+                    self.assertNotIn('reply_dynamic', order)
+                    self.assertNotIn('checkpoint_commit', order)
+                    self.assertEqual(len(hosts), 3)
+                    self.assertTrue(all(host.starts == 1 and host.phase == 'stopped' for host in hosts))
+                    self.assertTrue((case.agent / 'inbox/inflight/event-1.json').is_file())
+                    self.assertEqual((case.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+                    self.assertFalse((case.agent / 'done.json').exists())
+                    before_calls = list(calls)
+                    controller.reconcile(deadline=time.monotonic() + 2)
+                    self.assertEqual(calls, before_calls)
+                    self.assertNotIn('reply_dynamic', order)
+                finally:
+                    case.doCleanups()
 
     def test_permission_confirmed_receipt_requires_matching_resolution_after_once_only_send(self):
         for resolution in (None, 'delayed'):
