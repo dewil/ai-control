@@ -35,10 +35,29 @@ if 'stop' in args and is_old and os.environ.get('RETIRE_FAIL_STOP'):
     sys.exit(1)
 if 'daemon-reload' in args and os.environ.get('RETIRE_FAIL_RELOAD'):
     sys.exit(1)
+state=Path(os.environ['RETIRE_CALLS']+'.state')
+loaded=is_old and (bool(os.environ.get('RETIRE_MANAGER_LOADED')) or any(os.path.lexists(Path(os.environ['HOME'])/'.config/systemd/user'/f'{old}.{suffix}') for suffix in ('service','timer')))
+active=is_old and (bool(os.environ.get('RETIRE_FAIL_STOP')) or bool(os.environ.get('RETIRE_STICKY_ACTIVE')) or (bool(os.environ.get('RETIRE_MANAGER_ACTIVE')) and not state.exists()))
+if 'stop' in args and is_old:
+    state.write_text('stopped')
+    active=bool(os.environ.get('RETIRE_FAIL_STOP')) or bool(os.environ.get('RETIRE_STICKY_ACTIVE'))
 if 'is-active' in args:
-    active=is_old and bool(os.environ.get('RETIRE_FAIL_STOP'))
     print('active' if active else 'inactive')
     sys.exit(0 if active else 3)
+if 'show' in args:
+    if os.environ.get('RETIRE_SHOW_FAILURE'):
+        sys.exit(1)
+    fields={'ActiveState':'active' if active else 'inactive', 'SubState':'running' if active else 'dead', 'LoadState':'loaded' if loaded else 'not-found'}
+    requested=[]
+    for i,arg in enumerate(args):
+        if arg in ('-p','--property') and i+1<len(args):
+            requested.extend(args[i+1].split(','))
+        elif arg.startswith('--property=') or arg.startswith('-p='):
+            requested.extend(arg.split('=',1)[1].split(','))
+    for key in requested or fields:
+        if key in fields:
+            print(fields[key] if '--value' in args else key+'='+fields[key])
+    sys.exit(0)
 if 'is-enabled' in args:
     enabled=is_old and (Path(os.environ['HOME'])/'.config/systemd/user/timers.target.wants'/f'{old}.timer').exists()
     print('enabled' if enabled else 'disabled')
