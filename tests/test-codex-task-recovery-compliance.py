@@ -36,6 +36,11 @@ class RecoveryCompliance(unittest.TestCase):
         self.f = fixture_module.RuntimeContract('runTest')
         self.f.setUp()
         self.addCleanup(self.f.doCleanups)
+        # The shared runner derives its store beside the selected agents root;
+        # the generic library fixture's explicit private path is not that CLI path.
+        canonical_state = self.f.agent.parent.parent / 'codex-task-state'
+        self.f.state.rename(canonical_state)
+        self.f.state = canonical_state
         self.env = dict(self.f.git_env, CLAUDE_AGENTS_DIR=str(self.f.agent.parent),
             CLAUDE_AGENT_SPOOL_BASE=str(self.f.root / 'spool'),
             CLAUDE_AGENT_GENERATION='7', CLAUDE_AGENT_ATTEMPT='attempt-1')
@@ -90,6 +95,8 @@ class RecoveryCompliance(unittest.TestCase):
 
     def test_shared_cycle_unknown_recovery_retains_inflight_without_resubmit(self):
         f = self.f
+        store = f.publish_registry()
+        store.prepare('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
         before = (f.agent / 'inbox/inflight/event-1.json').read_bytes()
         class Unknown:
             def reconcile(self, *, deadline):
