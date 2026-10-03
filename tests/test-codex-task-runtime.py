@@ -1645,6 +1645,27 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
 
+    def test_drained_bootstrap_without_durable_proof_holds_without_model_retry(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='read',
+            bootstrap_publication_fault=True)
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertIn('admission_publication_blocked', order)
+        proofs = list((self.state / self.control['codex_state_id']).rglob('bootstrap-proof.json'))
+        self.assertEqual(len(proofs), 1)
+        proofs[0].unlink()
+        admission = self.state / self.control['codex_state_id'] / 'admission.json'
+        admission.rmdir()
+        baseline_calls = list(calls)
+        baseline_starts = [host.starts for host in hosts]
+        recovered = controller.reconcile(deadline=time.monotonic() + 3)
+        self.assertIn(recovered['outcome'], ('blocked', 'unknown'))
+        self.assertFalse(admission.exists())
+        self.assertEqual(calls, baseline_calls)
+        self.assertEqual([host.starts for host in hosts], baseline_starts)
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+
     def test_drained_bootstrap_publication_crash_repairs_only_from_exact_durable_proof(self):
         self.publish_registry()
         controller, hosts, calls, order = self.discovery_fixture(native_mode='read',
