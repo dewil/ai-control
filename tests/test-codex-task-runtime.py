@@ -366,7 +366,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -414,6 +414,9 @@ class RuntimeContract(unittest.TestCase):
                 self.aborts = 0
                 self.sock = None
                 self.socket_identity = None
+                self.socket_ready = readiness_mode is None or bool(hosts)
+                self.waiting_socket = not self.socket_ready
+                self.inspections = 0
 
             def journal(self):
                 self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -426,7 +429,7 @@ class RuntimeContract(unittest.TestCase):
             def snapshot(self):
                 return HostSnapshot(self.unit, self.phase, self.invocation,
                     12345 if self.phase == 'running' else None,
-                    self.socket, self.phase == 'running',
+                    self.socket, self.phase == 'running' and self.socket_ready,
                     control_group='/fixture/owned' if self.phase == 'running' else None)
 
             def start(self, *, deadline):
@@ -464,6 +467,26 @@ class RuntimeContract(unittest.TestCase):
                 return self.snapshot()
 
             def inspect(self, *, deadline):
+                self.inspections += 1
+                if self.phase == 'running' and self.waiting_socket:
+                    case.assertGreater(deadline, time.monotonic())
+                    index_root = case.state / case.control['codex_state_id']
+                    for path in (case.agent / '.lock', case.agent / 'inbox/.inbox.lock', index_root / 'store.lock'):
+                        with path.open('r+') as other:
+                            with case.assertRaises(BlockingIOError):
+                                fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    order.append('socket_wait_inspect')
+                    if readiness_mode == 'never':
+                        return self.snapshot()
+                    self.socket_ready = True
+                    self.waiting_socket = False
+                    if readiness_mode == 'drift':
+                        values = dict(unit=self.unit, phase='running', invocation_id=self.invocation,
+                            main_pid=12345, socket=self.socket, socket_ready=True, control_group='/fixture/owned')
+                        values[readiness_drift[0]] = readiness_drift[1]
+                        order.append('socket_wait_identity_drift')
+                        return HostSnapshot(**values)
+                    order.append('socket_ready')
                 return self.snapshot()
 
             def abort(self, *, deadline, guard):
@@ -731,6 +754,7 @@ class RuntimeContract(unittest.TestCase):
 
         def transport_factory(endpoint, *, deadline, clock):
             case.assertEqual(endpoint, hosts[-1].socket)
+            case.assertTrue(hosts[-1].socket_ready, 'Controller connected before native socket readiness')
             client = Transport()
             transports.append(client)
             return client
@@ -867,6 +891,57 @@ class RuntimeContract(unittest.TestCase):
         self.runtime_native_adapters = dict(adapters)
         controller = self.make(adapters=adapters)
         return controller, hosts, calls, order
+
+    def test_running_host_socket_becomes_ready_by_inspection_without_relaunch(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(readiness_mode='eventual', invalid_names=True)
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 2)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))  # Deliberate config refusal follows successful connect.
+        self.assertEqual(len(hosts), 1)
+        self.assertEqual(hosts[0].starts, 1)
+        self.assertGreaterEqual(hosts[0].inspections, 1)
+        self.assertEqual(sum(method == 'config/read' for method, params in calls), 1)
+        self.assertTrue(all(method in ('initialize', 'config/read') for method, params in calls))
+        self.assertLess(order.index('socket_ready'), order.index('config/read'))
+        self.assertEqual(hosts[0].phase, 'stopped')
+        self.assertEqual(hosts[0].aborts, 1)
+
+    def test_never_ready_owned_socket_deadline_drains_without_connect_or_relaunch(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(readiness_mode='never')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 1)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertEqual(len(hosts), 1)
+        self.assertEqual(hosts[0].starts, 1)
+        self.assertGreaterEqual(hosts[0].inspections, 1)
+        self.assertEqual(calls, [])
+        self.assertEqual(hosts[0].phase, 'stopped')
+        self.assertEqual(hosts[0].aborts, 1)
+        self.assertIs(controller.require_drained(deadline=time.monotonic() + 2), True)
+
+    def test_socket_wait_identity_drift_refuses_and_drains_original_host(self):
+        for field, value in (('invocation_id', 'f' * 32), ('main_pid', 12347), ('control_group', '/fixture/foreign')):
+            with self.subTest(field=field):
+                case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
+                case.build_fixture()
+                case.Runtime = self.Runtime
+                case.Error = self.Error
+                try:
+                    case.publish_registry()
+                    controller, hosts, calls, order = case.discovery_fixture(readiness_mode='drift', readiness_drift=(field, value))
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 2)
+                    self.assertIn(result['outcome'], ('blocked', 'unknown'))
+                    self.assertEqual(len(hosts), 1)
+                    self.assertEqual(hosts[0].starts, 1)
+                    self.assertEqual(calls, [])
+                    self.assertIn('socket_wait_identity_drift', order)
+                    self.assertEqual(hosts[0].phase, 'stopped')
+                    self.assertEqual(hosts[0].aborts, 1)
+                    journal = json.loads((hosts[0].directory / 'journal.json').read_text())
+                    self.assertEqual(journal['invocation_id'], hosts[0].invocation)
+                    self.assertNotEqual(journal['invocation_id'], 'f' * 32)
+                finally:
+                    case.doCleanups()
 
     def test_config_discovery_uncertain_reply_never_starts_session_or_retries(self):
         self.publish_registry()
