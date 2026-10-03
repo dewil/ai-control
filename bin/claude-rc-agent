@@ -110,6 +110,12 @@ cmd_create() {
   s_name=$(yq -r '.name // ""' "$spec")
   s_type=$(yq -r '.type // ""' "$spec")
   s_project=$(yq -r '.project // ""' "$spec")
+  local s_engine; s_engine=$(yq -r '.engine // "claude"' "$spec")
+  case "$s_engine" in claude|codex) : ;; *) fail "unsupported engine" 2 ;; esac
+  if [[ "$s_engine" == "codex" ]]; then
+    umask 077
+    [[ "$s_type" == "event" && "$(yq -r '.runtime' "$spec")" == "drain" && "$(yq -r '.workspace' "$spec")" == "worktree" && -z "$h_sid" ]] || fail "incompatible Codex task profile" 2
+  fi
   s_goal=$(yq -r '.goal // ""' "$spec")
   s_autonomy=$(yq -r '.autonomy // ""' "$spec")
   [[ "$s_name" == "$name" ]] || fail "spec.name '$s_name' != '$name'"
@@ -448,7 +454,7 @@ PY
 
   # event: inbox (0700) в staging (spool - внешний, чистится ниже под локом)
   if [[ "$s_type" == "event" ]]; then
-    mkdir -m 0700 -p "$tmp/inbox"/{pending,inflight,done,deadletter} \
+    mkdir -p "$tmp/inbox"/{pending,inflight,done,deadletter} \
                      "$tmp/run"
   fi
 
@@ -547,6 +553,38 @@ PY
     rm -rf "$SPOOL_BASE/$name"   # mission с реюзом имени бывшего event: сирота
   fi
 
+  if [[ "$s_engine" == "codex" ]]; then
+    local state_id
+    state_id=$(python3 - "$BIN_DIR" "$tmp" "$AGENTS_DIR/$name" "$(dirname "$AGENTS_DIR")/codex-task-state" <<'PYINIT'
+import os, sys, time, uuid
+sys.path.insert(0, sys.argv[1])
+from _codex_task_store import CodexTaskOperationStore
+staging, final, root = sys.argv[2:]
+os.makedirs(root,mode=0o700,exist_ok=True)
+os.chmod(os.path.dirname(final),0o700)
+os.chmod(staging,0o700)
+os.chmod(staging+'/spec.yaml',0o600)
+os.makedirs(os.path.join(os.path.dirname(final),'.locks'),mode=0o700,exist_ok=True)
+for directory in ('questions','inbox','inbox/pending','inbox/inflight','inbox/done','inbox/deadletter'):
+ os.makedirs(staging+'/'+directory,mode=0o700,exist_ok=True)
+for path in (staging+'/.lock',staging+'/done.lock',staging+'/questions/.lock',staging+'/inbox/.inbox.lock',os.path.dirname(final)+'/.locks/new-task-'+os.path.basename(final)+'.lock'):
+ fd=os.open(path,os.O_CREAT|os.O_WRONLY,0o600);os.fchmod(fd,0o600);os.close(fd)
+state=str(uuid.uuid4())
+print(CodexTaskOperationStore.initialize(staging,final,state,state_root=root,deadline=time.monotonic()+10))
+PYINIT
+) || fail "Codex private registry initialization refused" 2
+    # Staging is not a registered agent name: CAS intentionally rejects it.
+    # The existing durable writer publishes the marker in the private staging
+    # control before the creator's atomic final registry rename.
+    python3 - "$tmp/control.json" "$state_id" <<'PYMARKER' | "$IO" durable-write "$tmp/codex_state_id.control.json"
+import json,sys
+with open(sys.argv[1]) as stream: control=json.load(stream)
+control['codex_state_id']=sys.argv[2]
+print(json.dumps(control))
+PYMARKER
+    mv "$tmp/codex_state_id.control.json" "$tmp/control.json" || fail "Codex marker publication refused" 2
+  fi
+
   # --- атомарная публикация: единый mv (реестр + worktree вместе) ---
   mv "$tmp" "$AGENTS_DIR/$name"
   trap - EXIT   # опубликовано - staging больше не откатывается
@@ -585,17 +623,19 @@ PY
 # каждый шаг переисполним (redelivery Telegram шлет тот же update_id снова).
 
 cmd_new_task() {
-  local name="" project="" text=""
+  local name="" project="" text="" engine="claude" engine_seen=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name)    name="$2"; shift 2 ;;
       --project) project="$2"; shift 2 ;;
       --text)    text="$2"; shift 2 ;;
+      --engine) [[ $engine_seen -eq 0 && $# -ge 2 ]] || fail "duplicate/missing engine" 2; engine="$2"; engine_seen=1; shift 2 ;;
       *) fail "unknown arg: $1" ;;
     esac
   done
   [[ -n "$name" && -n "$project" && -n "$text" ]] \
     || fail "new-task требует --name/--project/--text" 2
+  case "$engine" in claude|codex) : ;; *) fail "unsupported engine" 2 ;; esac
   check_name "$name"
   command -v yq >/dev/null || fail "yq v4 required"
 
@@ -645,6 +685,7 @@ cmd_new_task() {
   # скобки не трогает), второй .replace() находил его уже ВНУТРИ вставленного
   # goal и подставлял туда путь проекта - ломая спеку (N25).
   local template="${CLAUDE_RC_TASK_TEMPLATE:-$HOME/.claude-control/task-template.yaml}"
+  [[ "$engine" == "codex" ]] && template="${CLAUDE_RC_CODEX_TASK_TEMPLATE:-$HOME/.claude-control/task-codex-template.yaml}"
   [[ -f "$template" ]] || fail "шаблон задачи не найден: $template (CLAUDE_RC_TASK_TEMPLATE)" 2
   local specfile; specfile=$(mktemp)
   if ! python3 - "$name" "$project_path" "$text" "$template" \
@@ -673,6 +714,10 @@ PY
   rm -f "$specfile.err"
   # поля рендера - для сверки с уже существующим агентом (ниже, аудит
   # major 1); читаем ДО удаления specfile
+  if [[ "$engine" == "codex" ]]; then
+    [[ "$(yq -r '.engine' "$specfile")" == "codex" && "$(yq -r '.type' "$specfile")" == "event" && "$(yq -r '.runtime' "$specfile")" == "drain" && "$(yq -r '.workspace' "$specfile")" == "worktree" ]] || { rm -f "$specfile"; fail "incompatible Codex task template" 2; }
+    [[ "$(yq -r '.limits.week_usd_cap // 0' "$specfile")" == "0" ]] || { rm -f "$specfile"; fail "Codex USD cost is unknown" 2; }
+  fi
   local rendered_ws; rendered_ws=$(yq -r '.workspace // "none"' "$specfile")
 
   # --- 3. create: "уже есть" (exit 4, already exists) - трактуется как ok
@@ -769,7 +814,19 @@ cmd_pause() {
   echo "$1: desired=paused (рантайм погасит reconciler)"
 }
 
+native_barrier() {
+  local dir; dir=$(agent_dir "$1")
+  local engine; engine=$(yq -r '.engine // "claude"' "$dir/spec.yaml")
+  if [[ "$engine" != "codex" ]] && [[ "$(yq -r '.codex_state_id // ""' "$dir/control.json")" != "" ]]; then fail "Codex engine drift refuses destructive action" 2; fi
+  case "$engine" in
+    claude) return 0 ;;
+    codex) "$BIN_DIR/codex-task-runtime" barrier "$dir" --reason "$2" >/dev/null || fail "Codex native drain is unconfirmed" 2 ;;
+    *) fail "unsupported engine" 2 ;;
+  esac
+}
+
 cmd_stop() {
+  native_barrier "$1" shutdown
   local dir; dir=$(agent_dir "$1")
   local c d0; c=$(read_control "$dir"); d0=$(jget "$c" 'd["desired"]')
   [[ "$d0" == "stopped" ]] && { echo "$1: уже stopped"; return 0; }
@@ -781,6 +838,7 @@ cmd_stop() {
 # ------------------------------------------------------------- attention ops
 
 cmd_resolve() {
+  native_barrier "$1" recovery
   local name="$1"; shift
   local dir; dir=$(agent_dir "$name")
   local mode="" extend=""
@@ -876,6 +934,7 @@ print((d or {}).get("agent_claim",""))')
 # отношения к accept/reject выше - те про acceptance.status в control.json,
 # другую и более старую машину.
 cmd_task_cancel() {
+  native_barrier "$1" cancel
   local name="$1"; shift
   local dir; dir=$(agent_dir "$name")
   local force=0 comment=""
@@ -918,16 +977,19 @@ cmd_status() {
   local dir; dir=$(agent_dir "$1")
   local c s
   c=$(read_control "$dir")
+  if [[ "$(yq -r ' .engine // "claude"' "$dir/spec.yaml")" == "codex" ]]; then echo "engine=codex USD=неизвестно"; fi
   s=$("$IO" state-read "$dir")
   # event: сводка inbox под общей таблицей
   if [[ "$(yq -r '.type // ""' "$dir/spec.yaml" 2>/dev/null)" == "event" ]]; then
     _status_table "$1" "$c" "$s"
     local ist
     if ist=$("$BIN_DIR/claude-agent-run" inbox-status "$dir" 2>/dev/null); then
-      python3 - "$ist" <<'PY'
+      python3 - "$ist" "$(yq -r '.engine // "claude"' "$dir/spec.yaml")" <<'PY'
 import json, sys
 d = json.loads(sys.argv[1])
 u = d.get("usage") or {}
+if len(sys.argv)>2 and sys.argv[2]=="codex":
+    u["cost_usd"]="неизвестно"
 print("  inbox: pending=%s inflight=%s done=%s dlq=%s quarantined=%s cursor=%s"
       % (d.get("pending"), d.get("inflight"), d.get("done"),
          d.get("deadletter"), d.get("quarantined"), d.get("cursor")))

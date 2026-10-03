@@ -1,0 +1,14 @@
+schema: 1
+name: {{name}}
+engine: codex
+type: event
+runtime: drain
+workspace: worktree
+role: none
+project: {{project}}
+goal: {{goal}}
+autonomy: suggest
+memory_max_mb: 200
+host_budget: {memory_max_mb: 1024, tasks_max: 64, cpu_quota_percent: 100}
+limits: {runs_per_day: 50, runs_per_week: 350, run_timeout_s: 600}
+source: {kind: spool, replay_window_h: 72}

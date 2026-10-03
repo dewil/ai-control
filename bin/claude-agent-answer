@@ -138,6 +138,12 @@ def main():
         if mode == "text" and qkind == "permission":
             fail("--text не допустим для permission-вопроса - только "
                  "--approve/--reject")
+        callback = d.get('native_callback')
+        if callback is not None:
+            allowed = callback.get('allowed_decisions') if type(callback) is dict else None
+            if d.get('engine') != 'codex' or qkind != 'permission' or callback.get('status') != 'pending' \
+                    or allowed not in (['reject'], ['approve','reject']) or mode not in allowed:
+                fail('решение запрещено фиксированным профилем Codex')
         if d.get("answered_at") is not None \
                 and d.get("event_published_at") is not None:
             # §7.2: status может оставаться open до закрытия прогоном, но
