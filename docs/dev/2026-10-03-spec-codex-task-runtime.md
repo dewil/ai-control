@@ -319,3 +319,8 @@ Completion recovery must perform the existing exact idempotent shared `finalize_
 ### Genuine answer writer contention
 
 The native waiting loop, heartbeat and guarded answer send must tolerate bounded contention with the trusted CLI question writer using the existing canonical lock order and deadline. A brief genuine question/control/inbox lock held by answer persistence is not a policy violation and must not revoke the operation or expire an otherwise valid answer. No native reply/checkpoint mutation may occur while the conflicting lock is held; after its release all authority and exact question evidence are revalidated. Deadline expiry, changed ownership or conflicting answer remains refusal with no native resend.
+
+
+### Native proof deadline after model latency
+
+A fresh-registry read/materialization wait is bounded to ten seconds from its first required evidence observation, within the ordinary operation deadline. It is not a ten-second limit on model thinking after ordinary turn/start. A genuine first callback/file event arriving later with an already available ordered current-turn proof may be processed after ownership verification; the proof must still physically precede the effect. No callback/native response/effect occurs until that proof. Missing proof after the bounded observation wait refuses; pre-proof file/command effects refuse immediately, and the entire operation remains bounded by task run_timeout.
