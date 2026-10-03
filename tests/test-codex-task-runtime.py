@@ -1989,6 +1989,44 @@ class RuntimeContract(unittest.TestCase):
                 finally:
                     case.doCleanups()
 
+    def test_late_quiet_ordinary_terminal_observes_owned_registry_before_noop_checkpoint(self):
+        self.assertTrue(callable(getattr(runtime_module, 'read_registry_evidence', None)),
+            'Accepted native registry evidence boundary absent')
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='quiet',
+            rollout_registry='ready', slow_ordinary_callback=True)
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 60)
+        self.assertEqual(result['outcome'], 'ran')
+        self.assertIn('ordinary_first_callback_after_twenty_seconds', order)
+        self.assertIn('owned_rollout_registry_proof_returned', order)
+        self.assertLess(order.index('owned_rollout_registry_proof_returned'), order.index('checkpoint_prepare'))
+        self.assertEqual(order.count('checkpoint_commit'), 1)
+        self.assertNotIn('reply_dynamic', order)
+        self.assertNotIn('reply_approval', order)
+        self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip(), self.base)
+        self.assertEqual(self.git('status', '--porcelain', cwd=self.agent / 'work'), '')
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+        self.assertFalse((self.agent / 'done.json').exists())
+
+    def test_late_quiet_terminal_without_owned_registry_holds_without_checkpoint(self):
+        self.assertTrue(callable(getattr(runtime_module, 'read_registry_evidence', None)),
+            'Accepted native registry evidence boundary absent')
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='quiet',
+            rollout_registry='absent', slow_ordinary_callback=True)
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 60)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertIn('ordinary_first_callback_after_twenty_seconds', order)
+        self.assertNotIn('checkpoint_prepare', order)
+        self.assertNotIn('checkpoint_commit', order)
+        self.assertNotIn('reply_dynamic', order)
+        self.assertNotIn('reply_approval', order)
+        self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
+        self.assertTrue((self.agent / 'inbox/inflight/event-1.json').is_file())
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip(), self.base)
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+
     def test_late_first_task_callback_missing_proof_waits_only_bounded_observation_window(self):
         self.assertTrue(callable(getattr(runtime_module, 'read_registry_evidence', None)),
             'Accepted native registry evidence boundary absent')
