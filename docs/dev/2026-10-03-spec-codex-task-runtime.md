@@ -314,3 +314,8 @@ Resumed operation может после fixed diagnostic первым дейст
 Owned rollout proof must precede every native TASK effect in the same current-turn raw record order. A native `apply_patch` or other effectful custom/function call before the fixed diagnostic pair is a refusal even if the pair is already present by the time the queued file event is dispatched; a later snapshot cannot retrospectively authorize that effect. Only benign non-tool prose/usage/metadata before the diagnostic may be skipped. Current admitted canonical thread_path must exactly equal the resume response path before ordinary turn/start, independently of matching thread ID.
 
 Completion recovery must perform the existing exact idempotent shared `finalize_worktree_done` with the recovered verified checkpoint before original envelope archival/store completion. A crash after task_done or request_done cannot leave requested/finalized:false with empty inflight; conflicts remain held and unarchived. Full normal path and replay preserve finalized content.
+
+
+### Genuine answer writer contention
+
+The native waiting loop, heartbeat and guarded answer send must tolerate bounded contention with the trusted CLI question writer using the existing canonical lock order and deadline. A brief genuine question/control/inbox lock held by answer persistence is not a policy violation and must not revoke the operation or expire an otherwise valid answer. No native reply/checkpoint mutation may occur while the conflicting lock is held; after its release all authority and exact question evidence are revalidated. Deadline expiry, changed ownership or conflicting answer remains refusal with no native resend.
