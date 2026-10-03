@@ -1,11 +1,11 @@
-# TASK integration fence validation
+# Проверки TASK integration fence
 
-Production frozen at 64570a7419f289450afb0fafad851175727b33c5; baseline 45d1db5268a41e66c9d1f8ce29e2fdee79536b72.
+Финальный production commit: fd70083ffdb16b9c267f5ffc429cc65942ab715f; baseline: 45d1db5268a41e66c9d1f8ce29e2fdee79536b72.
 
-Specification preceded implementation. Independent public Git/CLI scenarios initially produced 18 passes and 26 semantic failures. Three additional independently committed regressions proved temporary-worktree leaks after query timeout, partial add failure, and failed removal leaving registration.
+Спецификация закоммичена до реализации. Независимые публичные Git/CLI сценарии сначала дали 18 PASS и 26 семантических RED. Ещё четыре независимо закоммиченных теста подтвердили ошибки очистки после timeout запроса, частичного add, отказа remove с оставшейся регистрацией и постоянного отказа remove. Последний тест также проверяет recovery без повторной публикации target после снятия ошибки.
 
-Final code: independent suite 47 passed, 0 failed; retained lifecycle 697 passed, 0 failed; exact CI ShellCheck v0.11.0, syntax and diff checks passed. Broader Python run: 750 passes at dc02efe before narrow cleanup fixes; final independent and lifecycle reruns cover affected paths.
+На финальном коде: независимый набор 48 PASS / 0 FAIL; lifecycle 697 PASS / 0 FAIL; точный CI ShellCheck v0.11.0, syntax и diff checks прошли. Более широкий Python-прогон дал 750 PASS на dc02efe до узких исправлений очистки; финальные наборы повторно проверяют затронутое поведение.
 
-Retained fixtures provide truthful PR head fields. B44 expects refusal after post-push branch drift while preserving accepted remote SHA and newer local branch assertions. B48 passes actual task branch while preserving CAS assertions. Independent tests were not changed by implementation author.
+Retained fixtures предоставляют реальные PR head fields. B44 ожидает отказ после post-push drift, сохраняя проверки принятого remote SHA и новой local branch. B48 передаёт фактическую task branch, сохраняя CAS assertions. Автор реализации не менял независимые тесты.
 
-Distinct-model read-only review: initial detached-record finding contradicted by explicit parser support and real Git positive unchecked-divergent scenario. Final resumed review assesses implementation and documentation before publication.
+Read-only ревью другим фактическим model: исходная detached-record находка снята как ложная; новая P2 постоянного отказа удаления воспроизведена независимым тестом до исправления fd70083. Теперь cleanup доказывает отсутствие собственного каталога и Git-регистрации свежим валидированным запросом; неопределённость оставляет accepted/error/attention, integrated записывается после успешного proof. Финальная повторная независимая сверка обязательна до публикации.
