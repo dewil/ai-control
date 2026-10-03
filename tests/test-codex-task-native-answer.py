@@ -200,7 +200,7 @@ class NativeAnswerContract(unittest.TestCase):
         row = json.loads(done[0].read_text())['meta']['history'][-1]
         self.assertEqual(row['outcome'], 'ok')
         self.assertEqual(row['internal'], 'native_permission_answer')
-        self.assertIn(done[0].stem, (self.agent / 'inbox/dedup.log').read_text())
+        self.assertIn(done[0].stem, (self.agent / 'inbox/dedup.jsonl').read_text())
         self.no_native()
         return done[0]
 
