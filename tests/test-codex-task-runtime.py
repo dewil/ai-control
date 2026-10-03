@@ -594,6 +594,14 @@ class RuntimeContract(unittest.TestCase):
                         history.append(created)
                         call_id = str(uuid.uuid4())
                         diagnostic = len(hosts) == 2
+                        if not diagnostic and native_mode == 'ordinary_pre_registry_effect':
+                            candidate = case.agent / 'work/tracked.txt'
+                            candidate.write_text('native before registry candidate\n')
+                            self.events.append({'method': 'item/started', 'params': {
+                                'threadId': thread_id, 'turnId': turn_id,
+                                'item': {'id': 'premature-file', 'type': 'fileChange', 'status': 'inProgress',
+                                    'changes': [{'path': str(candidate), 'kind': {'type': 'update', 'move_path': None},
+                                        'diff': '-baseline\n+native before registry candidate\n'}]}}})
                         names = registry + (['exec_command'] if native_mode == 'extra_registry' or (not diagnostic and native_mode == 'ordinary_registry_extra') else [])
                         if native_mode == 'final_prose_registry' or (not diagnostic and native_mode == 'ordinary_registry_missing'):
                             created['items'].append({'type': 'agentMessage', 'id': str(uuid.uuid4()),
@@ -609,7 +617,7 @@ class RuntimeContract(unittest.TestCase):
                                         'type': 'custom_tool_call_output',
                                         'call_id': 'foreign' if native_mode == 'uncorrelated_registry' or (not diagnostic and native_mode == 'ordinary_registry_uncorrelated') else call_id,
                                         'output': 'Script completed\nOutput:\n' + json.dumps(sorted(names))}}}])
-                        if not diagnostic and native_mode in ('ordinary_registry_extra', 'ordinary_registry_missing', 'ordinary_registry_uncorrelated'):
+                        if not diagnostic and native_mode in ('ordinary_registry_extra', 'ordinary_registry_missing', 'ordinary_registry_uncorrelated', 'ordinary_pre_registry_effect'):
                             self.events.append({'id': 0, 'method': 'item/tool/call', 'params': {
                                 'threadId': thread_id, 'turnId': turn_id, 'callId': 'ordinary-call',
                                 'tool': 'task_read', 'arguments': {'path': 'tracked.txt'}, 'namespace': None}})
@@ -753,6 +761,11 @@ class RuntimeContract(unittest.TestCase):
                         (case.root / 'outside-candidate.txt').write_text('native updated scope accepted\n')
                     else:
                         (case.agent / 'work/tracked.txt').write_text('approved change\n')
+                if approval_state == 'question_close_fault':
+                    questions = list((case.agent / 'questions').glob('*.json'))
+                    case.assertEqual(len(questions), 1)
+                    os.link(questions[0], case.root / 'answered-question-sidefault.json')
+                    order.append('question_close_hardlink_fault')
                 history[-1].update(status='completed', completedAt=2)
                 self.events.append({'method': 'turn/completed', 'params': {
                     'threadId': thread_id, 'turn': copy.deepcopy(history[-1])}})
@@ -1439,8 +1452,22 @@ class RuntimeContract(unittest.TestCase):
         self.assertEqual(message.count('Codex-Task-Intent: '), 1)
         self.assertFalse((self.agent / 'done.json').exists())
         self.assertEqual(self.git('status', '--porcelain', cwd=self.agent / 'work'), '')
+        self.assertFalse((self.agent / 'inbox/inflight/event-1.json').exists())
+        archived = json.loads((self.agent / 'inbox/done/event-1.json').read_text())
+        projection = archived['meta']['codex_operation']
+        self.assertEqual(projection['status'], 'finished')
+        self.assertEqual(archived['meta']['history'][-1]['outcome'], 'ok')
+        index = json.loads((self.state / self.control['codex_state_id'] / 'index.json').read_text())
+        record = index['operations'][projection['operation_id']]
+        self.assertEqual(record['status'], 'finished')
+        self.assertEqual((record['thread_id'], record['turn_id']),
+            (projection['thread_id'], projection['turn_id']))
+        dedup = [json.loads(line) for line in (self.agent / 'inbox/dedup.jsonl').read_text().splitlines()]
+        self.assertEqual(sum(row['key'] == 'event-1' for row in dedup), 1)
         controller.reconcile(deadline=time.monotonic() + 2)
         self.assertEqual(self.git('rev-list', '--count', 'HEAD', cwd=self.agent / 'work'), before_count)
+        dedup_after = [json.loads(line) for line in (self.agent / 'inbox/dedup.jsonl').read_text().splitlines()]
+        self.assertEqual(sum(row['key'] == 'event-1' for row in dedup_after), 1)
 
     def test_ordinary_checkpoint_crash_unrelated_head_is_not_recovered_or_recommitted(self):
         controller, calls, head = self.ordinary_checkpoint_crash_fixture()
@@ -1644,6 +1671,59 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['thread_id'])
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
+
+    def test_ordinary_file_effect_before_registry_preserves_candidate_and_refuses_authority(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='ordinary_pre_registry_effect',
+            default_checkpoint=True)
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
+        self.assertNotIn('reply_dynamic', order)
+        self.assertNotIn('checkpoint_commit', order)
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'native before registry candidate\n')
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip(), self.base)
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+        self.assertFalse((self.agent / 'done.json').exists())
+        self.assertIs(controller.require_drained(deadline=time.monotonic() + 2), True)
+
+    def test_confirmed_native_answer_recovers_question_close_without_second_reply(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_full',
+            human_decision='decline', approval_state='question_close_fault')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertEqual(order.count('reply_approval'), 1)
+        self.assertIn('question_close_hardlink_fault', order)
+        questions = list((self.agent / 'questions').glob('*.json'))
+        self.assertEqual(len(questions), 1)
+        question = json.loads(questions[0].read_text())
+        self.assertEqual(question['status'], 'open')
+        self.assertEqual(question['decision'], 'reject')
+        self.assertEqual(questions[0].stat().st_nlink, 2)
+        receipts = list((self.state / self.control['codex_state_id']).rglob('approval-' + question['qid'] + '.json'))
+        self.assertEqual(len(receipts), 1)
+        receipt = json.loads(receipts[0].read_text())
+        self.assertEqual(set(receipt), {'question_id', 'operation_id', 'task_incarnation', 'callback_digest',
+            'decision', 'answered_at', 'answered_by'})
+        self.assertEqual(receipt['question_id'], question['qid'])
+        self.assertEqual(receipt['decision'], 'reject')
+        self.assertEqual(receipt['answered_by'], 'fixture-operator')
+        callback = copy.deepcopy(question['native_callback'])
+        callback['status'] = 'answered'
+        digest = hashlib.sha256(json.dumps(callback, sort_keys=True, separators=(',', ':'),
+            ensure_ascii=False).encode('utf-8')).hexdigest()
+        self.assertEqual(receipt['callback_digest'], digest)
+        (self.root / 'answered-question-sidefault.json').unlink()
+        before_calls = list(calls)
+        controller.reconcile(deadline=time.monotonic() + 3)
+        closed = json.loads(questions[0].read_text())
+        self.assertEqual(closed['status'], 'closed')
+        self.assertEqual(closed['native_callback']['status'], 'answered')
+        self.assertEqual(calls, before_calls)
+        self.assertEqual(order.count('reply_approval'), 1)
+        self.assertEqual(json.loads(receipts[0].read_text()), receipt)
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
 
     def test_drained_bootstrap_without_durable_proof_holds_without_model_retry(self):
         self.publish_registry()
