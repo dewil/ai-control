@@ -1074,16 +1074,17 @@ def codex_barrier(agent_dir, reason='shutdown'):
 
 
 def codex_python():
-    import importlib.util
-    if importlib.util.find_spec('websockets') is not None:
+    target=os.path.abspath(os.environ.get('CODEX_RC_PYTHON',os.path.expanduser('~/.local/share/claude-control/codex-venv/bin/python')))
+    if not os.path.isfile(target) or not os.access(target,os.X_OK):
+        die(2,'Codex verified Python dependency missing; install codex venv')
+    if target!=os.path.abspath(sys.executable):
+        os.execv(target,[target]+sys.argv)
+    try:
         import websockets
-        if websockets.__version__ != '15.0.1':
-            die(2, 'Codex websockets dependency version refused')
-        return
-    target = os.environ.get('CODEX_RC_PYTHON',os.path.expanduser('~/.local/share/claude-control/codex-venv/bin/python'))
-    if not os.path.isfile(target) or not os.access(target,os.X_OK) or os.path.abspath(target)==os.path.abspath(sys.executable):
-        die(2, 'Codex websockets dependency missing; install codex venv')
-    os.execv(target,[target]+sys.argv)
+    except ImportError:
+        die(2,'Codex websockets dependency missing; install codex venv')
+    if websockets.__version__!='15.0.1':
+        die(2,'Codex websockets dependency version refused')
 
 
 def commit_worktree_done(agent_dir, key, ws, name, project):

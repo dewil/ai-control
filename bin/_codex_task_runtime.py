@@ -5,6 +5,8 @@ from datetime import datetime, timezone, timedelta
 import fcntl
 import hashlib
 import json
+import importlib.machinery
+import importlib.util
 import math
 import os
 from pathlib import Path
@@ -108,7 +110,27 @@ def host_factory(state_dir, task_incarnation, cwd, *, executable, argv_factory, 
 
 
 def transport_factory(socket, *, deadline, clock):
-    return CodexTaskRuntimeTransport(socket, deadline=deadline, clock=clock)
+    require(type(socket) is str and os.path.isabs(socket) and os.path.normpath(socket)==socket and clock()<deadline)
+    alias=os.lstat(socket)
+    require(alias.st_uid==os.getuid() and (stat.S_ISSOCK(alias.st_mode) or stat.S_ISLNK(alias.st_mode)))
+    target=os.path.realpath(socket)
+    require(len(os.fsencode(target))<108 and os.path.realpath(os.path.dirname(socket))==os.path.dirname(socket))
+    info=os.lstat(target)
+    require(stat.S_ISSOCK(info.st_mode) and info.st_uid==os.getuid() and info.st_nlink==1 and stat.S_IMODE(info.st_mode)==0o600)
+    parent=os.path.dirname(target)
+    while True:
+        directory=os.lstat(parent)
+        require(stat.S_ISDIR(directory.st_mode) and directory.st_uid in (0,os.getuid())
+            and (not directory.st_mode & 0o022 or directory.st_uid==0 and directory.st_mode & stat.S_ISVTX))
+        if parent=='/':break
+        parent=os.path.dirname(parent)
+    transport=CodexTaskRuntimeTransport(target,deadline=deadline,clock=clock)
+    try:
+        require(_stamp(os.lstat(socket))==_stamp(alias) and os.path.realpath(socket)==target
+            and _stamp(os.lstat(target))==_stamp(info))
+    except Exception:
+        transport.close();raise
+    return transport
 
 
 def verify_child(host_snapshot, companion_paths, *, deadline):
@@ -359,6 +381,7 @@ class CodexTaskRuntime:
             env['meta'].setdefault('history',[]).append(dict(outcome=outcome,internal=env['meta']['internal']))
             durable_json(path,env,deadline=deadline,clock=self.clock)
             destination=self.agent_dir+'/inbox/done/'+key+'.json'
+            self._dedup_locked(key)
             require(not os.path.lexists(destination))
             os.rename(path,destination)
             fsync_dir(os.path.dirname(path)); fsync_dir(os.path.dirname(destination))
@@ -467,12 +490,27 @@ class CodexTaskRuntime:
         snap=self.store.snapshot(deadline=deadline)
         return self.state_root+'/'+snap['state_id']
 
+    def _executor_owner(self):
+        path=self.agent_dir+'/inbox/.executor.lock';before=file_info(path)
+        with open('/proc/locks','rb') as stream:raw=stream.read(1024*1024+1)
+        require(len(raw)<=1024*1024)
+        owners=[]
+        for line in raw.decode('ascii').splitlines():
+            fields=line.split()
+            if len(fields)<8 or fields[1:4]!=['FLOCK','ADVISORY','WRITE']:continue
+            device=fields[5].split(':')
+            if len(device)!=3:continue
+            if (int(device[0],16),int(device[1],16),int(device[2]))==(os.major(before.st_dev),os.minor(before.st_dev),before.st_ino):
+                owners.append(int(fields[4]))
+        require(owners==[os.getpid()] and _stamp(os.lstat(path))==_stamp(before))
+
     def execute(self,event_key,generation,attempt_id,*,deadline):
         self._deadline(deadline)
         self.current_op=None
         op=None; transport=None; thread_id=None; turn_id=None
         try:
             self._deadline(deadline)
+            self._executor_owner()
             self.static_preflight(deadline=deadline)
             self.require_drained(deadline=deadline)
             spec=self._spec(deadline)
@@ -509,10 +547,25 @@ class CodexTaskRuntime:
                     result=transport.call('turn/start',dict(threadId=thread_id,clientUserMessageId=op['operation_id'],input=[dict(type='text',text=text)]),deadline=deadline)
                     turn_id=result['turn']['id']; op=reservation.activate(thread_id,turn_id)
                 transport.bind_operation(thread_id,turn_id)
-                self._child(snapshot,deadline)
-                events=list(transport.events); transport.events.clear()
-                require(not any('id' in event for event in events))
-                registry=self._registry(events,thread_id,turn_id)
+                events=[]; registry=None
+                while True:
+                    self._deadline(deadline)
+                    events.extend(transport.events); transport.events.clear()
+                    require(len(events)<=256 and len(json.dumps(events).encode())<=1024*1024)
+                    require(not any('id' in event or event.get('method')=='item/started' and event.get('params',{}).get('item',{}).get('type')=='fileChange' for event in events))
+                    outputs=[event for event in events if event.get('method') in ('rawResponseItem/completed','item/rawResponseItem/completed') and event.get('params',{}).get('item',{}).get('type')=='custom_tool_call_output']
+                    if outputs: registry=self._registry(events,thread_id,turn_id)
+                    history=transport.call('thread/read',dict(threadId=thread_id,includeTurns=True),deadline=deadline)['thread']
+                    require(history['id']==thread_id and history['cwd']==self.cwd)
+                    turns=[row for row in history['turns'] if row['id']==turn_id]
+                    require(len(turns)==1)
+                    if turns[0]['status'] in ('completed','failed','interrupted'):
+                        events.extend(transport.events); transport.events.clear()
+                        require(not any('id' in event for event in events))
+                        registry=self._registry(events,thread_id,turn_id)
+                        self._child(snapshot,deadline)
+                        break
+                    time.sleep(min(.05,max(0,deadline-self.clock())))
                 pages=self._catalog(transport,thread_id,deadline)
                 validate_sealed_policy(response,self.cwd,config,pages,registry,dict(version='0.160.0',hashes=_HASHES))
                 terminal=self._terminal(transport,thread_id,turn_id,op['operation_id'],deadline); require(terminal=='completed')
@@ -520,10 +573,16 @@ class CodexTaskRuntime:
                 transport.close(); transport=None
                 self.revoke_and_drain('terminal',deadline=deadline)
                 require(not git_run(['status','--porcelain'],self.cwd,spec['project'],deadline=deadline).stdout.strip())
+                admission=dict(incarnation=control['incarnation'],release=copy.deepcopy(_HASHES),tools=tools,mcp_names=names,thread_id=thread_id,
+                    thread_path=self.last_native_thread['path'],model=response['model'],reasoning_effort=response['reasoningEffort'],
+                    permission_profile='control_task',config_digest=digest(sealed_overrides(self.cwd,names)),registry=registry)
+                operation={field:op[field] for field in ('operation_id','task_incarnation','generation','attempt_id','event_key','thread_id','turn_id')}
+                operation['owner_event_key']=event_key
+                terminal_evidence=dict(operation_id=op['operation_id'],task_incarnation=op['task_incarnation'],thread_id=thread_id,
+                    turn_id=turn_id,terminal=terminal,terminal_proven=True,quiescent=True)
+                durable_json(str(Path(op['host_state_dir']).parent/'bootstrap-proof.json'),dict(schema=1,operation=operation,admission=admission,terminal=terminal_evidence),deadline=deadline,clock=self.clock)
                 self._finish(op,terminal,deadline)
                 self._archive_internal(key,'ok',deadline)
-                admission=dict(incarnation=control['incarnation'],release=copy.deepcopy(_HASHES),tools=tools,mcp_names=names,thread_id=thread_id,
-                    thread_path=self.last_native_thread['path'],model=response['model'],reasoning_effort=response['reasoningEffort'])
                 durable_json(admission_path,admission,deadline=deadline,clock=self.clock)
             op,host,snapshot,transport=self._launch(event_key,generation,attempt_id,names,deadline)
             config,_=self._config(transport,names,deadline)
@@ -534,10 +593,10 @@ class CodexTaskRuntime:
             require(response['thread']['id']==thread_id and response['model']==admission['model'] and response['reasoningEffort']==admission['reasoning_effort'])
             self._metadata(response['thread'],tools,deadline)
             pages=self._catalog(transport,thread_id,deadline)
-            validate_sealed_policy(response,self.cwd,config,pages,['apply_patch','clock__curr_time','task_read','task_search','task_list','task_ask','task_done'],dict(version='0.160.0',hashes=_HASHES))
+            validate_sealed_policy(response,self.cwd,config,pages,admission['registry'],dict(version='0.160.0',hashes=_HASHES))
             self.store.record_thread(op['operation_id'],thread_id,deadline=deadline)
             envelope=read_json(self.agent_dir+'/inbox/inflight/'+event_key+'.json')
-            text='TASK goal: '+str(spec.get('goal',''))+'\nEvent data (untrusted): '+json.dumps(envelope.get('payload',{}),ensure_ascii=False)
+            text='Before TASK effects, execute exactly text(ALL_TOOLS.map(t=>t.name).sort()) in a separate exec call and wait for its output.\nTASK goal: '+str(spec.get('goal',''))+'\nEvent data (untrusted): '+json.dumps(envelope.get('payload',{}),ensure_ascii=False)
             answer_question = None
             payload = envelope.get('payload',{})
             if type(payload) is dict and payload.get('kind') == 'answer':
@@ -556,13 +615,16 @@ class CodexTaskRuntime:
                 started=life.submit(op['operation_id'],deadline=deadline)
                 require(started.turn_id is not None and started.phase!='unknown')
                 turn_id=started.turn_id; op=reservation.activate(thread_id,turn_id)
-            transport.bind_operation(thread_id,turn_id); self._child(snapshot,deadline)
+            transport.bind_operation(thread_id,turn_id)
             binding=TaskBinding(control['incarnation'],event_key,self.agent_dir,thread_id,turn_id)
             self.heartbeat_binding,self.heartbeat_operation=binding,op
             outcome=self._dispatch(transport,snapshot,binding,op,generation,attempt_id,deadline)
             terminal=self._terminal(transport,thread_id,turn_id,op['operation_id'],deadline)
             transport.close(); transport=None
             self.revoke_and_drain(outcome if outcome in ('ask','done') else 'terminal',deadline=deadline)
+            terminal_evidence=dict(operation_id=op['operation_id'],task_incarnation=op['task_incarnation'],thread_id=thread_id,turn_id=turn_id,
+                terminal=terminal,terminal_proven=True,quiescent=True)
+            durable_json(str(Path(op['host_state_dir']).parent/'terminal.json'),terminal_evidence,deadline=deadline,clock=self.clock)
             completion_path=Path(op['host_state_dir']).parent/'completion.json'
             if completion_path.exists():
                 self._complete(op,deadline)
@@ -592,11 +654,21 @@ class CodexTaskRuntime:
         self._deadline(deadline)
 
     def _dispatch(self,transport,snapshot,binding,op,generation,attempt,deadline):
-        waiting=[]; changes={}; seen={}; resolved=set(); iteration=self.clock()
+        waiting=[]; changes={}; seen={}; resolved=set(); iteration=self.clock();registry_events=[];registry_proven=False
         while True:
             self._deadline(deadline)
             self.adapters['heartbeat'](self.agent_dir,generation,attempt,'running',iteration,deadline=deadline)
             events=list(transport.events); transport.events.clear()
+            for event in events:
+                if event.get('method') in ('rawResponseItem/completed','item/rawResponseItem/completed'):
+                    if not registry_proven:registry_events.append(event)
+                    require(len(registry_events)<=256 and len(json.dumps(registry_events).encode())<=1024*1024)
+                    if not registry_proven:
+                        item=event.get('params',{}).get('item',{})
+                        if item.get('type')=='custom_tool_call_output':
+                            self._registry(registry_events,binding.thread_id,binding.turn_id);self._child(snapshot,deadline);registry_proven=True
+                if 'id' in event or event.get('method')=='item/started' and event.get('params',{}).get('item',{}).get('type')=='fileChange':
+                    require(registry_proven)
             for event in events:
                 _plain(event)
                 method=event.get('method'); params=event.get('params',{})
@@ -609,6 +681,7 @@ class CodexTaskRuntime:
                     changes[params['item']['id']]=params['item']['changes']
                 if 'id' not in event:
                     continue
+                require(registry_proven)
                 key=(type(event['id']),event['id']); fingerprint=digest(event)
                 if key in seen:
                     require(seen[key]==fingerprint)
@@ -672,6 +745,9 @@ class CodexTaskRuntime:
                             if update.get('method')=='serverRequest/resolved':
                                 rpc=update.get('params',{}).get('requestId'); require((type(rpc),rpc)!=key)
                             require(update.get('method')!='item/fileChange/patchUpdated')
+                            if update.get('method')=='item/started' and update.get('params',{}).get('item',{}).get('id')==params['itemId']:
+                                updated=update['params'];require(updated.get('threadId')==binding.thread_id and updated.get('turnId')==binding.turn_id
+                                    and updated['item'].get('type')=='fileChange' and _equal(updated['item'].get('changes'),patch))
                             if 'id' in update and (type(update['id']),update['id'])==key: require(digest(update)==seen[key])
                         question=read_json(self.agent_dir+'/questions/'+qid+'.json')
                         if question.get('answered_at') is not None:
@@ -687,15 +763,20 @@ class CodexTaskRuntime:
                                 require(question['decision'] in allowed_decisions)
                                 self._capture_patch(patch)
                                 if question['decision']=='approve': self._validate_patch(patch)
+                                future_callback=copy.deepcopy(question['native_callback']);future_callback['status']='answered'
+                                receipt=dict(question_id=qid,operation_id=op['operation_id'],task_incarnation=op['task_incarnation'],
+                                    callback_digest=digest(future_callback),decision=question['decision'],answered_at=question['answered_at'],answered_by=question['answered_by'])
+                                parent=str(Path(op['host_state_dir']).parent);confirmed=parent+'/approval-'+qid+'.json';intent=parent+'/approval-'+qid+'-intent.json'
+                                require(not os.path.lexists(intent))
+                                require(not os.path.lexists(confirmed))
+                                durable_json(intent,dict(schema=1,phase='send_intent',**receipt),deadline=deadline,clock=self.clock)
                                 transport.reply_approval(event['id'],dict(decision='accept' if question['decision']=='approve' else 'decline'),method=event['method'],
                                     thread_id=binding.thread_id,turn_id=binding.turn_id,item_id=params['itemId'],deadline=deadline)
+                                durable_json(confirmed,receipt,deadline=deadline,clock=self.clock)
+                                require(_equal(read_json(self.agent_dir+'/questions/'+qid+'.json'),question))
                                 question['status']='closed'
-                                question['native_callback']['status']='answered'
+                                question['native_callback']=future_callback
                                 durable_json(self.agent_dir+'/questions/'+qid+'.json',question,deadline=deadline,clock=self.clock)
-                                durable_json(str(Path(op['host_state_dir']).parent/('approval-'+qid+'.json')),
-                                    dict(question_id=qid, operation_id=op['operation_id'], task_incarnation=op['task_incarnation'],
-                                        callback_digest=digest(question['native_callback']), decision=question['decision'],
-                                        answered_at=question['answered_at'], answered_by=question['answered_by']),deadline=deadline,clock=self.clock)
                             waiting.clear(); break
                         transport.call('thread/read',dict(threadId=binding.thread_id,includeTurns=True),deadline=deadline)
                         time.sleep(min(.05,max(0,deadline-self.clock())))
@@ -704,7 +785,7 @@ class CodexTaskRuntime:
             turn=[t for t in thread['turns'] if t['id']==binding.turn_id]
             if turn and turn[0]['status'] in ('completed','failed','interrupted'):
                 require(not waiting)
-                require(turn[0]['status']=='completed')
+                require(registry_proven and turn[0]['status']=='completed')
                 return 'terminal'
             time.sleep(min(.05,max(0,deadline-self.clock())))
 
@@ -763,6 +844,7 @@ class CodexTaskRuntime:
         self.require_drained(deadline=deadline)
         snapshot=self.store.snapshot(deadline=deadline); op=snapshot['operations'][operation_id]
         require(op['event_key']==event_key and agent_dir==self.agent_dir)
+        require(type(summary) is str and not any(re.match(r'^\s*Codex-Task-(Operation|Intent):',line) for line in summary.splitlines()))
         spec=self._spec(deadline); project=spec['project']; parent=str(Path(op['host_state_dir']).parent)
         def git(args,index=None):
             result=git_run(args,self.cwd,project,index_file=index,deadline=deadline,clock=self.clock)
@@ -798,6 +880,11 @@ class CodexTaskRuntime:
             new_head=git(['rev-parse','HEAD'])
             require(git(['rev-parse',new_head+'^'])==receipt['parent_sha'] and git(['rev-parse',new_head+'^{tree}'])==receipt['tree_sha'])
             receipt.update(commit_sha=new_head,no_commit=False)
+        if not receipt['no_commit']:
+            message=git(['show','-s','--format=%B',receipt['commit_sha']])
+            for label,expected in (('Codex-Task-Operation:',trailer),('Codex-Task-Intent:',intent_trailer)):
+                rows=[line for line in message.splitlines() if line.startswith(label)]
+                require(rows==[expected])
         git(['read-tree','HEAD'])
         require(git(['status','--porcelain','--untracked-files=all'])=='')
         return receipt
@@ -843,18 +930,143 @@ class CodexTaskRuntime:
         value['done_receipt']=dict(envelope_key=op['event_key'],summary_digest=digest(value['summary']))
         value['phase']='done_written'; durable_json(path,value,deadline=deadline,clock=self.clock)
 
+    def _ask_proof(self,op):
+        parent=str(Path(op['host_state_dir']).parent)
+        journal=read_json(parent+'/bridge/journal.json')
+        expected=dict(task_incarnation=op['task_incarnation'],event_key=op['event_key'],agent_dir=self.agent_dir,
+                      thread_id=op['thread_id'],turn_id=op['turn_id'])
+        require(type(journal['schema']) is int and journal['schema']==1 and _equal(journal['binding'],expected))
+        candidates=[row for row in journal['calls'].values() if row.get('tool')=='task_ask' and row.get('result') is not None]
+        require(len(candidates)==1)
+        row=candidates[0];qid=row['result']['qid'];require(type(qid) is str and str(UUID(qid))==qid)
+        question=read_json(self.agent_dir+'/questions/'+qid+'.json')
+        require(question.get('qid')==qid and question.get('kind')=='info' and question.get('envelope_key')==op['event_key']
+            and question.get('status')=='open' and not question.get('native_callback'))
+        arguments=dict(question=question['question'])
+        for key in ('options','context'):
+            if question.get(key) is not None:arguments[key]=question[key]
+        require(row['fingerprint']==digest(arguments))
+
+    def _dedup_locked(self,key):
+        # Invoke the shared durable ledger writer under the already-held inbox lock.
+        loader=importlib.machinery.SourceFileLoader('_codex_runtime_shared_runner',os.path.join(os.path.dirname(__file__),'claude-agent-run'))
+        spec=importlib.util.spec_from_loader(loader.name,loader);module=importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+        module.dedup_add(self.agent_dir+'/inbox',key)
+
+    def _archive_ordinary(self,op,deadline):
+        with self._locks(all_locks=True,deadline=deadline):
+            with self.store._context(deadline,locked=True) as context:
+                current=context['index']['operations'][op['operation_id']]
+                require(current['status']=='finished')
+                for known in context['index']['operations'].values():self.store._drain_gate(context,known,deadline)
+                source=self.agent_dir+'/inbox/inflight/'+op['event_key']+'.json'
+                destination=self.agent_dir+'/inbox/done/'+op['event_key']+'.json'
+                if not os.path.lexists(source):
+                    env=read_json(destination);require(_equal(env['meta']['codex_operation'],current))
+                    return
+                env=read_json(source);require(_equal(env['meta']['codex_operation'],current))
+                outcome='ok'
+                if current['terminal_evidence']['terminal']=='interrupted':
+                    self._ask_proof(op);outcome='asked'
+                env['meta'].setdefault('history',[]).append(dict(outcome=outcome))
+                durable_json(source,env,deadline=deadline,clock=self.clock)
+                self._dedup_locked(op['event_key'])
+                require(not os.path.lexists(destination));os.rename(source,destination)
+                fsync_dir(os.path.dirname(source));fsync_dir(os.path.dirname(destination))
+
+    def _recover_questions(self,op,deadline):
+        parent=Path(op['host_state_dir']).parent
+        for path in parent.glob('approval-*-intent.json'):
+            intent=read_json(str(path))
+            require(set(intent)=={'schema','phase','question_id','operation_id','task_incarnation','callback_digest','decision','answered_at','answered_by'}
+                and type(intent['schema']) is int and intent['schema']==1 and intent['phase']=='send_intent')
+            receipt={key:value for key,value in intent.items() if key not in ('schema','phase')}
+            qid=receipt['question_id'];require(type(qid) is str and re.fullmatch(r'[A-Za-z0-9_-]{1,128}',qid))
+            require(path.name=='approval-'+qid+'-intent.json' and receipt['operation_id']==op['operation_id'] and receipt['task_incarnation']==op['task_incarnation'])
+            require(_equal(read_json(str(parent/('approval-'+qid+'.json'))),receipt))
+            with self._locks(all_locks=True,deadline=deadline), self.store._context(deadline,locked=True) as context:
+                current=context['index']['operations'][op['operation_id']]
+                require(current['task_incarnation']==op['task_incarnation'] and current['status'] in ('revoked','finished'))
+                for known in context['index']['operations'].values():self.store._drain_gate(context,known,deadline)
+                question_path=self.agent_dir+'/questions/'+qid+'.json';question=read_json(question_path)
+                callback=copy.deepcopy(question['native_callback'])
+                require(question['qid']==qid and question['engine']=='codex' and question['kind']=='permission'
+                    and question['status'] in ('open','closed') and callback['status'] in ('pending','answered')
+                    and callback['operation_id']==op['operation_id'] and callback['task_incarnation']==op['task_incarnation']
+                    and callback['thread_id']==op['thread_id'] and callback['turn_id']==op['turn_id']
+                    and callback['generation']==op['generation'] and callback['attempt_id']==op['attempt_id']
+                    and question['decision'] in callback['allowed_decisions'] and question['answer'] is None)
+                callback['status']='answered'
+                expected=dict(question_id=qid,operation_id=op['operation_id'],task_incarnation=op['task_incarnation'],
+                    callback_digest=digest(callback),decision=question['decision'],answered_at=question['answered_at'],answered_by=question['answered_by'])
+                require(_equal(receipt,expected) and question['answered_at'] and question['answered_by'])
+                if question['status']=='open':
+                    question['status']='closed';question['native_callback']=callback
+                    durable_json(question_path,question,deadline=deadline,clock=self.clock)
+
+    def _recover_bootstrap(self,op,deadline):
+        parent=Path(op['host_state_dir']).parent
+        source=self.agent_dir+'/inbox/inflight/'+op['event_key']+'.json'
+        done=self.agent_dir+'/inbox/done/'+op['event_key']+'.json'
+        envelope=read_json(source if os.path.lexists(source) else done)
+        if envelope.get('meta',{}).get('internal')!='codex_bootstrap':return False
+        proof=read_json(str(parent/'bootstrap-proof.json'))
+        require(set(proof)=={'schema','operation','admission','terminal'} and type(proof['schema']) is int and proof['schema']==1)
+        operation=proof['operation'];require(set(operation)=={'operation_id','task_incarnation','generation','attempt_id','event_key','thread_id','turn_id','owner_event_key'})
+        require(all(_equal(operation[key],op[key]) for key in operation if key!='owner_event_key')
+            and operation['owner_event_key']==envelope['meta']['owner_event_key'])
+        terminal=proof['terminal'];require(_equal(terminal,dict(operation_id=op['operation_id'],task_incarnation=op['task_incarnation'],
+            thread_id=op['thread_id'],turn_id=op['turn_id'],terminal='completed',terminal_proven=True,quiescent=True)))
+        admission=proof['admission'];tools=CodexTaskFiles.dynamic_tools()+dynamic_tools()
+        require(set(admission)=={'incarnation','release','tools','mcp_names','thread_id','thread_path','model','reasoning_effort','permission_profile','config_digest','registry'})
+        require(admission['incarnation']==op['task_incarnation'] and admission['thread_id']==op['thread_id']
+            and _equal(admission['release'],_HASHES) and _equal(admission['tools'],tools) and admission['permission_profile']=='control_task'
+            and admission['config_digest']==digest(sealed_overrides(self.cwd,admission['mcp_names']))
+            and type(admission['registry']) is list and len(admission['registry'])==7
+            and set(admission['registry'])=={'apply_patch','clock__curr_time','task_read','task_search','task_list','task_ask','task_done'})
+        self.static_preflight(deadline=deadline)
+        require(type(admission['model']) is str and admission['model'] and (admission['reasoning_effort'] is None or type(admission['reasoning_effort']) is str))
+        self._metadata(dict(id=admission['thread_id'],path=admission['thread_path']),tools,deadline)
+        if os.path.lexists(source):
+            self.store.finish(op['operation_id'],terminal,deadline=deadline)
+            self._archive_internal(op['event_key'],'ok',deadline)
+        else:
+            require(op['status']=='finished' and _equal(op['terminal_evidence'],terminal)
+                and envelope['meta']['history'][-1]['outcome']=='ok')
+        admission_path=self._state_dir(deadline)+'/admission.json'
+        if os.path.lexists(admission_path):require(_equal(read_json(admission_path),admission))
+        else:durable_json(admission_path,admission,deadline=deadline,clock=self.clock)
+        return True
+
     def reconcile(self,*,deadline):
         try:
-            self._deadline(deadline); snapshot=self.store.snapshot(deadline=deadline)
+            self._deadline(deadline); self._executor_owner(); snapshot=self.store.snapshot(deadline=deadline)
             if not snapshot['operations']: return dict(outcome='idle',operations=[],reason=None)
             self.revoke_and_drain('recovery',deadline=deadline)
             recovered=False
             for op in snapshot['operations'].values():
+                self._recover_questions(op,deadline)
+                if self._recover_bootstrap(op,deadline): recovered=True;continue
                 path=str(Path(op['host_state_dir']).parent/'completion.json')
                 if os.path.lexists(path):
                     value=read_json(path)
                     if value['phase'] not in ('done_written','finalized'):
                         self._complete(op,deadline); recovered=True
+                else:
+                    parent=str(Path(op['host_state_dir']).parent);checkpoint=parent+'/checkpoint.json'
+                    if os.path.lexists(checkpoint):
+                        terminal=read_json(parent+'/terminal.json')
+                        require(set(terminal)=={'operation_id','task_incarnation','thread_id','turn_id','terminal','terminal_proven','quiescent'}
+                            and all(_equal(terminal[key],op[key]) for key in ('operation_id','task_incarnation','thread_id','turn_id'))
+                            and terminal['terminal'] in ('completed','interrupted') and terminal['terminal_proven'] is True and terminal['quiescent'] is True)
+                        prepared=read_json(checkpoint);self._receipt(prepared,op)
+                        receipt=self.adapters['checkpoint'](self.agent_dir,op['operation_id'],op['event_key'],'TASK checkpoint',prepared,deadline=deadline)
+                        self._receipt(receipt,op);require(receipt['commit_sha'] is not None)
+                        if not _equal(prepared,receipt): durable_json(checkpoint,receipt,deadline=deadline,clock=self.clock)
+                        self.store.finish(op['operation_id'],terminal,deadline=deadline)
+                        self._archive_ordinary(op,deadline)
+                        recovered=True
             return dict(outcome='recovered' if recovered else 'idle',operations=list(snapshot['operations']),reason=None)
         except Exception:
             return dict(outcome='blocked',operations=[],reason='native_evidence_unconfirmed')
@@ -874,14 +1086,12 @@ def task_engine(agent_dir):
 
 
 def ensure_native_python():
-    import importlib.util
-    if importlib.util.find_spec('websockets') is not None:
-        import websockets
-        require(websockets.__version__=='15.0.1')
-        return
-    target=os.environ.get('CODEX_RC_PYTHON',os.path.expanduser('~/.local/share/claude-control/codex-venv/bin/python'))
-    require(os.path.isfile(target) and os.access(target,os.X_OK) and os.path.abspath(target)!=os.path.abspath(os.sys.executable))
-    os.execv(target,[target]+os.sys.argv)
+    target=os.path.abspath(os.environ.get('CODEX_RC_PYTHON',os.path.expanduser('~/.local/share/claude-control/codex-venv/bin/python')))
+    require(os.path.isfile(target) and os.access(target,os.X_OK))
+    if target!=os.path.abspath(os.sys.executable):
+        os.execv(target,[target]+os.sys.argv)
+    import websockets
+    require(websockets.__version__=='15.0.1')
 
 
 def runtime_for(agent_dir):
@@ -924,7 +1134,13 @@ def main(argv=None):
         ensure_native_python()
         controller=runtime_for(args.agent); deadline=time.monotonic()+30
         if args.command=='preflight':result=controller.static_preflight(deadline=deadline)
-        elif args.command=='reconcile':result=controller.reconcile(deadline=deadline)
+        elif args.command=='reconcile':
+            path=args.agent+'/inbox/.executor.lock';file_info(path)
+            fd=os.open(path,os.O_RDWR|os.O_NOFOLLOW)
+            try:
+                fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                result=controller.reconcile(deadline=deadline)
+            finally:os.close(fd)
         elif args.command=='barrier':result=controller.revoke_and_drain(args.reason,deadline=deadline)
         else:
             spec=controller._spec(deadline); timeout=spec.get('limits',{}).get('run_timeout_s',300)
