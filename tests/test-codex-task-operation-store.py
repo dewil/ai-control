@@ -317,6 +317,56 @@ class OperationStoreContract(unittest.TestCase):
         saved.rename(parent)
         self.assertIs(self.store.require_drained(deadline=self.deadline), True)
 
+    def test_replaced_not_launched_host_directory_never_becomes_drain_proof(self):
+        # INV-CXSTORE-04 / INV-CXSTORE-05: same safe pathname is not original identity.
+        self.publish()
+        operation = self.prepare()['operation_id']
+        self.store.revoke(deadline=self.deadline)
+        host = Path(self.read_index()['operations'][operation]['host_state_dir'])
+        saved = host.with_name('original-host')
+        original_index = self.index.read_bytes()
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+        host.rename(saved)
+        host.mkdir(mode=0o700)
+        try:
+            for store in (self.store, self.Store(str(self.agent), state_root=str(self.private), clock=self.clock)):
+                with self.subTest(reopened=store is not self.store), self.assertRaises(self.Error):
+                    store.require_drained(deadline=self.deadline)
+            self.assertEqual(self.index.read_bytes(), original_index)
+            self.assertEqual(list(host.iterdir()), [])
+        finally:
+            host.rmdir()
+            saved.rename(host)
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+        reopened = self.Store(str(self.agent), state_root=str(self.private), clock=self.clock)
+        self.assertIs(reopened.require_drained(deadline=self.deadline), True)
+
+    def test_replaced_operation_parent_refuses_even_when_original_host_is_moved_back(self):
+        # INV-CXSTORE-04 / INV-CXSTORE-05: all original private parent identities survive restart.
+        self.publish()
+        operation = self.prepare()['operation_id']
+        self.store.revoke(deadline=self.deadline)
+        host = Path(self.read_index()['operations'][operation]['host_state_dir'])
+        parent = host.parent
+        saved = parent.with_name('original-operation')
+        original_index = self.index.read_bytes()
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+        parent.rename(saved)
+        parent.mkdir(mode=0o700)
+        (saved / 'host').rename(host)
+        try:
+            for store in (self.store, self.Store(str(self.agent), state_root=str(self.private), clock=self.clock)):
+                with self.subTest(reopened=store is not self.store), self.assertRaises(self.Error):
+                    store.require_drained(deadline=self.deadline)
+            self.assertEqual(self.index.read_bytes(), original_index)
+        finally:
+            host.rename(saved / 'host')
+            parent.rmdir()
+            saved.rename(parent)
+        self.assertIs(self.store.require_drained(deadline=self.deadline), True)
+        reopened = self.Store(str(self.agent), state_root=str(self.private), clock=self.clock)
+        self.assertIs(reopened.require_drained(deadline=self.deadline), True)
+
     def partial_drain_publication(self):
         self.publish()
         operation = self.activate()
