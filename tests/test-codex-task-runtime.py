@@ -4,6 +4,7 @@ import copy
 from collections import deque
 import socket
 import hashlib
+import fcntl
 import importlib
 import json
 import os
@@ -85,7 +86,7 @@ class RuntimeContract(unittest.TestCase):
             codex_state_id=str(uuid.uuid4()))
         save(self.agent / 'control.json', self.control)
         self.spec = dict(engine='codex', type='event', runtime='drain',
-                         workspace='worktree', project=str(self.project))
+                         workspace='worktree', project=str(self.project), goal='Inspect own tracked fixture file')
         self.write_spec()
         save(self.agent / 'inbox/inflight/event-1.json', {'key': 'event-1', 'meta': {}})
         self.executable = self.release / 'codex'
@@ -93,6 +94,10 @@ class RuntimeContract(unittest.TestCase):
         for path in [self.executable] + [Path(v) for v in self.companions.values()]:
             path.write_text('#!/bin/sh\nexit 93\n')
             path.chmod(0o700)
+        self.executor = (self.agent / 'inbox/.executor.lock').open('a+')
+        os.chmod(self.agent / 'inbox/.executor.lock', 0o600)
+        fcntl.flock(self.executor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.addCleanup(self.executor.close)
         self.effects = []
         self.evidence = {'version': '0.160.0', 'hashes': copy.deepcopy(PINS)}
 
@@ -130,6 +135,7 @@ class RuntimeContract(unittest.TestCase):
 
     def refusal(self, action):
         before = self.snapshot()
+        original_control = json.loads((self.agent / 'control.json').read_text())
         try:
             result = action()
         except self.Error:
@@ -140,6 +146,9 @@ class RuntimeContract(unittest.TestCase):
                 self.assertIsNone(result[name])
         self.assertEqual(self.effects, [])
         self.assertEqual(before, self.snapshot(), 'Refusal altered event/worktree/private artifacts')
+        after_control = json.loads((self.agent / 'control.json').read_text())
+        for field in ('incarnation', 'generation', 'desired', 'lease', 'acceptance'):
+            self.assertEqual(after_control[field], original_control[field])
 
     # INV-CXRUN-02
     def test_constructor_is_inert_and_does_not_initialize_missing_index(self):
@@ -199,6 +208,17 @@ class RuntimeContract(unittest.TestCase):
                          {'verify_release': None}):
             with self.subTest(adapters=list(adapters)), self.assertRaises(self.Error):
                 self.make(adapters=adapters)
+        self.assertEqual(self.effects, [])
+
+    def test_constructor_copies_adapter_table_without_later_caller_authority(self):
+        self.publish_registry()
+        adapters = {'verify_release': self.verify, 'host_factory': self.native_forbidden,
+                    'transport_factory': self.native_forbidden}
+        controller = self.make(adapters=adapters)
+        adapters['verify_release'] = lambda *a, **kw: {'version': 'malicious', 'hashes': {}}
+        adapters['new_executor'] = self.native_forbidden
+        result = controller.static_preflight(deadline=time.monotonic() + 2)
+        self.assertEqual(result['release_hashes'], PINS)
         self.assertEqual(self.effects, [])
 
     def test_profile_and_unknown_engine_refuse_without_claim(self):
@@ -335,7 +355,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -347,6 +367,9 @@ class RuntimeContract(unittest.TestCase):
         native_path.parent.mkdir(mode=0o700)
         history = []
         checkpoint_calls = []
+        approval_replies = []
+        waiting_heartbeats = []
+        answered = set()
         from _codex_task_files import CodexTaskFiles
         from _codex_task_bridge import dynamic_tools
         descriptors = CodexTaskFiles.dynamic_tools() + dynamic_tools()
@@ -390,7 +413,8 @@ class RuntimeContract(unittest.TestCase):
             def snapshot(self):
                 return HostSnapshot(self.unit, self.phase, self.invocation,
                     12345 if self.phase == 'running' else None,
-                    self.socket, self.phase == 'running')
+                    self.socket, self.phase == 'running',
+                    control_group='/fixture/owned' if self.phase == 'running' else None)
 
             def start(self, *, deadline):
                 index = json.loads((case.state / case.control['codex_state_id'] / 'index.json').read_text())
@@ -453,6 +477,8 @@ class RuntimeContract(unittest.TestCase):
             def __init__(self):
                 self.events = deque()
                 self.closed = False
+                self.bound = None
+                self.replies = []
 
             def call(self, method, params, *, deadline):
                 calls.append((method, copy.deepcopy(params)))
@@ -531,8 +557,42 @@ class RuntimeContract(unittest.TestCase):
                                 'threadId': thread_id, 'turnId': turn_id, 'callId': 'bootstrap-ask',
                                 'tool': 'task_ask', 'arguments': {'question': 'Forbidden bootstrap question?'},
                                 'namespace': None}})
-                        self.events.append({'method': 'turn/completed', 'params': {
-                            'threadId': thread_id, 'turn': copy.deepcopy(created)}})
+                        if not diagnostic and native_mode in ('read', 'ask', 'done', 'done_dirty'):
+                            tool = {'read': 'task_read', 'ask': 'task_ask', 'done': 'task_done', 'done_dirty': 'task_done'}[native_mode]
+                            args = {'read': {'path': 'tracked.txt'}, 'ask': {'question': 'Proceed?'},
+                                    'done': {'summary': 'Ready <& unchanged'}, 'done_dirty': {'summary': 'Ready <& dirty'}}[native_mode]
+                            if native_mode == 'done_dirty':
+                                (case.agent / 'work/tracked.txt').write_text('native dirty task change\n')
+                            self.events.append({'id': 0, 'method': 'item/tool/call', 'params': {
+                                'threadId': thread_id, 'turnId': turn_id, 'callId': 'ordinary-call',
+                                'tool': tool, 'arguments': args, 'namespace': None}})
+                        if not diagnostic and native_mode in ('approval_reason_only', 'command_approval'):
+                            method = 'item/fileChange/requestApproval' if native_mode == 'approval_reason_only' else 'item/commandExecution/requestApproval'
+                            params = {'threadId': thread_id, 'turnId': turn_id, 'itemId': 'unproved-item',
+                                'startedAtMs': 1, 'reason': 'Please approve harmless work', 'grantRoot': None}
+                            self.events.append({'id': '7', 'method': method, 'params': params})
+                        if not diagnostic and native_mode in ('approval_full', 'approval_outside', 'approval_move_outside'):
+                            created['status'] = 'inProgress'
+                            created['completedAt'] = None
+                            path = str(case.agent / 'work/tracked.txt')
+                            if native_mode == 'approval_outside':
+                                path = str(case.root / 'outside-candidate.txt')
+                            change = {'path': path, 'kind': {'type': 'update', 'move_path': None},
+                                'diff': '--- tracked.txt\n+++ tracked.txt\n@@ -1 +1 @@\n-baseline\n+approved change\n'}
+                            if native_mode == 'approval_move_outside':
+                                change['kind']['move_path'] = str(case.root / 'outside-candidate.txt')
+                            if native_mode == 'approval_outside':
+                                change['kind'] = {'type': 'add'}
+                            self.events.extend([
+                                {'id': 7, 'method': 'item/fileChange/requestApproval', 'params': {
+                                    'threadId': thread_id, 'turnId': turn_id, 'itemId': 'full-item',
+                                    'startedAtMs': 1, 'reason': 'UNTRUSTED_NATIVE_REASON', 'grantRoot': None}},
+                                {'method': 'item/started', 'params': {'threadId': thread_id, 'turnId': turn_id,
+                                    'item': {'id': 'full-item', 'type': 'fileChange',
+                                        'changes': [change], 'status': 'inProgress'}}}])
+                        if created['status'] == 'completed':
+                            self.events.append({'method': 'turn/completed', 'params': {
+                                'threadId': thread_id, 'turn': copy.deepcopy(created)}})
                         save(native_path, {'type': 'session_meta', 'payload': {
                             'id': thread_id, 'cwd': str(case.agent / 'work'), 'cli_version': '0.160.0',
                             'history_mode': 'legacy', 'roots': [str(case.agent / 'work')],
@@ -546,6 +606,7 @@ class RuntimeContract(unittest.TestCase):
             def bind_operation(self, owned_thread_id, turn_id):
                 case.assertIsNotNone(native_mode, 'Threadless discovery acquired callback authority')
                 case.assertEqual(owned_thread_id, thread_id)
+                self.bound = (owned_thread_id, turn_id)
                 order.append('bind_operation')
 
             def receive(self, *, deadline):
@@ -553,11 +614,60 @@ class RuntimeContract(unittest.TestCase):
                     return self.events.popleft()
                 raise TimeoutError('offline fixture empty')
 
-            def reply_dynamic(self, *args, **kwargs):
-                case.fail('Threadless discovery answered TASK callback')
+            def reply_dynamic(self, request_id, result, *, thread_id, turn_id, call_id, deadline):
+                case.assertEqual(self.bound, (thread_id, turn_id))
+                case.assertIs(type(request_id), int)
+                case.assertEqual(request_id, 0)
+                case.assertEqual(call_id, 'ordinary-call')
+                index_path = case.state / case.control['codex_state_id']
+                index = json.loads((index_path / 'index.json').read_text())
+                active = [r for r in index['operations'].values() if r['status'] == 'active']
+                case.assertEqual(len(active), 1)
+                case.assertEqual(active[0]['event_key'], getattr(case, 'expected_event_key', 'event-1'))
+                # A reply is a guarded effect, not merely a callback result computation.
+                locks = [case.agent / 'questions/.lock', case.agent / 'done.lock',
+                    case.agent.parent / '.locks/new-task-taskone.lock', case.agent / '.lock',
+                    case.agent / 'inbox/.inbox.lock', index_path / 'store.lock']
+                for path in locks:
+                    with path.open('r+') as other:
+                        with case.assertRaises(BlockingIOError):
+                            fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if native_mode == 'ask':
+                    case.assertEqual(len(list((case.agent / 'questions').glob('*.json'))), 1)
+                if native_mode in ('done', 'done_dirty'):
+                    case.assertFalse((case.agent / 'done.json').exists())
+                    operation = active[0]['operation_id']
+                    intent = json.loads((index_path / 'operations' / operation / 'completion.json').read_text())
+                    case.assertEqual(intent['phase'], 'requested')
+                case.assertEqual(self.replies, [])
+                self.replies.append((request_id, copy.deepcopy(result)))
+                order.append('reply_dynamic')
 
-            def reply_approval(self, *args, **kwargs):
-                case.fail('Threadless discovery answered approval')
+            def reply_approval(self, request_id, result, *, method, thread_id, turn_id, item_id, deadline):
+                case.assertIn(native_mode, ('approval_full', 'approval_outside', 'approval_move_outside'))
+                case.assertEqual(self.bound, (thread_id, turn_id))
+                case.assertIs(type(request_id), int)
+                case.assertEqual(request_id, 7)
+                case.assertEqual(item_id, 'full-item')
+                case.assertEqual(method, 'item/fileChange/requestApproval')
+                case.assertIsNotNone(human_decision, 'Approval sent without human answer')
+                case.assertEqual(result, {'decision': human_decision})
+                if native_mode != 'approval_full':
+                    case.assertNotEqual(result['decision'], 'accept')
+                case.assertEqual(len(answered), 1)
+                case.assertEqual(approval_replies, [])
+                index_path = case.state / case.control['codex_state_id']
+                for path in (case.agent / 'questions/.lock', case.agent / 'done.lock',
+                             case.agent.parent / '.locks/new-task-taskone.lock', case.agent / '.lock',
+                             case.agent / 'inbox/.inbox.lock', index_path / 'store.lock'):
+                    with path.open('r+') as other:
+                        with case.assertRaises(BlockingIOError):
+                            fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                approval_replies.append((request_id, copy.deepcopy(result)))
+                order.append('reply_approval')
+                history[-1].update(status='completed', completedAt=2)
+                self.events.append({'method': 'turn/completed', 'params': {
+                    'threadId': thread_id, 'turn': copy.deepcopy(history[-1])}})
 
             def reply_user_input(self, *args, **kwargs):
                 case.fail('Threadless discovery answered user input')
@@ -604,18 +714,51 @@ class RuntimeContract(unittest.TestCase):
             order.append('checkpoint_prepare' if prepared_receipt is None else 'checkpoint_commit')
             head = case.git('rev-parse', 'HEAD', cwd=case.agent / 'work').strip()
             tree = case.git('rev-parse', 'HEAD^{tree}', cwd=case.agent / 'work').strip()
+            completion = case.state / case.control['codex_state_id'] / 'operations' / operation_id / 'completion.json'
+            digest = json.loads(completion.read_text())['request_digest'] if completion.exists() else hashlib.sha256(summary.encode()).hexdigest()
             if prepared_receipt is None:
                 return dict(branch='task/taskone-' + INC[:8], parent_sha=head,
                     tree_sha=tree, commit_sha=None, trailer='Codex-Task-Operation: ' + operation_id,
-                    intent_trailer=None, no_commit=False)
+                    intent_trailer='Codex-Task-Intent: ' + digest, no_commit=False)
             receipt = copy.deepcopy(prepared_receipt)
             receipt.update(commit_sha=head, no_commit=True)
             return receipt
 
-        controller = self.make(adapters={'verify_release': self.verify,
+        def heartbeat(agent_dir, generation, attempt_id, phase, iteration_started_at, *, deadline):
+            case.assertEqual(agent_dir, str(case.agent))
+            case.assertEqual((generation, attempt_id), (7, 'attempt-1'))
+            case.assertIn(phase, ('running', 'waiting_input', 'draining', 'blocked'))
+            if phase != 'waiting_input':
+                return None
+            waiting_heartbeats.append(iteration_started_at)
+            questions = list((case.agent / 'questions').glob('*.json'))
+            if human_decision is None or answered or not questions:
+                return None
+            question = json.loads(questions[0].read_text())
+            rendered = json.dumps(question, ensure_ascii=False)
+            case.assertIn('tracked.txt' if native_mode == 'approval_full' else 'outside-candidate.txt', rendered)
+            case.assertNotIn('Claude', rendered)
+            environment = case.git_env.copy()
+            environment.update(CLAUDE_AGENTS_DIR=str(case.agent.parent),
+                CLAUDE_AGENT_SPOOL_BASE=str(case.root / 'spool'),
+                CLAUDE_AGENT_GENERATION='7', CLAUDE_AGENT_ATTEMPT='attempt-1')
+            executable = Path(__file__).resolve().parents[1] / 'bin/claude-agent-answer'
+            command = [str(executable), str(case.agent), '--qid', question['qid'],
+                '--approve' if human_decision == 'accept' else '--reject', '--by', 'fixture-operator']
+            completed = subprocess.run(command, env=environment, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=1)
+            case.assertEqual(completed.returncode, 0, 'Genuine isolated answer writer rejected fixture')
+            answered.add(question['qid'])
+            order.append('genuine_human_answer')
+            return None
+
+        adapters = {'verify_release': self.verify,
             'host_factory': factory, 'transport_factory': transport_factory,
             'verify_child': child, 'read_thread_metadata': metadata if native_mode is not None else self.native_forbidden,
-            'checkpoint': checkpoint if native_mode is not None else self.native_forbidden, 'heartbeat': lambda *a, **k: None})
+            'checkpoint': checkpoint if native_mode is not None else self.native_forbidden, 'heartbeat': heartbeat}
+        if default_checkpoint:
+            adapters.pop('checkpoint')
+        controller = self.make(adapters=adapters)
         return controller, hosts, calls, order
 
     def test_config_discovery_uncertain_reply_never_starts_session_or_retries(self):
@@ -728,7 +871,7 @@ class RuntimeContract(unittest.TestCase):
     def test_child_identity_mismatch_never_grants_task_authority(self):
         for field, value in (('pid', True), ('start_ticks', 0), ('uid', os.getuid() + 1),
                              ('executable', str(self.executable)), ('sha256', '0' * 64),
-                             ('invocation_id', 'f' * 32)):
+                             ('invocation_id', 'f' * 32), ('control_group', '/fixture/foreign')):
             with self.subTest(field=field):
                 case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
                 case.setUp()
@@ -772,6 +915,191 @@ class RuntimeContract(unittest.TestCase):
                                                 deadline=time.monotonic() + 2))
         index = json.loads((self.state / self.control['codex_state_id'] / 'index.json').read_text())
         self.assertEqual(set(index['operations']), {old['operation_id']})
+
+    def test_ordinary_read_callback_is_guarded_after_start_response_and_all_host_drain(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='read')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+        self.assertEqual(result['outcome'], 'ran')
+        self.assertEqual(len(hosts), 3)
+        self.assertEqual(sum(m == 'turn/start' for m, p in calls), 2)
+        self.assertEqual(sum(m == 'thread/resume' for m, p in calls), 1)
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+        self.assertLess(order.index('bind_operation'), order.index('reply_dynamic'))
+        self.assertLess(order.index('reply_dynamic'), len(order) - 1 - order[::-1].index('host_abort'))
+        self.assertLess(len(order) - 1 - order[::-1].index('host_abort'),
+                        len(order) - 1 - order[::-1].index('checkpoint_commit'))
+        self.assertIs(controller.require_drained(deadline=time.monotonic() + 2), True)
+
+    def test_task_ask_callback_publishes_real_question_then_drains_and_checkpoints(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='ask')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+        self.assertEqual(result['outcome'], 'asked')
+        questions = list((self.agent / 'questions').glob('*.json'))
+        self.assertEqual(len(questions), 1)
+        question = json.loads(questions[0].read_text())
+        self.assertEqual(question['question'], 'Proceed?')
+        self.assertEqual(question['status'], 'open')
+        self.assertFalse((self.agent / 'done.json').exists())
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+        self.assertLess(order.index('reply_dynamic'), len(order) - 1 - order[::-1].index('host_abort'))
+        self.assertLess(len(order) - 1 - order[::-1].index('host_abort'),
+                        len(order) - 1 - order[::-1].index('checkpoint_commit'))
+        before = len(calls)
+        recovered = controller.reconcile(deadline=time.monotonic() + 2)
+        self.assertIn(recovered['outcome'], ('idle', 'recovered', 'blocked'))
+        self.assertEqual(len(calls), before)
+        self.assertEqual(len(list((self.agent / 'questions').glob('*.json'))), 1)
+
+    def test_task_done_is_staged_while_live_and_only_requested_after_drain(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='done')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+        self.assertEqual(result['outcome'], 'done_requested')
+        done = json.loads((self.agent / 'done.json').read_text())
+        self.assertEqual(done['state'], 'requested')
+        self.assertEqual(done['envelope_key'], 'event-1')
+        self.assertIs(done['finalized'], False)
+        self.assertEqual(done['summary'], 'Ready <& unchanged')
+        operation_dir = self.state / self.control['codex_state_id'] / 'operations' / result['operation_id']
+        completion = json.loads((operation_dir / 'completion.json').read_text())
+        self.assertEqual(completion['summary'], 'Ready <& unchanged')
+        self.assertEqual(completion['phase'], 'done_written')
+        self.assertIs(type(completion['request_id']), int)
+        self.assertEqual(completion['request_id'], 0)
+        self.assertEqual(completion['checkpoint']['commit_sha'], self.base)
+        self.assertIsNotNone(completion['done_receipt'])
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+        original = (self.agent / 'done.json').read_bytes()
+        before = len(calls)
+        controller.reconcile(deadline=time.monotonic() + 2)
+        self.assertEqual((self.agent / 'done.json').read_bytes(), original)
+        self.assertEqual(len(calls), before)
+
+    def test_retained_descriptor_drift_refuses_ordinary_send(self):
+        for mode in ('descriptor_loss', 'descriptor_true'):
+            with self.subTest(mode=mode):
+                case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
+                case.setUp()
+                try:
+                    case.publish_registry()
+                    controller, hosts, calls, order = case.discovery_fixture(native_mode=mode)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+                    self.assertIn(result['outcome'], ('blocked', 'unknown'))
+                    self.assertEqual(sum(m == 'turn/start' for m, p in calls), 1)
+                    self.assertFalse((case.agent / 'done.json').exists())
+                    self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+                finally:
+                    case.doCleanups()
+
+    def test_next_event_uses_new_operation_and_host_with_same_retained_thread(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='read')
+        first = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+        self.assertEqual(first['outcome'], 'ran')
+        first_projection = json.loads((self.agent / 'inbox/inflight/event-1.json').read_text())
+        save(self.agent / 'inbox/inflight/event-2.json', {'key': 'event-2', 'meta': {}})
+        self.expected_event_key = 'event-2'
+        second = controller.execute('event-2', 7, 'attempt-1', deadline=time.monotonic() + 3)
+        self.assertEqual(second['outcome'], 'ran')
+        self.assertNotEqual(first['operation_id'], second['operation_id'])
+        self.assertNotEqual(first['turn_id'], second['turn_id'])
+        self.assertEqual(first['thread_id'], second['thread_id'])
+        self.assertEqual(len(hosts), 4)
+        self.assertEqual(sum(m == 'thread/start' for m, p in calls), 1)
+        self.assertEqual(sum(m == 'thread/resume' for m, p in calls), 2)
+        self.assertEqual(sum(m == 'turn/start' for m, p in calls), 3)
+        self.assertEqual(json.loads((self.agent / 'inbox/inflight/event-1.json').read_text()), first_projection)
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+        self.assertIs(controller.require_drained(deadline=time.monotonic() + 2), True)
+
+    def test_reason_only_file_approval_has_no_answer_or_approve_question(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_reason_only')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertEqual(len(hosts), 3)
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+        self.assertFalse((self.agent / 'done.json').exists())
+        for path in (self.agent / 'questions').glob('*.json'):
+            question = json.loads(path.read_text())
+            self.assertNotIn('approve', [str(option).lower() for option in question.get('options', [])])
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip(), self.base)
+
+    def test_native_command_approval_is_policy_violation_without_human_workaround(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='command_approval')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+        self.assertEqual(list((self.agent / 'questions').glob('*.json')), [])
+        self.assertFalse((self.agent / 'done.json').exists())
+
+    def test_dirty_done_uses_default_guarded_git_checkpoint_with_exact_trailers(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='done_dirty', default_checkpoint=True)
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 5)
+        self.assertEqual(result['outcome'], 'done_requested')
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+        head = self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip()
+        self.assertNotEqual(head, self.base)
+        self.assertEqual(self.git('rev-parse', 'HEAD^', cwd=self.agent / 'work').strip(), self.base)
+        self.assertEqual(self.git('show', 'HEAD:tracked.txt', cwd=self.agent / 'work'), 'native dirty task change\n')
+        completion_path = self.state / self.control['codex_state_id'] / 'operations' / result['operation_id'] / 'completion.json'
+        completion = json.loads(completion_path.read_text())
+        self.assertEqual(completion['phase'], 'done_written')
+        self.assertEqual(completion['checkpoint']['commit_sha'], head)
+        self.assertIs(completion['checkpoint']['no_commit'], False)
+        message = self.git('show', '-s', '--format=%B', head, cwd=self.agent / 'work')
+        self.assertEqual(message.count('Codex-Task-Operation: ' + result['operation_id']), 1)
+        self.assertEqual(message.count('Codex-Task-Intent: ' + completion['request_digest']), 1)
+        done = json.loads((self.agent / 'done.json').read_text())
+        self.assertEqual(done['state'], 'requested')
+        self.assertIs(done['finalized'], False)
+        self.assertEqual(done['summary'], 'Ready <& dirty')
+        before_count = self.git('rev-list', '--count', 'HEAD', cwd=self.agent / 'work')
+        controller.reconcile(deadline=time.monotonic() + 3)
+        self.assertEqual(self.git('rev-list', '--count', 'HEAD', cwd=self.agent / 'work'), before_count)
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.project).strip(), self.base)
+
+    def test_correlated_full_file_change_waits_for_genuine_human_decline(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_full', human_decision='decline')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
+        self.assertEqual(result['outcome'], 'ran')
+        self.assertIn('genuine_human_answer', order)
+        self.assertIn('reply_approval', order)
+        self.assertLess(order.index('genuine_human_answer'), order.index('reply_approval'))
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+        self.assertFalse((self.agent / 'done.json').exists())
+
+    def test_full_file_change_approval_timeout_never_autoanswers(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='approval_full')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 1)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertNotIn('reply_approval', order)
+        self.assertNotIn('genuine_human_answer', order)
+        self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'baseline\n')
+
+    def test_outside_add_and_move_never_expand_baseline_after_human_approval(self):
+        for mode in ('approval_outside', 'approval_move_outside'):
+            with self.subTest(mode=mode):
+                case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
+                case.setUp()
+                try:
+                    case.publish_registry()
+                    controller, hosts, calls, order = case.discovery_fixture(native_mode=mode)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 1)
+                    self.assertIn(result['outcome'], ('blocked', 'unknown'))
+                    self.assertNotIn('reply_approval', order)
+                    self.assertFalse((case.root / 'outside-candidate.txt').exists())
+                    self.assertTrue(all(h.phase == 'stopped' for h in hosts))
+                finally:
+                    case.doCleanups()
 
     def test_idle_reconcile_cannot_create_task_question_or_done_evidence(self):
         self.publish_registry()
