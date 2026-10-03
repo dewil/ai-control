@@ -729,14 +729,15 @@ PY
   local created="created" create_err="" crc=0
   create_err=$(cmd_create "$name" --spec "$specfile" 2>&1 >/dev/null) && crc=0 || crc=$?
   if [[ "$crc" == 4 && "$create_err" == *"already exists"* ]]; then
-    local ex_type ex_project ex_ws
+    local ex_type ex_project ex_ws ex_engine
+    ex_engine=$(yq -r '.engine // "claude"' "$AGENTS_DIR/$name/spec.yaml")
     ex_type=$(yq -r '.type // ""' "$AGENTS_DIR/$name/spec.yaml")
     ex_project=$(yq -r '.project // ""' "$AGENTS_DIR/$name/spec.yaml")
     ex_ws=$(yq -r '.workspace // "none"' "$AGENTS_DIR/$name/spec.yaml")
-    if [[ "$ex_type" != "event" || "$ex_project" != "$project_path" \
+    if [[ "$ex_engine" != "$engine" || "$ex_type" != "event" || "$ex_project" != "$project_path" \
           || "$ex_ws" != "$rendered_ws" ]]; then
       rm -f "$specfile"
-      fail "агент '$name' уже существует с другим type/project/workspace - не та же задача, отказ" 4
+      fail "агент '$name' уже существует с другим engine/type/project/workspace - не та же задача, отказ" 4
     fi
     created="existing"
   elif [[ "$crc" != 0 ]]; then
@@ -977,7 +978,7 @@ cmd_status() {
   local dir; dir=$(agent_dir "$1")
   local c s
   c=$(read_control "$dir")
-  if [[ "$(yq -r ' .engine // "claude"' "$dir/spec.yaml")" == "codex" ]]; then echo "engine=codex USD=неизвестно"; fi
+  if [[ "$(yq -r '.engine // "claude"' "$dir/spec.yaml")" == "codex" ]]; then echo "engine=codex USD=неизвестно"; fi
   s=$("$IO" state-read "$dir")
   # event: сводка inbox под общей таблицей
   if [[ "$(yq -r '.type // ""' "$dir/spec.yaml" 2>/dev/null)" == "event" ]]; then
