@@ -118,4 +118,19 @@ Dedicated host и thread используют один control_task profile: sco
 
 Трассируемость tests/test-codex-task-operation-store.py, FR/INV-CXSTORE01..05. Единственный spec parse использует установленный mikefarah yq `-o=json -I=0 .`; runtime integration должна передавать тот же strict reader backend через spec_reader, чей прежний default `-c` несовместим с YAML на mikefarah yq. Store сам не выполняет native RPC, control writes, TASK commit/finalization; runner/reconciler/create/approvals/install E2E остаются отдельными gates.
 
-Operation-store helper завершён: durable original directory identity и exact partial-drain replay закреплены tests/test-codex-task-operation-store.py (64 tests), независимая compliance PASS. Full TASK runtime остаётся отдельным открытым изменением.
+Operation-store helper завершён: durable original directory identity и exact partial-drain replay закреплены tests/test-codex-task-operation-store.py (64 tests), независимая compliance PASS. Полный TASK runtime использует этот контракт; интеграция описана ниже.
+## Полный Codex TASK runtime
+
+Explicit engine Codex проходит dedicated event/drain/worktree creator, sealed diagnostic bootstrap и ordinary operation под actual TASK/store fences. Questions и native human approvals имеют разные lifecycle: task_ask отзывает и дренирует host, native approval ждёт genuine human answer внутри живого bounded operation. Dirty task_done превращается в requested done только после staged intent, revoke/drain и trusted checkpoint. Перед git, finalize, lease release и archive обязательна полнота all-host registry и kernel drain; terminal turn этого не заменяет. Claude default сохраняется. Принятый контракт: [TASK runtime](../dev/done/2026-10-03-spec-codex-task-runtime.md). Независимая сверка: [compliance](../dev/codex-task-runtime-compliance-summary.md).
+
+
+| Инвариант | Проверки |
+|---|---|
+| INV-CXRUN-01 — explicit engine/template/creator | test-codex-task-wiring.py |
+| INV-CXRUN-02 — preflight/bootstrap/current proof/history | test-codex-task-runtime.py, test-codex-task-wiring.py, test-codex-task-native-registry.py |
+| INV-CXRUN-03 — immutable operation/native send/fences | test-codex-task-runtime.py |
+| INV-CXRUN-04 — actual V8/cgroup/profile/budgets | test-codex-task-wiring.py, test-codex-task-budget-inspect.py |
+| INV-CXRUN-05 — genuine ask/done and trusted checkpoint | test-codex-task-runtime.py |
+| INV-CXRUN-06 — genuine once-only permission decision | test-codex-task-runtime.py, test-codex-task-native-answer.py |
+| INV-CXRUN-07 — all-host barrier and idempotent recovery | test-codex-task-runtime.py, test-codex-task-checkpoint.py, test-codex-task-recovery-compliance.py |
+| INV-CXRUN-08 — unknown cost and installed own E2E | test-codex-task-wiring.py, test-tgbot-codex.py, native acceptance |

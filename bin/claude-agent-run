@@ -1036,6 +1036,57 @@ def fill_direct_changes(agent_dir, key, ws, finalize=True):
             durable_json(done_path, dd)
 
 
+def task_engine(agent_dir):
+    r = subprocess.run(['yq','-o=json','-I=0','.engine',os.path.join(agent_dir,'spec.yaml')],capture_output=True,timeout=10)
+    if r.returncode != 0:
+        raise ValueError('TASK engine unreadable')
+    engine = json.loads(r.stdout)
+    if engine is None: engine='claude'
+    control_path=os.path.join(agent_dir,'control.json')
+    if os.path.lexists(control_path):
+        control=load_json(control_path)
+        if 'codex_state_id' in control and engine!='codex':
+            raise ValueError('Codex TASK engine drift refused')
+    if type(engine) is not str or engine not in ('claude','codex'):
+        raise ValueError('Unsupported TASK engine')
+    return engine
+
+
+def codex_runtime(agent_dir):
+    from _codex_task_runtime import CodexTaskRuntime
+    executable = os.path.realpath(shutil.which('codex') or '/nonexistent/codex')
+    if executable.endswith('/bin/codex.js'):
+        package = os.path.dirname(os.path.dirname(executable))
+        executable = package + '/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex'
+    vendor = os.path.dirname(os.path.dirname(executable))
+    return CodexTaskRuntime(agent_dir,state_root=os.path.dirname(os.path.dirname(agent_dir))+'/codex-task-state',executable=executable,
+        companion_paths={'code_mode_host':vendor+'/bin/codex-code-mode-host','bwrap':vendor+'/codex-resources/bwrap','rg':vendor+'/codex-path/rg'},
+        host_budget={'memory_max_mb':int(spec_get(agent_dir,'.host_budget.memory_max_mb','1024')),
+                     'tasks_max':int(spec_get(agent_dir,'.host_budget.tasks_max','64')),
+                     'cpu_quota_percent':int(spec_get(agent_dir,'.host_budget.cpu_quota_percent','100'))})
+
+
+def codex_barrier(agent_dir, reason='shutdown'):
+    if task_engine(agent_dir) == 'codex':
+        controller = codex_runtime(agent_dir)
+        controller.revoke_and_drain(reason,deadline=time.monotonic()+30)
+        controller.require_drained(deadline=time.monotonic()+30)
+
+
+def codex_python():
+    target=os.path.abspath(os.environ.get('CODEX_RC_PYTHON',os.path.expanduser('~/.local/share/claude-control/codex-venv/bin/python')))
+    if not os.path.isfile(target) or not os.access(target,os.X_OK):
+        die(2,'Codex verified Python dependency missing; install codex venv')
+    if target!=os.path.abspath(sys.executable):
+        os.execv(target,[target]+sys.argv)
+    try:
+        import websockets
+    except ImportError:
+        die(2,'Codex websockets dependency missing; install codex venv')
+    if websockets.__version__!='15.0.1':
+        die(2,'Codex websockets dependency version refused')
+
+
 def commit_worktree_done(agent_dir, key, ws, name, project):
     """Коммитит содержимое worktree РАНТАЙМОМ (V2.10 §3d.1), в терминальной
     ветке прогона-владельца конверта, ВСЕГДА ПЕРЕД finalize_worktree_done -
@@ -1053,6 +1104,7 @@ def commit_worktree_done(agent_dir, key, ws, name, project):
     worktree остается как есть, и finalize_worktree_done, вызванная сразу
     следом, инвалидирует заявку по уже существующему гейту "грязное
     дерево" (§3a)."""
+    codex_barrier(agent_dir)
     if ws != "worktree":
         return
     done_path = os.path.join(agent_dir, "done.json")
@@ -1098,45 +1150,59 @@ def finalize_worktree_done(agent_dir, key, ws, name, project):
     предъявлять нечего, показывать человеку наполовину сделанную работу
     нельзя. done-notify карточку такой заявки не пушит (пушит только
     state=="requested"), done-verdict тоже ее не примет (тот же гейт)."""
+    codex_barrier(agent_dir)
     if ws != "worktree":
         return
     done_path = os.path.join(agent_dir, "done.json")
     if not os.path.isfile(done_path):
         return
     with FLock(os.path.join(agent_dir, "done.lock")):
-        try:
-            dd = load_json(done_path)
-        except (OSError, ValueError):
-            return
-        if not isinstance(dd, dict) or dd.get("state") != "requested":
-            return
-        if dd.get("envelope_key") != key or dd.get("workspace") != "worktree":
-            return
-        base = dd.get("base")
-        facts = None
-        if base and BASE_SHA_RE.match(base) and project:
-            work = os.path.join(agent_dir, "work")
-            facts = _worktree_facts(work, base, name, project)
-        if facts is None:
-            dd["state"] = "invalid"
-            dd["invalid_reason"] = (
-                "worktree грязное, HEAD не на своей ветке, не потомок "
-                "зафиксированной базы либо база отсутствует - на момент "
-                "завершения прогона предъявлять нечего")
-            # V2.10 §3c, блокер 2: инвалидная заявка тоже финализирована
-            # (решение принято) - state!="requested" все равно блокирует
-            # done-notify отдельно, finalized здесь для единообразия записи.
-            dd["finalized"] = True
-            durable_json(done_path, dd)
-            return
-        commit_sha, base_out, branch, empty = facts
-        dd["commit_sha"] = commit_sha
-        dd["base"] = base_out
-        dd["branch"] = branch
-        dd["empty"] = empty
-        # V2.10 §3c, аудит блокер 2: только теперь заявка финализирована -
-        # done-notify молчит, пока finalized не true (см. cmd_done_notify).
+        finalize_worktree_done_locked(agent_dir, key, name, project)
+
+
+def finalize_worktree_done_locked(agent_dir, key, name, project, *,
+                                 strict=False, deadline=None, clock=time.monotonic):
+    """Trusted caller owns done/control/inbox fences and proves native drain."""
+    done_path = os.path.join(agent_dir, "done.json")
+    try:
+        dd = load_json(done_path)
+    except (OSError, ValueError):
+        return
+    if not isinstance(dd, dict) or dd.get("state") != "requested":
+        return
+    if dd.get("envelope_key") != key or dd.get("workspace") != "worktree":
+        return
+    base = dd.get("base")
+    facts = None
+    if base and BASE_SHA_RE.match(base) and project:
+        work = os.path.join(agent_dir, "work")
+        facts = _worktree_facts(work, base, name, project, deadline=deadline, clock=clock)
+    if facts is None:
+        if strict:
+            raise GitGuardError("native completion worktree facts unavailable")
+        dd["state"] = "invalid"
+        dd["invalid_reason"] = (
+            "worktree грязное, HEAD не на своей ветке, не потомок "
+            "зафиксированной базы либо база отсутствует - на момент "
+            "завершения прогона предъявлять нечего")
+        # V2.10 §3c, блокер 2: инвалидная заявка тоже финализирована
+        # (решение принято) - state!="requested" все равно блокирует
+        # done-notify отдельно, finalized здесь для единообразия записи.
         dd["finalized"] = True
+        durable_json(done_path, dd)
+        return
+    commit_sha, base_out, branch, empty = facts
+    dd["commit_sha"] = commit_sha
+    dd["base"] = base_out
+    dd["branch"] = branch
+    dd["empty"] = empty
+    # V2.10 §3c, аудит блокер 2: только теперь заявка финализирована -
+    # done-notify молчит, пока finalized не true (см. cmd_done_notify).
+    dd["finalized"] = True
+    if strict:
+        from _agent_question_io import durable_json as bounded_durable_json
+        bounded_durable_json(done_path, dd, deadline=deadline, clock=clock)
+    else:
         durable_json(done_path, dd)
 
 
@@ -1585,12 +1651,13 @@ def cmd_intake(argv):
     if len(argv) >= 3 and argv[1] == "--batch":
         batch = int(argv[2])
     ib = inbox_init(agent_dir)
+    native_snapshot = codex_store_snapshot(agent_dir) if task_engine(agent_dir)=='codex' else None
     # lock-порядок Д2: .inbox.lock (intake/restore/dlq); dedup.lock вложенный
     with FLock(os.path.join(ib, ".inbox.lock")):
-        _intake_locked(agent_dir, name, ib, batch)
+        _intake_locked(agent_dir, name, ib, batch, native_snapshot=native_snapshot)
 
 
-def _intake_locked(agent_dir, name, ib, batch):
+def _intake_locked(agent_dir, name, ib, batch, *, native_snapshot=None):
     prev = {}
     try:
         prev = load_json(os.path.join(ib, "intake-status.json"))
@@ -1672,6 +1739,20 @@ def _intake_locked(agent_dir, name, ib, batch):
                                  "quarantined": False,
                                  "next_attempt_at": None, "history": []},
                         "payload": payload}
+                    native_resolved=False
+                    if task_engine(agent_dir)=='codex':
+                        try: native_resolved=codex_answer_resolved(agent_dir,payload,native_snapshot)
+                        except (Exception,SystemExit):
+                            env_doc['meta']['quarantined']=True
+                            env_doc['meta']['reason']='native_permission_receipt_unconfirmed'
+                    if native_resolved:
+                        env_doc['meta']['history'].append({'at':now_iso(),'outcome':'ok','internal':'native_permission_answer'})
+                        durable_json(env_path(ib, 'done', key), env_doc)
+                        dedup_add(ib, key)
+                        cursor_write(ib, seq, source_ns)
+                        pos = seq
+                        taken += 1
+                        continue
                     durable_json(env_path(ib, "pending", key), env_doc)
                     counts["pending"] += 1
                     ibytes += len(json.dumps(env_doc).encode())
@@ -1793,6 +1874,9 @@ def usage_bump(ib, agent_dir=None, cost=0.0):
     """Инкремент ДО спавна прогона: убитый прогон засчитан (Д5)."""
     u = usage_load(ib)
     _roll_periods(u, agent_dir)
+    if agent_dir is not None and task_engine(agent_dir)=='codex':
+        u['cost_usd']=None;u['week_cost_usd']=None
+        if cost: die(2,'Codex USD accounting unavailable')
     if cost:
         u["cost_usd"] = round(u.get("cost_usd", 0.0) + cost, 4)
         u["week_cost_usd"] = round(u.get("week_cost_usd", 0.0) + cost, 4)
@@ -1868,6 +1952,7 @@ def runner_status_write(ib, probe_ok, reason="probe"):
 # ----------------------------------------------------------------- executor
 
 def state_write(agent_dir, phase, status_line, runs, cost):
+    if task_engine(agent_dir)=='codex': cost=None
     gen = os.environ.get("CLAUDE_AGENT_GENERATION", "0")
     attempt = os.environ.get("CLAUDE_AGENT_ATTEMPT", "manual")
     now = now_iso()
@@ -1917,6 +2002,7 @@ def recovery_pass(agent_dir, ib, name):
     (аудит V2.3, major 3): иначе гонка "runner умер / ask еще дописывает
     вопрос" дает open_q=None, конверт уезжает в pending, тут же морозится
     новым вопросом и после ответа проигрывается заново."""
+    codex_barrier(agent_dir)
     qdir = questions_dir(agent_dir)
     os.makedirs(qdir, mode=0o700, exist_ok=True)
     with FLock(os.path.join(qdir, ".lock")):
@@ -2329,6 +2415,7 @@ def _question_reminders_locked(agent_dir, qdir, name):
                 continue
             detail = {"kind": "question", "agent": name, "qid": qid,
                       "qkind": d.get("kind"), "text": d.get("question"),
+                      "engine": d.get("engine"), "native_callback": d.get("native_callback"),
                       "options": d.get("options") or []}
             if not alert_question(name, qid, detail):
                 print("%s fail" % qid)
@@ -3148,11 +3235,136 @@ def pick_ready(ib, agent_dir=None):
     return best[1] if best else None
 
 
+def codex_store_snapshot(agent_dir):
+    from _codex_task_store import CodexTaskOperationStore
+    store=CodexTaskOperationStore(agent_dir,state_root=os.path.dirname(os.path.dirname(agent_dir))+'/codex-task-state')
+    return store.snapshot(deadline=time.monotonic()+30)
+
+
+def codex_private_json(agent_dir,path):
+    # Reuse the accepted store's strict private-file reader; no native dependency.
+    from _codex_task_store import CodexTaskOperationStore
+    store=CodexTaskOperationStore(agent_dir,state_root=os.path.dirname(os.path.dirname(agent_dir))+'/codex-task-state')
+    context={'pins':[]};deadline=time.monotonic()+30
+    try:
+        parent=os.path.dirname(path)
+        store._pin(parent,context['pins'])
+        while parent!='/':
+            parent=os.path.dirname(parent)
+            store._pin(parent,context['pins'],private=False)
+        value=store._read(path,context,deadline)
+        store._check(context,deadline)
+        return value
+    finally:
+        for _,fd,_,_,_ in context['pins']: os.close(fd)
+
+
+def codex_answer_resolved(agent_dir, payload, snapshot):
+    if not isinstance(payload, dict) or payload.get('kind') != 'answer':
+        return False
+    qid = payload.get('question_id')
+    if not isinstance(qid, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', qid):
+        return False
+    read_json=lambda path: codex_private_json(agent_dir,path)
+    digest=lambda value: hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
+    question = read_json(os.path.join(agent_dir, 'questions', qid+'.json'))
+    callback = question.get('native_callback')
+    if callback is None: return False
+    if type(callback) is not dict or callback.get('status')!='answered':
+        die(2,'native permission reply unconfirmed')
+    if (question.get('engine')!='codex' or question.get('kind') != 'permission' or question.get('status') != 'closed'
+            or question.get('qid')!=qid or question.get('answer') is not None
+            or type(question.get('answered_at')) is not str or not question['answered_at']
+            or type(question.get('answered_by')) is not str or not question['answered_by']):
+        die(2, 'native permission receipt refused')
+    from uuid import UUID
+    control = read_json(os.path.join(agent_dir,'control.json'))
+    state_id = control.get('codex_state_id')
+    if type(state_id) is not str or str(UUID(state_id)) != state_id:
+        die(2,'native permission state refused')
+    if snapshot is None or snapshot.get('state_id') != state_id or snapshot.get('task_incarnation') != control.get('incarnation'):
+        die(2,'native permission state refused')
+    operation = next((op for op in snapshot['operations'].values() if op['operation_id']==callback.get('operation_id')), None)
+    if operation is None:
+        die(2, 'native permission operation missing')
+    for field in ('operation_id','task_incarnation','generation','attempt_id','thread_id','turn_id'):
+        if type(callback.get(field)) is not type(operation[field]) or callback[field]!=operation[field]:
+            die(2,'native permission binding refused')
+    allowed=callback.get('allowed_decisions')
+    if type(allowed) is not list or allowed not in (['reject'],['approve','reject']) or question.get('decision') not in allowed:
+        die(2,'native permission decision refused')
+    receipt = read_json(os.path.join(os.path.dirname(operation['host_state_dir']), 'approval-'+qid+'.json'))
+    expected = dict(question_id=qid, operation_id=operation['operation_id'], task_incarnation=operation['task_incarnation'],
+                    callback_digest=digest(callback), decision=question.get('decision'),
+                    answered_at=question.get('answered_at'), answered_by=question.get('answered_by'))
+    if receipt != expected or operation['task_incarnation'] != callback.get('task_incarnation'):
+        die(2, 'native permission receipt refused')
+    return True
+
+
+def codex_cycle(agent_dir,ib,name,runs):
+    # An answer may have been harvested while the native RPC was still waiting.
+    # Resolve only native permission receipts; ordinary task_ask answers remain pending.
+    native_snapshot=codex_store_snapshot(agent_dir)
+    with FLock(os.path.join(ib,'.inbox.lock')):
+        for answer_key in list_keys(ib,'pending'):
+            answer_env = load_json(env_path(ib,'pending',answer_key))
+            try: resolved=codex_answer_resolved(agent_dir,answer_env.get('payload'),native_snapshot)
+            except (Exception,SystemExit): return 'infra_wait'
+            if resolved:
+                answer_env['meta'].setdefault('history',[]).append({'at':now_iso(),'outcome':'ok','internal':'native_permission_answer'})
+                durable_json(env_path(ib,'pending',answer_key),answer_env)
+                env_move(ib,answer_key,'pending','done')
+                dedup_add(ib,answer_key)
+    if list_keys(ib,'inflight'):
+        recovery = codex_runtime(agent_dir).reconcile(deadline=time.monotonic()+30)
+        if recovery.get('outcome') not in ('recovered','idle') or list_keys(ib,'inflight'): return 'infra_wait'
+    key = pick_ready(ib,agent_dir)
+    if key is None: return 'idle'
+    controller = codex_runtime(agent_dir)
+    controller.static_preflight(deadline=time.monotonic()+30)
+    controller.require_drained(deadline=time.monotonic()+30)
+    questions_open(agent_dir)  # Corrupt questions must never become empty state.
+    if list_keys(ib,'inflight'):
+        return 'infra_wait'  # Recovery of an immutable native operation is explicit; never requeue or claim another.
+    until = budget_check(agent_dir,ib)
+    if until: return 'exhausted'
+    with FLock(os.path.join(ib,'.inbox.lock')):
+        env_move(ib,key,'pending','inflight')
+    control = load_json(os.path.join(agent_dir,'control.json'))
+    usage_bump(ib,agent_dir)
+    timeout = float(spec_get(agent_dir,'.limits.run_timeout_s','600'))
+    result = controller.execute(key,control['generation'],control['lease']['start_attempt_id'],deadline=time.monotonic()+timeout)
+    outcome = result['outcome']
+    if outcome in ('ran','asked','done_requested','cancelled'):
+        controller.require_drained(deadline=time.monotonic()+30)
+        with FLock(os.path.join(ib,'.inbox.lock')):
+            path=env_path(ib,'inflight',key);env=load_json(path)
+            env['meta'].setdefault('history',[]).append({'at':now_iso(),'outcome':'asked' if outcome=='asked' else 'cancelled' if outcome=='cancelled' else 'ok'})
+            durable_json(path,env)
+        if outcome=='done_requested': finalize_worktree_done(agent_dir,key,'worktree',name,spec_get(agent_dir,'.project'))
+        with FLock(os.path.join(ib,'.inbox.lock')):
+            env_move(ib,key,'inflight','done')
+            dedup_add(ib,key)
+    else:
+        append_event(agent_dir,'codex_runtime_hold','executor',{'reason':result.get('reason')})
+        subprocess.run([os.path.join(BIN_DIR,'claude-agent-io'),'control-cas',agent_dir,
+                        '--expect','generation='+str(control['generation']),
+                        '--expect','incarnation='+json.dumps(control['incarnation']),
+                        '--set','attention='+json.dumps({'reason':'codex_runtime','since':now_iso()}),
+                        '--event','attention_codex_runtime','--actor','executor'],capture_output=True,timeout=15,check=True)
+
+    usage=usage_load(ib);usage['cost_usd']=None;usage['week_cost_usd']=None;durable_json(os.path.join(ib,'usage.json'),usage)
+    return 'ran' if outcome=='done_requested' else outcome
+
+
 def executor_cycle(agent_dir, ib, name, runs):
     """Один цикл. Возврат: 'ran' | 'idle' | 'exhausted' | 'infra_wait'."""
     # fail-closed на битый вопрос (аудит V2.3, major 7): алерт РОВНО здесь
     # (единожды за цикл) - questions_open/pick_ready/recovery_pass читают
     # состояние вопросов много раз за цикл, алертить из каждого - спам
+    if task_engine(agent_dir) == "codex":
+        return codex_cycle(agent_dir,ib,name,runs)
     _, q_corrupt = questions_scan(agent_dir)
     if q_corrupt:
         alert(name, "questions_corrupt",
@@ -3207,6 +3419,10 @@ def cmd_loop(argv, mode="loop"):
     drain (v2 §2: крутит 'ran' подряд, на первом не-'ran' - финал + exit 0)."""
     agent_dir, name = check_dir(
         argv[0] if argv else os.environ.get("CLAUDE_AGENT_DIR", ""))
+    engine = task_engine(agent_dir)
+    if engine == 'codex':
+        codex_python()  # Reexec before any non-inherited flock or inbox mutation.
+        codex_runtime(agent_dir).static_preflight(deadline=time.monotonic()+30)
     ib = inbox_init(agent_dir)
     lock = FLock(os.path.join(ib, ".executor.lock"), wait=False)
     with lock:
@@ -3462,6 +3678,7 @@ def _done_migrate_finalize(agent_dir, dp, d, name):
 
     Гарантия та же, что у штатной финализации: `finalized: true` не
     ставится, пока предъявляемое человеку не сверено с реальностью."""
+    codex_barrier(agent_dir)
     ws = d.get("workspace")
     if ws == "none":
         d["finalized"] = True
@@ -3521,6 +3738,7 @@ def cmd_done_notify(argv):
     dp = os.path.join(agent_dir, "done.json")
     if not os.path.isfile(dp):
         return
+    codex_barrier(agent_dir)
     lock_fd = os.open(os.path.join(agent_dir, "done.lock"),
                       os.O_WRONLY | os.O_CREAT, 0o600)
     try:
@@ -3572,7 +3790,7 @@ def cmd_done_notify(argv):
         # выше, второй попытки на "дописать хвост потом" не будет). Падение
         # прогона/проверки НЕ роняет карточку (приемка важнее уроков) - см.
         # _lessons_prepare_safe (аудит серьезная 6).
-        lesson_tail = _lessons_prepare_safe(agent_dir, name, envelope_key)
+        lesson_tail = '' if task_engine(agent_dir)=='codex' else _lessons_prepare_safe(agent_dir, name, envelope_key)
 
         project = spec_get(agent_dir, ".project")
         summary = d.get("summary") or ""
@@ -3593,6 +3811,12 @@ def cmd_done_notify(argv):
                   "gen8": done_gen8(d),
                   "branch": d.get("branch"), "changes": changes_detail,
                   "changes_total": changes_total, "empty": d.get("empty")}
+        if task_engine(agent_dir)=='codex':
+            snapshot=codex_store_snapshot(agent_dir)
+            operation=next((op for op in snapshot['operations'].values() if op['event_key']==envelope_key),None)
+            if operation is None: return
+            detail.update(engine='codex',phase=operation['status'],operation_id=operation['operation_id'],
+                          thread_id=operation['thread_id'],turn_id=operation['turn_id'],reason=None,cost_usd=None)
         if lesson_tail:
             # хвост карточки (V2.9 §5): отдельного ключа "нет уроков" не
             # заводим - отсутствие ключа неотличимо от старого детейла
@@ -4183,6 +4407,7 @@ def _phase_integrate(agent_dir, name, d):
     успел закоммитить, проскакивает фенсинг целиком - человек принимает
     пустую карточку, новая работа не интегрируется, задача уезжает в архив
     как успешно принятая. Тест обязан уметь провалить эту проверку (§9 п.3)."""
+    codex_barrier(agent_dir)
     ws = d.get("workspace")
     if ws != "worktree":
         d["state"] = "integrated"
@@ -4281,6 +4506,10 @@ def _phase_cleanup(agent_dir, name, d):
     кого), а ветка задачи удаляется при ЛЮБОЙ политике проекта и без CAS на
     принятый коммит (мержа не было, PR не будет, смотреть на нее некому -
     в отличие от принятой задачи под integrate:pr)."""
+    try:
+        codex_barrier(agent_dir)
+    except Exception:
+        return "fail", "native runtime barrier refused"
     cancelled = d.get("state") == "cancelled"
     ws = d.get("workspace")
     if ws != "worktree":
@@ -4452,6 +4681,7 @@ def _phase_archive(agent_dir, name, d):
     и os.unlink сентинела молча промахнутся мимо каталога, которого уже
     нет, и ложная незакрытая тревога осталась бы висеть на архивированном
     агенте."""
+    codex_barrier(agent_dir)
     if d.get("state") == "cleaned":
         if _agent_active(name) or _agent_desired(agent_dir) != "stopped":
             _agent_request_stop(name)
@@ -4764,6 +4994,7 @@ def cmd_done_advance(argv):
     if len(argv) > 1:
         die(2, "done-advance: unexpected argument %r" % argv[1])
     agent_dir, name = check_dir(argv[0])
+    codex_barrier(agent_dir)
     _tombstone_gc(agent_dir)
     dp = os.path.join(agent_dir, "done.json")
     if not os.path.isfile(dp):
@@ -4933,6 +5164,7 @@ def _cancel_task_branch(agent_dir, name):
     идентичности, что в worktree_facts: чужую ветку уборка удалять не
     должна. "Не смогли узнать" вырождается в None безопасно - ветка
     останется в проекте, но задача все равно доедет до архива."""
+    codex_barrier(agent_dir)
     work = os.path.join(agent_dir, "work")
     project_path = spec_get(agent_dir, ".project")
     if not project_path or os.path.islink(work) or not os.path.isdir(work):
@@ -4965,6 +5197,7 @@ def _apply_cancel(agent_dir, name, dp, comment):
     - состояние, где результат уже уехал (CANCEL_REFUSED_STATES) - отказ
       кодом 4, файл не меняется: отмена не делает вид, что сработала, и не
       превращается в откат интеграции."""
+    codex_barrier(agent_dir)
     d = None
     if os.path.isfile(dp):
         try:
@@ -5072,6 +5305,7 @@ def cmd_done_verdict(argv):
             print("terminal")
             die(4, "done-verdict: агент уже архивирован (agents/%s "
                    "отсутствует) - отменять нечего" % name)
+        codex_barrier(agent_dir)
         with FLock(os.path.join(agent_dir, "done.lock")):
             _apply_cancel(agent_dir, name,
                           os.path.join(agent_dir, "done.json"), comment)
@@ -5088,6 +5322,7 @@ def cmd_done_verdict(argv):
         print("stale")
         die(3, "done-verdict: агент архивирован (agents/%s отсутствует)"
             % name)
+    codex_barrier(agent_dir)
     dp = os.path.join(agent_dir, "done.json")
     with FLock(os.path.join(agent_dir, "done.lock")):
         if not os.path.isfile(dp):

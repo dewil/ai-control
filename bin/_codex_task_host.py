@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
 import fcntl
+from decimal import Decimal
 import errno
 import json
 import math
@@ -151,6 +152,7 @@ class HostSnapshot:
     main_pid: int | None
     socket: str
     socket_ready: bool
+    control_group: str | None = None
 
 
 class SystemdTaskManager:
@@ -159,7 +161,12 @@ class SystemdTaskManager:
     _env = ('HOME', 'PATH', 'CODEX_HOME', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
             'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy')
 
-    def __init__(self, *, runner=subprocess.run, clock=time.monotonic, peer_probe=None, process_opener=None):
+    def __init__(self, *, runner=subprocess.run, clock=time.monotonic, peer_probe=None, process_opener=None, host_budget=None):
+        if host_budget is not None:
+            _require(type(host_budget) is dict and set(host_budget) == {'memory_max_mb', 'tasks_max', 'cpu_quota_percent'})
+            for key, low, high in (('memory_max_mb', 256, 8192), ('tasks_max', 16, 256), ('cpu_quota_percent', 1, 400)):
+                _require(type(host_budget[key]) is int and low <= host_budget[key] <= high)
+        self.host_budget = dict(host_budget) if host_budget is not None else None
         self.runner, self.clock = runner, clock
         self.peer_probe = peer_probe if peer_probe is not None else self._peer_probe
         self.process_opener = process_opener if process_opener is not None else self._open_process
@@ -263,6 +270,10 @@ class SystemdTaskManager:
                    '--property=KillMode=control-group', '--property=Restart=no', '--property=UMask=0077',
                    '--property=TimeoutStopSec=5s', '--property=ExitType=main',
                    '--property=RemainAfterExit=no', '--property=SendSIGKILL=yes', '--working-directory=' + cwd, '--expand-environment=no']
+        if self.host_budget is not None:
+            command.extend(['--property=MemoryMax=' + str(self.host_budget['memory_max_mb']) + 'M',
+                            '--property=TasksMax=' + str(self.host_budget['tasks_max']),
+                            '--property=CPUQuota=' + str(self.host_budget['cpu_quota_percent']) + '%'])
         for name in self._env:
             if name in os.environ:
                 _require('\x00' not in os.environ[name])
@@ -339,16 +350,17 @@ class SystemdTaskManager:
 
     def inspect(self, unit, *, deadline):
         _unit(unit)
+        observed_fields=self._fields + (('MemoryMax','TasksMax','CPUQuotaPerSecUSec') if self.host_budget is not None else ())
         result = self._run(['systemctl', '--user', '--no-ask-password', 'show', unit,
-                            '--property=' + ','.join(self._fields)], deadline)
+                            '--property=' + ','.join(observed_fields)], deadline)
         _require(isinstance(result.stdout, str) and len(result.stdout) <= 65536)
         fields = {}
         for line in result.stdout.splitlines():
             _require('=' in line)
             key, value = line.split('=', 1)
-            _require(key in self._fields and key not in fields)
+            _require(key in observed_fields and key not in fields)
             fields[key] = value
-        _require(set(fields) == set(self._fields))
+        _require(set(fields) == set(observed_fields))
         _require(re.fullmatch('[0-9]+', fields['MainPID']) is not None)
         pid = int(fields['MainPID'])
         if fields['LoadState'] == 'not-found':
@@ -356,6 +368,15 @@ class SystemdTaskManager:
                      and pid == 0 and fields['ActiveState'] == 'inactive' and fields['SubState'] == 'dead')
             return None
         _require(result.returncode == 0 and fields['LoadState'] == 'loaded')
+        if self.host_budget is not None:
+            _require(re.fullmatch('[0-9]+',fields['MemoryMax']) is not None
+                and int(fields['MemoryMax'])==self.host_budget['memory_max_mb']*1024*1024)
+            _require(re.fullmatch('[0-9]+',fields['TasksMax']) is not None
+                and int(fields['TasksMax'])==self.host_budget['tasks_max'])
+            quota=re.fullmatch(r'([0-9]+(?:\.[0-9]{1,6})?)(us|ms|s)',fields['CPUQuotaPerSecUSec'])
+            _require(quota is not None)
+            microseconds=Decimal(quota[1])*{'us':1,'ms':1000,'s':1000000}[quota[2]]
+            _require(microseconds==self.host_budget['cpu_quota_percent']*10000)
         _require(fields['RemainAfterExit'] in ('yes', 'no') and fields['SendSIGKILL'] in ('yes', 'no'))
         return _status(dict(invocation_id=fields['InvocationID'], description=fields['Description'],
                             kill_mode=fields['KillMode'], active_state=fields['ActiveState'],
@@ -365,7 +386,7 @@ class SystemdTaskManager:
 
 
 class CodexTaskHost:
-    def __init__(self, state_dir, task_incarnation, cwd, *, executable, manager=None, clock=time.monotonic):
+    def __init__(self, state_dir, task_incarnation, cwd, *, executable, manager=None, clock=time.monotonic, argv_factory=None):
         try:
             for path in (state_dir, cwd, executable):
                 _path(path)
@@ -378,6 +399,8 @@ class CodexTaskHost:
                 os.mkdir(state_dir, 0o700)
             self.state_dir, self.cwd, self.executable = state_dir, cwd, executable
             self.task_incarnation = task_incarnation
+            _require(argv_factory is None or callable(argv_factory))
+            self.argv_factory = argv_factory if argv_factory is not None else host_argv
             self.clock = clock
             self.manager = manager if manager is not None else SystemdTaskManager(clock=clock)
             self.socket = os.path.join(state_dir, 'server.sock')
@@ -489,7 +512,7 @@ class CodexTaskHost:
 
     def _snapshot(self, journal, phase='unknown', status=None, ready=False):
         return HostSnapshot(journal['unit'], phase, status['invocation_id'] if status else None,
-                            status['main_pid'] if status else None, self.socket, ready)
+                            status['main_pid'] if status else None, self.socket, ready, status.get('control_group') if status else None)
 
     def _observe_socket(self, journal, status, deadline):
         identity = journal['socket_identity']
@@ -561,7 +584,7 @@ class CodexTaskHost:
                 return self._inspect(journal, deadline)
             try:
                 _require(self.manager.version(self.executable, deadline=deadline) == '0.160.0')
-                argv = host_argv(self.socket, executable=self.executable)
+                argv = self.argv_factory(self.socket, executable=self.executable)
             except Exception:
                 raise HostError('Task host launch prerequisites failed') from None
             journal = dict(schema=1, task_incarnation=self.task_incarnation, cwd=self.cwd,
