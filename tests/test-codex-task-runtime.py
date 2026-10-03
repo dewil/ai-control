@@ -47,6 +47,9 @@ class RuntimeContract(unittest.TestCase):
             'static admission and fail-closed native execution are required')
         self.Runtime = runtime_module.CodexTaskRuntime
         self.Error = runtime_module.RuntimeError
+        self.build_fixture()
+
+    def build_fixture(self):
         previous = os.umask(0o077)
         self.addCleanup(os.umask, previous)
         self.tmp = tempfile.TemporaryDirectory()
@@ -58,7 +61,7 @@ class RuntimeContract(unittest.TestCase):
         self.release = self.root / 'release'
         for directory in (self.agent / 'questions', self.agent / 'inbox/inflight',
                           self.agent / 'inbox/done', self.agent.parent / '.locks',
-                          self.state, self.project, self.release):
+                          self.state, self.project, self.release, self.root / 'spool/taskone'):
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         for path in self.root.rglob('*'):
             if path.is_dir():
@@ -287,6 +290,9 @@ class RuntimeContract(unittest.TestCase):
                 raise
             self.fail('INV-CXRUN-07: accepted operation store dependency is absent')
         staging = self.agent.parent / '.staging'
+        # Creator runs before the runner acquires its executor lock.
+        self.executor.close()
+        (self.agent / 'inbox/.executor.lock').unlink()
         event = json.loads((self.agent / 'inbox/inflight/event-1.json').read_text())
         (self.agent / 'inbox/inflight/event-1.json').unlink()
         self.agent.rename(staging)
@@ -302,6 +308,10 @@ class RuntimeContract(unittest.TestCase):
         save(staging / 'control.json', original)
         staging.rename(self.agent)
         save(self.agent / 'inbox/inflight/event-1.json', event)
+        self.executor = (self.agent / 'inbox/.executor.lock').open('a+')
+        os.chmod(self.agent / 'inbox/.executor.lock', 0o600)
+        fcntl.flock(self.executor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.addCleanup(self.executor.close)
         return module.CodexTaskOperationStore(str(self.agent), state_root=str(self.state))
 
     def test_empty_complete_registry_barrier_returns_literal_true(self):
@@ -790,6 +800,7 @@ class RuntimeContract(unittest.TestCase):
             if human_decision is None or answered or not questions:
                 return None
             question = json.loads(questions[0].read_text())
+            case.assertEqual(question['kind'], 'permission')
             rendered = json.dumps(question, ensure_ascii=False)
             case.assertIn('tracked.txt' if native_mode == 'approval_full' else 'outside-candidate.txt', rendered)
             case.assertNotIn('Claude', rendered)
@@ -803,6 +814,9 @@ class RuntimeContract(unittest.TestCase):
             completed = subprocess.run(command, env=environment, stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=1)
             case.assertEqual(completed.returncode, 0, 'Genuine isolated answer writer rejected fixture')
+            stored = json.loads(questions[0].read_text())
+            case.assertEqual(stored['decision'], 'approve' if human_decision == 'accept' else 'reject')
+            case.assertEqual(stored['answered_by'], 'fixture-operator')
             answered.add(question['qid'])
             order.append('genuine_human_answer')
             if approval_state == 'patch_changed':
