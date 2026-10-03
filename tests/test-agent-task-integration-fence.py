@@ -95,12 +95,13 @@ if Path(c['marker']).exists() and ((c['action'].startswith('unknown-worktree') a
  if c['action'].endswith('malformed'): print('unparseable git output'); sys.exit(0)
  sys.exit(1)
 p=subprocess.run([c['git']]+a,capture_output=True)
-trigger=(c['trigger']=='ancestry' and 'merge-base' in a and '--is-ancestor' in a and c['target'] in a and c['sha'] in a and a.index(c['target'])<a.index(c['sha'])) or (c['trigger']=='temporary' and 'merge' in a and '--no-edit' in a and '-C' in a and a[a.index('-C')+1]!=c['repo']) or (c['trigger']=='push' and 'push' in a)
+trigger=(c['trigger']=='integrated' and 'merge-base' in a and '--is-ancestor' in a and c['sha'] in a and c['target'] in a) or (c['trigger']=='ancestry' and 'merge-base' in a and '--is-ancestor' in a and c['target'] in a and c['sha'] in a and a.index(c['target'])<a.index(c['sha'])) or (c['trigger']=='temporary' and 'merge' in a and '--no-edit' in a and '-C' in a and a[a.index('-C')+1]!=c['repo']) or (c['trigger']=='push' and 'push' in a)
 mark=Path(c['marker'])
 if trigger and not mark.exists():
  mark.write_text('triggered')
  action=c['action']
- if action=='sha': subprocess.run([c['git'],'-C',c['repo'],'update-ref','refs/heads/'+c['branch'],c['target']],check=True)
+ if action=='delete': subprocess.run([c['git'],'-C',c['repo'],'update-ref','-d','refs/heads/'+c['branch']],check=True)
+ elif action=='sha': subprocess.run([c['git'],'-C',c['repo'],'update-ref','refs/heads/'+c['branch'],c['target']],check=True)
  elif action=='registry': Path(c['registry']).write_text('{}\\n')
  elif action=='dirty': (Path(c['repo'])/'late-dirty.txt').write_text('human data')
  elif action=='head':
@@ -173,6 +174,18 @@ for kind in ('unchecked-ff','unchecked-divergent'):
         assert git(f['base']/'duplicate','rev-parse','HEAD')==f['target'],'human checkout moved'
         assert git(f['repo'],'worktree','list','--porcelain').count('worktree ')==3,'temporary worktree leaked'
     case('appeared-'+kind,test)
+
+# Already integrated is still a publication decision requiring fresh proof.
+for action in ('delete','registry','dirty'):
+    def test(action=action):
+        f=fixture('already-integrated-'+action)
+        git(f['repo'],'merge','--ff-only',f['sha']); f['target']=git(f['repo'],'rev-parse','main')
+        p=advance(f,action,'integrated')
+        assert (f['base']/'triggered').exists(),'already-integrated ancestry query was not reached'
+        refused(f,p); unchanged(f)
+        if action=='dirty': assert (f['repo']/'late-dirty.txt').read_text()=='human data'
+        if action=='delete': assert cmd(REAL_GIT,'-C',f['repo'],'show-ref','--verify','refs/heads/'+f['branch'],check=False).returncode!=0,'deleted task branch recreated'
+    case('already-integrated-'+action,test)
 
 # Valid paths establish fixtures and guard against blanket refusal.
 for kind in ('checked-ff','checked-divergent','unchecked-ff','unchecked-divergent'):
