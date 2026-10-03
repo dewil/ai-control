@@ -366,7 +366,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -506,6 +506,11 @@ class RuntimeContract(unittest.TestCase):
                         self.sock.close()
                     self.journal()
                     order.append('host_abort')
+                    if bootstrap_publication_fault and len(hosts) == 2:
+                        blocker = case.state / case.control['codex_state_id'] / 'admission.json'
+                        if not blocker.exists():
+                            blocker.mkdir(mode=0o700)
+                            order.append('admission_publication_blocked')
                     return self.snapshot()
 
             def stop(self, *, deadline, quiescent=False):
@@ -1639,6 +1644,36 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['thread_id'])
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
+
+    def test_drained_bootstrap_publication_crash_repairs_only_from_exact_durable_proof(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='read',
+            bootstrap_publication_fault=True)
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertIn('admission_publication_blocked', order)
+        proofs = list((self.state / self.control['codex_state_id']).rglob('bootstrap-proof.json'))
+        self.assertEqual(len(proofs), 1)
+        proof = json.loads(proofs[0].read_text())
+        self.assertEqual(set(proof), {'schema', 'operation', 'admission', 'terminal'})
+        self.assertEqual(proof['schema'], 1)
+        self.assertEqual(set(proof['operation']), {'operation_id', 'task_incarnation', 'generation',
+            'attempt_id', 'event_key', 'thread_id', 'turn_id', 'owner_event_key'})
+        self.assertEqual(set(proof['terminal']), {'operation_id', 'task_incarnation', 'thread_id',
+            'turn_id', 'terminal', 'terminal_proven', 'quiescent'})
+        self.assertEqual(proof['terminal']['terminal'], 'completed')
+        self.assertIs(proof['terminal']['terminal_proven'], True)
+        self.assertIs(proof['terminal']['quiescent'], True)
+        self.assertTrue(all(host.phase == 'stopped' for host in hosts))
+        self.assertEqual(sum(method == 'turn/start' for method, params in calls), 1)
+        baseline_calls = list(calls)
+        baseline_starts = [host.starts for host in hosts]
+        admission = self.state / self.control['codex_state_id'] / 'admission.json'
+        admission.rmdir()
+        controller.reconcile(deadline=time.monotonic() + 3)
+        self.assertEqual(json.loads(admission.read_text()), proof['admission'])
+        self.assertEqual(calls, baseline_calls)
+        self.assertEqual([host.starts for host in hosts], baseline_starts)
 
     def test_ordinary_turn_requires_its_own_exact_correlated_registry_before_task_authority(self):
         for mode in ('ordinary_registry_extra', 'ordinary_registry_missing', 'ordinary_registry_uncorrelated'):
