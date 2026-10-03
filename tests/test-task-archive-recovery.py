@@ -58,7 +58,15 @@ sys.exit(0)
 '''
         (self.mock/'systemctl').write_text(script)
         (self.mock/'systemctl').chmod(0o700)
-        (self.mock/'systemd-run').write_text('#!/bin/sh\nprintf "launch\\n" >> "$CC_ARCHIVE_FIXTURE/launch.log"\nexit 0\n')
+        (self.mock/'systemd-run').write_text("""#!/usr/bin/env python3
+import os,pathlib,time,json
+b=pathlib.Path(os.environ['CC_ARCHIVE_FIXTURE'])
+with (b/'launch.log').open('a') as f: f.write('launch\\n')
+(b/'launch-entered').touch()
+end=time.monotonic()+10
+while (b/'block-launch').exists() and not (b/'launch-release').exists() and time.monotonic()<end: time.sleep(.01)
+(b/'system-state').write_text(json.dumps(['active',0]))
+""")
         (self.mock/'systemd-run').chmod(0o700)
 
     def tearDown(self):
@@ -141,6 +149,90 @@ workspace: none
             if proc.poll() is not None: break
             time.sleep(.01)
         self.fail('public archive did not reach the mocked liveness query')
+
+    def launch_fixture(self):
+        agent=self.fixture(desired='paused')
+        done=(agent/'done.json').read_text()
+        (agent/'done.json').unlink()
+        self.cli('claude-rc','agent','start','archiveone',check=True)
+        return agent,done
+
+    def test_INV_TASK_44_reconciler_launch_wins_archive_waits(self):
+        agent,done=self.launch_fixture()
+        (self.base/'block-launch').touch()
+        launch=subprocess.Popen([str(ROOT/'bin'/'claude-agent-reconciler'),'--once'],
+                                env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        archive=None
+        try:
+            self.wait_marker(self.base/'launch-entered',launch)
+            (agent/'done.json').write_text(done)
+            control=json.loads((agent/'control.json').read_text())
+            control['desired']='stopped'
+            (agent/'control.json').write_text(json.dumps(control))
+            archive=subprocess.Popen([str(ROOT/'bin'/'claude-agent-run'),'done-advance',str(agent)],
+                                     env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            try: archive.communicate(timeout=.3)
+            except subprocess.TimeoutExpired: pass
+            self.assertTrue(agent.is_dir(),'archive moved source while launch held admission')
+            (self.base/'launch-release').touch()
+            launch.communicate(timeout=10)
+            archive.communicate(timeout=10)
+            self.assertTrue(agent.is_dir(),'archive moved source after native unit became active')
+        finally:
+            (self.base/'launch-release').touch()
+            for proc in (launch,archive):
+                if proc is not None:
+                    if proc.poll() is None: proc.kill()
+                    proc.communicate()
+
+    def test_INV_TASK_44_cached_reconciler_cannot_launch_after_archive(self):
+        agent,done=self.launch_fixture()
+        (self.base/'block-query').touch()
+        launch=subprocess.Popen([str(ROOT/'bin'/'claude-agent-reconciler'),'--once'],
+                                env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        try:
+            self.wait_marker(self.base/'query-entered',launch)
+            (agent/'done.json').write_text(done)
+            control=json.loads((agent/'control.json').read_text())
+            control['desired']='stopped'
+            (agent/'control.json').write_text(json.dumps(control))
+            self.cli('claude-agent-run','done-advance',agent,check=True)
+            self.assertFalse(agent.exists(),'fixture archive did not win admission')
+            (self.base/'query-release').touch()
+            launch.communicate(timeout=10)
+            self.assertFalse(agent.exists(),'cached reconciler recreated original path')
+            self.assertFalse((self.base/'launch.log').exists(),'cached reconciler launched archived incarnation')
+        finally:
+            (self.base/'query-release').touch()
+            if launch.poll() is None: launch.kill()
+            launch.communicate()
+
+    def test_INV_TASK_44_cached_reconciler_cannot_launch_replacement(self):
+        agent,_=self.launch_fixture()
+        (self.base/'block-query').touch()
+        launch=subprocess.Popen([str(ROOT/'bin'/'claude-agent-reconciler'),'--once'],
+                                env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        try:
+            self.wait_marker(self.base/'query-entered',launch)
+            original=self.base/'original-incarnation'
+            agent.rename(original)
+            shutil.copytree(original,agent)
+            control=json.loads((agent/'control.json').read_text())
+            control['incarnation']='replacement-incarnation'
+            control['desired']='paused'
+            (agent/'control.json').write_text(json.dumps(control))
+            (agent/'replacement-proof').write_text('new object must remain')
+            (self.base/'query-release').touch()
+            launch.communicate(timeout=10)
+            self.assertTrue((agent/'replacement-proof').exists())
+            self.assertEqual(json.loads((agent/'control.json').read_text())['incarnation'],
+                             'replacement-incarnation')
+            self.assertFalse((self.base/'launch.log').exists(),
+                             'cached reconciler launched into replacement incarnation')
+        finally:
+            (self.base/'query-release').touch()
+            if launch.poll() is None: launch.kill()
+            launch.communicate()
 
     def test_INV_TASK_44_replaced_incarnation_is_not_archived(self):
         agent=self.fixture('cleaned')
