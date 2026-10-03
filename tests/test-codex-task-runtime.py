@@ -1889,6 +1889,8 @@ class RuntimeContract(unittest.TestCase):
         self.assertEqual(self.effects, [])
 
     def test_resumed_turn_missing_wire_raw_waits_for_delayed_owned_rollout_registry_before_callback(self):
+        self.assertTrue(callable(getattr(runtime_module, 'read_registry_evidence', None)),
+            'Accepted native registry evidence boundary absent')
         self.publish_registry()
         controller, hosts, calls, order = self.discovery_fixture(native_mode='read', rollout_registry='delayed')
         result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
@@ -1903,6 +1905,8 @@ class RuntimeContract(unittest.TestCase):
         self.assertTrue(all(host.starts == 1 and host.phase == 'stopped' for host in hosts))
 
     def test_resumed_turn_absent_foreign_or_unsafe_rollout_registry_never_grants_authority(self):
+        self.assertTrue(callable(getattr(runtime_module, 'read_registry_evidence', None)),
+            'Accepted native registry evidence boundary absent')
         for evidence in ('absent', 'wrong_thread', 'wrong_turn', 'wrong_operation', 'extra_exec', 'malformed_output'):
             with self.subTest(evidence=evidence):
                 case = RuntimeContract(methodName='test_constructor_is_inert_and_does_not_initialize_missing_index')
@@ -1928,6 +1932,8 @@ class RuntimeContract(unittest.TestCase):
                     case.doCleanups()
 
     def test_resumed_turn_file_effect_before_delayed_rollout_proof_is_immediate_quarantine(self):
+        self.assertTrue(callable(getattr(runtime_module, 'read_registry_evidence', None)),
+            'Accepted native registry evidence boundary absent')
         self.publish_registry()
         controller, hosts, calls, order = self.discovery_fixture(native_mode='ordinary_pre_registry_effect',
             rollout_registry='delayed', default_checkpoint=True)
