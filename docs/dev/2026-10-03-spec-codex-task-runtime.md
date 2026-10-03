@@ -324,3 +324,8 @@ The native waiting loop, heartbeat and guarded answer send must tolerate bounded
 ### Native proof deadline after model latency
 
 A fresh-registry read/materialization wait is bounded to ten seconds from its first required evidence observation, within the ordinary operation deadline. It is not a ten-second limit on model thinking after ordinary turn/start. A genuine first callback/file event arriving later with an already available ordered current-turn proof may be processed after ownership verification; the proof must still physically precede the effect. No callback/native response/effect occurs until that proof. Missing proof after the bounded observation wait refuses; pre-proof file/command effects refuse immediately, and the entire operation remains bounded by task run_timeout.
+
+
+### Retryable completion recovery finalization
+
+Strict native completion recovery passes the operation deadline through trusted worktree/Git checks and finalizer writes. If the recovered checkpoint exists but the worktree is temporarily dirty or Git guard/facts cannot be established, preserve the original requested done/completion/envelope exactly without invalidating or marking it finalized. Hold with no archive/finish/native replay; after the operator resolves the same temporary conflict, reconcile may finish the exact original checkpoint once. This strict recovery behavior does not change legacy ordinary-run finalization policy for dirty worktrees.
