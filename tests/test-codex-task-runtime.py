@@ -366,7 +366,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -382,6 +382,7 @@ class RuntimeContract(unittest.TestCase):
         waiting_heartbeats = []
         transports = []
         answered = set()
+        bootstrap_materialized = [False]
         from _codex_task_files import CodexTaskFiles
         from _codex_task_bridge import dynamic_tools
         descriptors = CodexTaskFiles.dynamic_tools() + dynamic_tools()
@@ -536,6 +537,22 @@ class RuntimeContract(unittest.TestCase):
                 self.closed = False
                 self.bound = None
                 self.replies = []
+                self.late_events = None
+                self.bootstrap_polls = 0
+
+            def materialize_bootstrap(self):
+                case.assertIsNotNone(self.late_events)
+                self.events.extend(self.late_events)
+                self.late_events = None
+                history[-1].update(status='completed', completedAt=2)
+                self.events.append({'method': 'turn/completed', 'params': {
+                    'threadId': thread_id, 'turn': copy.deepcopy(history[-1])}})
+                save(native_path, {'type': 'session_meta', 'payload': {
+                    'id': thread_id, 'cwd': str(case.agent / 'work'), 'cli_version': '0.160.0',
+                    'history_mode': 'legacy', 'roots': [str(case.agent / 'work')],
+                    'dynamic_tools': copy.deepcopy(descriptors)}})
+                bootstrap_materialized[0] = True
+                order.append('bootstrap_registry_materialized')
 
             def call(self, method, params, *, deadline):
                 calls.append((method, copy.deepcopy(params)))
@@ -578,6 +595,12 @@ class RuntimeContract(unittest.TestCase):
                                 'excludeTmpdirEnvVar': True, 'excludeSlashTmp': True,
                                 'writableRoots': [str(case.agent / 'work')]}}
                     if method == 'thread/read':
+                        if self.late_events is not None:
+                            self.bootstrap_polls += 1
+                            if self.bootstrap_polls == 1 or asynchronous_bootstrap == 'never':
+                                order.append('bootstrap_history_in_progress')
+                            else:
+                                self.materialize_bootstrap()
                         if native_mode == 'lost_start' and history:
                             raise ConnectionError('PRIVATE_HISTORY_UNAVAILABLE')
                         case.assertIs(params['includeTurns'], True)
@@ -678,6 +701,13 @@ class RuntimeContract(unittest.TestCase):
                             'id': thread_id, 'cwd': str(case.agent / 'work'), 'cli_version': '0.160.0',
                             'history_mode': 'legacy', 'roots': [str(case.agent / 'work')],
                             'dynamic_tools': copy.deepcopy(descriptors)}})
+                        if diagnostic and asynchronous_bootstrap is not None:
+                            self.late_events = [event for event in self.events
+                                if event['method'] == 'rawResponseItem/completed']
+                            self.events.clear()
+                            created.update(status='inProgress', completedAt=None)
+                            native_path.unlink()
+                            order.append('bootstrap_start_returned_before_registry')
                         order.append('callbacks_queued_before_start_response')
                         if native_mode == 'lost_start':
                             raise ConnectionError('PRIVATE_START_REPLY_LOST')
@@ -693,6 +723,8 @@ class RuntimeContract(unittest.TestCase):
                 order.append('bind_operation')
 
             def receive(self, *, deadline):
+                if self.late_events is not None and asynchronous_bootstrap == 'late':
+                    self.materialize_bootstrap()
                 if self.events:
                     return self.events.popleft()
                 raise TimeoutError('offline fixture empty')
@@ -786,6 +818,11 @@ class RuntimeContract(unittest.TestCase):
 
         def child(snapshot, companion_paths, *, deadline):
             host = next(h for h in hosts if h.unit == snapshot.unit)
+            if asynchronous_bootstrap is not None and len(hosts) == 2:
+                if not bootstrap_materialized[0]:
+                    order.append('bootstrap_child_not_yet_materialized')
+                    raise case.Error('Native fixture V8 has not materialized yet')
+                order.append('bootstrap_child_proven')
             proof = dict(pid=12346, start_ticks=100, uid=os.getuid(),
                 executable=companion_paths['code_mode_host'], sha256=PINS['code_mode_host'],
                 control_group='/fixture/owned', invocation_id=host.invocation)
@@ -1671,6 +1708,38 @@ class RuntimeContract(unittest.TestCase):
         self.assertIsNone(projection['meta']['codex_operation']['thread_id'])
         self.assertIsNone(projection['meta']['codex_operation']['turn_id'])
         self.assertEqual(self.effects, [])
+
+    def test_bootstrap_waits_for_late_registry_and_v8_before_admission_without_restart(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='read',
+            asynchronous_bootstrap='late')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
+        self.assertEqual(result['outcome'], 'ran')
+        self.assertIn('bootstrap_registry_materialized', order)
+        self.assertIn('bootstrap_child_proven', order)
+        self.assertLess(order.index('bootstrap_registry_materialized'), order.index('bootstrap_child_proven'))
+        self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
+        self.assertEqual(sum(method == 'thread/start' for method, params in calls), 1)
+        self.assertEqual(order.count('reply_dynamic'), 1)
+        self.assertEqual(len(hosts), 3)
+        self.assertTrue(all(host.starts == 1 and host.phase == 'stopped' for host in hosts))
+        self.assertTrue((self.state / self.control['codex_state_id'] / 'admission.json').is_file())
+        self.assertLess(order.index('bootstrap_child_proven'), order.index('reply_dynamic'))
+
+    def test_bootstrap_missing_late_registry_and_v8_holds_without_admission_or_retry(self):
+        self.publish_registry()
+        controller, hosts, calls, order = self.discovery_fixture(native_mode='read',
+            asynchronous_bootstrap='never')
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 1)
+        self.assertIn(result['outcome'], ('blocked', 'unknown'))
+        self.assertNotIn('bootstrap_registry_materialized', order)
+        self.assertNotIn('bootstrap_child_proven', order)
+        self.assertNotIn('reply_dynamic', order)
+        self.assertEqual(sum(method == 'turn/start' for method, params in calls), 1)
+        self.assertEqual(len(hosts), 2)
+        self.assertTrue(all(host.starts == 1 and host.phase == 'stopped' for host in hosts))
+        self.assertFalse((self.state / self.control['codex_state_id'] / 'admission.json').exists())
+        self.assertEqual((self.agent / 'work/tracked.txt').read_text(), 'baseline\n')
 
     def test_ordinary_file_effect_before_registry_preserves_candidate_and_refuses_authority(self):
         self.publish_registry()
