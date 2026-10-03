@@ -38,16 +38,14 @@ class RecoveryOwnership(unittest.TestCase):
         self.before = self.completion.read_bytes()
         self.log = f.root / 'recovery-controller-calls.jsonl'
         self.effect = f.root / 'checkpoint-done-effect'
-        # Preserve the real module and CLI main/parser/flock implementation.
-        # NativeAnswerContract's unrelated controller-only seam is replaced
-        # here by a test executable driver overriding ONLY public runtime_for.
+        # Preserve actual CLI main/parser/flock as opaque trusted fixture bytes.
+        # Append only a public controller class override for the shared runner;
+        # CLI driver additionally overrides public runtime_for before real main.
         actual_runtime = ROOT / 'bin/_codex_task_runtime.py'
         if actual_runtime.is_file():
-            shutil.copyfile(actual_runtime, f.bin / '_codex_task_runtime.py')
-            driver = f.bin / 'codex-task-runtime'
-            source = ('#!/usr/bin/env python3\nimport sys,json,pathlib\n'
-                'import _codex_task_runtime as runtime\n'
-                'RuntimeError=runtime.RuntimeError\n'
+            module = f.bin / '_codex_task_runtime.py'
+            shutil.copyfile(actual_runtime, module)
+            spy = ('\nimport json,pathlib\n'
                 'class FakeRecoveryController:\n'
                 ' def __init__(self,agent_dir,**kwargs): self.agent_dir=str(agent_dir)\n'
                 ' def static_preflight(self,*,deadline): return dict(ready=True,version="0.160.0",permission_profile="control_task",release_hashes={})\n'
@@ -60,7 +58,14 @@ class RecoveryOwnership(unittest.TestCase):
                 '  raise RuntimeError("unexpected competing execute")\n'
                 ' def require_drained(self,*,deadline): raise RuntimeError("fixture drain not granted")\n'
                 ' def revoke_and_drain(self,reason,*,deadline): raise RuntimeError("fixture drain not granted")\n'
-                'runtime.runtime_for=lambda agent_dir,*args,**kwargs: FakeRecoveryController(agent_dir,**kwargs)\n'
+                'CodexTaskRuntime=FakeRecoveryController\n')
+            compile(spy, 'fixture-public-controller-override', 'exec')
+            with module.open('ab') as copied_module:
+                copied_module.write(spy.encode('utf-8'))
+            driver = f.bin / 'codex-task-runtime'
+            source = ('#!/usr/bin/env python3\nimport sys\n'
+                'import _codex_task_runtime as runtime\n'
+                'runtime.runtime_for=lambda agent_dir,*args,**kwargs: runtime.CodexTaskRuntime(agent_dir,**kwargs)\n'
                 'if __name__ == "__main__": sys.exit(runtime.main())\n')
             compile(source, str(driver), 'exec')
             driver.write_text(source)
