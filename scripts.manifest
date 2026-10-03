@@ -12,7 +12,7 @@
 claude-rc
 codex-rc
 _codex_rc.py
-# Подготовительный lifecycle helper: пока без TASK/CLI/runtime wiring.
+# Общие helpers отдельного Codex TASK runtime.
 _codex_task_lifecycle.py
 _codex_task_transport.py
 _codex_task_policy.py
