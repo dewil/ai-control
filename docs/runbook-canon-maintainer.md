@@ -1,3 +1,5 @@
+> **Архив / historical (2026-10-03).** Версионная раскатка Toolkit удалена. Команды, timer и оператор ниже больше не поставляются и не являются инструкцией по эксплуатации. Ручной SHA-pinned AI sync и harvest delivery/pending сохранены.
+
 # Runbook: canon-maintainer (fleet-reconciler канона)
 
 Оперативная инструкция "что делать сейчас". Как устроено и почему - explainer:

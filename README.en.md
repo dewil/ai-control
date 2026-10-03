@@ -5,9 +5,9 @@
 [![shellcheck](https://github.com/dewil/claude-control/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/dewil/claude-control/actions/workflows/shellcheck.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-Autonomous infrastructure on top of [Claude Code](https://claude.com/claude-code): an always-on control plane that (1) dispatches remote Claude sessions to any of your projects from your phone, and (2) runs a fleet of background agents — with an event spool, budgets, cross-machine handoff, independent-context acceptance, and deterministic canon rollout via pull requests.
+Autonomous infrastructure on top of [Claude Code](https://claude.com/claude-code): an always-on control plane that (1) dispatches remote Claude sessions to any of your projects from your phone, and (2) runs a fleet of background agents — with an event spool, budgets, cross-machine handoff, independent-context acceptance.
 
-> One half of a two-repo system. The other is [**claude-toolkit**](https://github.com/dewil/claude-toolkit): a canon of rules/agents/skills plus a transactional engine that packages it into immutable releases. `claude-control` rolls those releases across the fleet (see [Layer 2 → canon fleet-reconciler](#canon-fleet-reconciler)).
+> The related [**claude-toolkit**](https://github.com/dewil/claude-toolkit) contains rules, roles and skills. Updates use manual SHA-pinned AI sync; harvest retains upstream brief delivery.
 
 > [!NOTE]
 > The core (remote-control) sits on top of the [`claude remote-control`](https://code.claude.com/docs/en/remote-control.md) feature — a **research preview** at the time of writing. Requires Claude Code CLI **≥ 2.1.51** and a Claude-subscription login (`claude /login`); Anthropic API keys do not work for remote-control.
@@ -32,26 +32,21 @@ flowchart TB
       subgraph L2["Layer 2 — autonomous agent layer (Linux)"]
         recon["reconciler<br/>event-spool + budgets"]
         tgbot["tgbot<br/>dashboard + /new /task /limits"]
-        canon["canon-maintainer<br/>canon fleet-reconciler"]
         takeover["takeover<br/>Mac → VM handoff"]
         harvest["acceptor + harvester<br/>acceptance + role rules"]
       end
     end
 
-    toolkit["claude-toolkit<br/>canon + release engine"]
-    fleet["git project fleet<br/>(PR-based canon rollout)"]
+    toolkit["claude-toolkit<br/>rules + skills"]
 
     phone <--> tgbot
     tgbot --> menu
     rc --> projA["ccsession-&lt;uuid&gt;: session A"]
     rc --> projB["ccsession-&lt;uuid&gt;: session B"]
-    toolkit -. "canon.lock.json (immutable)" .-> canon
-    canon -- "PR canon/vN" --> fleet
-    recon --> canon
 ```
 
 - **Layer 1 — sessions from the bot** (Linux; the CLI works on macOS, but transient units do not). `/sessions` in Telegram: projects -> that project's sessions under their own names -> bring up, put down, start a new one. A raised session lives in a transient `systemd` unit and shows up in the Claude Code app. Access to any repo and to any past session, with no SSH and no manual `cd`.
-- **Layer 2 — autonomous agent layer** (Linux/systemd on a VM). Background agents supervised by a reconciler: an event spool, a `/new`-from-phone task loop (worktree, cards, accept by tap), per-run budgets, a circuit breaker, cross-machine takeover, independent role-based acceptance, an operator-feedback harvester, and a deterministic canon fleet-reconciler.
+- **Layer 2 — autonomous agent layer** (Linux/systemd on a VM). Background agents supervised by a reconciler: an event spool, a `/new`-from-phone task loop (worktree, cards, accept by tap), per-run budgets, a circuit breaker, cross-machine takeover, independent role-based acceptance, an operator-feedback harvester.
 
 Both layers are **stdlib Python + shell, zero external dependencies**, user-level units only (no `sudo`, no system services), idempotent install/uninstall.
 
@@ -115,15 +110,6 @@ On top of the spool: a full task lifecycle with no open session. `/new <project>
 ### tgbot — fleet dashboard
 A long-poll Telegram bot (getUpdates, not webhooks — webhooks are DPI-filtered in some networks). Commands `/agents`, `/agent <name>`, `/new <project> <text>` (birth a task), `/task <name> <text>` (an event for an existing agent), `/menu` and `/limits` (remaining Claude/Codex subscription limits); question and acceptance cards carry inline buttons, answered by tap or reply. Private chats + a `from.id` whitelist; all agent output is untrusted, HTML-escaped and sent as `<pre>`.
 
-### <a id="canon-fleet-reconciler"></a>canon-maintainer — canon fleet-reconciler
-Rolls canon revisions from [claude-toolkit](https://github.com/dewil/claude-toolkit) across a fleet of git projects **via pull requests**, deterministically and with no LLM in the data plane. Consumes the toolkit's transactional delta engine (`canon-delta.py`). The densest piece, engineering-wise:
-
-- **Model B**: the reconciler on the VM holds fleet clones; canon travels on a `canon/<vN>` branch + PR; `applied` is recorded only once the canon bytes are present in the post-merge default branch (post-merge truth). Mac checkouts and non-git vaults are never mutated — observe only.
-- **Immutable releases**: a revision's identity = the git commit_sha of the annotated tag `canon-vN`; a rejected release (closed PR) is superseded by the next version, never rebuilt.
-- **Rollout rings** canary → snapshot → rest, plus a **circuit breaker** (latch on incompat/error/smoke, cleared only by an explicit `ack`).
-- **Semantic smoke** of the candidate before push, a per-pass **budget** of applications, **break-glass rollback** to the previous revision, **observe-first** (early passes only watch), and an instant `disarm` kill switch.
-- Full [runbook](./docs/runbook-canon-maintainer.md) and [stage 8 design](./docs/design-2026-07-14-stage8-canon-sync.md).
-
 ### takeover — cross-machine handoff
 Moves a live mission Mac → VM **not by transferring the transcript** (fundamentally unsafe — it would drag along foreign context) but as a fresh, brief-seeded session: a new agent starts on the VM from a self-contained brief anchored at a base commit. [Stage 5 design](./docs/design-2026-07-13-stage5-takeover.md).
 
@@ -152,10 +138,9 @@ Paths, repo URLs and credentials live in `~/.config/claude-control/backup-env` (
 
 What makes this more than scripts:
 
-- **Determinism in the data plane.** Canon rollout is a pure delta engine over an immutable release descriptor; the LLM comes up only on demand for conflict resolution. Metric: 0 LLM calls on a no-op pass.
-- **Transactional safety.** A WAL with a crash matrix (prepare/commit/recovery roll-forward/back), CAS before rename, no-clobber on foreign files, write containment within the project. Proven by fault-injection tests, not "on paper".
-- **Autonomy with brakes.** Per-run budgets, a circuit breaker with a durable latch, rollout rings, observe-first, a kill switch. An autonomous agent cannot run away silently.
-- **Adversarial verification.** Each major layer goes through several rounds of adversarial review by a **second model** (a different class of bugs than the primary agent finds); every finding is closed with a fix **plus a regression test**. The stack of stages has accumulated dozens of closed blockers; the toolkit's canon engine has ~100 stdlib tests and 4 adversarial rounds to GO.
+- **Transactional safety.** Durable event spools, task recovery, no-clobber on foreign files, and write containment within the project. Proven by fault-injection tests, not "on paper".
+- **Autonomy with brakes.** Per-run budgets, a circuit breaker with a durable latch, a kill switch. An autonomous agent cannot run away silently.
+- **Adversarial verification.** Each major layer goes through several rounds of adversarial review by a **second model** (a different class of bugs than the primary agent finds); every finding is closed with a fix **plus a regression test**. The stack of stages has accumulated dozens of closed blockers.
 - **An explicit threat model.** Trusted VM, our durable state, canon from our git mirror; the boundaries (TOCTOU under flock, symlink parents, secret handling) are worked out and documented, residual risks accepted in writing.
 - **Zero dependencies, user-level.** Only stdlib Python + shell, only user launchd/systemd units, idempotent install/uninstall.
 
@@ -186,7 +171,7 @@ cd claude-control
 $EDITOR ~/.claude-control/projects.yaml   # add your projects
 ```
 
-Done. Session control lives in the Telegram bot: **`/sessions` -> project -> session -> bring up**; the bot, reconciler, canon-maintainer and limits-digest come up from the same `install.sh` once `~/.config/claude-control/env` has the needed variables (see the runbooks in `docs/`). Without the bot the same actions are available from the machine: `claude-rc sessions <project> --porcelain`, `claude-rc up <project> <uuid>`.
+Done. Session control lives in the Telegram bot: **`/sessions` -> project -> session -> bring up**; the bot, reconciler and limits-digest come up from the same `install.sh` once `~/.config/claude-control/env` has the needed variables (see the runbooks in `docs/`). Without the bot the same actions are available from the machine: `claude-rc sessions <project> --porcelain`, `claude-rc up <project> <uuid>`.
 
 Hacking on the repo itself? Use `./install.sh --link` (scripts in `~/.local/bin/` become symlinks to `bin/`, so `git pull` updates the running code immediately).
 
@@ -212,7 +197,6 @@ Layer 2 (agent):
 - [`bin/claude-agent-run`](./bin/claude-agent-run), [`claude-agent-io`](./bin/claude-agent-io), [`claude-agent-session`](./bin/claude-agent-session) — agent execution/spool/sessions.
 - [`bin/claude-agent-tgbot`](./bin/claude-agent-tgbot) — the Telegram dashboard (`/agents`, `/new`, `/task`, `/limits`, question and acceptance cards).
 - [`bin/claude-agent-done`](./bin/claude-agent-done), [`claude-agent-ask`](./bin/claude-agent-ask), [`claude-agent-answer`](./bin/claude-agent-answer), [`claude-agent-permit`](./bin/claude-agent-permit) — the V2 task protocol: the "done" claim, mid-run questions, the trusted answer writer, the confirmation gate.
-- [`bin/claude-agent-canon-maintainer`](./bin/claude-agent-canon-maintainer) — the canon fleet-reconciler.
 - [`bin/claude-agent-limits-digest`](./bin/claude-agent-limits-digest) — the LLM limits digest.
 - [`bin/claude-agent-harvest`](./bin/claude-agent-harvest), [`claude-agent-review`](./bin/claude-agent-review), [`claude-agent-checkrun`](./bin/claude-agent-checkrun) — acceptance/review/checks.
 - [`bin/claude-rc-takeover`](./bin/claude-rc-takeover), [`claude-rc-agent`](./bin/claude-rc-agent) — cross-machine takeover.
@@ -223,7 +207,7 @@ Optional module (`--with-backup`):
 Shared:
 - [`launchd/`](./launchd/) / [`systemd/`](./systemd/) — unit templates; `install.sh` renders them.
 - [`examples/`](./examples/) — starter `projects.yaml`, `CLAUDE.md`, `settings.local.json`.
-- [`docs/`](./docs/) — `architecture.md`, per-stage design docs, runbooks (canon-maintainer, limits-digest), troubleshooting.
+- [`docs/`](./docs/) — `architecture.md`, per-stage design docs, runbooks (limits-digest), troubleshooting.
 - [`tests/`](./tests/) — offline tests for agent-layer components.
 - [`install.sh`](./install.sh) / [`uninstall.sh`](./uninstall.sh); what gets installed and removed lives in [`scripts.manifest`](./scripts.manifest), shared by both (the backup module has its own `scripts.manifest.backup`).
 

@@ -187,7 +187,7 @@ flowchart TB
 
 Агентские сессии **вне охвата** `claude-control-project-watchdog` (живут на своих tmux-сокетах и не числятся в projects.yaml; в watchdog есть и явный guard) - их надзирает только reconciler: политика "stale -> stop + fresh" уничтожила бы миссию.
 
-Тесты: `tests/test-agent-*.sh` - юнит-суиты по компонентам (io, cli, run, review, tgbot, canon-maintainer; V2-контур: drain, workspace, thread, question, permit, tg-cards, reminders, task-lifecycle, schedule, lessons), `tests/test-mission-*.sh` (юнит, локально), `tests/fault/run-fault-tests.sh` (fault-injection: crash-матрица + событийные S16-S19 + приёмщик S20-S27, Linux/systemd, mock-агент/mock-CLAUDE_BIN), `tests/corpus/run-corpus.sh` (LLM-корпус приёмщика, требует API - критерий этапа 7).
+Тесты: `tests/test-agent-*.sh` - юнит-суиты по компонентам (io, cli, run, review, tgbot, harvest; V2-контур: drain, workspace, thread, question, permit, tg-cards, reminders, task-lifecycle, schedule, lessons), `tests/test-mission-*.sh` (юнит, локально), `tests/fault/run-fault-tests.sh` (fault-injection: crash-матрица + событийные S16-S19 + приёмщик S20-S27, Linux/systemd, mock-агент/mock-CLAUDE_BIN), `tests/corpus/run-corpus.sh` (LLM-корпус приёмщика, требует API - критерий этапа 7).
 
 ## Супервизоры
 
@@ -200,7 +200,6 @@ flowchart TB
 - `~/.config/systemd/user/claude-agent-reconciler.service` - reconciler агентного слоя, `Restart=always`, `RestartSec=30`. Ставится безусловно (при пустом реестре - холостой цикл). Установщик после `enable --now` делает еще и `try-restart`: `enable --now` не трогает уже работающий демон, и свежая раскатка до него не доезжала - ловилось на жнеце зомби-сессий, где файлы на диске были новые, а проход шел по старому коду.
 - `~/.config/systemd/user/claude-agent-tgbot.service` - TG-бот, он же слой 1 (подъем сессий тапом), `Restart=on-failure` (без токена выходит с кодом 0 и не рестартится). Включается только при заданном `CLAUDE_AGENT_TG_TOKEN` в `~/.config/claude-control/env`.
 - `~/.config/systemd/user/claude-agent-limits-digest.{service,timer}` - дайджест остатка лимитов. Включается тем же условием, что и бот.
-- `~/.config/systemd/user/claude-agent-canon-maintainer.{service,timer}` - сверщик канона.
 - `~/.config/systemd/user/claude-control-logrotate.{service,timer}` - ротация логов, `OnUnitActiveSec=1h`. Ставится независимо от `--watchdog`, поэтому логи ограничены всегда.
 - `~/.config/systemd/user/claude-control-backup.{service,timer}` - только при `--with-backup`, и включается руками после `claude-control-backup-init`.
 
@@ -216,7 +215,7 @@ Legacy, шаблоны еще рендерятся под откат, но ус�
 
 Без `loginctl enable-linger $USER` user-сервисы остановятся при logout. `install.sh` проверяет и предупреждает, если lingering выключен.
 
-Опционально: `~/.config/claude-control/env` подхватывается через `EnvironmentFile=-` всеми постоянными юнитами (бот, reconciler, canon-maintainer, limits-digest, logrotate и legacy-трое); отсутствие файла - не ошибка. На macOS launchd env-файлы не читает, поэтому тот же файл читает сам entrypoint `claude-control-session` - на macOS это влияет на control-сессию (`CLAUDE_BIN`, proxy), но не на watchdog/logrotate. Удобно для проброса `CLAUDE_BIN`, proxy-переменных и т.п. без правки unit'а.
+Опционально: `~/.config/claude-control/env` подхватывается через `EnvironmentFile=-` всеми постоянными юнитами (бот, reconciler, limits-digest, logrotate и legacy-трое); отсутствие файла - не ошибка. На macOS launchd env-файлы не читает, поэтому тот же файл читает сам entrypoint `claude-control-session` - на macOS это влияет на control-сессию (`CLAUDE_BIN`, proxy), но не на watchdog/logrotate. Удобно для проброса `CLAUDE_BIN`, proxy-переменных и т.п. без правки unit'а.
 
 ## Что где лежит после установки
 
@@ -228,7 +227,7 @@ Legacy, шаблоны еще рендерятся под откат, но ус�
   claude-agent-tgbot, claude-agent-reconciler, claude-agent-run, claude-agent-session
   claude-agent-io, claude-agent-ask, claude-agent-answer, claude-agent-permit,
   claude-agent-done, claude-agent-review, claude-agent-checkrun, claude-agent-harvest
-  claude-agent-canon-maintainer, claude-agent-limits-digest, claude-control-logrotate
+  claude-agent-limits-digest, claude-control-logrotate
   _rc_projects.sh, _rc_ctx.py, _rc_meta.py, _rc_titles.py, _schedule_spec.py,
   _agent_headless_argv.py, _agent_trust_preseed.py, _agent_question_io.py, _agent_worktree.py
   claude-control-session, claude-control-watchdog, claude-control-project-watchdog   # legacy, юниты выключены
@@ -236,7 +235,6 @@ Legacy, шаблоны еще рендерятся под откат, но ус�
 ~/.config/systemd/user/
   claude-agent-tgbot.service              # слой 1: подъем сессий тапом
   claude-agent-reconciler.service         # слой 2: агенты
-  claude-agent-canon-maintainer.{service,timer}
   claude-agent-limits-digest.{service,timer}
   claude-control-logrotate.{service,timer}
   claude-control-backup.{service,timer}   # только при --with-backup
@@ -270,3 +268,5 @@ Legacy, шаблоны еще рендерятся под откат, но ус�
   com.<user>.claude-control-project-watchdog.plist   # legacy
   com.<user>.claude-control-logrotate.plist   # ротация логов (раз в час)
 ```
+
+Версионный canon-maintainer удален. Install и uninstall используют общий source-only `lib/retire-canon-maintainer.sh`: проверяют остановку legacy timer/service, удаляют только текущие unit/mask/enable links и binary, затем проверяют daemon-reload. Данные, архивы и `.bak` остаются; dry-run не меняет состояние.
