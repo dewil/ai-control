@@ -228,3 +228,8 @@ Permission-answer intake: existing `claude-agent-run spool-put NAME --json '{"ki
 Полный captured file patch вне baseline может создавать только reject-only permission question: native_callback.allowed_decisions=["reject"], UI без approve. Human reject сопоставляется exact live operation/request/digest и отправляет decline; это не filesystem/session grant, outside paths не читаются ради approval. Для in-scope списка допустимы approve/reject с повторной baseline scope проверкой непосредственно перед accept. Программный human approve для reject-only, missingfullscope и nonnullgrantRoot не расширяет baseline; refuse/revoke. Existing outside tests без humandecision не заменяют actual decline acceptance.
 
 Captured native_callback.allowed_decisions ограничивает также genuine answer CLI: `--approve` для native reject-only вопроса отказывает до мутации question/spool; `--reject` остаётся разрешён. Это Codex-native gating по защищённому captured question, прежние permission/info вопросы без native binding сохраняют поведение. CLI refusal не делает native reply и не расширяет baseline.
+
+
+### Recovery и владение executor lock
+
+Прямой CLI `reconcile` способен выполнять checkpoint/completion/done recovery, поэтому получает тот же existing `inbox/.executor.lock` nonblocking до controller.reconcile. При занятом lock возвращает bounded busy/refusal, не вызывает recovery и не меняет evidence/Git/done. Shared runner recovery выполняется только под уже принадлежащим runner executor flock; отдельный reconciler либо владеет этим lock для восстановления, либо ограничивается revoke/drain без checkpoint/completion. Drain-barrier остаётся допустимым способом запретить и остановить native работу без присвоения executor authority.
