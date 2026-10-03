@@ -55,6 +55,30 @@ RECON="$HERE/../bin/claude-agent-reconciler"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Own fixtures have no real systemd units. INV-TASK-44 requires matched
+# inactive/exit3 evidence; a host's missing-unit inactive/exit4 is unknown.
+# Keep all systemd calls isolated; individual adversarial mocks override PATH.
+mkdir -p "$TMP/systembin"
+cat > "$TMP/systembin/systemctl" <<'PYMOCK'
+#!/usr/bin/env python3
+import sys
+args = sys.argv[1:]
+if "is-active" in args:
+    print("inactive")
+    sys.exit(3)
+if "show" in args:
+    properties = []
+    for index, arg in enumerate(args):
+        if arg in ("-p", "--property") and index + 1 < len(args):
+            properties.extend(args[index + 1].split(","))
+    values = {"LoadState": "not-found", "ActiveState": "inactive", "SubState": "dead",
+              "MainPID": "0", "ControlGroup": "", "Result": "success"}
+    for prop in properties:
+        print(values.get(prop, "") if "--value" in args else prop + "=" + values.get(prop, ""))
+PYMOCK
+chmod +x "$TMP/systembin/systemctl"
+export PATH="$TMP/systembin:$PATH"
+
 # HOME переопределен: bin/claude-agent-run без CLAUDE_AGENT_LESSONS_JOURNAL_DIR
 # резолвит ~/.claude-control/lessons от реального $HOME.
 export HOME="$TMP/home"

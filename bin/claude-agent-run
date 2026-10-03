@@ -4624,7 +4624,7 @@ def _agent_active(name):
         r = subprocess.run(
             ["systemctl", "--user", "is-active", "agent-%s.service" % name],
             capture_output=True, text=True, timeout=10)
-        return r.stdout.strip() not in ("inactive", "failed")
+        return not (r.returncode == 3 and r.stdout.strip() in ("inactive", "failed"))
     except Exception:
         return True
 
@@ -4682,56 +4682,67 @@ def _phase_archive(agent_dir, name, d):
     нет, и ложная незакрытая тревога осталась бы висеть на архивированном
     агенте."""
     codex_barrier(agent_dir)
-    if d.get("state") == "cleaned":
-        if _agent_active(name) or _agent_desired(agent_dir) != "stopped":
-            _agent_request_stop(name)
-            return "wait", None
-        d["state"] = "archived"
-        d["archived_at"] = now_iso()
-        durable_json(os.path.join(agent_dir, "done.json"), d)
-    dest = os.path.normpath(os.path.join(
-        agent_dir, "..", "..", "archive", "%s-%s" % (name, d["archived_at"])))
-    tomb_root = os.path.normpath(os.path.join(agent_dir, "..", "..",
-                                              "tombstones"))
+    identity = os.stat(agent_dir)
+    incarnation = (load_json(os.path.join(agent_dir, "control.json")) or {}).get("incarnation")
+
+    def same_agent():
+        try:
+            current = os.stat(agent_dir)
+            control = load_json(os.path.join(agent_dir, "control.json"))
+            return (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino) and control.get("incarnation") == incarnation
+        except (OSError, ValueError, AttributeError):
+            return False
+
     lock_path = _archive_name_lock_path(agent_dir, name)
     os.makedirs(os.path.dirname(lock_path), mode=0o700, exist_ok=True)
-    lock_fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        try:
-            os.makedirs(tomb_root, mode=0o700, exist_ok=True)
-            durable_json(os.path.join(tomb_root, name + ".json"),
-                        {"name": name, "archived_at": d["archived_at"],
-                         "archived_to": dest,
-                         # чем кончилась задача (INV-TASK-54): у надгробия
-                         # это единственный след - каталог агента к этому
-                         # моменту уже уезжает в archive/, а причина нужна
-                         # потом, когда имя всплывет в /new
-                         "reason": ("cancelled" if d.get("cancelled_at")
-                                    else "accepted")})
-        except OSError as e:
-            return "fail", "надгробие не записано: %s" % e
+    request_stop = False
+    with FLock(lock_path):
+        if not same_agent():
+            return "wait", None
+        # CAS owns control.lock itself: finish it BEFORE taking that lock.
         if not _clear_attention(agent_dir):
-            # аудит третий блокер 6: транзиентная ошибка control-cas здесь
-            # не проглатывается - иначе rename ниже унес бы непогашенный
-            # done_phase в архив без единого шанса на retry.
             return "fail", "не удалось снять attention перед архивом"
-        _phase_alert_clear(agent_dir)
-        if d.get("phase_error") is not None:
-            # тот же минор 11: phase_error от предыдущего неудачного прохода
-            # archive иначе уехал бы в архив как есть - ложная незакрытая
-            # авария на уже успешно завершенном агенте
-            d["phase_error"] = None
-            durable_json(os.path.join(agent_dir, "done.json"), d)
-        try:
-            os.makedirs(os.path.dirname(dest), mode=0o700, exist_ok=True)
-            os.rename(agent_dir, dest)
-        except OSError as e:
-            return "fail", "rename в архив не удался: %s" % e
-    finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        os.close(lock_fd)
-    return "written", None
+        with FLock(os.path.join(agent_dir, ".lock")):
+            if not same_agent():
+                return "wait", None
+            active = _agent_active(name)
+            # The query can block; do not let a cached path authorize another
+            # incarnation, even when that replacement bypassed trusted locks.
+            if not same_agent():
+                return "wait", None
+            if active or _agent_desired(agent_dir) != "stopped":
+                request_stop = True
+            else:
+                if d.get("state") == "cleaned":
+                    d["state"] = "archived"
+                    d["archived_at"] = now_iso()
+                    durable_json(os.path.join(agent_dir, "done.json"), d)
+                dest = os.path.normpath(os.path.join(agent_dir, "..", "..", "archive",
+                                                   "%s-%s" % (name, d["archived_at"])))
+                tomb_root = os.path.normpath(os.path.join(agent_dir, "..", "..", "tombstones"))
+                try:
+                    os.makedirs(tomb_root, mode=0o700, exist_ok=True)
+                    durable_json(os.path.join(tomb_root, name + ".json"),
+                                 {"name": name, "archived_at": d["archived_at"],
+                                  "archived_to": dest,
+                                  "reason": "cancelled" if d.get("cancelled_at") else "accepted"})
+                except OSError as e:
+                    return "fail", "надгробие не записано: %s" % e
+                _phase_alert_clear(agent_dir)
+                if d.get("phase_error") is not None:
+                    d["phase_error"] = None
+                    durable_json(os.path.join(agent_dir, "done.json"), d)
+                try:
+                    os.makedirs(os.path.dirname(dest), mode=0o700, exist_ok=True)
+                    os.rename(agent_dir, dest)
+                except OSError as e:
+                    return "fail", "rename в архив не удался: %s" % e
+                return "written", None
+    # Stop performs control CAS (and a native barrier): never call it under
+    # either name/control lock held above.
+    if request_stop and same_agent():
+        _agent_request_stop(name)
+    return "wait", None
 
 
 def _phase_revise(agent_dir, name, d, dp):
