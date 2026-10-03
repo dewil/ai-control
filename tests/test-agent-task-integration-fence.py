@@ -100,6 +100,9 @@ if c['action']=='timeout-worktree' and Path(c['marker']).exists() and 'worktree'
 if Path(c['marker']).exists() and ((c['action'].startswith('unknown-worktree') and 'worktree' in a and 'list' in a) or (c['action'].startswith('unknown-status') and 'status' in a and c['repo'] in a)):
  if c['action'].endswith('malformed'): print('unparseable git output'); sys.exit(0)
  sys.exit(1)
+if c['action']=='failed-worktree-remove' and 'worktree' in a and 'remove' in a and '--force' in a and str(Path(c['agent'])/'.integrate-worktree') in a and not Path(c['marker']).exists():
+ Path(c['marker']).write_text('owned temporary worktree remove returned error without effect')
+ print('fixture: owned temporary worktree remove failed',file=sys.stderr); sys.exit(1)
 p=subprocess.run([c['git']]+a,capture_output=True)
 if c['action']=='partial-worktree-add' and 'worktree' in a and 'add' in a and '--detach' in a and p.returncode==0 and not Path(c['marker']).exists():
  Path(c['marker']).write_text('actual detached worktree add completed before reported failure')
@@ -219,6 +222,21 @@ def partial_temporary_worktree_add_cleanup():
     assert listing.count('worktree ')==2, f'owned temporary worktree leaked after partial add error: {listing}'
     assert not (f['agent']/'.integrate-worktree').exists(),'owned .integrate-worktree directory leaked'
 case('partial-temporary-worktree-add-cleanup',partial_temporary_worktree_add_cleanup)
+
+# INV-TASK-39/42: failed remove cannot leave a detached Git registration behind.
+def failed_temporary_worktree_remove_cleanup():
+    f=fixture('failed-temporary-remove','unchecked-divergent')
+    p=advance(f,'failed-worktree-remove','none')
+    assert (f['base']/'triggered').exists(),'owned temporary worktree remove failure was not injected'
+    if p.returncode==0:
+        assert data(f['agent']/'done.json')['state']=='integrated','success did not record integration'
+        assert cmd(REAL_GIT,'-C',f['repo'],'merge-base','--is-ancestor',f['sha'],'main',check=False).returncode==0,'success did not integrate accepted SHA'
+    else:
+        refused(f,p)
+    assert not (f['agent']/'.integrate-worktree').exists(),'owned .integrate-worktree directory leaked'
+    listing=git(f['repo'],'worktree','list','--porcelain')
+    assert listing.count('worktree ')==2, f'owned detached registration leaked after remove error: {listing}'
+case('failed-temporary-worktree-remove-cleanup',failed_temporary_worktree_remove_cleanup)
 
 # Valid paths establish fixtures and guard against blanket refusal.
 for kind in ('checked-ff','checked-divergent','unchecked-ff','unchecked-divergent'):
