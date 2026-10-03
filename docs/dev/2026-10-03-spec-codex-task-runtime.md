@@ -275,3 +275,6 @@ Durable exact terminal.json после all-host drain достаточен дл�
 
 
 Verified native approval reply означает successful once-only local send плюс subsequent matching `serverRequest/resolved` для exact typed requestId/threadId при неизменном item/patch binding. Одного ws.send недостаточно для confirmed receipt/закрытия question. Notification подтверждает resolution запроса, но не применение patch: pinned source bespoke_event_handling.rs on_file_change_request_approval_response отправляет resolution перед submit(PatchApproval). Успешное изменение/terminal outcome подтверждается отдельно owned history+drain. До resolution существует только durable send_intent; timeout/disconnect/conflicting identity удерживает вопрос и не повторяет reply. Во время ожидания не держать TASK locks, блокируя cancellation; перед receipt повторно получить exact live fence/проверить question.
+
+
+Новый sealed bootstrap thread/start явно выбирает historyMode:"legacy", потому что accepted lifecycle требует full retained legacy history; native0.160.0 при omitted mode вправе выбрать paginated. Existing incompatible paginated admission не мигрируется/не принимается fallback, остаётся refused. Model/effort/account не меняются.
