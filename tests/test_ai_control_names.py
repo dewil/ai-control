@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from unittest.mock import patch
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -671,6 +672,72 @@ runpy.run_path(helper, run_name='__main__')
                 path = bridge_dir / 'journal.json'
                 record = json.loads(path.read_text())
                 path.write_text('{' if number == 0 else json.dumps(dict(record, schema=987654)))
+                before = snapshot(self.home)
+                self.assertNotEqual(self.run_migration().returncode, 0)
+                self.assertEqual(snapshot(self.home), before)
+
+    def test_retained_native_admission_valid_recovery_then_inert_migration_refusal(self):
+        self.home = self.private / 'native-home'
+        self.home.mkdir(mode=0o700)
+        self.env['HOME'] = str(self.home)
+        old_root = self.home / '.claude-control'
+        old_root.mkdir(mode=0o700)
+        module_spec = importlib.util.spec_from_file_location(
+            'naming_public_runtime_fixture', ROOT / 'tests/test-codex-task-runtime.py')
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        class FixtureDirectory:
+            name = str(old_root)
+            def cleanup(self):
+                pass  # Outer private TemporaryDirectory owns cleanup.
+        case = module.RuntimeContract()
+        self.addCleanup(case.doCleanups)
+        with patch.object(module.tempfile, 'TemporaryDirectory', return_value=FixtureDirectory()):
+            case.setUp()
+        state = old_root / 'codex-task-state'
+        case.state.rename(state)
+        case.state = state
+        # Preserve the existing authoritative recovery assertions verbatim via
+        # its public fixture test before isolating the naming boundary.
+        case.test_drained_bootstrap_publication_crash_repairs_only_from_exact_durable_proof()
+        admission = state / case.control['codex_state_id'] / 'admission.json'
+        self.assertTrue(admission.is_file())
+        self.assertEqual(len(list(state.rglob('bootstrap-proof.json'))), 1)
+        # This private fixture's git marker independently blocks migration;
+        # remove only that marker after successful native recovery so the test
+        # specifically requires the unsupported retained-native barrier.
+        (case.agent / 'work/.git').unlink()
+        before = snapshot(self.home)
+        self.assertNotEqual(self.run_migration().returncode, 0)
+        self.assertEqual(snapshot(self.home), before)
+
+    def test_retained_native_artifact_existence_refuses_even_malformed_or_unbound(self):
+        cases = ('admission-malformed', 'admission-directory', 'proof-bound-malformed',
+                 'proof-unbound', 'lifecycle-bound', 'lifecycle-unbound')
+        for number, kind in enumerate(cases):
+            with self.subTest(kind=kind):
+                self.home = self.private / ('native-artifact-' + str(number))
+                self.home.mkdir(mode=0o700)
+                self.env['HOME'] = str(self.home)
+                fixture, operation, _ = self.make_operation()
+                state_dir = fixture.private / fixture.sid
+                host = Path(fixture.read_index()['operations'][operation]['host_state_dir'])
+                if kind.startswith('admission'):
+                    artifact = state_dir / 'admission.json'
+                elif kind == 'proof-bound-malformed':
+                    artifact = host.parent / 'bootstrap-proof.json'
+                elif kind == 'proof-unbound':
+                    artifact = state_dir / 'unbound/bootstrap-proof.json'
+                elif kind == 'lifecycle-bound':
+                    artifact = host.parent / 'lifecycle/retained.json'
+                else:
+                    artifact = state_dir / 'unbound/lifecycle/retained.json'
+                artifact.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                if kind == 'admission-directory':
+                    artifact.mkdir(mode=0o700)
+                else:
+                    artifact.write_bytes(b'{ malformed synthetic retained native metadata')
+                    artifact.chmod(0o600)
                 before = snapshot(self.home)
                 self.assertNotEqual(self.run_migration().returncode, 0)
                 self.assertEqual(snapshot(self.home), before)
