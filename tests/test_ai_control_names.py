@@ -3,12 +3,15 @@
 Only synthetic private homes are used. Migration never reaches the real user
 manager: a PATH stub records invocations and supplies deterministic unit states.
 """
+import importlib.util
 import json
 import os
 from pathlib import Path
 import stat
 import subprocess
 import tempfile
+import time
+import uuid
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -222,7 +225,8 @@ if 'list-units' in sys.argv:
 
     def test_active_old_new_and_transient_units_refuse_without_mutation(self):
         for unit in ('claude-control.service', 'claude-agent-tgbot.service',
-                     'ai-control.service', 'ai-agent-reconciler.service', 'ccsession-test.service'):
+                     'ai-control.service', 'ai-agent-reconciler.service', 'ccsession-test.service',
+                     'cctask-test.service'):
             with self.subTest(unit=unit):
                 self.env['TEST_ACTIVE_UNIT'] = unit
                 before = snapshot(self.home)
@@ -231,6 +235,115 @@ if 'list-units' in sys.argv:
 
     def test_apply_requires_available_user_manager(self):
         self.env['TEST_MANAGER_DOWN'] = '1'
+        before = snapshot(self.home)
+        self.assertNotEqual(self.run_migration().returncode, 0)
+        self.assertEqual(snapshot(self.home), before)
+
+
+class StoppedMetadataMigrationContract(unittest.TestCase):
+    """Use established public operation-store fixture methods, never inspect bin."""
+    setUp = OfflineMigrationContract.setUp
+    run_migration = OfflineMigrationContract.run_migration
+
+    def make_operation(self):
+        previous_umask = os.umask(0o077)
+        self.addCleanup(os.umask, previous_umask)
+        spec = importlib.util.spec_from_file_location(
+            'naming_public_operation_fixture', ROOT / 'tests/test-codex-task-operation-store.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        fixture = module.OperationStoreContract()
+        fixture.Store = module.store_module.CodexTaskOperationStore
+        fixture.Error = module.store_module.StoreError
+        fixture.root = self.home / '.claude-control'
+        fixture.stage = fixture.root / 'agents/.staging'
+        fixture.agent = fixture.root / 'agents/taskone'
+        fixture.private = fixture.root / 'codex-task-state'
+        fixture.project = self.private / 'external-project'
+        for directory in (fixture.stage / 'work', fixture.stage / 'inbox/inflight',
+                          fixture.private, fixture.project):
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        for directory in fixture.root.rglob('*'):
+            if directory.is_dir():
+                directory.chmod(0o700)
+        for path in (fixture.stage / '.lock', fixture.stage / 'inbox/.inbox.lock'):
+            path.touch(mode=0o600)
+        fixture.control = dict(schema=1, incarnation=module.INC, generation=0,
+            desired='paused', hold=None, mission_base='a' * 40,
+            acceptance={'status': 'pending'}, lease={'state': 'none', 'start_attempt_id': None},
+            seq=0, session_id=None, attention=None, handoff=None)
+        module.save(fixture.stage / 'control.json', fixture.control)
+        (fixture.stage / 'spec.yaml').write_text('engine: codex\ntype: event\nruntime: drain\nworkspace: worktree\nproject: ' + str(fixture.project) + '\n')
+        fixture.sid = str(uuid.uuid4())
+        fixture.now, fixture.deadline = 100.0, 110.0
+        fixture.clock = lambda: fixture.now
+        fixture.index = fixture.private / fixture.sid / 'index.json'
+        operation, envelope = fixture.historical()
+        self.assertIs(fixture.store.snapshot(deadline=fixture.deadline)['reconciliation_required'], False)
+        return fixture, operation, envelope
+
+    def test_stopped_operation_relocates_trusted_paths_preserving_authority(self):
+        fixture, operation, envelope = self.make_operation()
+        old_root = self.home / '.claude-control'
+        new_root = self.home / '.ai-control'
+        index_before = fixture.read_index()
+        host_before = Path(index_before['operations'][operation]['host_state_dir'])
+        journal_before = json.loads((host_before / 'journal.json').read_text())
+        opaque_before = (fixture.agent / 'spec.yaml').read_bytes()
+        identities_before = {str(path.relative_to(old_root)): json.loads(path.read_text())
+                             for path in old_root.rglob('directory-identity.json')}
+        self.assertTrue(identities_before, 'public fixture must provide pinned directory identity')
+        directories = {str(path.relative_to(old_root)): (path.stat().st_dev, path.stat().st_ino)
+                       for path in [old_root, *old_root.rglob('*')] if path.is_dir()}
+        result = self.run_migration()
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+        new_agent = new_root / 'agents/taskone'
+        new_index = new_root / 'codex-task-state' / fixture.sid / 'index.json'
+        index_after = json.loads(new_index.read_text())
+        self.assertEqual(index_after['agent_dir'], str(new_agent))
+        old_op = index_before['operations'][operation]
+        new_op = index_after['operations'][operation]
+        expected_host = str(new_root / host_before.relative_to(old_root))
+        self.assertEqual(new_op['host_state_dir'], expected_host)
+        self.assertEqual(new_op['drain_evidence']['host_state_dir'], expected_host)
+        expected_op = json.loads(json.dumps(old_op))
+        expected_op['host_state_dir'] = expected_host
+        expected_op['drain_evidence']['host_state_dir'] = expected_host
+        self.assertEqual(new_op, expected_op, 'authority proofs must remain unchanged')
+        journal_after = json.loads((Path(expected_host) / 'journal.json').read_text())
+        expected_journal = dict(journal_before, cwd=str(new_agent / 'work'),
+                                socket=str(Path(expected_host) / 'server.sock'))
+        self.assertEqual(journal_after, expected_journal)
+        self.assertEqual((new_agent / 'spec.yaml').read_bytes(), opaque_before)
+        projection = json.loads((new_agent / 'inbox/done' / envelope.name).read_text())
+        self.assertEqual(projection['meta']['codex_operation']['host_state_dir'], expected_host)
+        for relative, identity in directories.items():
+            path = new_root / relative
+            self.assertEqual((path.stat().st_dev, path.stat().st_ino), identity)
+        for relative, identity in identities_before.items():
+            expected_identity = dict(identity)
+            expected_identity['directories'] = {
+                str(new_root / Path(key).relative_to(old_root)) if Path(key).is_relative_to(old_root) else key: value
+                for key, value in identity['directories'].items()}
+            self.assertEqual(json.loads((new_root / relative).read_text()), expected_identity)
+        reopened = fixture.Store(str(new_agent), state_root=str(new_root / 'codex-task-state'))
+        self.assertIs(reopened.snapshot(deadline=time.monotonic() + 10)['reconciliation_required'], False)
+
+    def test_unknown_schema_refuses_before_any_root_move(self):
+        fixture, _, _ = self.make_operation()
+        record = fixture.read_index()
+        record['schema'] = 987654
+        fixture.index.write_text(json.dumps(record))
+        before = snapshot(self.home)
+        self.assertNotEqual(self.run_migration().returncode, 0)
+        self.assertEqual(snapshot(self.home), before)
+
+    def test_nonstopped_journal_refuses_before_any_root_move(self):
+        fixture, operation, _ = self.make_operation()
+        journal = Path(fixture.read_index()['operations'][operation]['host_state_dir']) / 'journal.json'
+        record = json.loads(journal.read_text())
+        record['phase'] = 'running'
+        journal.write_text(json.dumps(record))
         before = snapshot(self.home)
         self.assertNotEqual(self.run_migration().returncode, 0)
         self.assertEqual(snapshot(self.home), before)
