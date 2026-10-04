@@ -186,6 +186,8 @@ def metadata(home):
 
     if not state.exists():
         return updates, stores
+    if any(state.rglob('admission.json')) or any(state.rglob('bootstrap-proof.json')) or any(state.glob('**/lifecycle/*.json')):
+        raise MigrationError('retained native admission/bootstrap/lifecycle evidence requires supported provider rebind before migration')
     try:
         for directory in state.iterdir():
             if not directory.is_dir() or not (directory / 'index.json').is_file():
