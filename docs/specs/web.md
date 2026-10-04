@@ -41,6 +41,4 @@ Known-pattern masking включает весь установленный SECRE
 
 ## Имена ai-control (04.10.2026)
 
-INV-WEB-09: публичная команда веб-компонента — ai-control-web; пакет /opt/ai-control-web, приватные данные /var/lib/ai-control-web, socket /run/ai-control-web/broker.sock, services ai-control-web.service и ai-control-web-broker.service. Старый claude-control-web CLI остаётся совместимым входом в ту же реализацию. Переименование не меняет auth/replay/writer semantics и не переносит registry или OAuth: trusted writers пока существующие установленные команды. Старые web services отключаются до включения новых, credentials/replay-state сохраняются при наличии; отсутствие enrollment не заменяется фиктивным входом. Отдельный service UID пока claude-panel, его rename не нужен для продукта.
-
-Трассируемость INV-WEB-09: tests/test_ai_control_names.py (CLI, templates, manifest, install docs).
+INV-WEB-09: canonical web command ai-control-web, package /opt/ai-control-web, private state /var/lib/ai-control-web, socket /run/ai-control-web/broker.sock and ai-control-web*.service. Broker delegates ai-agent trusted writers against ~/.ai-control/agents. Credentials/replay state preserve contents and permissions on migration. No legacy alias runtime for new installs. See naming.md for full migration contract.
