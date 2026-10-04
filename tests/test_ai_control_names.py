@@ -423,10 +423,12 @@ def replace(source, target, *args, **kwargs):
     target_path = pathlib.Path(target)
     if injection == 'write-failure' and not failed and (root / '.ai-control').exists() and not (root / '.claude-control').exists() and target_path.is_relative_to(root / '.ai-control'):
         failed = True
+        (root.parent / 'metadata-failure-injected').write_text('injected')
         raise OSError('synthetic metadata write failure')
     return original_replace(source, target, *args, **kwargs)
 os.rename = rename
 os.replace = replace
+sys.path.insert(0, str(pathlib.Path(helper).parent))
 sys.argv = [helper, '--home', home]
 runpy.run_path(helper, run_name='__main__')
 """
@@ -465,6 +467,8 @@ runpy.run_path(helper, run_name='__main__')
         fixture, _, _ = self.make_operation()
         before = snapshot(self.home)
         result = self.injected_migration('write-failure')
+        self.assertTrue((self.home.parent / 'metadata-failure-injected').is_file(),
+                        'must reach injected metadata write after root moves; setup refusal is not rollback evidence')
         self.assertNotEqual(result.returncode, 0, 'write failure must not report completed migration')
         checkpoint = self.home / '.ai-control-naming-transaction'
         if checkpoint.exists():
