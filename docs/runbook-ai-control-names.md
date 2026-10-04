@@ -30,6 +30,9 @@ import errno, fcntl, hashlib, json, os, re, stat, subprocess
 from pathlib import Path
 home = Path('/home/dwl')
 old, new = home / '.claude-control', home / '.ai-control'
+root_info = old.lstat()
+if not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid != os.getuid() or stat.S_IMODE(root_info.st_mode) != 0o700:
+    raise SystemExit('historical state root must be owned mode0700')
 roots = [old, home / '.config/claude-control', home / '.local/share/claude-control']
 plan_dir = home / '.ai-control-naming-operator-plan'
 staging = home / '.ai-control-worktree-staging'
@@ -98,7 +101,8 @@ for root in roots:
             if absent(project):
                 for path in (spec_path, control_path):
                     details = path.lstat()
-                    if not stat.S_ISREG(details.st_mode) or details.st_uid != os.getuid() or details.st_nlink != 1 or stat.S_IMODE(details.st_mode) != 0o600:
+                    allowed_modes = (0o600, 0o644, 0o664) if path == spec_path else (0o600,)
+                    if not stat.S_ISREG(details.st_mode) or details.st_uid != os.getuid() or details.st_nlink != 1 or stat.S_IMODE(details.st_mode) not in allowed_modes:
                         raise SystemExit('historical control/spec ownership refused')
                 control = json.loads(control_path.read_bytes(), object_pairs_hook=pairs)
                 if type(control) is not dict or type(control.get('schema')) is not int or control['schema'] != 1 or control.get('desired') != 'stopped' or type(control.get('acceptance')) is not dict or control['acceptance'].get('status') != 'accepted':
@@ -226,7 +230,7 @@ git -C "$CANONICAL_REPOSITORY" worktree move "$STAGED_WORK" "$NEW_WORK"
 git -C "$OLD_REPOSITORY" worktree move "$STAGED_WORK" "$NEW_WORK"
 ```
 
-Historical_orphan entries имеют отдельный opaque flow: ordinary `os.rename(old, staged)` перед helper и `os.rename(staged, canonical)` после helper, target обязан отсутствовать, filesystem/dev/inode и private file evidence проверены для всех пяти до первого move. Не использовать Git move/repair для orphan. Сохранить `.git` literal bytes/mode, все work files/links и control.json/spec.yaml bytes/modes неизменными; verify actual old/canonical missing candidates и уже-invalid Git marker до и после. Это перенос historical данных, не repair/registration acceptance. Не очищать stale lease. Unknown/nonaccepted/running/held-lock/active-writer evidence отказывает до plan/staging.
+Historical_orphan entries имеют отдельный opaque flow: ordinary `os.rename(old, staged)` перед helper и `os.rename(staged, canonical)` после helper, target обязан отсутствовать, filesystem/dev/inode и private file evidence проверены для всех пяти до первого move. Не использовать Git move/repair для orphan. Сохранить `.git` literal bytes/mode, все work files/links и control.json/spec.yaml bytes/modes неизменными; verify actual old/canonical missing candidates и уже-invalid Git marker до и после. Это перенос historical данных, не repair/registration acceptance. Historical eligibility требует owned regular single-link control.json0600; spec.yaml сохраняет свой исходный mode0600/0644/0664 только под verified owned state root0700. Nonprivate root или unknown spec mode отказывает до plan publication; spec не chmod и его bytes/mode не менять. Не очищать stale lease. Unknown/nonaccepted/running/held-lock/active-writer evidence отказывает до plan/staging.
 
 Команды cache/agent применять только к соответствующему role. Для трёх valid entries проверить exact Git registration через `git worktree list --porcelain`, `git -C "$NEW_WORK" rev-parse --path-format=absolute --git-common-dir`, HEAD/branch, dirty status, retained file bytes/modes и work directory dev/inode из private plan. Перенос common repository делает старый `.git` pointer staged cache недействительным; нельзя проверять cache или делать final move до exact repair из canonical repository. `git worktree repair` не разрешает unknown repos/paths и не заменяет проверку dirt. Не prune/delete `.git`, не reset/clean и не overwrite destination.
 
