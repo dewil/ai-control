@@ -365,6 +365,61 @@ class SessionChatContract(unittest.TestCase):
             self.assert_error(self.send(), 'unavailable')
         self.assertEqual(self.rpc.starts(), [])
 
+    def test_INV_WSESS_06_receipts_inside_git_ancestor_fail_closed(self):
+        for marker_type in ('directory', 'worktree-file', 'bare'):
+            with self.subTest(marker_type=marker_type):
+                git_root = self.base / ('git-' + marker_type)
+                git_root.mkdir(mode=0o700)
+                if marker_type == 'directory':
+                    (git_root / '.git').mkdir(mode=0o700)
+                elif marker_type == 'worktree-file':
+                    (git_root / '.git').write_text('gitdir: /var/tmp/synthetic-git-metadata\n')
+                else:
+                    (git_root / 'HEAD').write_text('ref: refs/heads/synthetic\n')
+                    (git_root / 'objects').mkdir(mode=0o700)
+                    (git_root / 'refs').mkdir(mode=0o700)
+                nested = git_root / 'nested'
+                nested.mkdir(mode=0o700)
+                try:
+                    chat = self.module.SessionChat(self.rpc, self.resolve, lambda: ['demo'], str(nested / 'receipts'))
+                    result = chat.send('demo', SID, MID, 'Synthetic git fixture')
+                except (ValueError, OSError, RuntimeError):
+                    result = {'error': 'unavailable'}
+                self.assert_error(result, 'unavailable')
+                self.assertEqual(self.rpc.starts(), [])
+
+    def receipt_namespace(self):
+        for path in self.receipts.rglob('*'):
+            if not path.is_file():
+                continue
+            try:
+                record = json.loads(path.read_text())
+            except (ValueError, OSError):
+                continue
+            if isinstance(record, dict) and record.get('message_id') == MID:
+                return path.parent
+        self.fail('Private synthetic receipt must retain its message_id metadata')
+
+    def test_INV_WSESS_06_namespace_limit_counts_ignored_temporary_files(self):
+        self.send()
+        namespace = self.receipt_namespace()
+        for index in range(10003):
+            fd = os.open(namespace / f'.tmp-{index:05d}', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.close(fd)
+        self.assert_error(self.chat.history('demo', SID), 'unavailable')
+        self.assert_error(self.chat.send('demo', SID, OTHER, 'New bounded namespace send'), 'unavailable')
+        self.assertEqual(len(self.rpc.starts()), 1)
+        self.assertEqual(self.receipt_namespace(), namespace, 'Exhaustion cannot delete protective records')
+
+    def test_INV_WSESS_06_namespace_limit_counts_ignored_directories(self):
+        self.send()
+        namespace = self.receipt_namespace()
+        for index in range(10003):
+            (namespace / f'.junk-{index:05d}').mkdir(mode=0o700)
+        self.assert_error(self.chat.history('demo', SID), 'unavailable')
+        self.assert_error(self.chat.send('demo', SID, OTHER, 'New directory-exhaustion send'), 'unavailable')
+        self.assertEqual(len(self.rpc.starts()), 1)
+
     def test_INV_WSESS_06_receipt_directory_symlink_fails_closed(self):
         target = self.base / 'unsafe-target'
         target.mkdir(mode=0o700)
