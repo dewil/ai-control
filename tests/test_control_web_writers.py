@@ -49,6 +49,19 @@ class TrustedWriters(unittest.TestCase):
         self.assertEqual(self.backend.answer('task-one',QID,'text','Second answer'),{'error':'invalid_or_stale'})
         self.assertEqual(json.loads((self.agent/'questions'/(QID+'.json')).read_text())['answer'],'First human answer')
         self.assertTrue(list((self.root/'spool'/'task-one').glob('*.json')))
+    def test_actual_saved_pending_recovers_original_without_new_answer(self):
+        shutil.rmtree(self.root/'spool'/'task-one')
+        self.assertEqual(self.backend.answer('task-one',QID,'text','First durable answer'),{'error':'saved_pending'})
+        question=self.backend.snapshot()['tasks'][0]['questions'][0]
+        self.assertTrue(question['answered'])
+        self.assertTrue(question['pending_delivery'])
+        self.assertEqual(question['allowed_decisions'],[])
+        (self.root/'spool'/'task-one').mkdir(mode=0o700)
+        self.assertEqual(self.backend.answer('task-one',QID,'recover',''),{'status':'already'})
+        record=json.loads((self.agent/'questions'/(QID+'.json')).read_text())
+        self.assertEqual(record['answer'],'First durable answer')
+        self.assertTrue(record['event_published_at'])
+
     @unittest.skipUnless(shutil.which('yq'),'existing Control writer requires yq')
     def test_actual_verdict_accept_repeat_and_stale(self):
         self.assertEqual(self.backend.verdict('task-one','deadbeef','accept',''),{'error':'stale'})

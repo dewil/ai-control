@@ -19,7 +19,7 @@ HTTP: GET / login/UI; POST /api/login JSON password,totp → csrf; cookie contro
 Broker module bin/_control_web_broker.py: RegistryBackend(registry,bin_dir,runner=None). Snapshot реализует этот schema. runner callable(args,**kwargs) совместим subprocess.run; argv list shell=False, timeout bounded, sanitized outcomes. answer/verdict вызывают абсолютные trusted bin helpers. Linux socket newline JSON ≤128KiB, one request/connection, peer UID allowlist, strict operation fields. Client SocketBackend(socket_path) реализует backend. CLI bin/claude-control-web: web / broker / init-auth (secret enrollment локально, stdout не содержит секретов; private output file). Systemd templates и отдельная инструкция установки без автоматического public firewall изменения.
 
 ## Известные дыры и вопросы
-Реализации пока нет; HTTPS адрес уточняется отдельно и не блокирует локальное выполнение. Нет продуктовых вопросов для этого slice. Production access не объявляется без installed acceptance.
+Реализация task workflow есть и проверяется локально; публичный HTTPS адрес, административная установка и installed acceptance остаются незавершёнными. Нет продуктовых вопросов для этого slice. Production access не объявляется без installed acceptance.
 
 ## Трассируемость
 INV-WEB-01..08 → tests/test_control_web_contract.py и tests/test_control_web_broker_contract.py; browser phone workflow и isolated install smoke.

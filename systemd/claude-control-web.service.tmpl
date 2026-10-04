@@ -11,6 +11,7 @@ ExecStart=/opt/claude-control-web/venv/bin/python /opt/claude-control-web/bin/cl
 Restart=on-failure
 RestartSec=3
 UMask=0077
+MemoryMax=256M
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict

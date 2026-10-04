@@ -1,5 +1,6 @@
 """Single-worker task UI. Authentication secrets never cross the broker."""
 import base64
+import fcntl
 import hashlib
 import hmac
 import json
@@ -44,6 +45,24 @@ def totp_code(secret, at):
     return '%06d' % (number % 1000000)
 
 
+
+def _load_totp_step(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 1024:
+            raise ValueError('invalid replay state')
+        try:
+            with os.fdopen(fd, closefd=False) as stream:
+                state = json.load(stream)
+            if type(state) is not dict or set(state) != {'last_step'} or type(state['last_step']) is not int or state['last_step'] < -1:
+                raise ValueError('invalid replay state')
+            return state['last_step']
+        except (ValueError, TypeError, KeyError):
+            raise ValueError('invalid replay state') from None
+    finally:
+        os.close(fd)
+
 def create_app(config, backend, clock=None):
     clock = clock or time.time
     origin = config['origin']
@@ -71,27 +90,7 @@ def create_app(config, backend, clock=None):
         parent = replay_path.parent.stat()
         if Path('/data') in replay_path.resolve().parents or parent.st_uid != os.getuid() or parent.st_mode & 0o077:
             raise ValueError('private replay directory required')
-        try:
-            fd = os.open(replay_path, os.O_RDONLY | os.O_NOFOLLOW)
-        except FileNotFoundError:
-            raise ValueError('missing replay state') from None
-        if fd is not None:
-            try:
-                info = os.fstat(fd)
-                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 1024:
-                    raise ValueError('invalid replay state')
-                try:
-                    with os.fdopen(fd, closefd=False) as stream:
-                        state = json.load(stream)
-                    if type(state) is not dict or set(state) != {'last_step'}:
-                        raise ValueError('invalid replay state')
-                    used_step = state['last_step']
-                except (ValueError, TypeError, KeyError):
-                    raise ValueError('invalid replay state') from None
-                if type(used_step) is not int or used_step < -1:
-                    raise ValueError('invalid replay step')
-            finally:
-                os.close(fd)
+        used_step = _load_totp_step(replay_path)
     lock = threading.Lock()
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -117,9 +116,21 @@ def create_app(config, backend, clock=None):
         nonlocal used_step
         if type(value) is not str or not re.fullmatch(r'[0-9]{6}', value):
             return False
-        now = clock()
-        for step in (int(now) // 30, int(now) // 30 - 1, int(now) // 30 + 1):
-            if step > used_step and hmac.compare_digest(value, totp_code(config['totp_secret'], step * 30)):
+        lock_fd = None
+        try:
+            if replay_path is not None:
+                # Lock a stable adjacent inode, never the atomically replaced state.
+                lock_path = replay_path.with_name(replay_path.name + '.lock')
+                lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+                info = os.fstat(lock_fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_nlink != 1:
+                    raise ValueError('invalid replay lock')
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                used_step = _load_totp_step(replay_path)
+            now = clock()
+            for step in (int(now) // 30, int(now) // 30 - 1, int(now) // 30 + 1):
+                if step <= used_step or not hmac.compare_digest(value, totp_code(config['totp_secret'], step * 30)):
+                    continue
                 if replay_path is not None:
                     temporary = replay_path.with_name('.replay-' + secrets.token_hex(8))
                     try:
@@ -134,13 +145,14 @@ def create_app(config, backend, clock=None):
                             os.fsync(directory)
                         finally:
                             os.close(directory)
-                    except OSError:
-                        return False
                     finally:
                         temporary.unlink(missing_ok=True)
                 used_step = step
                 return True
-        return False
+            return False
+        finally:
+            if lock_fd is not None:
+                os.close(lock_fd)
 
     async def body(request):
         try:
@@ -204,7 +216,11 @@ def create_app(config, backend, clock=None):
             if len(attempts) >= 10:
                 return error('rate_limited', 429)
             attempts.append(now)
-            if not verify_password(data['password'], config['password_hash']) or not consume_totp(data['totp']):
+            try:
+                valid = verify_password(data['password'], config['password_hash']) and consume_totp(data['totp'])
+            except (OSError, ValueError):
+                return error('unavailable', 503)
+            if not valid:
                 return error('unauthorized', 401)
             token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
             # SIMPLIFIED: one operator, one worker, bounded in-memory sessions;
@@ -247,7 +263,7 @@ def create_app(config, backend, clock=None):
         if failure:
             return failure
         data = await body(request)
-        if data is None or set(data) != {'agent', 'qid', 'decision', 'text'} or not valid_name(data['agent']) or not valid_uuid(data['qid']) or data['decision'] not in ('text', 'approve', 'reject') or not text(data['text'], data['decision'] == 'text'):
+        if data is None or set(data) != {'agent', 'qid', 'decision', 'text'} or not valid_name(data['agent']) or not valid_uuid(data['qid']) or data['decision'] not in ('text', 'approve', 'reject', 'recover') or not text(data['text'], data['decision'] == 'text') or (data['decision'] == 'recover' and data['text'] != ''):
             return error('invalid_request', 422)
         return await run_in_threadpool(outcome, lambda: backend.answer(data['agent'], data['qid'], data['decision'], data['text']))
 
@@ -267,8 +283,12 @@ def create_app(config, backend, clock=None):
                 if len(attempts) >= 10:
                     return error('rate_limited', 429)
                 attempts.append(now)
-                if not consume_totp(data.get('totp')):
-                    return error('unauthorized', 401)
+                try:
+                    valid = consume_totp(data.get('totp'))
+                except (OSError, ValueError):
+                    return error('unavailable', 503)
+                if not valid:
+                    return error('invalid_code', 403)
         return await run_in_threadpool(outcome, lambda: backend.verdict(data['agent'], data['generation'], data['decision'], data['comment']))
 
     @app.post('/api/logout')
