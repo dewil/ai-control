@@ -121,7 +121,13 @@ if os.environ.get('TEST_MANAGER_DOWN') == '1':
     sys.exit(1)
 if 'list-units' in sys.argv:
     unit = os.environ.get('TEST_ACTIVE_UNIT', '')
-    if unit:
+    selected_types = []
+    for number, argument in enumerate(sys.argv[1:], start=1):
+        if argument.startswith('--type='):
+            selected_types.extend(argument.split('=', 1)[1].split(','))
+        elif argument == '--type' and number + 1 < len(sys.argv):
+            selected_types.extend(sys.argv[number + 1].split(','))
+    if unit and (not selected_types or unit.rsplit('.', 1)[-1] in selected_types):
         print(unit + ' loaded active running synthetic runtime')
 ''')
         systemctl.chmod(0o700)
@@ -226,7 +232,8 @@ if 'list-units' in sys.argv:
     def test_active_old_new_and_transient_units_refuse_without_mutation(self):
         for unit in ('claude-control.service', 'claude-agent-tgbot.service',
                      'ai-control.service', 'ai-agent-reconciler.service', 'ccsession-test.service',
-                     'cctask-test.service'):
+                     'cctask-test.service', 'ai-agent-limits-digest.timer',
+                     'claude-control-logrotate.timer', 'ai-control-backup.timer'):
             with self.subTest(unit=unit):
                 self.env['TEST_ACTIVE_UNIT'] = unit
                 before = snapshot(self.home)
