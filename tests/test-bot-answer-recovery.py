@@ -274,6 +274,24 @@ class Recovery(unittest.TestCase):
         self.assertEqual(offset,42)
         self.one_address(q)
 
+    def test_closed_native_recovery_rejects_invalid_callback_before_noop(self):
+        invalid=[('missing',None),('partial',dict(status='answered',allowed_decisions=['reject']))]
+        cb=self.native_callback();cb.update(status='answered',generation='7')
+        invalid.append(('mistyped generation',cb))
+        for label,callback in invalid:
+            with self.subTest(binding=label):
+                extras=dict(engine='codex',status='closed')
+                if callback is not None:extras['native_callback']=callback
+                q=self.question('permission',saved=True,**extras);before=self.read(q)
+                r=self.answer(q,'--recover')
+                self.assertEqual(r.returncode,2,r.stderr)
+                self.assertEqual(self.read(q),before);self.assertEqual(self.events(),[])
+        complete=self.native_callback();complete['status']='answered'
+        q=self.question('permission',saved=True,status='closed',engine='codex',native_callback=complete)
+        before=self.read(q);r=self.answer(q,'--recover')
+        self.assertEqual(r.returncode,0,r.stderr)
+        self.assertEqual(self.read(q),before);self.assertEqual(self.events(),[])
+
     def register(self,qid,message=10):
         self.bot.sent_map_register(1001,[message],self.agent.name,None,kind='question',qid=qid)
     def update(self,qid,uid=41,message=10,reply=False,from_id=1001):
