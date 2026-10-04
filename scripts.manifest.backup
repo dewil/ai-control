@@ -2,6 +2,6 @@
 # поэтому список отдельный от scripts.manifest - но такой же общий: uninstall.sh
 # снимает эти имена всегда, отсутствие файла на машине не ошибка.
 
-claude-control-backup
-claude-control-backup-init
-claude-control-backup-restore-test
+ai-control-backup
+ai-control-backup-init
+ai-control-backup-restore-test

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Tests for V2.3 question-FSM (claude-agent-ask/-answer + runner-интеграция
+# Tests for V2.3 question-FSM (ai-agent-ask/-answer + runner-интеграция
 # событийных агентов).
 # Контракт: docs/design-2026-07-26-v2.3-question-fsm.md §8 (кейсы Q1-Q21).
 #
 # Q5/Q6/Q7/Q8/Q10 переписаны под фикс-пачку аудита 7675e00 (доверенный
-# писатель claude-agent-answer вместо payload.text - см. Q15). Q15-Q21 -
+# писатель ai-agent-answer вместо payload.text - см. Q15). Q15-Q21 -
 # новые кейсы по аудиту.
 #
 # Ambiguity-заметка (см. итоговый отчет): контракт называет исходы "asked" и
@@ -16,15 +16,15 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RUN="$HERE/../bin/claude-agent-run"
-ASK="$HERE/../bin/claude-agent-ask"
-ANSWER="$HERE/../bin/claude-agent-answer"
+RUN="$HERE/../bin/ai-agent-run"
+ASK="$HERE/../bin/ai-agent-ask"
+ANSWER="$HERE/../bin/ai-agent-answer"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-export CLAUDE_AGENTS_DIR="$TMP/agents"
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
-export CLAUDE_AGENT_PROBE_CMD=/usr/bin/true
-export CLAUDE_AGENT_GENERATION=1 CLAUDE_AGENT_ATTEMPT=test-attempt
+export AI_AGENTS_DIR="$TMP/agents"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_AGENT_PROBE_CMD=/usr/bin/true
+export AI_AGENT_GENERATION=1 AI_AGENT_ATTEMPT=test-attempt
 
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); }
@@ -72,7 +72,7 @@ mask_prompt() { # <file> <key-hex> <native_id> - вычищаем волатил
     "$f"
 }
 ask_direct() { # <agent-dir> <event-key> <question> [options] [context] -> stdout=qid, rc через $?
-  # v2.3 §2/аудит major 6: claude-agent-ask требует envelope_key реально в
+  # v2.3 §2/аудит major 6: ai-agent-ask требует envelope_key реально в
   # inflight - синтетические ключи получают временный stub-конверт,
   # удаляемый сразу после вызова (иначе следующий step обработал бы его
   # как мертвый runner). Реальный конверт (Q6/Q21 и т.п.) вызывающий сам
@@ -88,16 +88,16 @@ ask_direct() { # <agent-dir> <event-key> <question> [options] [context] -> stdou
   local args=(--question "$q")
   [[ -n "$opts" ]] && args+=(--options "$opts")
   [[ -n "$ctx" ]] && args+=(--context "$ctx")
-  CLAUDE_AGENT_DIR="$dir" CLAUDE_AGENT_EVENT_KEY="$key" "$ASK" "${args[@]}"
+  AI_AGENT_DIR="$dir" AI_AGENT_EVENT_KEY="$key" "$ASK" "${args[@]}"
   local rc=$?
   [[ "$stubbed" == 1 ]] && rm -f "$dir/inbox/inflight/$key.json"
   return $rc
 }
 mk_event() { # <name> -> печатает путь к agent-dir
   local name="$1"
-  local ag="$CLAUDE_AGENTS_DIR/$name"
-  mkdir -p "$ag" "$CLAUDE_AGENT_SPOOL_BASE/$name"
-  chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/$name"
+  local ag="$AI_AGENTS_DIR/$name"
+  mkdir -p "$ag" "$AI_AGENT_SPOOL_BASE/$name"
+  chmod 0700 "$AI_AGENT_SPOOL_BASE/$name"
   cat > "$ag/spec.yaml" <<EOF
 schema: 1
 name: $name
@@ -113,10 +113,10 @@ EOF
 }
 
 # --- mock claude: дампит промпт (PROMPT_DUMP_FILE), метит вызов (CLAUDE_INVOKED_MARKER),
-#     умеет режимы ask_ok/ask_fail/ask_and_touch - реально вызвать claude-agent-ask (Q3/Q4/Q20) ---
+#     умеет режимы ask_ok/ask_fail/ask_and_touch - реально вызвать ai-agent-ask (Q3/Q4/Q20) ---
 MOCK="$TMP/mock-claude"
 export MOCK_ASK_BIN="$ASK"
-export MOCK_DONE_BIN="$HERE/../bin/claude-agent-done"
+export MOCK_DONE_BIN="$HERE/../bin/ai-agent-done"
 cat > "$MOCK" <<'EOF'
 #!/usr/bin/env bash
 if [[ -n "${PROMPT_DUMP_FILE:-}" ]]; then cat > "$PROMPT_DUMP_FILE"; else cat > /dev/null; fi
@@ -160,7 +160,7 @@ export CLAUDE_INVOKED_MARKER="$TMP/claude-invoked-marker"
 echo ok > "$MOCK_MODE_FILE"
 
 # =============================================================== Q1
-echo "=== Q1: claude-agent-ask создает файл вопроса с корректными полями, stdout=qid ==="
+echo "=== Q1: ai-agent-ask создает файл вопроса с корректными полями, stdout=qid ==="
 AGQ1=$(mk_event evtq1)
 QID1=$(ask_direct "$AGQ1" "q1-envelope-key" "Что делать с X?" "yes|no" "контекст Q1" 2>"$TMP/q1err"); RC1=$?
 [[ "$RC1" == 0 ]] && ok || fail "Q1: exit 0 ($(cat "$TMP/q1err"))"
@@ -169,7 +169,7 @@ QF1="$AGQ1/questions/$QID1.json"
 [[ -f "$QF1" ]] && ok || fail "Q1: файл вопроса agents/<name>/questions/<qid>.json создан"
 [[ "$(jq_file "$QF1" 'd.get("qid")')" == "$QID1" ]] && ok || fail "Q1: поле qid = имени файла"
 [[ "$(jq_file "$QF1" 'd.get("envelope_key")')" == "q1-envelope-key" ]] \
-  && ok || fail "Q1: envelope_key = CLAUDE_AGENT_EVENT_KEY"
+  && ok || fail "Q1: envelope_key = AI_AGENT_EVENT_KEY"
 [[ "$(jq_file "$QF1" 'd.get("kind")')" == "info" ]] && ok || fail "Q1: kind=info"
 [[ "$(jq_file "$QF1" 'd.get("status")')" == "open" ]] && ok || fail "Q1: status=open"
 [[ "$(jq_file "$QF1" 'd.get("question")')" == "Что делать с X?" ]] && ok || fail "Q1: question сохранен"
@@ -234,7 +234,7 @@ assert "Q5 step с замороженным обычным конвертом" 0
 [[ -f "$AGQ5/inbox/pending/$KREG5.json" ]] && ok || fail "Q5: обычный конверт остался нетронутым в pending"
 [[ "$(jq_file "$AGQ5/inbox/pending/$KREG5.json" 'd["meta"].get("attempts",0)')" == "0" ]] \
   && ok || fail "Q5: attempts обычного конверта не увеличился"
-# v2.3 аудит blocker 1: текст ответа кладет ТОЛЬКО claude-agent-answer
+# v2.3 аудит blocker 1: текст ответа кладет ТОЛЬКО ai-agent-answer
 "$ANSWER" "$AGQ5" --qid "$QID5" --text "ответ Q5" >/dev/null 2>"$TMP/q5ans_err"
 "$RUN" intake "$AGQ5" >/dev/null
 assert "Q5 step с answer-конвертом нужного question_id" 0 "$RUN" step "$AGQ5"
@@ -275,7 +275,7 @@ KREGQ7=$(ls "$AGQ7/inbox/pending" | sed 's/.json//')
 assert "Q7 обычный конверт заморожен пока вопрос открыт" 0 "$RUN" step "$AGQ7"
 [[ "$(cat "$TMP/out")" == "idle" ]] && ok || fail "Q7: idle пока вопрос открыт"
 # v2.3 аудит blocker 1 (правка старого дефекта теста): текст ответа кладет
-# ТОЛЬКО claude-agent-answer, payload события несет лишь адресацию
+# ТОЛЬКО ai-agent-answer, payload события несет лишь адресацию
 "$ANSWER" "$AGQ7" --qid "$QID7" --text "ответ Q7 текст" >/dev/null 2>"$TMP/q7ans_err"
 "$RUN" intake "$AGQ7" >/dev/null
 assert "Q7 answer-прогон" 0 "$RUN" step "$AGQ7"
@@ -313,7 +313,7 @@ QF8="$AGQ8/questions/$QID8.json"
 # (до прогона) - именно поэтому прогон вообще состоялся; закрытие (status)
 # не происходит, т.к. прогон упал (инв.5 - close только в ok-ветке)
 [[ "$(jq_file "$QF8" 'd.get("answer")')" == "плохой ответ" ]] \
-  && ok || fail "Q8: answer уже записан claude-agent-answer (до прогона)"
+  && ok || fail "Q8: answer уже записан ai-agent-answer (до прогона)"
 [[ "$(jq_file "$QF8" 'd.get("closed_by_envelope")')" == "None" ]] \
   && ok || fail "Q8: closed_by_envelope не заполнен (прогон не завершился успехом)"
 [[ -f "$AGQ8/inbox/pending/$KANSQ8.json" ]] && ok || fail "Q8: answer-конверт остался в pending (обычный ретрай)"
@@ -391,7 +391,7 @@ printf '{"key": "%s", "seq": 6, "at": "2026-07-26T09:00:01Z", "kind": "answer", 
   "$KQ10" "$FAKEQ10" >> "$THQ10"
 # QIDT10 остается open -> инв.4 (заморозка) не даст выбрать обычный конверт
 # (подтверждено Q5/Q7/Q8/Q14) - следующий шаг должен адресовать ИМЕННО этот
-# qid; ответ - через claude-agent-answer (аудит blocker 1), иначе stale.
+# qid; ответ - через ai-agent-answer (аудит blocker 1), иначе stale.
 "$ANSWER" "$AGQ10" --qid "$QIDT10" --text "q10-closing-answer" >/dev/null 2>"$TMP/q10ans_err"
 "$RUN" intake "$AGQ10" >/dev/null
 PROMPTQ10="$TMP/promptq10.txt"
@@ -645,18 +645,18 @@ IS14B=$("$RUN" inbox-status "$AGQ14"); echo "$IS14B" > "$TMP/is14b.json"
   && ok || fail "Q14: ready=1 - только answer-конверт нужного question_id учтен ($IS14B)"
 
 # =============================================================== Q15 (аудит V2.3, blocker 1)
-echo "=== Q15: claude-agent-answer пишет ответ в файл; payload.text игнорируется целиком ==="
+echo "=== Q15: ai-agent-answer пишет ответ в файл; payload.text игнорируется целиком ==="
 AGQ15=$(mk_event evtq15)
 QID15=$(ask_direct "$AGQ15" "q15-asker-key" "Q15 вопрос?" 2>"$TMP/q15err1")
 "$ANSWER" "$AGQ15" --qid "$QID15" --text "q15-real-answer-text" >/dev/null 2>"$TMP/q15ansout"
 QF15="$AGQ15/questions/$QID15.json"
 [[ "$(jq_file "$QF15" 'd.get("answer")')" == "q15-real-answer-text" ]] \
-  && ok || fail "Q15: answer записан claude-agent-answer в файл вопроса"
+  && ok || fail "Q15: answer записан ai-agent-answer в файл вопроса"
 [[ "$(jq_file "$QF15" 'bool(d.get("answered_at"))')" == "True" ]] && ok || fail "Q15: answered_at заполнен"
 [[ "$(jq_file "$QF15" 'bool(d.get("answered_by"))')" == "True" ]] && ok || fail "Q15: answered_by заполнен"
 "$RUN" intake "$AGQ15" >/dev/null
 PEND15=($(ls "$AGQ15/inbox/pending"))
-[[ "${#PEND15[@]}" == "1" ]] && ok || fail "Q15: адресующее событие claude-agent-answer появилось в pending"
+[[ "${#PEND15[@]}" == "1" ]] && ok || fail "Q15: адресующее событие ai-agent-answer появилось в pending"
 KADDR15="${PEND15[0]%.json}"
 [[ "$(jq_file "$AGQ15/inbox/pending/$KADDR15.json" 'd["payload"].get("text")')" == "None" ]] \
   && ok || fail "Q15: payload адресующего события не несет текст (только question_id)"
@@ -731,7 +731,7 @@ AGQ18=$(mk_event evtq18)
 "$RUN" spool-put evtq18 --text "q18-regular" >/dev/null
 "$RUN" intake "$AGQ18" >/dev/null
 Q18_BEFORE=$(ls "$AGQ18/questions" 2>/dev/null | wc -l | tr -d ' ')
-OUT18=$(CLAUDE_AGENT_DIR="$AGQ18" CLAUDE_AGENT_EVENT_KEY="nonexistent-key-not-in-inflight" \
+OUT18=$(AI_AGENT_DIR="$AGQ18" AI_AGENT_EVENT_KEY="nonexistent-key-not-in-inflight" \
   "$ASK" --question "Q18?" 2>"$TMP/q18err"); RC18=$?
 [[ "$RC18" == 2 ]] && ok || fail "Q18: exit 2 (got $RC18, $(cat "$TMP/q18err"))"
 Q18_AFTER=$(ls "$AGQ18/questions" 2>/dev/null | wc -l | tr -d ' ')
@@ -749,7 +749,7 @@ KQ19=$(ls "$AGQ19/inbox/pending" | sed 's/.json//')
 mv "$AGQ19/inbox/pending/$KQ19.json" "$AGQ19/inbox/inflight/$KQ19.json"
 mkdir -p "$AGQ19/questions"
 echo '{not valid json' > "$AGQ19/questions/deadbeef-dead-beef-dead-beefdeadbeef.json"
-OUT19=$(CLAUDE_AGENT_DIR="$AGQ19" CLAUDE_AGENT_EVENT_KEY="$KQ19" "$ASK" --question "Q19?" 2>"$TMP/q19err"); RC19=$?
+OUT19=$(AI_AGENT_DIR="$AGQ19" AI_AGENT_EVENT_KEY="$KQ19" "$ASK" --question "Q19?" 2>"$TMP/q19err"); RC19=$?
 [[ "$RC19" == 2 ]] && ok || fail "Q19: ask exit 2 на битом состоянии questions/ (got $RC19, $(cat "$TMP/q19err"))"
 Q19_FILES=$(ls "$AGQ19/questions"/*.json 2>/dev/null | wc -l | tr -d ' ')
 [[ "$Q19_FILES" == "1" ]] && ok || fail "Q19: второй (валидный) вопрос НЕ создан - только битый файл остался"
@@ -762,9 +762,9 @@ IS19=$("$RUN" inbox-status "$AGQ19"); echo "$IS19" > "$TMP/is19.json"
 # =============================================================== Q20 (аудит V2.3, major 4)
 echo "=== Q20: workspace:direct + исход asked - changes/<key>.json все равно записан (V2.1 не обойден) ==="
 PROJ20="$TMP/proj20"; mkdir -p "$PROJ20"
-AGQ20="$CLAUDE_AGENTS_DIR/evtq20"
-mkdir -p "$AGQ20" "$CLAUDE_AGENT_SPOOL_BASE/evtq20"
-chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/evtq20"
+AGQ20="$AI_AGENTS_DIR/evtq20"
+mkdir -p "$AGQ20" "$AI_AGENT_SPOOL_BASE/evtq20"
+chmod 0700 "$AI_AGENT_SPOOL_BASE/evtq20"
 cat > "$AGQ20/spec.yaml" <<EOF
 schema: 1
 name: evtq20
@@ -824,16 +824,16 @@ LC21=$(linecount "$AGQ21/thread.jsonl")
 [[ "$LC21" == "0" ]] && ok || fail "Q21: тред пуст - recovery не пишет дублей (получили $LC21 строк)"
 
 # =============================================================== Q22 (V2.10 r5, блокер 1)
-# Рамка велит звать claude-agent-done РАНО (V2.10 §3e), поэтому у direct-
+# Рамка велит звать ai-agent-done РАНО (V2.10 §3e), поэтому у direct-
 # задачи штатна цепочка: done -> правка -> ask -> (ответ) -> done -> ok.
 # Дифф прогона A durable в changes/<A>.json (Q20), но заявку финализирует
 # терминальная ветка прогона B - и без слияния предъявила бы человеку
 # ТОЛЬКО дифф B (пустой), скрыв реальную правку живого проекта.
 echo "=== Q22: workspace:direct, цепочка done->правка->ask->answer->done->ok - заявка несет дифф обоих прогонов ==="
 PROJ22="$TMP/proj22"; mkdir -p "$PROJ22"
-AGQ22="$CLAUDE_AGENTS_DIR/evtq22"
-mkdir -p "$AGQ22" "$CLAUDE_AGENT_SPOOL_BASE/evtq22"
-chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/evtq22"
+AGQ22="$AI_AGENTS_DIR/evtq22"
+mkdir -p "$AGQ22" "$AI_AGENT_SPOOL_BASE/evtq22"
+chmod 0700 "$AI_AGENT_SPOOL_BASE/evtq22"
 cat > "$AGQ22/spec.yaml" <<EOF
 schema: 1
 name: evtq22
@@ -885,15 +885,15 @@ DP22="$AGQ22/done.json"
 echo "=== Q23: crash до терминального шва - recovery доигрывает заявку идемпотентно ==="
 echo "--- Q23a: direct, исход asked durable, crash до checkpoint - recovery дозаписывает дифф БЕЗ финализации ---"
 PROJ23A="$TMP/proj23a"; mkdir -p "$PROJ23A"
-AGQ23A="$CLAUDE_AGENTS_DIR/evtq23a"
-mkdir -p "$AGQ23A" "$CLAUDE_AGENT_SPOOL_BASE/evtq23a"
-chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/evtq23a"
-sed "s|evtq22|evtq23a|; s|$PROJ22|$PROJ23A|" "$CLAUDE_AGENTS_DIR/evtq22/spec.yaml" > "$AGQ23A/spec.yaml"
+AGQ23A="$AI_AGENTS_DIR/evtq23a"
+mkdir -p "$AGQ23A" "$AI_AGENT_SPOOL_BASE/evtq23a"
+chmod 0700 "$AI_AGENT_SPOOL_BASE/evtq23a"
+sed "s|evtq22|evtq23a|; s|$PROJ22|$PROJ23A|" "$AI_AGENTS_DIR/evtq22/spec.yaml" > "$AGQ23A/spec.yaml"
 "$RUN" spool-put evtq23a --text "q23a-event" >/dev/null
 "$RUN" intake "$AGQ23A" >/dev/null
 K23A=$(ls "$AGQ23A/inbox/pending" | sed 's/.json//')
 mv "$AGQ23A/inbox/pending/$K23A.json" "$AGQ23A/inbox/inflight/$K23A.json"
-CLAUDE_AGENT_DIR="$AGQ23A" CLAUDE_AGENT_EVENT_KEY="$K23A" \
+AI_AGENT_DIR="$AGQ23A" AI_AGENT_EVENT_KEY="$K23A" \
   "$MOCK_DONE_BIN" --summary "q23a заявка" >/dev/null 2>"$TMP/q23a-done-err" \
   && ok || fail "Q23a: fixture - заявка записана ($(cat "$TMP/q23a-done-err"))"
 QID23A=$(ask_direct "$AGQ23A" "$K23A" "q23a вопрос?" 2>"$TMP/q23a-ask-err")
@@ -921,15 +921,15 @@ assert "Q23a step: recovery терминализирует мертвый asked-
 
 echo "--- Q23b: direct, исход ok durable, crash до fill/finalize - recovery дозаписывает дифф И финализирует ---"
 PROJ23B="$TMP/proj23b"; mkdir -p "$PROJ23B"
-AGQ23B="$CLAUDE_AGENTS_DIR/evtq23b"
-mkdir -p "$AGQ23B" "$CLAUDE_AGENT_SPOOL_BASE/evtq23b"
-chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/evtq23b"
-sed "s|evtq22|evtq23b|; s|$PROJ22|$PROJ23B|" "$CLAUDE_AGENTS_DIR/evtq22/spec.yaml" > "$AGQ23B/spec.yaml"
+AGQ23B="$AI_AGENTS_DIR/evtq23b"
+mkdir -p "$AGQ23B" "$AI_AGENT_SPOOL_BASE/evtq23b"
+chmod 0700 "$AI_AGENT_SPOOL_BASE/evtq23b"
+sed "s|evtq22|evtq23b|; s|$PROJ22|$PROJ23B|" "$AI_AGENTS_DIR/evtq22/spec.yaml" > "$AGQ23B/spec.yaml"
 "$RUN" spool-put evtq23b --text "q23b-event" >/dev/null
 "$RUN" intake "$AGQ23B" >/dev/null
 K23B=$(ls "$AGQ23B/inbox/pending" | sed 's/.json//')
 mv "$AGQ23B/inbox/pending/$K23B.json" "$AGQ23B/inbox/inflight/$K23B.json"
-CLAUDE_AGENT_DIR="$AGQ23B" CLAUDE_AGENT_EVENT_KEY="$K23B" \
+AI_AGENT_DIR="$AGQ23B" AI_AGENT_EVENT_KEY="$K23B" \
   "$MOCK_DONE_BIN" --summary "q23b заявка" >/dev/null 2>"$TMP/q23b-done-err" \
   && ok || fail "Q23b: fixture - заявка записана ($(cat "$TMP/q23b-done-err"))"
 mkdir -p "$AGQ23B/changes"

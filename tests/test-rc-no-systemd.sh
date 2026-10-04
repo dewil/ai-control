@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Машина без systemd: claude-rc обязан отказывать словами, а не умирать молча.
+# Машина без systemd: ai-rc обязан отказывать словами, а не умирать молча.
 #
-# Зачем тест. На macOS `claude-rc live` завершался с rc=127 и ПУСТЫМ выводом
+# Зачем тест. На macOS `ai-rc live` завершался с rc=127 и ПУСТЫМ выводом
 # (замерено 2026-08-13, macOS 26.5.2): под `set -euo pipefail` отсутствующий
 # systemctl дает 127 в пайпе, pipefail тащит его в статус присваивания, `set -e`
 # убивает скрипт, а `2>/dev/null` съедает объяснение. Снаружи это читается как
@@ -10,11 +10,11 @@
 #
 # Systemd тут не подделывается: наоборот, собирается PATH из симлинков на все
 # обычные каталоги БЕЗ одного имени - systemd-run. Пустой PATH не годится:
-# claude-rc раньше гейта проверяет yq и зовет uname, и тест ловил бы не то.
+# ai-rc раньше гейта проверяет yq и зовет uname, и тест ловил бы не то.
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RC="$(cd "$HERE/.." && pwd)/bin/claude-rc"
+RC="$(cd "$HERE/.." && pwd)/bin/ai-rc"
 
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); }
@@ -40,7 +40,10 @@ if PATH="$NOSD" command -v systemd-run >/dev/null 2>&1; then
   fail "systemd-run виден и в урезанном PATH - песочница собрана неверно"
 else ok; fi
 
-run_rc() { PATH="$NOSD" "$BASH" "$RC" "$@" 2>"$SANDBOX/err" >"$SANDBOX/out"; }
+# Canonical naming: the new default registry is not yet installed on the test host.
+# Supply a private fixture so the existing assertions reach the systemd gate.
+printf 'projects: {}\n' > "$SANDBOX/projects.yaml"
+run_rc() { AI_RC_PROJECTS_FILE="$SANDBOX/projects.yaml" PATH="$NOSD" "$BASH" "$RC" "$@" 2>"$SANDBOX/err" >"$SANDBOX/out"; }
 
 for verb in live up new down reap compact; do
   run_rc "$verb" nosuchproject 00000000-0000-0000-0000-000000000000
@@ -60,7 +63,7 @@ done
 run_rc --help
 rc=$?
 [[ $rc -eq 0 ]] && ok || fail "--help вернул $rc на машине без systemd"
-if grep -q 'claude-rc' "$SANDBOX/out"; then ok; else fail "--help ничего не напечатал"; fi
+if grep -q 'ai-rc' "$SANDBOX/out"; then ok; else fail "--help ничего не напечатал"; fi
 
 echo "PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

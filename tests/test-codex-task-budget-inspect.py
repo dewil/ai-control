@@ -19,7 +19,7 @@ class BudgetObservation(unittest.TestCase):
         self.calls = []
         self.unit = 'cctask-' + str(uuid.uuid4()) + '.service'
         self.token = str(uuid.uuid4())
-        self.base_fields = dict(LoadState='loaded', Description='claude-control task ' + self.token,
+        self.base_fields = dict(LoadState='loaded', Description='ai-control task ' + self.token,
             InvocationID='a' * 32, ActiveState='active', SubState='running', MainPID='123',
             ControlGroup='/own-fixture', KillMode='control-group', Type='exec', ExitType='main',
             Restart='no', RemainAfterExit='no', SendSIGKILL='yes')

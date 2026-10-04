@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Tests for bin/claude-rc-takeover (этап 5, Mac-сторона кросс-машинного handoff).
+# Tests for bin/ai-rc-takeover (этап 5, Mac-сторона кросс-машинного handoff).
 # Пред-проверки - локально; happy-path - real git push в bare-origin + shim ssh/scp.
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RC="$HERE/../bin/claude-rc"
+RC="$HERE/../bin/ai-rc"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 

@@ -6,7 +6,7 @@
 
 ## Границы
 
-**Входит:** `bin/claude-agent-model-advice`, конфигурация helper и явных
+**Входит:** `bin/ai-agent-model-advice`, конфигурация helper и явных
 сопоставлений через `CONTROL_JEV_*`, фиксированный файл вопросов рядом с
 helper, bounded-вызов helper и fenced JSON-квитанция в задаче.
 
@@ -42,14 +42,14 @@ acceptance выполняются отдельно после проверки �
   операторской границей, а внешний ответ — недоверенные данные.
 - **INV-MADVICE-05.** Helper и модели берутся только из allowlist
   `CONTROL_JEV_*`; окружение процесса имеет приоритет над существующим
-  `~/.config/claude-control/env`. Нет автоматических дефолтов или новых
+  `~/.config/ai-control/env`. Нет автоматических дефолтов или новых
   registry/native settings. Довод: наличие команды не должно менять уже
   настроенную модель или сессию.
 
 ## Внешний контракт
 
 ```text
-claude-agent-model-advice --public-text-file PATH --task PATH [--risk]
+ai-agent-model-advice --public-text-file PATH --task PATH [--risk]
                           [--current-model SLUG]
 ```
 

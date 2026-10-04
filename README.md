@@ -1,4 +1,4 @@
-# claude-control
+# ai-control
 
 **Русский · [English](./README.en.md)**
 
@@ -26,7 +26,7 @@ flowchart TB
       direction TB
       subgraph L1["Слой 1 - сессии из бота"]
         menu["/sessions в Telegram<br/>проекты → сессии по именам"]
-        rc["claude-rc up/down/new<br/>транзиентный юнит на сессию"]
+        rc["ai-rc up/down/new<br/>транзиентный юнит на сессию"]
         menu --> rc
       end
       subgraph L2["Слой 2 - автономный агентный слой (Linux)"]
@@ -56,9 +56,9 @@ flowchart TB
 
 Claude Code умеет открывать сессию для удалённого управления, к ней подключаешься с телефона. Но сам по себе он этого не закрывает: чтобы попасть в нужный репозиторий, надо физически сесть за машину, `cd` в проект и запустить `claude --remote-control`. А чтобы вернуться во вчерашний разговор - ещё и вспомнить, какой именно из десятков это был.
 
-`claude-control` закрывает оба зазора одним экраном в Telegram:
+`ai-control` закрывает оба зазора одним экраном в Telegram:
 
-- `/sessions` -> список проектов из `~/.claude-control/projects.yaml`;
+- `/sessions` -> список проектов из `~/.ai-control/projects.yaml`;
 - проект -> его сессии **под теми же именами, что видны в Cursor** (`/rename` пишет имя в транскрипт, бот читает оттуда же), у поднятых - кружок;
 - тап по сессии -> `▶ поднять` / `⏹ положить`; отдельной кнопкой - `➕ новая сессия`.
 
@@ -70,7 +70,7 @@ Claude Code умеет открывать сессию для удалённог
 
 ```
 Ты (в Telegram)  - /sessions
-Бот              - [claude-control] [проект 1] [проект 2] ...
+Бот              - [ai-control] [проект 1] [проект 2] ...
 Ты               - проект 1
 Бот              - ➕ новая сессия
                    ● control-v2      ← поднята
@@ -83,12 +83,12 @@ Claude Code умеет открывать сессию для удалённог
 То же с машины, если бот недоступен:
 
 ```sh
-claude-rc sessions <проект> --porcelain   # uuid, имя, поднята ли
-claude-rc up <проект> <uuid>              # поднять
-claude-rc new <проект>                    # новая пустая
-claude-rc down <uuid>                     # положить
-claude-rc live                            # что поднято сейчас
-claude-rc reap [--dry-run]                # погасить зомби: юнит жив, а мост снесен
+ai-rc sessions <проект> --porcelain   # uuid, имя, поднята ли
+ai-rc up <проект> <uuid>              # поднять
+ai-rc new <проект>                    # новая пустая
+ai-rc down <uuid>                     # положить
+ai-rc live                            # что поднято сейчас
+ai-rc reap [--dry-run]                # погасить зомби: юнит жив, а мост снесен
 ```
 
 Зомби заводится, когда карточку сессии архивируют в браузере: CLI сносит мост, а
@@ -110,7 +110,7 @@ claude-rc reap [--dry-run]                # погасить зомби: юни�
 Поверх spool'а - полный жизненный цикл задачи без открытой сессии: `/new <проект> <текст>` в Telegram рождает задачу из шаблона со строгим поясом прав (fail-closed: нет валидного шаблона - нет задачи), агент работает в git-worktree проекта и заявляет о готовности; карточка приёмки прилетает в личку, тап "принять" мержит ветку в проект, уборка и архив - автоматически. Одиннадцать этапов [V2.0](./docs/design-2026-07-25-v2-runtime-drain.md)-[V2.10](./docs/design-2026-07-28-v2.10-task-actually-works.md), каждый со своим SDD-контрактом и adversarial-аудитом:
 
 - **Scale-to-zero и память.** Executor гаснет на пустом inbox, reconciler будит по событию ([V2.0](./docs/design-2026-07-25-v2-runtime-drain.md)); worktree и пояса прав per-agent ([V2.1](./docs/design-2026-07-25-v2.1-workspace-permissions.md)); тред-память задачи переживает прогоны ([V2.2](./docs/design-2026-07-26-v2.2-thread-memory.md)).
-- **Вопросы и подтверждения** - durable-исход прогона, не смерть задачи: агент спрашивает (`claude-agent-ask`) или упирается в гейт прав, карточка с кнопками уезжает в TG, ответ тапом/reply-ем возвращается ровно один раз ([V2.3](./docs/design-2026-07-26-v2.3-question-fsm.md)-[V2.6](./docs/design-2026-07-26-v2.6-reminder-ladder.md)).
+- **Вопросы и подтверждения** - durable-исход прогона, не смерть задачи: агент спрашивает (`ai-agent-ask`) или упирается в гейт прав, карточка с кнопками уезжает в TG, ответ тапом/reply-ем возвращается ровно один раз ([V2.3](./docs/design-2026-07-26-v2.3-question-fsm.md)-[V2.6](./docs/design-2026-07-26-v2.6-reminder-ladder.md)).
 - **Приёмка** - durable FSM `requested -> accepted -> integrated -> cleaned -> archived` с фиксацией SHA заявки ([V2.7a](./docs/design-2026-07-26-v2.7a-task-birth-and-done.md), [V2.7b](./docs/design-2026-07-26-v2.7b-acceptance-integration.md)); расписание как источник событий ([V2.8](./docs/design-2026-07-27-v2.8-schedule-source.md)); поправки человека по ходу задачи дистиллируются в правила проекта ([V2.9](./docs/design-2026-07-27-v2.9-lesson-distillation.md)).
 - **У агента нет git.** Три круга аудита нашли три независимых способа исполнить код агента до человеческой приёмки через git-механизмы (хуки, флаги вроде `git log --output=`, clean-фильтры, fsmonitor) - глушить их по одному оказалось невыигрываемой гонкой. Git отобран целиком: коммитит рантайм, после заявки о готовности ([V2.10](./docs/design-2026-07-28-v2.10-task-actually-works.md)).
 
@@ -133,14 +133,14 @@ Long-poll Telegram-бот (getUpdates, не webhook - webhooks режет DPI в
 
 ## Резервные копии (опционально)
 
-Модуль `claude-control-backup`: клиентски-шифрованный дедуплицированный бэкап произвольных путей в **два независимых S3-репозитория** через [restic](https://restic.net). Ставится флагом `--with-backup` (Linux).
+Модуль `ai-control-backup`: клиентски-шифрованный дедуплицированный бэкап произвольных путей в **два независимых S3-репозитория** через [restic](https://restic.net). Ставится флагом `--with-backup` (Linux).
 
 - **Клиентское шифрование** - провайдер видит только шифртекст, поэтому бэкап можно держать у хостинга, которому не доверяешь plaintext.
 - **Два независимых провайдера** - два `backup` (не `copy`); падение или бан одного не мешает второму, восстановление возможно из любого.
 - **Дедуп + zstd-сжатие** - на текстовых данных обычно 5-10x экономии.
 - **systemd-таймер** (ежедневно) + **restore-drill** - непроверенный бэкап не считается бэкапом.
 
-Пути, URL репозиториев и креды - в `~/.config/claude-control/backup-env` (вне git, `chmod 600`); в скриптах ничего машино-специфичного. Настройка и восстановление - в [docs/runbook-backup.md](docs/runbook-backup.md).
+Пути, URL репозиториев и креды - в `~/.config/ai-control/backup-env` (вне git, `chmod 600`); в скриптах ничего машино-специфичного. Настройка и восстановление - в [docs/runbook-backup.md](docs/runbook-backup.md).
 
 ## Инженерные решения и верификация
 
@@ -158,35 +158,35 @@ Long-poll Telegram-бот (getUpdates, не webhook - webhooks режет DPI в
 
 ## Требования
 
-- Linux с `systemd --user` (Ubuntu 22.04+, Debian 12+) - оба слоя. На macOS доступен CLI (`claude-rc sessions/up/down`), но держатель сессий - транзиентный systemd-юнит, поэтому подъём сессий там не работает.
+- Linux с `systemd --user` (Ubuntu 22.04+, Debian 12+) - оба слоя. На macOS доступен CLI (`ai-rc sessions/up/down`), но держатель сессий - транзиентный systemd-юнит, поэтому подъём сессий там не работает.
 - [Claude Code CLI](https://docs.claude.com/claude-code) ≥ 2.1.51, залогинен через `claude /login` (Claude-подписка).
 - `yq` от mikefarah, v4 - `brew install yq` (macOS); на Linux **бинарник с [GitHub releases](https://github.com/mikefarah/yq/releases)** (пакет `yq` из apt - другой проект). `install.sh` проверит версию.
 - Linux: включённый **lingering** (`loginctl enable-linger $USER`), иначе user-сервисы гибнут при logout. `install.sh` проверит и предупредит.
 
 ## Ручная оценка уровня модели
 
-`claude-agent-model-advice --public-text-file ./public-task.txt --task ./docs/task.md` — отдельная opt-in команда. Она передает только явно указанный публичный файл доверенному Jev helper, а затем добавляет fenced JSON-квитанцию в Markdown-задачу. Ввод ограничен 4000 символами и 16 KiB. Helper задается абсолютным `CONTROL_JEV_HELPER` в `~/.config/claude-control/env` или окружении процесса; рядом с ним должен лежать неизмененный `jev-executor-questions.json` с закрепленным SHA-256. `CONTROL_JEV_CHEAP_MODEL`, `CONTROL_JEV_STANDARD_MODEL` и `CONTROL_JEV_DEEP_MODEL` задают необязательные сопоставления со slug моделей Codex; без них команда сохраняет только уровень.
+`ai-agent-model-advice --public-text-file ./public-task.txt --task ./docs/task.md` — отдельная opt-in команда. Она передает только явно указанный публичный файл доверенному Jev helper, а затем добавляет fenced JSON-квитанцию в Markdown-задачу. Ввод ограничен 4000 символами и 16 KiB. Helper задается абсолютным `CONTROL_JEV_HELPER` в `~/.config/ai-control/env` или окружении процесса; рядом с ним должен лежать неизмененный `jev-executor-questions.json` с закрепленным SHA-256. `CONTROL_JEV_CHEAP_MODEL`, `CONTROL_JEV_STANDARD_MODEL` и `CONTROL_JEV_DEEP_MODEL` задают необязательные сопоставления со slug моделей Codex; без них команда сохраняет только уровень.
 
 Это ручная рекомендация: команда не запускает исполнителя и не меняет текущую модель. `--risk` и `--current-model` подавляют вызов и кандидат; `clarify` также не предлагает модель. Квитанция добавляется только в существующий обычный `.md`-файл. Повторный запуск — новый явный вызов и может снова обратиться к helper. Не используй рекомендацию для задач с секретами, доступом к production или иными чувствительными рисками: оценка не подтверждает их отсутствие. Контракт: [model-advice](docs/specs/model-advice.md).
 
 ## Быстрый старт
 
 ```sh
-git clone https://github.com/dewil/claude-control.git
-cd claude-control
+git clone https://github.com/dewil/claude-control.git ai-control
+cd ai-control
 ./install.sh
-$EDITOR ~/.claude-control/projects.yaml   # вписать свои проекты
+$EDITOR ~/.ai-control/projects.yaml   # вписать свои проекты
 ```
 
-Готово. Управление сессиями живёт в Telegram-боте: **`/sessions` -> проект -> сессия -> поднять**; бот, reconciler и limits-digest поднимаются тем же `install.sh` при наличии `~/.config/claude-control/env` с нужными переменными (см. runbook'и в `docs/`). Без бота те же действия доступны с машины: `claude-rc sessions <проект> --porcelain`, `claude-rc up <проект> <uuid>`.
+Готово. Управление сессиями живёт в Telegram-боте: **`/sessions` -> проект -> сессия -> поднять**; бот, reconciler и limits-digest поднимаются тем же `install.sh` при наличии `~/.config/ai-control/env` с нужными переменными (см. runbook'и в `docs/`). Без бота те же действия доступны с машины: `ai-rc sessions <проект> --porcelain`, `ai-rc up <проект> <uuid>`.
 
 Правишь сам репо - ставь `./install.sh --link` (скрипты в `~/.local/bin/` станут симлинками на `bin/`, `git pull` сразу обновляет рабочий код).
 
 ## Безопасность
 
-- **`projects.yaml` - доверенный файл.** `claude-rc` парсит пути через `yq` как данные, без shell-интерполяции, валидирует имя проекта; содержимое под твоим контролем. Не редактируй его по запросу LLM из чата.
-- **Бот не запускает ничего сам.** Тап уходит в `claude-rc up/down/new`; имя проекта и короткий id сессии из `callback_data` отбиваются строгой формой до вызова, в shell не попадают. Доступ - приватный чат плюс whitelist по `from.id`.
-- **Поднятые сессии наследуют твои `~/.claude/settings.json`.** `claude-rc` ничего не пробрасывает поверх - если стоит `bypassPermissions`, удалённая сессия молча сделает что попросят. Хочешь иначе - добавь в проект `.claude/settings.local.json` с явным allow-списком.
+- **`projects.yaml` - доверенный файл.** `ai-rc` парсит пути через `yq` как данные, без shell-интерполяции, валидирует имя проекта; содержимое под твоим контролем. Не редактируй его по запросу LLM из чата.
+- **Бот не запускает ничего сам.** Тап уходит в `ai-rc up/down/new`; имя проекта и короткий id сессии из `callback_data` отбиваются строгой формой до вызова, в shell не попадают. Доступ - приватный чат плюс whitelist по `from.id`.
+- **Поднятые сессии наследуют твои `~/.claude/settings.json`.** `ai-rc` ничего не пробрасывает поверх - если стоит `bypassPermissions`, удалённая сессия молча сделает что попросят. Хочешь иначе - добавь в проект `.claude/settings.local.json` с явным allow-списком.
 - **prompt-injection.** Текст из README, имён веток и чужих файлов - данные, не инструкции. Имя сессии приходит из транскрипта и тоже считается данными: в кнопку и карточку оно уходит экранированным, а в командную строку - через `%q`.
 - **Агентный слой** - приватные чаты + whitelist в Telegram, бюджеты и circuit breaker против разгона, секреты только в env-файлах (не в репо/чате).
 - **Task-агенты (V2) не имеют git.** Работают в worktree со строгим поясом прав из шаблона (fail-closed: нет валидного шаблона - задача не заводится); коммитит рантайм, в default-ветку проекта результат попадает только после явной приёмки человеком.
@@ -194,34 +194,34 @@ $EDITOR ~/.claude-control/projects.yaml   # вписать свои проект
 ## Структура
 
 Слой 1 (сессии):
-- [`bin/claude-rc`](./bin/claude-rc) - `sessions --porcelain`, `up`, `new`, `down`, `live`: список сессий с именами и подъём транзиентным юнитом.
-- [`bin/claude-agent-tgbot`](./bin/claude-agent-tgbot) - экран `/sessions` (он же дашборд агентов, см. слой 2).
-- [`bin/claude-control-session`](./bin/claude-control-session), [`claude-control-watchdog`](./bin/claude-control-watchdog), [`claude-control-project-watchdog`](./bin/claude-control-project-watchdog) - legacy-диспетчер на вечной control-сессии и tmux. Установщик их больше не включает и снимает с уже установленных машин; файлы оставлены для отката.
+- [`bin/ai-rc`](./bin/ai-rc) - `sessions --porcelain`, `up`, `new`, `down`, `live`: список сессий с именами и подъём транзиентным юнитом.
+- [`bin/ai-agent-tgbot`](./bin/ai-agent-tgbot) - экран `/sessions` (он же дашборд агентов, см. слой 2).
+- [`bin/ai-control-session`](./bin/ai-control-session), [`ai-control-watchdog`](./bin/ai-control-watchdog), [`ai-control-project-watchdog`](./bin/ai-control-project-watchdog) - legacy-диспетчер на вечной control-сессии и tmux. Установщик их больше не включает и снимает с уже установленных машин; файлы оставлены для отката.
 
 Слой 2 (агентный):
-- [`bin/claude-agent-reconciler`](./bin/claude-agent-reconciler) - reconciler автономных агентов.
-- [`bin/claude-agent-run`](./bin/claude-agent-run), [`claude-agent-io`](./bin/claude-agent-io), [`claude-agent-session`](./bin/claude-agent-session) - исполнение/spool/сессии агентов.
-- [`bin/claude-agent-tgbot`](./bin/claude-agent-tgbot) - Telegram-дашборд (`/agents`, `/new`, `/task`, `/limits`, карточки вопросов и приёмки).
+- [`bin/ai-agent-reconciler`](./bin/ai-agent-reconciler) - reconciler автономных агентов.
+- [`bin/ai-agent-run`](./bin/ai-agent-run), [`ai-agent-io`](./bin/ai-agent-io), [`ai-agent-session`](./bin/ai-agent-session) - исполнение/spool/сессии агентов.
+- [`bin/ai-agent-tgbot`](./bin/ai-agent-tgbot) - Telegram-дашборд (`/agents`, `/new`, `/task`, `/limits`, карточки вопросов и приёмки).
   Ответив реплаем один раз, дальше можно писать (или наговаривать) просто в чат: адресат запоминается на 30 минут и продолжение уходит в ту же сессию. Молчание тут намеренное - если запомненного адресата нет или его инкарнация сменилась, сообщение обрабатывается как раньше, а не подхватывается наугад.
-  Голосовой ответ владельца бот расшифровывает локально (GigaAM, `transcribe-meeting`; переопределяется `CLAUDE_AGENT_VOICE_ASR`) и дальше ведет его теми же путями, что печатную реплику - reply на карточку агента попадает в ту же сессию. Расшифровку он показывает ответным сообщением: распознавание ошибается, и человек должен видеть, что получил агент.
-  Режим `voice` отправляет итог голосом: синтез делает `bin/voice-report` этого же репозитория (путь резолвится рядом с ботом, переопределяется `CLAUDE_AGENT_VOICE_SYNTH`), доставка - своя. Текст доходит всегда: выключен тумблер, нет синтезатора или упала отправка файла - уходит обычное сообщение, вместе с привязкой ответа к агенту.
+  Голосовой ответ владельца бот расшифровывает локально (GigaAM, `transcribe-meeting`; переопределяется `AI_AGENT_VOICE_ASR`) и дальше ведет его теми же путями, что печатную реплику - reply на карточку агента попадает в ту же сессию. Расшифровку он показывает ответным сообщением: распознавание ошибается, и человек должен видеть, что получил агент.
+  Режим `voice` отправляет итог голосом: синтез делает `bin/voice-report` этого же репозитория (путь резолвится рядом с ботом, переопределяется `AI_AGENT_VOICE_SYNTH`), доставка - своя. Текст доходит всегда: выключен тумблер, нет синтезатора или упала отправка файла - уходит обычное сообщение, вместе с привязкой ответа к агенту.
 
-  **Голос из сессий - канал в одну сторону.** Слово "сессия" в этом разделе означает живую сессию АГЕНТА в tmux: reply доезжает до нее через `mission-inbox` и `tmux send-keys`. У сессий слоя 1 (`ccsession-<uuid>`, глаголы `claude-rc`) обратного канала нет вовсе - юнит поднимается голым `script`, stdin `/dev/null`, pty держит сам `script`. Итог голосом такая сессия шлет флагом `--session <имя>`; reply на него получает внятный отказ с названием сессии, а не совет про карточку задачи. Промпт пишется внутри самой сессии. Решение владельца 24.08.2026: так и оставить, пока не появится машинный канал ввода.
+  **Голос из сессий - канал в одну сторону.** Слово "сессия" в этом разделе означает живую сессию АГЕНТА в tmux: reply доезжает до нее через `mission-inbox` и `tmux send-keys`. У сессий слоя 1 (`ccsession-<uuid>`, глаголы `ai-rc`) обратного канала нет вовсе - юнит поднимается голым `script`, stdin `/dev/null`, pty держит сам `script`. Итог голосом такая сессия шлет флагом `--session <имя>`; reply на него получает внятный отказ с названием сессии, а не совет про карточку задачи. Промпт пишется внутри самой сессии. Решение владельца 24.08.2026: так и оставить, пока не появится машинный канал ввода.
 
   **Как итог представляется.** Карточка в Telegram подписывается именем сессии (иначе все итоги приходят одинаковым "Итог работы" и подряд неразличимы), а сама озвучка открывается отбивкой `Новое сообщение. Сессия <имя>.` - при автовоспроизведении карточку никто не видит, телефон в кармане. Имя берется из транскрипта (`custom-title`), а не из юнита: переименованная сессия должна называться так же, как в браузере. Латиница перед синтезом транслитерируется - русский Silero ее не произносит вовсе, на месте имени была пауза; подпись карточки и роутинг при этом работают с исходным именем.
 
-  **Сессия ждет ответа - сигнал в бота.** `bin/claude-agent-waiting-hook` - хук `Notification` в `~/.claude/settings.json`: Claude Code дергает его, когда сессия ждет ввода или уперлась в запрос разрешения. Без него молчащая сессия неотличима от работающей, и вопрос мог стоять часами. В сообщение идут имя сессии (из транскрипта, как у голоса), хвост вопроса, кнопка `Сессии` и **ссылка вида `https://claude.ai/code/session_<id>`** - она открывает ту же сессию в приложении Claude. Идентификатор берется из строки моста `v2 session URL` в debug-логе: **признак якорен на формат строки**, потому что CLI пишет в тот же файл содержимое работы, и голая подстрока `cse_` подменялась текстом самой сессии (поймано на живых данных). Превью ссылки отключается флагом `notify --no-preview` - карточка занимает пол-экрана телефона. Повтор по одной сессии - не чаще раза в 30 минут (`CLAUDE_AGENT_WAITING_QUIET_S`); терминальные сессии игнорируются, они и так перед глазами.
+  **Сессия ждет ответа - сигнал в бота.** `bin/ai-agent-waiting-hook` - хук `Notification` в `~/.claude/settings.json`: Claude Code дергает его, когда сессия ждет ввода или уперлась в запрос разрешения. Без него молчащая сессия неотличима от работающей, и вопрос мог стоять часами. В сообщение идут имя сессии (из транскрипта, как у голоса), хвост вопроса, кнопка `Сессии` и **ссылка вида `https://claude.ai/code/session_<id>`** - она открывает ту же сессию в приложении Claude. Идентификатор берется из строки моста `v2 session URL` в debug-логе: **признак якорен на формат строки**, потому что CLI пишет в тот же файл содержимое работы, и голая подстрока `cse_` подменялась текстом самой сессии (поймано на живых данных). Превью ссылки отключается флагом `notify --no-preview` - карточка занимает пол-экрана телефона. Повтор по одной сессии - не чаще раза в 30 минут (`AI_AGENT_WAITING_QUIET_S`); терминальные сессии игнорируются, они и так перед глазами.
 
-  **Кто зовет озвучку.** `bin/claude-agent-voice-hook` - хук `Stop` в `~/.claude/settings.json`: сессия договорила ответ, хук берет его и шлет голосом. Без него транспорт есть, а зовущего нет - голос приходит только оттуда, где команду набрали руками. Четыре фильтра, каждый нужен: тумблер выключен - молчим; ответ короче 400 знаков - это "готово" и уточнения, слушать нечего; с прошлой озвучки этой сессии меньше 5 минут - телефон не радио; сессия без юнита `ccsession-*` (локальный терминал, агент) - не наш случай. Отправка уходит отвязанным процессом: хук не ждет синтез. Причины отказа - `~/.cache/voice-hook.log`, наружу хук молчит всегда.
+  **Кто зовет озвучку.** `bin/ai-agent-voice-hook` - хук `Stop` в `~/.claude/settings.json`: сессия договорила ответ, хук берет его и шлет голосом. Без него транспорт есть, а зовущего нет - голос приходит только оттуда, где команду набрали руками. Четыре фильтра, каждый нужен: тумблер выключен - молчим; ответ короче 400 знаков - это "готово" и уточнения, слушать нечего; с прошлой озвучки этой сессии меньше 5 минут - телефон не радио; сессия без юнита `ccsession-*` (локальный терминал, агент) - не наш случай. Отправка уходит отвязанным процессом: хук не ждет синтез. Причины отказа - `~/.cache/voice-hook.log`, наружу хук молчит всегда.
 
-  Озвучка под тумблером - кнопка `Голос: вкл/выкл` во втором ряду клавиатуры, состояние прямо в подписи (в дороге видно режим, не нажимая). Режим общий для всех сессий, живет в `~/.claude-control/tgbot.voice.json`, по умолчанию ВЫКЛЮЧЕН. Входящий голос расшифровывается всегда независимо от тумблера: распознавание локальное, а реплай голосом нужен и в текстовом режиме.
-- [`bin/claude-agent-done`](./bin/claude-agent-done), [`claude-agent-ask`](./bin/claude-agent-ask), [`claude-agent-answer`](./bin/claude-agent-answer), [`claude-agent-permit`](./bin/claude-agent-permit) - протокол задачи V2: заявка "готово", вопрос из прогона, доверенный писатель ответов, гейт подтверждений.
-- [`bin/claude-agent-limits-digest`](./bin/claude-agent-limits-digest) - дайджест лимитов LLM.
-- [`bin/claude-agent-harvest`](./bin/claude-agent-harvest), [`claude-agent-review`](./bin/claude-agent-review), [`claude-agent-checkrun`](./bin/claude-agent-checkrun) - приёмка/ревью/проверки.
-- [`bin/claude-rc-takeover`](./bin/claude-rc-takeover), [`claude-rc-agent`](./bin/claude-rc-agent) - кросс-машинный takeover.
+  Озвучка под тумблером - кнопка `Голос: вкл/выкл` во втором ряду клавиатуры, состояние прямо в подписи (в дороге видно режим, не нажимая). Режим общий для всех сессий, живет в `~/.ai-control/tgbot.voice.json`, по умолчанию ВЫКЛЮЧЕН. Входящий голос расшифровывается всегда независимо от тумблера: распознавание локальное, а реплай голосом нужен и в текстовом режиме.
+- [`bin/ai-agent-done`](./bin/ai-agent-done), [`ai-agent-ask`](./bin/ai-agent-ask), [`ai-agent-answer`](./bin/ai-agent-answer), [`ai-agent-permit`](./bin/ai-agent-permit) - протокол задачи V2: заявка "готово", вопрос из прогона, доверенный писатель ответов, гейт подтверждений.
+- [`bin/ai-agent-limits-digest`](./bin/ai-agent-limits-digest) - дайджест лимитов LLM.
+- [`bin/ai-agent-harvest`](./bin/ai-agent-harvest), [`ai-agent-review`](./bin/ai-agent-review), [`ai-agent-checkrun`](./bin/ai-agent-checkrun) - приёмка/ревью/проверки.
+- [`bin/ai-rc-takeover`](./bin/ai-rc-takeover), [`ai-rc-agent`](./bin/ai-rc-agent) - кросс-машинный takeover.
 
 Опциональный модуль (`--with-backup`):
-- [`bin/claude-control-backup`](./bin/claude-control-backup), [`claude-control-backup-init`](./bin/claude-control-backup-init), [`claude-control-backup-restore-test`](./bin/claude-control-backup-restore-test) - restic-бэкап в два S3 (см. [runbook](./docs/runbook-backup.md)).
+- [`bin/ai-control-backup`](./bin/ai-control-backup), [`ai-control-backup-init`](./bin/ai-control-backup-init), [`ai-control-backup-restore-test`](./bin/ai-control-backup-restore-test) - restic-бэкап в два S3 (см. [runbook](./docs/runbook-backup.md)).
 
 Общее:
 - [`launchd/`](./launchd/) / [`systemd/`](./systemd/) - шаблоны юнитов; `install.sh` их рендерит.
@@ -233,15 +233,15 @@ $EDITOR ~/.claude-control/projects.yaml   # вписать свои проект
 ## Принципы
 
 - **Идемпотентность** - `install.sh` гоняется повторно; `projects.yaml`, `CLAUDE.md`, логи не трогаются.
-- **Runtime отдельно от репо** - код где удобно (`~/Work/claude-control/`), данные в `~/.claude-control/`.
+- **Runtime отдельно от репо** - код где удобно (`~/Work/ai-control/`), данные в `~/.ai-control/`.
 - **Только user-level супервизор** - launchd user agent / `systemctl --user`, никакого `sudo`.
-- **Никакой магии в надзоре** - watchdog читает лог и пинает супервизор; всё видно глазами в `~/.claude-control/*.log`.
+- **Никакой магии в надзоре** - watchdog читает лог и пинает супервизор; всё видно глазами в `~/.ai-control/*.log`.
 
 ## Удалить
 
 ```sh
 ./uninstall.sh           # снять агентов, удалить скрипты из ~/.local/bin/
-./uninstall.sh --purge   # дополнительно снести ~/.claude-control/
+./uninstall.sh --purge   # дополнительно снести ~/.ai-control/
 ```
 
 ## Лицензия
@@ -255,4 +255,6 @@ $EDITOR ~/.claude-control/projects.yaml   # вписать свои проект
 
 ## Фоновые задачи Codex
 
-`claude-rc agent new-task --engine codex --name task-example --project example --text 'Задача'` создаёт отдельную event/drain задачу в worktree. В Telegram: `/new --engine codex example Задача`. Модель и effort наследуются от Codex; вопросы, приёмка и отмена используют общую TASK-процедуру. Без `--engine codex` используется Claude. Требования, ограничения и восстановление: [runbook-codex-tasks.md](docs/runbook-codex-tasks.md).
+`ai-rc agent new-task --engine codex --name task-example --project example --text 'Задача'` создаёт отдельную event/drain задачу в worktree. В Telegram: `/new --engine codex example Задача`. Модель и effort наследуются от Codex; вопросы, приёмка и отмена используют общую TASK-процедуру. Без `--engine codex` используется Claude. Требования, ограничения и восстановление: [runbook-codex-tasks.md](docs/runbook-codex-tasks.md).
+
+Canonical migration установленной версии: [runbook-ai-control-names.md](docs/runbook-ai-control-names.md). Legacy aliases не устанавливаются.

@@ -5,16 +5,16 @@
 # Контракт: docs/design-2026-07-27-v2.9-lesson-distillation.md §8 (кейсы L1-L31).
 #
 # Написано с чистого листа по спеке (SDD, RED-фаза): реализация V2.9 еще НЕ
-# существует на момент написания (bin/claude-agent-run, bin/claude-agent-tgbot,
+# существует на момент написания (bin/ai-agent-run, bin/ai-agent-tgbot,
 # bin/_rc_projects.sh ни разу не открывались через Read под этот файл) - только
 # сама спека и установленный ранее публичный контракт соседних этапов
 # (route_callback/authorized_cb/question_card из V2.5/V2.6/V2.7b,
-# project_path/project_integrate из V2.7b, done-notify/CLAUDE_AGENT_ALERT_CMD
+# project_path/project_integrate из V2.7b, done-notify/AI_AGENT_ALERT_CMD
 # из V2.7a) - взят из тестов и спек этих этапов, НЕ из их реализации.
 #
 # Ambiguity-заметки (полный список - в финальном отчете задачи; коротко):
 # 1. Имя приватного обработчика тапа по кнопке урока НЕ названо спекой
-#    буквально (спека называет только route_callback + "claude-agent-run
+#    буквально (спека называет только route_callback + "ai-agent-run
 #    lesson-verdict"). По симметрии с уже существующими _handle_question_callback
 #    и _handle_done_callback (V2.5/V2.7b) тест ИСХОДИТ из имени
 #    _handle_lesson_callback; точная сигнатура (token, proxy, chat_id, agent,
@@ -36,7 +36,7 @@
 #    спекой не дана буквально - тест читает его СТРУКТУРНО-АГНОСТИЧНО:
 #    candidate_id ищется как sha256-hex (64 hex-символа) где угодно в сыром
 #    тексте файла, без предположений о ключах/вложенности JSON.
-# 4. Код возврата claude-agent-run lesson-verdict для "stale" не назван
+# 4. Код возврата ai-agent-run lesson-verdict для "stale" не назван
 #    явно - по прямой аналогии с done-verdict (B9 в test-agent-task-lifecycle.sh:
 #    несовпадение CAS-идентификатора -> exit != 0) тест проверяет только
 #    "!= 0", не конкретное число. Для applied/already - exit 0 (аналогия с
@@ -51,30 +51,30 @@ set -u
 shopt -s nullglob
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RUN="$HERE/../bin/claude-agent-run"
-RC="$HERE/../bin/claude-rc"
-ASK="$HERE/../bin/claude-agent-ask"
-ANSWER="$HERE/../bin/claude-agent-answer"
-TGBOT="$HERE/../bin/claude-agent-tgbot"
+RUN="$HERE/../bin/ai-agent-run"
+RC="$HERE/../bin/ai-rc"
+ASK="$HERE/../bin/ai-agent-ask"
+ANSWER="$HERE/../bin/ai-agent-answer"
+TGBOT="$HERE/../bin/ai-agent-tgbot"
 RC_PROJECTS_HELPER="$HERE/../bin/_rc_projects.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 export HOME="$TMP/home"
 mkdir -p "$HOME"
-export CLAUDE_AGENTS_DIR="$TMP/agents"
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
-export CLAUDE_AGENT_PROBE_CMD=/usr/bin/true
-export CLAUDE_AGENT_GENERATION=1 CLAUDE_AGENT_ATTEMPT=test-attempt
-export CLAUDE_RECONCILER_DIR="$TMP/reconciler"
-mkdir -p "$CLAUDE_RECONCILER_DIR"
-export CLAUDE_RC_PROJECTS_FILE="$TMP/projects.yaml"
-: > "$CLAUDE_RC_PROJECTS_FILE"
-export CLAUDE_AGENT_TG_SENT_MAP="$TMP/tgbot.sent.json"
+export AI_AGENTS_DIR="$TMP/agents"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_AGENT_PROBE_CMD=/usr/bin/true
+export AI_AGENT_GENERATION=1 AI_AGENT_ATTEMPT=test-attempt
+export AI_RECONCILER_DIR="$TMP/reconciler"
+mkdir -p "$AI_RECONCILER_DIR"
+export AI_RC_PROJECTS_FILE="$TMP/projects.yaml"
+: > "$AI_RC_PROJECTS_FILE"
+export AI_AGENT_TG_SENT_MAP="$TMP/tgbot.sent.json"
 # журнал подтверждений (V2.9 §6, аудит блокер 3) - вне любого проекта,
-# отдельный от $CLAUDE_AGENTS_DIR/$CLAUDE_AGENT_SPOOL_BASE подкаталог
+# отдельный от $AI_AGENTS_DIR/$AI_AGENT_SPOOL_BASE подкаталог
 # сандбокса, но так же вне дерева любого register_*_project.
-export CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$TMP/lessons"
+export AI_AGENT_LESSONS_JOURNAL_DIR="$TMP/lessons"
 TEST_WHITELIST_JSON='[1001]'
 
 PASS=0; FAIL=0
@@ -96,9 +96,9 @@ json_str() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1], ensure_a
 # ---------------------------------------------------------------- фикстуры --
 mk_event() { # <name> -> печатает agent-dir (mkdir-фикстура, без реального create - проект не нужен)
   local name="$1"
-  local ag="$CLAUDE_AGENTS_DIR/$name"
-  mkdir -p "$ag" "$CLAUDE_AGENT_SPOOL_BASE/$name"
-  chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/$name"
+  local ag="$AI_AGENTS_DIR/$name"
+  mkdir -p "$ag" "$AI_AGENT_SPOOL_BASE/$name"
+  chmod 0700 "$AI_AGENT_SPOOL_BASE/$name"
   cat > "$ag/spec.yaml" <<EOF
 schema: 1
 name: $name
@@ -115,9 +115,9 @@ EOF
 
 mk_event_with_model() { # <name> <task-model> [lessons-model] -> agent-dir, spec несет ОБА поля
   local name="$1" task_model="$2" lessons_model="${3:-}"
-  local ag="$CLAUDE_AGENTS_DIR/$name"
-  mkdir -p "$ag" "$CLAUDE_AGENT_SPOOL_BASE/$name"
-  chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/$name"
+  local ag="$AI_AGENTS_DIR/$name"
+  mkdir -p "$ag" "$AI_AGENT_SPOOL_BASE/$name"
+  chmod 0700 "$AI_AGENT_SPOOL_BASE/$name"
   {
     printf 'schema: 1\nname: %s\ntype: event\nrole: none\n' "$name"
     printf 'goal: "lesson distillation model unit test"\nautonomy: suggest\n'
@@ -132,13 +132,13 @@ mk_event_with_model() { # <name> <task-model> [lessons-model] -> agent-dir, spec
   echo "$ag"
 }
 
-register_flat_project() { printf '%s: %s\n' "$1" "$2" >> "$CLAUDE_RC_PROJECTS_FILE"; } # <name> <path> - форма A
+register_flat_project() { printf '%s: %s\n' "$1" "$2" >> "$AI_RC_PROJECTS_FILE"; } # <name> <path> - форма A
 register_obj_project() { # <name> <path> [lessons-rel] [integrate] -> форма B (§6: 3-е поле - lessons)
   local name="$1" path="$2" lessons="${3:-}" integ="${4:-}"
   { printf '%s:\n  path: %s\n' "$name" "$path"
     [[ -n "$lessons" ]] && printf '  lessons: %s\n' "$lessons"
     [[ -n "$integ" ]] && printf '  integrate: %s\n' "$integ"
-  } >> "$CLAUDE_RC_PROJECTS_FILE"
+  } >> "$AI_RC_PROJECTS_FILE"
 }
 rc_project_lessons_path() { ( . "$RC_PROJECTS_HELPER" 2>/dev/null; project_lessons_path "$1" 2>/dev/null ); }
 
@@ -161,7 +161,7 @@ EOF
   "$RC" agent create "$name" --spec "$specfile" >/dev/null 2>"$TMP/create-$name.err"
   local rc=$?
   [[ "$rc" == 0 ]] && ok || fail "fixture: create $name (project=$proj) ($(cat "$TMP/create-$name.err"))"
-  echo "$CLAUDE_AGENTS_DIR/$name"
+  echo "$AI_AGENTS_DIR/$name"
 }
 mk_worktree_project_agent() { # <name> <project-path> -> agent-dir workspace:worktree (для L23)
   local name="$1" proj="$2"
@@ -182,7 +182,7 @@ EOF
   "$RC" agent create "$name" --spec "$specfile" >/dev/null 2>"$TMP/create-$name.err"
   local rc=$?
   [[ "$rc" == 0 ]] && ok || fail "fixture: create $name workspace:worktree (project=$proj) ($(cat "$TMP/create-$name.err"))"
-  echo "$CLAUDE_AGENTS_DIR/$name"
+  echo "$AI_AGENTS_DIR/$name"
 }
 mk_git_project() { # <dir> -> git-репозиторий с одним коммитом
   local dir="$1"
@@ -191,7 +191,7 @@ mk_git_project() { # <dir> -> git-репозиторий с одним комм�
     && git -c user.email=t@t -c user.name=t commit -qm init )
 }
 
-# claude-agent-ask требует envelope_key реально в inflight (V2.3 §2) - тот же
+# ai-agent-ask требует envelope_key реально в inflight (V2.3 §2) - тот же
 # прием stub-конверта, что в tests/test-agent-tg-cards.sh/test-agent-question.sh.
 ask_direct() { # <agent-dir> <event-key> <question> -> stdout=qid
   local dir="$1" key="$2" q="$3"
@@ -202,15 +202,15 @@ ask_direct() { # <agent-dir> <event-key> <question> -> stdout=qid
       "$key" > "$dir/inbox/inflight/$key.json"
     stubbed=1
   fi
-  CLAUDE_AGENT_DIR="$dir" CLAUDE_AGENT_EVENT_KEY="$key" "$ASK" --question "$q"
+  AI_AGENT_DIR="$dir" AI_AGENT_EVENT_KEY="$key" "$ASK" --question "$q"
   local rc=$?
   [[ "$stubbed" == 1 ]] && rm -f "$dir/inbox/inflight/$key.json"
   return $rc
 }
 # V2.9 аудит блокер 1: текст поправки обязан читаться ИЗ ФАЙЛА ВОПРОСА
-# (questions/<qid>.json, поле answer - пишет его ТОЛЬКО claude-agent-answer,
+# (questions/<qid>.json, поле answer - пишет его ТОЛЬКО ai-agent-answer,
 # доверенный писатель V2.3 §4), а НЕ из самой записи треда e.get("text") -
-# агент знает свой CLAUDE_AGENT_DIR и может дописать в thread.jsonl
+# агент знает свой AI_AGENT_DIR и может дописать в thread.jsonl
 # поддельную запись kind=answer с существующим qid и произвольным текстом.
 # Фикстура поэтому пишет РЕАЛЬНЫЙ ответ через $ANSWER (как в проде), а
 # запись треда - ЦЕЛЕНАПРАВЛЕННО с ДРУГИМ, ФИКСИРОВАННЫМ форменным текстом
@@ -222,7 +222,7 @@ FORGE_MARKER="FORGED-THREAD-ANSWER-TEXT-NOT-FROM-QUESTION-FILE"
 append_trusted_answer() { # <agent-dir> <event-key> <real-qid> <text> [seq]
   local dir="$1" key="$2" qid="$3" text="$4" seq="${5:-9}"
   "$ANSWER" "$dir" --qid "$qid" --text "$text" >/dev/null 2>"$TMP/.answer-err" \
-    || { echo "fixture: claude-agent-answer упал: $(cat "$TMP/.answer-err")" >&2; return 1; }
+    || { echo "fixture: ai-agent-answer упал: $(cat "$TMP/.answer-err")" >&2; return 1; }
   python3 -c 'import json, sys
 d = {"key": sys.argv[1], "seq": int(sys.argv[4]), "at": "2026-07-27T09:00:00Z",
      "kind": "answer", "qid": sys.argv[2], "text": sys.argv[3]}
@@ -240,7 +240,7 @@ open(sys.argv[3], "a").write(json.dumps(d, ensure_ascii=False) + "\n")' \
 
 write_done_requested() { # <agent-dir> <key> <summary> [comment|-] -> done.json requested, pushed_at:null (V2.7a/V2.7b поля)
   # V2.10 §3c (аудит блокер 2): workspace:none финализирован СРАЗУ, как у
-  # реального claude-agent-done - finalized:true с самого создания.
+  # реального ai-agent-done - finalized:true с самого создания.
   local dir="$1" key="$2" summary="$3" comment="${4:--}"
   local comment_json="null"
   [[ "$comment" != "-" ]] && comment_json="$(json_str "$comment")"
@@ -314,7 +314,7 @@ lesson_id_count() { lesson_ids "$1" | grep -c . || true; }
 lesson_first_cid8() { lesson_ids "$1" | head -n1 | cut -c1-8; }
 
 # журнал подтверждений (V2.9 §6): ключ проекта - ТА ЖЕ формула, что
-# _lessons_sha16([realpath(project)]) в bin/claude-agent-run (product-side),
+# _lessons_sha16([realpath(project)]) в bin/ai-agent-run (product-side),
 # продублирована здесь по тому же принципу whitebox-фикстур (append_trusted_
 # answer и т.п.) - тест не читает реализацию, а прогоняет ПУБЛИЧНО описанный
 # алгоритм (§6: sha16 по образцу harvester Д4) от своего имени.
@@ -325,7 +325,7 @@ blob = json.dumps([p], ensure_ascii=False).encode("utf-8")
 print(hashlib.sha256(blob).hexdigest()[:16])' "$1"
 }
 lesson_journal_path() { # <project-abs-path>
-  printf '%s/%s.jsonl' "$CLAUDE_AGENT_LESSONS_JOURNAL_DIR" "$(lesson_project_key "$1")"
+  printf '%s/%s.jsonl' "$AI_AGENT_LESSONS_JOURNAL_DIR" "$(lesson_project_key "$1")"
 }
 # whitebox-фикстура: дописывает запись НАПРЯМУЮ В ЖУРНАЛ (не в зеркало
 # проекта) - симулирует N УЖЕ ПОДТВЕРЖДЕННЫХ ранее уроков без прогона всей
@@ -521,12 +521,12 @@ MOCK_CALLED_L1="$TMP/l1-called"
 PROMPT_L1="$TMP/l1-prompt.txt"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_CALLED_FILE="$MOCK_CALLED_L1" \
   PROMPT_DUMP_FILE="$PROMPT_L1" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l1-alert.sh" "$RUN" done-notify "$AGL1" >/dev/null 2>"$TMP/l1.err"; RCL1=$?
+  AI_AGENT_ALERT_CMD="$TMP/l1-alert.sh" "$RUN" done-notify "$AGL1" >/dev/null 2>"$TMP/l1.err"; RCL1=$?
 [[ "$RCL1" == 0 ]] && ok || fail "L1: done-notify exit 0 (got $RCL1: $(cat "$TMP/l1.err"))"
 [[ -f "$MOCK_CALLED_L1" ]] && ok || fail "L1: модель дистилляции вызвана (доверенный ответ - валидная поправка)"
 [[ -f "$AGL1/lessons.json" ]] && ok || fail "L1: lessons.json создан"
 # falsifiability блокера 1: append_trusted_answer пишет РЕАЛЬНЫЙ ответ через
-# claude-agent-answer (в файл вопроса), но САМУ ЗАПИСЬ ТРЕДА - с другим,
+# ai-agent-answer (в файл вопроса), но САМУ ЗАПИСЬ ТРЕДА - с другим,
 # фиксированным форменным текстом ($FORGE_MARKER, независимым от $text).
 # Если дистилляция читает текст ПРАВИЛЬНО (из файла) - в промпте виден
 # $text и НЕ виден $FORGE_MARKER. Если бы регрессировала на чтение из
@@ -548,7 +548,7 @@ mk_done_envelope "$AGL2" "$KL2"
 mk_alert_ok "$TMP/l2-alert.log" "$TMP/l2-alert.sh"
 MOCK_CALLED_L2="$TMP/l2-called"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_CALLED_FILE="$MOCK_CALLED_L2" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l2-alert.sh" "$RUN" done-notify "$AGL2" >/dev/null 2>"$TMP/l2.err"; RCL2=$?
+  AI_AGENT_ALERT_CMD="$TMP/l2-alert.sh" "$RUN" done-notify "$AGL2" >/dev/null 2>"$TMP/l2.err"; RCL2=$?
 [[ "$RCL2" == 0 ]] && ok || fail "L2: done-notify exit 0 (got $RCL2: $(cat "$TMP/l2.err"))"
 [[ ! -f "$MOCK_CALLED_L2" ]] && ok || fail "L2: модель НЕ вызвана (единственная запись - недоверенная)"
 [[ ! -f "$AGL2/lessons.json" ]] && ok || fail "L2: lessons.json не создан"
@@ -577,7 +577,7 @@ mk_done_envelope "$AGL3" "$KL3B"
 mk_alert_ok "$TMP/l3-alert.log" "$TMP/l3-alert.sh"
 MOCK_CALLED_L3="$TMP/l3-called"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_CALLED_FILE="$MOCK_CALLED_L3" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l3-alert.sh" "$RUN" done-notify "$AGL3" >/dev/null 2>"$TMP/l3.err"; RCL3=$?
+  AI_AGENT_ALERT_CMD="$TMP/l3-alert.sh" "$RUN" done-notify "$AGL3" >/dev/null 2>"$TMP/l3.err"; RCL3=$?
 [[ "$RCL3" == 0 ]] && ok || fail "L3: done-notify exit 0 (got $RCL3: $(cat "$TMP/l3.err"))"
 [[ -f "$MOCK_CALLED_L3" ]] && ok || fail "L3: модель вызвана (комментарий отказа дошел через тред как поправка)"
 [[ -f "$AGL3/lessons.json" ]] && ok || fail "L3: lessons.json создан"
@@ -656,7 +656,7 @@ mk_done_envelope "$AGL3X" "$KL3X2"
 mk_alert_ok "$TMP/l3x-alert.log" "$TMP/l3x-alert.sh"
 MOCK_CALLED_L3X="$TMP/l3x-called"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_CALLED_FILE="$MOCK_CALLED_L3X" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l3x-alert.sh" "$RUN" done-notify "$AGL3X" >/dev/null 2>"$TMP/l3x.err"
+  AI_AGENT_ALERT_CMD="$TMP/l3x-alert.sh" "$RUN" done-notify "$AGL3X" >/dev/null 2>"$TMP/l3x.err"
 [[ -f "$MOCK_CALLED_L3X" ]] \
   && ok || fail "L3X: после ретрая поправка ВСЕ РАВНО доходит до дистилляции (не потеряна крахом)"
 
@@ -688,7 +688,7 @@ open(sys.argv[3], "a").write(json.dumps(d, ensure_ascii=False) + "\n")' \
 mk_alert_ok "$TMP/l3yw-alert.log" "$TMP/l3yw-alert.sh"
 MOCK_CALLED_L3YW="$TMP/l3yw-called"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_CALLED_FILE="$MOCK_CALLED_L3YW" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l3yw-alert.sh" "$RUN" done-notify "$AGL3YW" >/dev/null 2>"$TMP/l3yw.err"; RCL3YW=$?
+  AI_AGENT_ALERT_CMD="$TMP/l3yw-alert.sh" "$RUN" done-notify "$AGL3YW" >/dev/null 2>"$TMP/l3yw.err"; RCL3YW=$?
 [[ "$RCL3YW" == 0 ]] && ok || fail "L3YW: done-notify exit 0 (got $RCL3YW)"
 [[ ! -f "$MOCK_CALLED_L3YW" ]] \
   && ok || fail "L3YW: модель НЕ вызвана (rid не по формуле - отбивается форматной проверкой)"
@@ -717,7 +717,7 @@ KL3Y="l3y-key"
 write_done_requested "$AGL3Y" "$KL3Y" "L3Y summary"
 mk_done_envelope "$AGL3Y" "$KL3Y"
 # reject_comment_rid(key) = sha256("reject:"+key).hexdigest() - формула
-# из bin/claude-agent-run (§1 п.2), продублирована здесь тем же принципом
+# из bin/ai-agent-run (§1 п.2), продублирована здесь тем же принципом
 # whitebox-фикстур, что lesson_project_key ниже.
 FORGE_RID_L3Y=$(python3 -c 'import hashlib, sys
 print(hashlib.sha256(("reject:" + sys.argv[1]).encode()).hexdigest())' "$KL3Y")
@@ -739,7 +739,7 @@ MOCK_CALLED_L3Y="$TMP/l3y-called"
 PROMPT_L3Y="$TMP/l3y-prompt.txt"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_CALLED_FILE="$MOCK_CALLED_L3Y" \
   PROMPT_DUMP_FILE="$PROMPT_L3Y" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l3y-alert.sh" "$RUN" done-notify "$AGL3Y" >/dev/null 2>"$TMP/l3y.err"; RCL3Y=$?
+  AI_AGENT_ALERT_CMD="$TMP/l3y-alert.sh" "$RUN" done-notify "$AGL3Y" >/dev/null 2>"$TMP/l3y.err"; RCL3Y=$?
 [[ "$RCL3Y" == 0 ]] && ok || fail "L3Y: done-notify exit 0 (got $RCL3Y)"
 [[ -f "$MOCK_CALLED_L3Y" ]] \
   && ok || fail "L3Y: самосогласованная подделка ПРОХОДИТ - модель вызвана (честно задокументированное поведение)"
@@ -802,7 +802,7 @@ MOCK_CALLED_L3Z="$TMP/l3z-called"
 PROMPT_L3Z="$TMP/l3z-prompt.txt"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_CALLED_FILE="$MOCK_CALLED_L3Z" \
   PROMPT_DUMP_FILE="$PROMPT_L3Z" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l3z-alert.sh" "$RUN" done-notify "$AGL3Z" >/dev/null 2>"$TMP/l3z.err"; RCL3Z=$?
+  AI_AGENT_ALERT_CMD="$TMP/l3z-alert.sh" "$RUN" done-notify "$AGL3Z" >/dev/null 2>"$TMP/l3z.err"; RCL3Z=$?
 [[ "$RCL3Z" == 0 ]] && ok || fail "L3Z: done-notify exit 0 (got $RCL3Z: $(cat "$TMP/l3z.err"))"
 [[ -f "$MOCK_CALLED_L3Z" ]] \
   && ok || fail "L3Z: после доигрывания комментарий реально становится поправкой (модель вызвана)"
@@ -825,7 +825,7 @@ mk_done_envelope "$AGL4" "$KL4B"
 mk_alert_ok "$TMP/l4-alert.log" "$TMP/l4-alert.sh"
 MOCK_CALLED_L4="$TMP/l4-called"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_CALLED_FILE="$MOCK_CALLED_L4" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l4-alert.sh" "$RUN" done-notify "$AGL4" >/dev/null 2>"$TMP/l4.err"; RCL4=$?
+  AI_AGENT_ALERT_CMD="$TMP/l4-alert.sh" "$RUN" done-notify "$AGL4" >/dev/null 2>"$TMP/l4.err"; RCL4=$?
 [[ "$RCL4" == 0 ]] && ok || fail "L4: done-notify exit 0 (got $RCL4: $(cat "$TMP/l4.err"))"
 [[ ! -f "$MOCK_CALLED_L4" ]] && ok || fail "L4: модель НЕ вызвана (тап без текста - не поправка)"
 [[ ! -f "$AGL4/lessons.json" ]] && ok || fail "L4: lessons.json не создан"
@@ -843,7 +843,7 @@ mk_done_envelope "$AGL5" "$KL5"
 mk_alert_ok "$TMP/l5-alert.log" "$TMP/l5-alert.sh"
 MOCK_CALLED_L5="$TMP/l5-called"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_CALLED_FILE="$MOCK_CALLED_L5" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l5-alert.sh" "$RUN" done-notify "$AGL5" >/dev/null 2>"$TMP/l5.err"; RCL5=$?
+  AI_AGENT_ALERT_CMD="$TMP/l5-alert.sh" "$RUN" done-notify "$AGL5" >/dev/null 2>"$TMP/l5.err"; RCL5=$?
 [[ "$RCL5" == 0 ]] && ok || fail "L5: done-notify exit 0 (got $RCL5: $(cat "$TMP/l5.err"))"
 [[ ! -f "$MOCK_CALLED_L5" ]] && ok || fail "L5: модель НЕ вызвана (короткий ответ - согласие, не знание)"
 [[ ! -f "$AGL5/lessons.json" ]] && ok || fail "L5: lessons.json не создан"
@@ -857,7 +857,7 @@ mk_done_envelope "$AGL6" "$KL6"
 mk_alert_ok "$TMP/l6-alert.log" "$TMP/l6-alert.sh"
 MOCK_CALLED_L6="$TMP/l6-called"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_CALLED_FILE="$MOCK_CALLED_L6" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l6-alert.sh" "$RUN" done-notify "$AGL6" >/dev/null 2>"$TMP/l6.err"; RCL6=$?
+  AI_AGENT_ALERT_CMD="$TMP/l6-alert.sh" "$RUN" done-notify "$AGL6" >/dev/null 2>"$TMP/l6.err"; RCL6=$?
 [[ "$RCL6" == 0 ]] && ok || fail "L6: done-notify exit 0 (got $RCL6: $(cat "$TMP/l6.err"))"
 [[ ! -f "$MOCK_CALLED_L6" ]] && ok || fail "L6: модель не вызвана вовсе"
 [[ ! -f "$AGL6/lessons.json" ]] && ok || fail "L6: файла состояния кандидатов нет"
@@ -899,7 +899,7 @@ mk_done_envelope "$AGL7" "$KL7"
 mk_alert_ok "$TMP/l7-alert.log" "$TMP/l7-alert.sh"
 PROMPT_L7="$TMP/l7-prompt.txt"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one PROMPT_DUMP_FILE="$PROMPT_L7" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l7-alert.sh" "$RUN" done-notify "$AGL7" >/dev/null 2>"$TMP/l7.err"
+  AI_AGENT_ALERT_CMD="$TMP/l7-alert.sh" "$RUN" done-notify "$AGL7" >/dev/null 2>"$TMP/l7.err"
 [[ -s "$PROMPT_L7" ]] && ok || fail "L7: промпт модели дистилляции сдампен (модель вызвана)"
 grep -qF "hunter2seclong" "$PROMPT_L7" && fail "L7: секрет 'hunter2seclong' не должен дойти до модели" || ok
 grep -qF "abc.def.ghi.secretlong" "$PROMPT_L7" && fail "L7: секрет Bearer не должен дойти до модели" || ok
@@ -931,7 +931,7 @@ write_done_requested "$AGL8" "$KL8" "L8 summary"
 mk_done_envelope "$AGL8" "$KL8"
 mk_alert_ok "$TMP/l8-alert.log" "$TMP/l8-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=unknown MOCK_LESSON_ESSENCE="l8-should-be-dropped-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l8-alert.sh" "$RUN" done-notify "$AGL8" >/dev/null 2>"$TMP/l8.err"; RCL8=$?
+  AI_AGENT_ALERT_CMD="$TMP/l8-alert.sh" "$RUN" done-notify "$AGL8" >/dev/null 2>"$TMP/l8.err"; RCL8=$?
 [[ "$RCL8" == 0 ]] && ok || fail "L8: done-notify exit 0 даже если единственный кандидат отброшен (got $RCL8)"
 if [[ -f "$AGL8/lessons.json" ]]; then
   grep -qF "l8-should-be-dropped-marker" "$AGL8/lessons.json" \
@@ -952,7 +952,7 @@ write_done_requested "$AGL8B" "$KL8B" "L8b summary"
 mk_done_envelope "$AGL8B" "$KL8B"
 mk_alert_ok "$TMP/l8b-alert.log" "$TMP/l8b-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l8-should-be-dropped-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l8b-alert.sh" "$RUN" done-notify "$AGL8B" >/dev/null 2>"$TMP/l8b.err"
+  AI_AGENT_ALERT_CMD="$TMP/l8b-alert.sh" "$RUN" done-notify "$AGL8B" >/dev/null 2>"$TMP/l8b.err"
 [[ -f "$AGL8B/lessons.json" ]] && grep -qF "l8-should-be-dropped-marker" "$AGL8B/lessons.json" \
   && ok || fail "L8: контроль - валидный from ОСТАЕТСЯ в lessons.json (доказывает падаемость L8)"
 
@@ -968,7 +968,7 @@ write_done_requested "$AGL9" "$KL9" "L9 summary"
 mk_done_envelope "$AGL9" "$KL9"
 mk_alert_ok "$TMP/l9-alert.log" "$TMP/l9-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=empty_essence MOCK_LESSON_WHY="l9-should-be-dropped-why-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l9-alert.sh" "$RUN" done-notify "$AGL9" >/dev/null 2>"$TMP/l9.err"; RCL9=$?
+  AI_AGENT_ALERT_CMD="$TMP/l9-alert.sh" "$RUN" done-notify "$AGL9" >/dev/null 2>"$TMP/l9.err"; RCL9=$?
 [[ "$RCL9" == 0 ]] && ok || fail "L9: done-notify exit 0 (got $RCL9)"
 if [[ -f "$AGL9/lessons.json" ]]; then
   grep -qF "l9-should-be-dropped-why-marker" "$AGL9/lessons.json" \
@@ -987,7 +987,7 @@ register_flat_project projl7b "$PROJ_L7B"
 AGL7B=$(mk_single_correction_project_agent evtl7b "$PROJ_L7B")
 mk_alert_ok "$TMP/l7b-alert.log" "$TMP/l7b-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=truncated \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l7b-alert.sh" "$RUN" done-notify "$AGL7B" >/dev/null 2>"$TMP/l7b.err"; RCL7B=$?
+  AI_AGENT_ALERT_CMD="$TMP/l7b-alert.sh" "$RUN" done-notify "$AGL7B" >/dev/null 2>"$TMP/l7b.err"; RCL7B=$?
 [[ "$RCL7B" == 0 ]] && ok || fail "L7B: done-notify exit 0 даже на битом ответе (приемка не сломана, got $RCL7B)"
 [[ ! -f "$AGL7B/lessons.json" ]] \
   && ok || fail "L7B: lessons.json НЕ создан (иначе поправка потерялась бы навсегда под видом пустого списка)"
@@ -999,7 +999,7 @@ echo "=== L8D: голый объект вместо обязательного �
 AGL8D=$(mk_single_correction_agent evtl8d)
 mk_alert_ok "$TMP/l8d-alert.log" "$TMP/l8d-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=bare_object MOCK_LESSON_ESSENCE="l8d-bare-object-should-be-dropped" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l8d-alert.sh" "$RUN" done-notify "$AGL8D" >/dev/null 2>"$TMP/l8d.err"
+  AI_AGENT_ALERT_CMD="$TMP/l8d-alert.sh" "$RUN" done-notify "$AGL8D" >/dev/null 2>"$TMP/l8d.err"
 [[ ! -f "$AGL8D/lessons.json" ]] && ok || fail "L8D: lessons.json НЕ создан (голый объект - не валидный ответ)"
 
 # =============================================================== L8E (falsifiability: см. финальный ответ)
@@ -1007,7 +1007,7 @@ echo "=== L8E: 'garbage {...} trailing' вокруг объекта, не мас
 AGL8E=$(mk_single_correction_agent evtl8e)
 mk_alert_ok "$TMP/l8e-alert.log" "$TMP/l8e-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=trailing_garbage MOCK_LESSON_ESSENCE="l8e-garbage-should-be-dropped" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l8e-alert.sh" "$RUN" done-notify "$AGL8E" >/dev/null 2>"$TMP/l8e.err"
+  AI_AGENT_ALERT_CMD="$TMP/l8e-alert.sh" "$RUN" done-notify "$AGL8E" >/dev/null 2>"$TMP/l8e.err"
 [[ ! -f "$AGL8E/lessons.json" ]] && ok || fail "L8E: lessons.json НЕ создан (мусор вокруг объекта - не валидный ответ)"
 
 # =============================================================== L8F (falsifiability: см. финальный ответ)
@@ -1015,7 +1015,7 @@ echo "=== L8F: essence/how_to_apply - объект, не строка - канд
 AGL8F=$(mk_single_correction_agent evtl8f)
 mk_alert_ok "$TMP/l8f-alert.log" "$TMP/l8f-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=bad_type_essence \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l8f-alert.sh" "$RUN" done-notify "$AGL8F" >/dev/null 2>"$TMP/l8f.err"
+  AI_AGENT_ALERT_CMD="$TMP/l8f-alert.sh" "$RUN" done-notify "$AGL8F" >/dev/null 2>"$TMP/l8f.err"
 if [[ -f "$AGL8F/lessons.json" ]]; then
   grep -qF "evil-hidden-marker" "$AGL8F/lessons.json" \
     && fail "L8F: объект в how_to_apply не должен пройти через str(...)" || ok
@@ -1028,7 +1028,7 @@ echo "=== L8G: essence сверх лимита длины - кандидат О�
 AGL8G=$(mk_single_correction_agent evtl8g)
 mk_alert_ok "$TMP/l8g-alert.log" "$TMP/l8g-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=oversize_essence \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l8g-alert.sh" "$RUN" done-notify "$AGL8G" >/dev/null 2>"$TMP/l8g.err"
+  AI_AGENT_ALERT_CMD="$TMP/l8g-alert.sh" "$RUN" done-notify "$AGL8G" >/dev/null 2>"$TMP/l8g.err"
 if [[ -f "$AGL8G/lessons.json" ]]; then
   grep -qF "l8g-oversize-" "$AGL8G/lessons.json" \
     && fail "L8G: кандидат сверх лимита длины не должен попасть в lessons.json ни целиком, ни урезанным" || ok
@@ -1048,7 +1048,7 @@ write_done_requested "$AGL10" "$KL10" "L10 summary"
 mk_done_envelope "$AGL10" "$KL10"
 mk_alert_ok "$TMP/l10-alert.log" "$TMP/l10-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=many \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l10-alert.sh" "$RUN" done-notify "$AGL10" >/dev/null 2>"$TMP/l10.err"
+  AI_AGENT_ALERT_CMD="$TMP/l10-alert.sh" "$RUN" done-notify "$AGL10" >/dev/null 2>"$TMP/l10.err"
 [[ -f "$AGL10/lessons.json" ]] && ok || fail "L10: lessons.json создан (5 кандидатов на входе)"
 CNT_L10=$(lesson_id_count "$AGL10/lessons.json" 2>/dev/null || echo 0)
 [[ "$CNT_L10" == "3" ]] && ok || fail "L10: ровно 3 кандидата остаются, лишние (5-3=2) отброшены (got $CNT_L10)"
@@ -1070,7 +1070,7 @@ mk_alert_ok "$TMP/l11-alert.log" "$TMP/l11-alert.sh"
 # стороны: id "от counter/random" провалил бы дедуп (получили бы 3 записи,
 # не 2); id "игнорирующий essence" схлопнул бы ВСЕ 3 в одну (получили бы 1).
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=mixed_dup \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l11-alert.sh" "$RUN" done-notify "$AGL11" >/dev/null 2>"$TMP/l11.err"
+  AI_AGENT_ALERT_CMD="$TMP/l11-alert.sh" "$RUN" done-notify "$AGL11" >/dev/null 2>"$TMP/l11.err"
 [[ -f "$AGL11/lessons.json" ]] && ok || fail "L11: lessons.json создан"
 CNT_L11=$(lesson_id_count "$AGL11/lessons.json" 2>/dev/null || echo 0)
 [[ "$CNT_L11" == "2" ]] \
@@ -1090,7 +1090,7 @@ write_done_requested "$AGL11B" "$KL11B" "L11B summary"
 mk_done_envelope "$AGL11B" "$KL11B"
 mk_alert_ok "$TMP/l11b-alert.log" "$TMP/l11b-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=vary_why \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l11b-alert.sh" "$RUN" done-notify "$AGL11B" >/dev/null 2>"$TMP/l11b.err"
+  AI_AGENT_ALERT_CMD="$TMP/l11b-alert.sh" "$RUN" done-notify "$AGL11B" >/dev/null 2>"$TMP/l11b.err"
 CNT_L11B=$(lesson_id_count "$AGL11B/lessons.json" 2>/dev/null || echo 0)
 [[ "$CNT_L11B" == "2" ]] \
   && ok || fail "L11B: одинаковые essence/how, разный why -> 2 РАЗНЫХ candidate_id (got $CNT_L11B)"
@@ -1107,7 +1107,7 @@ write_done_requested "$AGL11C" "$KL11C" "L11C summary"
 mk_done_envelope "$AGL11C" "$KL11C"
 mk_alert_ok "$TMP/l11c-alert.log" "$TMP/l11c-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=vary_how \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l11c-alert.sh" "$RUN" done-notify "$AGL11C" >/dev/null 2>"$TMP/l11c.err"
+  AI_AGENT_ALERT_CMD="$TMP/l11c-alert.sh" "$RUN" done-notify "$AGL11C" >/dev/null 2>"$TMP/l11c.err"
 CNT_L11C=$(lesson_id_count "$AGL11C/lessons.json" 2>/dev/null || echo 0)
 [[ "$CNT_L11C" == "2" ]] \
   && ok || fail "L11C: одинаковые essence/why, разный how_to_apply -> 2 РАЗНЫХ candidate_id (got $CNT_L11C)"
@@ -1131,7 +1131,7 @@ mk_lesson_candidate() { # <agent-name> <ask-key> <essence-marker> -> печат�
   mk_done_envelope "$dir" "$key"
   mk_alert_ok "$TMP/$name-alert.log" "$TMP/$name-alert.sh"
   CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="$essence" \
-    CLAUDE_AGENT_ALERT_CMD="$TMP/$name-alert.sh" "$RUN" done-notify "$dir" >/dev/null 2>"$TMP/$name-notify.err"
+    AI_AGENT_ALERT_CMD="$TMP/$name-alert.sh" "$RUN" done-notify "$dir" >/dev/null 2>"$TMP/$name-notify.err"
   echo "$dir $(lesson_first_cid8 "$dir/lessons.json")"
 }
 
@@ -1259,7 +1259,7 @@ mk_alert_ok "$TMP/l12e-alert.log" "$TMP/l12e-alert.sh"
 BIG_L12E=$(python3 -c 'print(" ".join(["word"] * 40))')
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one \
   MOCK_LESSON_ESSENCE="l12e-marker-$BIG_L12E" MOCK_LESSON_WHY="$BIG_L12E" MOCK_LESSON_HOW="$BIG_L12E" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l12e-alert.sh" "$RUN" done-notify "$AGL12E" >/dev/null 2>"$TMP/l12e.err"
+  AI_AGENT_ALERT_CMD="$TMP/l12e-alert.sh" "$RUN" done-notify "$AGL12E" >/dev/null 2>"$TMP/l12e.err"
 if [[ -f "$AGL12E/lessons.json" ]]; then
   grep -qF "l12e-marker-" "$AGL12E/lessons.json" \
     && fail "L12E: essence/why/how суммарно за лимитом (~610>480) - кандидат должен быть отброшен ЦЕЛИКОМ" || ok
@@ -1272,7 +1272,7 @@ echo "=== L12F: лимит длины кандидата считается по
 # essence/how из символов "&" - сырая сумма (essence+why+how) укладывается в
 # LESSON_CANDIDATE_MAX_BYTES=480 (192<=480, старая проверка пропустила бы
 # кандидата), но "&" эскейпится в "&amp;" (x5) - ПОСЛЕ escape сумма ~912,
-# больше того, что реально уйдет отправителю (bin/claude-agent-tgbot
+# больше того, что реально уйдет отправителю (bin/ai-agent-tgbot
 # send_message эскейпит карточку целиком ПОСЛЕ сборки). Три таких кандидата
 # в карточке дали бы сообщение, которое чанкер режет на несколько частей, и
 # клавиатура осталась бы только под последним куском.
@@ -1288,7 +1288,7 @@ mk_alert_ok "$TMP/l12f-alert.log" "$TMP/l12f-alert.sh"
 AMP_L12F=$(python3 -c 'print("&" * 90)')
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one \
   MOCK_LESSON_ESSENCE="l12f-marker-$AMP_L12F" MOCK_LESSON_WHY="" MOCK_LESSON_HOW="$AMP_L12F" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l12f-alert.sh" "$RUN" done-notify "$AGL12F" >/dev/null 2>"$TMP/l12f.err"
+  AI_AGENT_ALERT_CMD="$TMP/l12f-alert.sh" "$RUN" done-notify "$AGL12F" >/dev/null 2>"$TMP/l12f.err"
 if [[ -f "$AGL12F/lessons.json" ]]; then
   grep -qF "l12f-marker-" "$AGL12F/lessons.json" \
     && fail "L12F: сырая сумма (~192) в пределах капа, но escape-сумма (~912) - за пределами: кандидат должен быть отброшен" || ok
@@ -1338,7 +1338,7 @@ echo "=== L37: поздний тап по кнопке урока НА АРХИ�
 # (тот же путь, что кладет _phase_archive: os.rename(agent_dir, dest)) -
 # lessons.json, control.json, spec.yaml переезжают ВМЕСТЕ с каталогом.
 read -r AGL37 CID8_L37 < <(mk_lesson_candidate agtl37 l37-key l37-archived-essence-marker)
-ARCHIVE_ROOT_L37="$(dirname "$CLAUDE_AGENTS_DIR")/archive"
+ARCHIVE_ROOT_L37="$(dirname "$AI_AGENTS_DIR")/archive"
 mkdir -p "$ARCHIVE_ROOT_L37"
 ARCHDIR_L37="$ARCHIVE_ROOT_L37/agtl37-2026-01-01T00:00:00Z"
 mv "$AGL37" "$ARCHDIR_L37"
@@ -1359,7 +1359,7 @@ mkdir -p "$ARCHDIR_L37_DECOY"
 DECOY_CID_L37='99999999aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 echo '{"candidates": [{"candidate_id": "'"$DECOY_CID_L37"'", "status": "proposed"}]}' \
   > "$ARCHDIR_L37_DECOY/lessons.json"
-RC_L37_DECOY=$(python3 - "$HERE/../bin/claude-agent-run" <<'PY'
+RC_L37_DECOY=$(python3 - "$HERE/../bin/ai-agent-run" <<'PY'
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
 path = sys.argv[1]
@@ -1410,7 +1410,7 @@ for ln, seg in hits:
 PY
 )
 [[ "${CNT_L17:-0}" == "0" ]] \
-  && ok || fail "L17: bin/claude-agent-tgbot обращается к lessons.json файлово (got $CNT_L17)"
+  && ok || fail "L17: bin/ai-agent-tgbot обращается к lessons.json файлово (got $CNT_L17)"
 
 ####################################################################
 # Запись (§6, L18-L23)
@@ -1438,7 +1438,7 @@ write_done_requested "$AGL18" "$KL18" "L18 summary"
 mk_done_envelope "$AGL18" "$KL18"
 mk_alert_ok "$TMP/l18-alert.log" "$TMP/l18-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l18-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l18-alert.sh" "$RUN" done-notify "$AGL18" >/dev/null 2>"$TMP/l18.err"
+  AI_AGENT_ALERT_CMD="$TMP/l18-alert.sh" "$RUN" done-notify "$AGL18" >/dev/null 2>"$TMP/l18.err"
 CID8_L18=$(lesson_first_cid8 "$AGL18/lessons.json")
 "$RUN" lesson-verdict "$AGL18" --accept --id "$CID8_L18" >/dev/null 2>"$TMP/l18v.err"
 [[ -f "$DEF_L18_ABS" ]] && ok || fail "L18: файл уроков создан по дефолтному пути ($DEF_L18_ABS)"
@@ -1462,7 +1462,7 @@ write_done_requested "$AGL19" "$KL19" "L19 summary"
 mk_done_envelope "$AGL19" "$KL19"
 mk_alert_ok "$TMP/l19-alert.log" "$TMP/l19-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l19-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l19-alert.sh" "$RUN" done-notify "$AGL19" >/dev/null 2>"$TMP/l19.err"
+  AI_AGENT_ALERT_CMD="$TMP/l19-alert.sh" "$RUN" done-notify "$AGL19" >/dev/null 2>"$TMP/l19.err"
 CID8_L19=$(lesson_first_cid8 "$AGL19/lessons.json")
 "$RUN" lesson-verdict "$AGL19" --accept --id "$CID8_L19" >/dev/null 2>"$TMP/l19v.err"
 [[ -f "$PROJ_L19/docs/team-lessons.md" ]] && ok || fail "L19: файл уроков создан по явному пути формы B, не по дефолту"
@@ -1486,7 +1486,7 @@ write_done_requested "$AGL19B" "$KL19B" "L19B summary"
 mk_done_envelope "$AGL19B" "$KL19B"
 mk_alert_ok "$TMP/l19b-alert.log" "$TMP/l19b-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l19b-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l19b-alert.sh" "$RUN" done-notify "$AGL19B" >/dev/null 2>"$TMP/l19b.err"
+  AI_AGENT_ALERT_CMD="$TMP/l19b-alert.sh" "$RUN" done-notify "$AGL19B" >/dev/null 2>"$TMP/l19b.err"
 CID8_L19B=$(lesson_first_cid8 "$AGL19B/lessons.json")
 "$RUN" lesson-verdict "$AGL19B" --accept --id "$CID8_L19B" >"$TMP/l19bv.out" 2>"$TMP/l19bv.err"; RCL19BV=$?
 [[ "$RCL19BV" != 0 ]] && ok || fail "L19B: accept на traversal-пути -> отказ (exit != 0, got $RCL19BV)"
@@ -1514,7 +1514,7 @@ echo "=== L20: дедуп по candidate_id - редо ПОСЛЕ обрыва (
 # Прямой --accept дважды подряд НЕ упражняет файловый дедуп вовсе: второй
 # вызов у cmd_lesson_verdict видит status=="applied" и возвращает "already"
 # ДО того, как вообще позвал бы _lessons_write_project (см. cur in
-# ("applied","dismissed") в bin/claude-agent-run) - файловый дедуп по
+# ("applied","dismissed") в bin/ai-agent-run) - файловый дедуп по
 # candidate_id защищает другой, реальный сценарий: _lessons_write_project
 # отработал (журнал+зеркало дописаны), но процесс упал ДО durable_json,
 # фиксирующего status="applied" - редо (следующий тик/повтор тапа) увидит
@@ -1533,7 +1533,7 @@ write_done_requested "$AGL20" "$KL20" "L20 summary"
 mk_done_envelope "$AGL20" "$KL20"
 mk_alert_ok "$TMP/l20-alert.log" "$TMP/l20-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l20-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l20-alert.sh" "$RUN" done-notify "$AGL20" >/dev/null 2>"$TMP/l20.err"
+  AI_AGENT_ALERT_CMD="$TMP/l20-alert.sh" "$RUN" done-notify "$AGL20" >/dev/null 2>"$TMP/l20.err"
 CID8_L20=$(lesson_first_cid8 "$AGL20/lessons.json")
 "$RUN" lesson-verdict "$AGL20" --accept --id "$CID8_L20" >/dev/null 2>"$TMP/l20v1.err"
 LESSONS_L20="$PROJ_L20/.claude/rules/lessons.md"
@@ -1616,7 +1616,7 @@ write_done_requested "$AGL20C" "$KL20C" "L20c summary"
 mk_done_envelope "$AGL20C" "$KL20C"
 mk_alert_ok "$TMP/l20c-alert.log" "$TMP/l20c-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l20c-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l20c-alert.sh" "$RUN" done-notify "$AGL20C" >/dev/null 2>"$TMP/l20c.err"
+  AI_AGENT_ALERT_CMD="$TMP/l20c-alert.sh" "$RUN" done-notify "$AGL20C" >/dev/null 2>"$TMP/l20c.err"
 CID8_L20C=$(lesson_first_cid8 "$AGL20C/lessons.json")
 [[ -n "$CID8_L20C" ]] && ok || fail "L20C: fixture - кандидат создан (project_key/project_real зафиксированы на A)"
 # подмена: symlink теперь указывает на ДРУГОЙ проект (B) - МЕЖДУ дистилляцией
@@ -1646,7 +1646,7 @@ write_done_requested "$AGL20D" "$KL20D" "L20d summary"
 mk_done_envelope "$AGL20D" "$KL20D"
 mk_alert_ok "$TMP/l20d-alert.log" "$TMP/l20d-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l20d-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l20d-alert.sh" "$RUN" done-notify "$AGL20D" >/dev/null 2>"$TMP/l20d.err"
+  AI_AGENT_ALERT_CMD="$TMP/l20d-alert.sh" "$RUN" done-notify "$AGL20D" >/dev/null 2>"$TMP/l20d.err"
 # на момент дистилляции .claude/rules ЕЩЕ НЕ существует - ранний
 # _lessons_path_contained pre-check пройдет по ЧИСТО ТЕКСТОВОМУ пути (нечего
 # резолвить). Монки-патчим FLock.__enter__ реального модуля - симлинк
@@ -1706,7 +1706,7 @@ write_done_requested "$AGL20G" "$KL20G" "L20g summary"
 mk_done_envelope "$AGL20G" "$KL20G"
 mk_alert_ok "$TMP/l20g-alert.log" "$TMP/l20g-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l20g-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l20g-alert.sh" "$RUN" done-notify "$AGL20G" >/dev/null 2>"$TMP/l20g.err"
+  AI_AGENT_ALERT_CMD="$TMP/l20g-alert.sh" "$RUN" done-notify "$AGL20G" >/dev/null 2>"$TMP/l20g.err"
 # Монки-патчим FLock.__enter__ (тот же прием, что L20D) - РОВНО в окне
 # ожидания журнального лока (после того, как project_real/root_dev_ino уже
 # вычислены вызывающим, ДО открытия корневого fd внутри _lessons_safe_leaf_
@@ -1805,12 +1805,12 @@ mk_alert_ok "$TMP/l20f-alert.log" "$TMP/l20f-alert.sh"
 JOURNAL_DIR_L20F="$TMP/journal-l20f"
 mkdir -p "$JOURNAL_DIR_L20F"
 chmod 0500 "$JOURNAL_DIR_L20F"   # каталог существует (makedirs(exist_ok=True) пройдет), но не пишем в него
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_DIR_L20F" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_DIR_L20F" \
   CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l20f-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l20f-alert.sh" "$RUN" done-notify "$AGL20F" >/dev/null 2>"$TMP/l20f.err"
+  AI_AGENT_ALERT_CMD="$TMP/l20f-alert.sh" "$RUN" done-notify "$AGL20F" >/dev/null 2>"$TMP/l20f.err"
 CID8_L20F=$(lesson_first_cid8 "$AGL20F/lessons.json" 2>/dev/null)
 [[ -n "$CID8_L20F" ]] && ok || fail "L20F: fixture - кандидат создан"
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_DIR_L20F" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_DIR_L20F" \
   "$RUN" lesson-verdict "$AGL20F" --accept --id "$CID8_L20F" \
   >"$TMP/l20fv.out" 2>"$TMP/l20fv.err"; RCL20F=$?
 chmod 0700 "$JOURNAL_DIR_L20F"
@@ -1836,7 +1836,7 @@ write_done_requested "$AGL21" "$KL21" "L21 summary"
 mk_done_envelope "$AGL21" "$KL21"
 mk_alert_ok "$TMP/l21-alert.log" "$TMP/l21-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l21-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l21-alert.sh" "$RUN" done-notify "$AGL21" >/dev/null 2>"$TMP/l21.err"
+  AI_AGENT_ALERT_CMD="$TMP/l21-alert.sh" "$RUN" done-notify "$AGL21" >/dev/null 2>"$TMP/l21.err"
 CID8_L21=$(lesson_first_cid8 "$AGL21/lessons.json")
 "$RUN" lesson-verdict "$AGL21" --accept --id "$CID8_L21" >/dev/null 2>"$TMP/l21v.err"
 STATUS_L21=$(git -C "$PROJ_L21" status --porcelain)
@@ -1857,7 +1857,7 @@ PROJ_L22="$TMP/proj-l22"; mkdir -p "$PROJ_L22"
 # регистрация снимается ПОСЛЕ create, не до).
 register_flat_project projl22 "$PROJ_L22"
 AGL22=$(mk_project_agent agtl22 "$PROJ_L22")
-: > "$CLAUDE_RC_PROJECTS_FILE"  # проект пропал из реестра
+: > "$AI_RC_PROJECTS_FILE"  # проект пропал из реестра
 "$RUN" spool-put agtl22 --text "l22-event" >/dev/null
 "$RUN" intake "$AGL22" >/dev/null
 KL22=$(ls "$AGL22/inbox/pending" | sed 's/.json//')
@@ -1867,7 +1867,7 @@ write_done_requested "$AGL22" "$KL22" "L22 summary"
 mk_done_envelope "$AGL22" "$KL22"
 mk_alert_ok "$TMP/l22-alert.log" "$TMP/l22-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l22-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l22-alert.sh" "$RUN" done-notify "$AGL22" >/dev/null 2>"$TMP/l22.err"
+  AI_AGENT_ALERT_CMD="$TMP/l22-alert.sh" "$RUN" done-notify "$AGL22" >/dev/null 2>"$TMP/l22.err"
 CID8_L22=$(lesson_first_cid8 "$AGL22/lessons.json" 2>/dev/null)
 if [[ -n "$CID8_L22" ]]; then
   "$RUN" lesson-verdict "$AGL22" --accept --id "$CID8_L22" >"$TMP/l22v.out" 2>"$TMP/l22v.err"; RCL22=$?
@@ -1883,12 +1883,12 @@ fi
 # =============================================================== L22B (falsifiability блокера 2)
 echo "=== L22B: журнал уроков внутри корня зарегистрированного проекта - отказ, урок не потерян молча (аудит блокер 2) ==="
 # Журнал переопределен ТОЛЬКО для вызовов ЭТОГО теста (переменная окружения
-# конкретных подпроцессов, не глобальный $CLAUDE_AGENT_LESSONS_JOURNAL_DIR) -
+# конкретных подпроцессов, не глобальный $AI_AGENT_LESSONS_JOURNAL_DIR) -
 # и лежит ВНУТРИ корня зарегистрированного проекта, симулируя "проект
 # заведен с корнем, накрывающим каталог контура".
 PROJ_L22B="$TMP/proj-l22b"; mkdir -p "$PROJ_L22B"
 register_flat_project projl22b "$PROJ_L22B"
-JOURNAL_L22B="$PROJ_L22B/.claude-control-lessons"
+JOURNAL_L22B="$PROJ_L22B/.ai-control-lessons"
 AGL22B=$(mk_project_agent agtl22b "$PROJ_L22B")
 "$RUN" spool-put agtl22b --text "l22b-event" >/dev/null
 "$RUN" intake "$AGL22B" >/dev/null
@@ -1898,12 +1898,12 @@ append_trusted_answer "$AGL22B" "$KL22B" "$QL22B" "l22b correction text marker l
 write_done_requested "$AGL22B" "$KL22B" "L22b summary"
 mk_done_envelope "$AGL22B" "$KL22B"
 mk_alert_ok "$TMP/l22b-alert.log" "$TMP/l22b-alert.sh"
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L22B" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L22B" \
   CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l22b-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l22b-alert.sh" "$RUN" done-notify "$AGL22B" >/dev/null 2>"$TMP/l22b.err"
+  AI_AGENT_ALERT_CMD="$TMP/l22b-alert.sh" "$RUN" done-notify "$AGL22B" >/dev/null 2>"$TMP/l22b.err"
 CID8_L22B=$(lesson_first_cid8 "$AGL22B/lessons.json" 2>/dev/null)
 [[ -n "$CID8_L22B" ]] && ok || fail "L22B: fixture - кандидат создан"
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L22B" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L22B" \
   "$RUN" lesson-verdict "$AGL22B" --accept --id "$CID8_L22B" \
   >"$TMP/l22bv.out" 2>"$TMP/l22bv.err"; RCL22B=$?
 [[ "$RCL22B" != 0 ]] \
@@ -1936,12 +1936,12 @@ write_done_requested "$AGL35" "$KL35" "L35 summary"
 mk_done_envelope "$AGL35" "$KL35"
 mk_alert_ok "$TMP/l35-alert.log" "$TMP/l35-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l35-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l35-alert.sh" "$RUN" done-notify "$AGL35" >/dev/null 2>"$TMP/l35.err"
+  AI_AGENT_ALERT_CMD="$TMP/l35-alert.sh" "$RUN" done-notify "$AGL35" >/dev/null 2>"$TMP/l35.err"
 CID8_L35=$(lesson_first_cid8 "$AGL35/lessons.json" 2>/dev/null)
 [[ -n "$CID8_L35" ]] && ok || fail "L35: fixture - кандидат создан ДО дрейфа реестра"
 # реестр сдвигается ПОСЛЕ дистилляции, ДО подтверждения - projl35 теперь
 # указывает на ВЛОЖЕННЫЙ подкаталог того же дерева.
-: > "$CLAUDE_RC_PROJECTS_FILE"
+: > "$AI_RC_PROJECTS_FILE"
 register_flat_project projl35 "$PROJ_L35_SUB"
 "$RUN" lesson-verdict "$AGL35" --accept --id "$CID8_L35" \
   >"$TMP/l35v.out" 2>"$TMP/l35v.err"; RCL35=$?
@@ -1980,9 +1980,9 @@ write_done_requested "$AGL33" "$KL33" "L33 summary"
 mk_done_envelope "$AGL33" "$KL33"
 mk_alert_ok "$TMP/l33-alert.log" "$TMP/l33-alert.sh"
 JOURNAL_L33="$TMP/journal-l33"
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L33" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L33" \
   CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l33-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l33-alert.sh" "$RUN" done-notify "$AGL33" >/dev/null 2>"$TMP/l33.err"
+  AI_AGENT_ALERT_CMD="$TMP/l33-alert.sh" "$RUN" done-notify "$AGL33" >/dev/null 2>"$TMP/l33.err"
 CID8_L33=$(lesson_first_cid8 "$AGL33/lessons.json" 2>/dev/null)
 [[ -n "$CID8_L33" ]] && ok || fail "L33: fixture - кандидат создан"
 PKEY_B_L33=$(lesson_project_key "$PROJ_L33B")
@@ -1993,7 +1993,7 @@ assert d.get("project_real"), "fixture: project_real должен быть за�
 d["project_key"] = new_key
 json.dump(d, open(path, "w"), ensure_ascii=False)' \
   "$AGL33/lessons.json" "$PKEY_B_L33"
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L33" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L33" \
   "$RUN" lesson-verdict "$AGL33" --accept --id "$CID8_L33" \
   >"$TMP/l33v.out" 2>"$TMP/l33v.err"; RCL33=$?
 [[ "$RCL33" != 0 ]] \
@@ -2029,9 +2029,9 @@ write_done_requested "$AGL33D" "$KL33D" "L33d summary"
 mk_done_envelope "$AGL33D" "$KL33D"
 mk_alert_ok "$TMP/l33d-alert.log" "$TMP/l33d-alert.sh"
 JOURNAL_L33D="$TMP/journal-l33d"
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L33D" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L33D" \
   CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l33d-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l33d-alert.sh" "$RUN" done-notify "$AGL33D" >/dev/null 2>"$TMP/l33d.err"
+  AI_AGENT_ALERT_CMD="$TMP/l33d-alert.sh" "$RUN" done-notify "$AGL33D" >/dev/null 2>"$TMP/l33d.err"
 CID8_L33D=$(lesson_first_cid8 "$AGL33D/lessons.json" 2>/dev/null)
 [[ -n "$CID8_L33D" ]] && ok || fail "L33C: fixture - кандидат создан"
 # forged-ключ указывает на ДРУГОЙ (не свой) проект - PROJ_L33B, уже
@@ -2045,7 +2045,7 @@ d["project_key"] = forged_key
 d["project_real"] = None
 json.dump(d, open(path, "w"), ensure_ascii=False)' \
   "$AGL33D/lessons.json" "$PKEY_FORGED_L33D"
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L33D" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L33D" \
   "$RUN" lesson-verdict "$AGL33D" --accept --id "$CID8_L33D" \
   >"$TMP/l33dv.out" 2>"$TMP/l33dv.err"; RCL33D=$?
 [[ "$RCL33D" != 0 ]] \
@@ -2074,9 +2074,9 @@ mk_done_envelope "$AGL33C" "$KL33C"
 mk_alert_ok "$TMP/l33c-alert.log" "$TMP/l33c-alert.sh"
 JOURNAL_L33C="$TMP/journal-l33c"
 ESCAPE_TARGET_L33C="$TMP/l33c-escaped.jsonl"
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L33C" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L33C" \
   CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l33c-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l33c-alert.sh" "$RUN" done-notify "$AGL33C" >/dev/null 2>"$TMP/l33c.err"
+  AI_AGENT_ALERT_CMD="$TMP/l33c-alert.sh" "$RUN" done-notify "$AGL33C" >/dev/null 2>"$TMP/l33c.err"
 CID8_L33C=$(lesson_first_cid8 "$AGL33C/lessons.json" 2>/dev/null)
 [[ -n "$CID8_L33C" ]] && ok || fail "L33B: fixture - кандидат создан"
 python3 -c 'import json, sys
@@ -2085,7 +2085,7 @@ d = json.load(open(path))
 d["project_key"] = evil_key
 json.dump(d, open(path, "w"), ensure_ascii=False)' \
   "$AGL33C/lessons.json" "$ESCAPE_TARGET_L33C"
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L33C" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L33C" \
   "$RUN" lesson-verdict "$AGL33C" --accept --id "$CID8_L33C" \
   >"$TMP/l33bv.out" 2>"$TMP/l33bv.err"; RCL33B=$?
 [[ "$RCL33B" != 0 ]] \
@@ -2112,7 +2112,7 @@ write_done_requested "$AGL23" "$KL23" "L23 summary"
 mk_done_envelope "$AGL23" "$KL23"
 mk_alert_ok "$TMP/l23-alert.log" "$TMP/l23-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l23-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l23-alert.sh" "$RUN" done-notify "$AGL23" >/dev/null 2>"$TMP/l23.err"
+  AI_AGENT_ALERT_CMD="$TMP/l23-alert.sh" "$RUN" done-notify "$AGL23" >/dev/null 2>"$TMP/l23.err"
 CID8_L23=$(lesson_first_cid8 "$AGL23/lessons.json")
 "$RUN" lesson-verdict "$AGL23" --accept --id "$CID8_L23" >/dev/null 2>"$TMP/l23v.err"
 [[ -f "$PROJ_L23/.claude/rules/lessons.md" ]] && ok || fail "L23: файл уроков в ОСНОВНОМ каталоге проекта (не worktree)"
@@ -2148,7 +2148,7 @@ write_done_requested "$AGL24A" "$KL24A" "L24a summary"
 mk_done_envelope "$AGL24A" "$KL24A"
 mk_alert_ok "$TMP/l24a-alert.log" "$TMP/l24a-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l24-confirmed-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l24a-alert.sh" "$RUN" done-notify "$AGL24A" >/dev/null 2>"$TMP/l24a.err"
+  AI_AGENT_ALERT_CMD="$TMP/l24a-alert.sh" "$RUN" done-notify "$AGL24A" >/dev/null 2>"$TMP/l24a.err"
 CID8_L24=$(lesson_first_cid8 "$AGL24A/lessons.json")
 "$RUN" lesson-verdict "$AGL24A" --accept --id "$CID8_L24" >/dev/null 2>"$TMP/l24av.err"
 # задача B: новая задача того же проекта - должна увидеть урок в промпте
@@ -2173,7 +2173,7 @@ write_done_requested "$AGL25A" "$KL25A" "L25a summary"
 mk_done_envelope "$AGL25A" "$KL25A"
 mk_alert_ok "$TMP/l25a-alert.log" "$TMP/l25a-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l25-unconfirmed-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l25a-alert.sh" "$RUN" done-notify "$AGL25A" >/dev/null 2>"$TMP/l25a.err"
+  AI_AGENT_ALERT_CMD="$TMP/l25a-alert.sh" "$RUN" done-notify "$AGL25A" >/dev/null 2>"$TMP/l25a.err"
 # НЕ подтверждаем (нет lesson-verdict --accept)
 AGL25B=$(mk_project_agent agtl25b "$PROJ_L25")
 PROMPT_L25B="$TMP/l25b-prompt.txt"
@@ -2198,7 +2198,7 @@ write_done_requested "$AGL26A" "$KL26A" "L26a summary"
 mk_done_envelope "$AGL26A" "$KL26A"
 mk_alert_ok "$TMP/l26a-alert.log" "$TMP/l26a-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l26-cross-project-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l26a-alert.sh" "$RUN" done-notify "$AGL26A" >/dev/null 2>"$TMP/l26a.err"
+  AI_AGENT_ALERT_CMD="$TMP/l26a-alert.sh" "$RUN" done-notify "$AGL26A" >/dev/null 2>"$TMP/l26a.err"
 CID8_L26=$(lesson_first_cid8 "$AGL26A/lessons.json")
 "$RUN" lesson-verdict "$AGL26A" --accept --id "$CID8_L26" >/dev/null 2>"$TMP/l26av.err"
 grep -qF "l26-cross-project-essence-marker" "$PROJ_L26A/.claude/rules/lessons.md" \
@@ -2230,11 +2230,11 @@ append_trusted_answer "$AGL34A" "$KL34A" "$QL34A" "l34 correction text marker lo
 write_done_requested "$AGL34A" "$KL34A" "L34a summary"
 mk_done_envelope "$AGL34A" "$KL34A"
 mk_alert_ok "$TMP/l34a-alert.log" "$TMP/l34a-alert.sh"
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34" \
   CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l34-confirmed-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l34a-alert.sh" "$RUN" done-notify "$AGL34A" >/dev/null 2>"$TMP/l34a.err"
+  AI_AGENT_ALERT_CMD="$TMP/l34a-alert.sh" "$RUN" done-notify "$AGL34A" >/dev/null 2>"$TMP/l34a.err"
 CID8_L34=$(lesson_first_cid8 "$AGL34A/lessons.json" 2>/dev/null)
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34" \
   "$RUN" lesson-verdict "$AGL34A" --accept --id "$CID8_L34" >/dev/null 2>"$TMP/l34av.err"
 [[ -n "$(find "$JOURNAL_L34" -name '*.jsonl' 2>/dev/null)" ]] \
   && ok || fail "L34: fixture - урок реально записан в журнал, пока он был безопасен"
@@ -2242,7 +2242,7 @@ CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34" \
 register_flat_project projl34-overlap "$JOURNAL_L34"
 AGL34B=$(mk_project_agent agtl34b "$PROJ_L34")
 PROMPT_L34B="$TMP/l34b-prompt.txt"
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34" \
   run_step_prompt "$AGL34B" agtl34b "l34b-event" "$PROMPT_L34B"
 [[ -s "$PROMPT_L34B" ]] && ok || fail "L34: промпт задачи B сдампен"
 grep -qF "l34-confirmed-essence-marker" "$PROMPT_L34B" \
@@ -2271,11 +2271,11 @@ append_trusted_answer "$AGL34BA" "$KL34BA" "$QL34BA" "l34b correction text marke
 write_done_requested "$AGL34BA" "$KL34BA" "L34ba summary"
 mk_done_envelope "$AGL34BA" "$KL34BA"
 mk_alert_ok "$TMP/l34ba-alert.log" "$TMP/l34ba-alert.sh"
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34B" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34B" \
   CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l34b-confirmed-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l34ba-alert.sh" "$RUN" done-notify "$AGL34BA" >/dev/null 2>"$TMP/l34ba.err"
+  AI_AGENT_ALERT_CMD="$TMP/l34ba-alert.sh" "$RUN" done-notify "$AGL34BA" >/dev/null 2>"$TMP/l34ba.err"
 CID8_L34B=$(lesson_first_cid8 "$AGL34BA/lessons.json" 2>/dev/null)
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34B" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34B" \
   "$RUN" lesson-verdict "$AGL34BA" --accept --id "$CID8_L34B" >/dev/null 2>"$TMP/l34bav.err"
 [[ -n "$(find "$JOURNAL_L34B" -name '*.jsonl' 2>/dev/null)" ]] \
   && ok || fail "L34B: fixture - урок реально записан, реестр читался нормально"
@@ -2291,24 +2291,24 @@ AGL34BC=$(mk_project_agent agtl34bc "$PROJ_L34B")
 # реестр становится ВРЕМЕННО битым (невалидный YAML) - НЕ трогая сам
 # журнал и не меняя список зарегистрированных проектов по существу
 REGISTRY_BACKUP_L34B="$TMP/projects-backup-l34b.yaml"
-cp "$CLAUDE_RC_PROJECTS_FILE" "$REGISTRY_BACKUP_L34B"
-printf 'projl34b: [\n' > "$CLAUDE_RC_PROJECTS_FILE"
+cp "$AI_RC_PROJECTS_FILE" "$REGISTRY_BACKUP_L34B"
+printf 'projl34b: [\n' > "$AI_RC_PROJECTS_FILE"
 PROMPT_L34BB="$TMP/l34bb-prompt.txt"
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34B" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34B" \
   run_step_prompt "$AGL34BB" agtl34bb "l34bb-event" "$PROMPT_L34BB"
 [[ -s "$PROMPT_L34BB" ]] && ok || fail "L34B: промпт задачи B (реестр битый) сдампен"
 grep -qF "l34b-confirmed-essence-marker" "$PROMPT_L34BB" \
   && fail "L34B: не смогли перечислить проекты (битый реестр) -> отказ (пустой блок), а не 'пересечений нет'" || ok
 # реестр чинится - урок (не потерян, только временно скрыт) снова виден
-cp "$REGISTRY_BACKUP_L34B" "$CLAUDE_RC_PROJECTS_FILE"
+cp "$REGISTRY_BACKUP_L34B" "$AI_RC_PROJECTS_FILE"
 PROMPT_L34BC="$TMP/l34bc-prompt.txt"
-CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34B" \
+AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_L34B" \
   run_step_prompt "$AGL34BC" agtl34bc "l34bc-event" "$PROMPT_L34BC"
 grep -qF "l34b-confirmed-essence-marker" "$PROMPT_L34BC" \
   && ok || fail "L34B: после починки реестра урок снова виден (не потерян, только временно скрыт)"
 
 # =============================================================== L27
-echo "=== L27: кап CLAUDE_AGENT_LESSONS_MAX_BYTES - отброшены самые старые записи, новые остаются ==="
+echo "=== L27: кап AI_AGENT_LESSONS_MAX_BYTES - отброшены самые старые записи, новые остаются ==="
 # аудит блокер 3: промпт читает ИЗ ЖУРНАЛА, не из зеркала в проекте -
 # фикстура пишет 20 "ранее подтвержденных" уроков НАПРЯМУЮ В ЖУРНАЛ
 # (write_journal_lesson), не в .claude/rules/lessons.md.
@@ -2322,12 +2322,12 @@ for i in $(seq -w 1 20); do
 done
 AGL27=$(mk_project_agent agtl27 "$PROJ_L27")
 PROMPT_L27="$TMP/l27-prompt.txt"
-CLAUDE_AGENT_LESSONS_MAX_BYTES=800
-export CLAUDE_AGENT_LESSONS_MAX_BYTES
+AI_AGENT_LESSONS_MAX_BYTES=800
+export AI_AGENT_LESSONS_MAX_BYTES
 "$RUN" spool-put agtl27 --text "l27-event" >/dev/null
 "$RUN" intake "$AGL27" >/dev/null
 CLAUDE_BIN="$STEP_MOCK" PROMPT_DUMP_FILE="$PROMPT_L27" "$RUN" step "$AGL27" >/dev/null 2>"$TMP/l27.err"
-unset CLAUDE_AGENT_LESSONS_MAX_BYTES
+unset AI_AGENT_LESSONS_MAX_BYTES
 [[ -s "$PROMPT_L27" ]] && ok || fail "L27: промпт сдампен"
 grep -qF "l27-lesson-01" "$PROMPT_L27" \
   && fail "L27: самая старая запись не должна поместиться в урезанный (800 байт) блок уроков" || ok
@@ -2343,7 +2343,7 @@ grep -qF "[уроки усечены: не поместилось " "$PROMPT_L27
 # импорт, тот же прием, что importlib-загрузка бота в test-agent-tg-cards.sh)
 # и меряем байты РОВНО того, что вернула функция - надежнее, чем вычленять
 # границы блока из полного текста прогонного промпта.
-BLOCK_L27_BYTES=$(CLAUDE_AGENT_LESSONS_MAX_BYTES=800 python3 - "$RUN" "$AGL27" <<'PY'
+BLOCK_L27_BYTES=$(AI_AGENT_LESSONS_MAX_BYTES=800 python3 - "$RUN" "$AGL27" <<'PY'
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
 path, agent_dir = sys.argv[1], sys.argv[2]
@@ -2422,7 +2422,7 @@ write_done_requested "$AGL29" "$KL29" "L29 summary"
 mk_done_envelope "$AGL29" "$KL29"
 mk_alert_ok "$TMP/l29-alert.log" "$TMP/l29-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=fail \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l29-alert.sh" "$RUN" done-notify "$AGL29" >/dev/null 2>"$TMP/l29.err"; RCL29=$?
+  AI_AGENT_ALERT_CMD="$TMP/l29-alert.sh" "$RUN" done-notify "$AGL29" >/dev/null 2>"$TMP/l29.err"; RCL29=$?
 [[ "$RCL29" == 0 ]] && ok || fail "L29: done-notify exit 0 даже при падении модели (приемка не сломана, got $RCL29)"
 [[ "$(alert_block_count "$TMP/l29-alert.log")" == "1" ]] \
   && ok || fail "L29: карточка готовности все равно отправлена (ровно один вызов alert-команды)"
@@ -2449,7 +2449,7 @@ register_flat_project projl29b "$PROJ_L29B"
 AGL29B=$(mk_single_correction_project_agent evtl29b "$PROJ_L29B")
 mk_alert_ok "$TMP/l29b-alert.log" "$TMP/l29b-alert.sh"
 CLAUDE_BIN="$TMP/no-such-claude-binary-l29b" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l29b-alert.sh" "$RUN" done-notify "$AGL29B" \
+  AI_AGENT_ALERT_CMD="$TMP/l29b-alert.sh" "$RUN" done-notify "$AGL29B" \
   >/dev/null 2>"$TMP/l29b.err"; RCL29B=$?
 [[ "$RCL29B" == 0 ]] \
   && ok || fail "L29B: done-notify exit 0 даже когда CLAUDE_BIN не существует (got $RCL29B: $(cat "$TMP/l29b.err"))"
@@ -2473,7 +2473,7 @@ mk_alert_ok "$TMP/l30-alert.log" "$TMP/l30-alert.sh"
 MOCK_CALLED_L30_1="$TMP/l30-called-1"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l30-essence-marker" \
   MOCK_LESSON_CALLED_FILE="$MOCK_CALLED_L30_1" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l30-alert.sh" "$RUN" done-notify "$AGL30" >/dev/null 2>"$TMP/l30a.err"
+  AI_AGENT_ALERT_CMD="$TMP/l30-alert.sh" "$RUN" done-notify "$AGL30" >/dev/null 2>"$TMP/l30a.err"
 [[ -f "$MOCK_CALLED_L30_1" ]] && ok || fail "L30: fixture - первый проход реально вызвал модель"
 [[ -f "$AGL30/lessons.json" ]] && ok || fail "L30: fixture - lessons.json записан первым проходом"
 CNT_L30_1=$(alert_block_count "$TMP/l30-alert.log")
@@ -2489,7 +2489,7 @@ d = json.load(open(p)); d["pushed_at"] = None
 json.dump(d, open(p, "w"), ensure_ascii=False)' "$AGL30"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l30-essence-marker" \
   MOCK_LESSON_CALLED_FILE="$MOCK_CALLED_L30_2" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l30-alert.sh" "$RUN" done-notify "$AGL30" >/dev/null 2>"$TMP/l30b.err"
+  AI_AGENT_ALERT_CMD="$TMP/l30-alert.sh" "$RUN" done-notify "$AGL30" >/dev/null 2>"$TMP/l30b.err"
 [[ ! -f "$MOCK_CALLED_L30_2" ]] \
   && ok || fail "L30: повторный проход НЕ перезапускает модель (lessons.json уже есть для этой задачи)"
 CID_COUNT_L30=$(lesson_id_count "$AGL30/lessons.json")
@@ -2507,7 +2507,7 @@ CNT_L30_2=$(alert_block_count "$TMP/l30-alert.log")
 MOCK_CALLED_L30_3="$TMP/l30-called-3"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l30-essence-marker" \
   MOCK_LESSON_CALLED_FILE="$MOCK_CALLED_L30_3" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l30-alert.sh" "$RUN" done-notify "$AGL30" >/dev/null 2>"$TMP/l30c.err"
+  AI_AGENT_ALERT_CMD="$TMP/l30-alert.sh" "$RUN" done-notify "$AGL30" >/dev/null 2>"$TMP/l30c.err"
 [[ ! -f "$MOCK_CALLED_L30_3" ]] && ok || fail "L30: устойчивое состояние - модель не перезапускается"
 CNT_L30_3=$(alert_block_count "$TMP/l30-alert.log")
 [[ "$CNT_L30_3" == "$CNT_L30_2" ]] \
@@ -2529,7 +2529,7 @@ mk_lesson_ready_for_verdict() { # <name> <essence-marker> -> печатает "a
   mk_done_envelope "$dir" "$key"
   mk_alert_ok "$TMP/$name-alert.log" "$TMP/$name-alert.sh"
   CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="$essence" \
-    CLAUDE_AGENT_ALERT_CMD="$TMP/$name-alert.sh" "$RUN" done-notify "$dir" >/dev/null 2>"$TMP/$name-notify.err"
+    AI_AGENT_ALERT_CMD="$TMP/$name-alert.sh" "$RUN" done-notify "$dir" >/dev/null 2>"$TMP/$name-notify.err"
   echo "$dir $(lesson_first_cid8 "$dir/lessons.json")"
 }
 read -r AGL31A CID8_L31A < <(mk_lesson_ready_for_verdict agtl31a l31a-concurrent-essence-marker)
@@ -2548,7 +2548,7 @@ grep -qF "l31a-concurrent-essence-marker" "$LESSONS_L31" && ok || fail "L31: з�
 grep -qF "l31b-concurrent-essence-marker" "$LESSONS_L31" && ok || fail "L31: запись агента B не потеряна"
 
 # =============================================================== L32
-echo "=== L32: кап CLAUDE_AGENT_LESSONS_INPUT_MAX_BYTES - в промпт дистилляции ушли только свежие поправки ==="
+echo "=== L32: кап AI_AGENT_LESSONS_INPUT_MAX_BYTES - в промпт дистилляции ушли только свежие поправки ==="
 AGL32=$(mk_event evtl32)
 PAD_L32=$(python3 -c 'print(" ".join("pad%d" % j for j in range(20)))')
 # 5 РАЗЛИЧНЫХ поправок - реальным путем через done-verdict --reject --comment
@@ -2577,8 +2577,8 @@ PROMPT_L32="$TMP/l32-prompt.txt"
 # marker-5), marker-1..3 - нет (числа рассчитаны на реальный _lessons_build_
 # prompt: рамка 1445 байт, каждая строка данных ~143 байта).
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one PROMPT_DUMP_FILE="$PROMPT_L32" \
-  CLAUDE_AGENT_LESSONS_INPUT_MAX_BYTES=1900 \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l32-alert.sh" "$RUN" done-notify "$AGL32" >/dev/null 2>"$TMP/l32.err"
+  AI_AGENT_LESSONS_INPUT_MAX_BYTES=1900 \
+  AI_AGENT_ALERT_CMD="$TMP/l32-alert.sh" "$RUN" done-notify "$AGL32" >/dev/null 2>"$TMP/l32.err"
 [[ -s "$PROMPT_L32" ]] && ok || fail "L32: промпт дистилляции сдампен (модель вызвана)"
 grep -qF "l32-marker-1-" "$PROMPT_L32" \
   && fail "L32: самая старая поправка (1) не должна поместиться в урезанный (1900 байт) вход" || ok
@@ -2602,7 +2602,7 @@ echo "=== L32B: кап учитывает РАМКУ промпта целико
 # (~1550 байт) - то есть БОЛЬШЕ заявленного капа. Исправленная версия обязана
 # уложить ВЕСЬ промпт (рамка+маркер+данные) в 1540 байт, даже ценой того, что
 # ни одна строка данных не поместится.
-BYTES_L32B=$(CLAUDE_AGENT_LESSONS_INPUT_MAX_BYTES=1540 python3 - "$RUN" <<'PY'
+BYTES_L32B=$(AI_AGENT_LESSONS_INPUT_MAX_BYTES=1540 python3 - "$RUN" <<'PY'
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
 path = sys.argv[1]
@@ -2627,7 +2627,7 @@ echo "=== L38: кап входа МЕНЬШЕ рамки промпта - _lesso
 # "while kept and ..." останавливался, как только kept опустевал, и БЕЗ
 # финальной проверки возвращал рамку целиком - т.е. РОВНО ОДНУ строку
 # сверх заявленного лимита.
-NONE_L38=$(CLAUDE_AGENT_LESSONS_INPUT_MAX_BYTES=100 python3 - "$RUN" <<'PY'
+NONE_L38=$(AI_AGENT_LESSONS_INPUT_MAX_BYTES=100 python3 - "$RUN" <<'PY'
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
 path = sys.argv[1]
@@ -2664,9 +2664,9 @@ write_done_requested "$AGL38B" "$KL38B" "L38b summary"
 mk_done_envelope "$AGL38B" "$KL38B"
 mk_alert_ok "$TMP/l38b-alert.log" "$TMP/l38b-alert.sh"
 MOCK_CALLED_L38B="$TMP/l38b-called"
-CLAUDE_AGENT_LESSONS_INPUT_MAX_BYTES=100 \
+AI_AGENT_LESSONS_INPUT_MAX_BYTES=100 \
   CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_CALLED_FILE="$MOCK_CALLED_L38B" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l38b-alert.sh" "$RUN" done-notify "$AGL38B" \
+  AI_AGENT_ALERT_CMD="$TMP/l38b-alert.sh" "$RUN" done-notify "$AGL38B" \
   >/dev/null 2>"$TMP/l38b.err"; RCL38B=$?
 [[ "$RCL38B" == 0 ]] \
   && ok || fail "L38B: done-notify exit 0 даже когда кап меньше рамки (приемка не сломана, got $RCL38B)"
@@ -2688,9 +2688,9 @@ grep -qF '"lessons"' "$TMP/l38b-alert.log" \
 
 # =============================================================== L39 (контрольный аудит блокер 2)
 echo "=== L39: эшелон доверенных каналов - questions/reject_comments/lessons.json/done.json уходят в deny ПО УМОЛЧАНИЮ, даже при пустых permissions в спеке ==="
-AGL39="$CLAUDE_AGENTS_DIR/agtl39"
-mkdir -p "$AGL39" "$CLAUDE_AGENT_SPOOL_BASE/agtl39"
-chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/agtl39"
+AGL39="$AI_AGENTS_DIR/agtl39"
+mkdir -p "$AGL39" "$AI_AGENT_SPOOL_BASE/agtl39"
+chmod 0700 "$AI_AGENT_SPOOL_BASE/agtl39"
 cat > "$AGL39/spec.yaml" <<EOF
 schema: 1
 name: agtl39
@@ -2733,7 +2733,7 @@ write_done_requested "$AGL40A" "$KL40A" "L40a summary"
 mk_done_envelope "$AGL40A" "$KL40A"
 mk_alert_ok "$TMP/l40a-alert.log" "$TMP/l40a-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ESSENCE="l40-accumulated-essence-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l40a-alert.sh" "$RUN" done-notify "$AGL40A" >/dev/null 2>"$TMP/l40a.err"
+  AI_AGENT_ALERT_CMD="$TMP/l40a-alert.sh" "$RUN" done-notify "$AGL40A" >/dev/null 2>"$TMP/l40a.err"
 CID8_L40=$(lesson_first_cid8 "$AGL40A/lessons.json")
 "$RUN" lesson-verdict "$AGL40A" --accept --id "$CID8_L40" >/dev/null 2>"$TMP/l40av.err"
 JOURNAL_L40_OLD="$(lesson_journal_path "$PROJ_L40_OLD")"
@@ -2742,7 +2742,7 @@ JOURNAL_L40_OLD="$(lesson_journal_path "$PROJ_L40_OLD")"
 # обновляется на новый путь (тот же порядок, каким это делает оператор).
 PROJ_L40_NEW="$TMP/proj-l40-new"
 mv "$PROJ_L40_OLD" "$PROJ_L40_NEW"
-: > "$CLAUDE_RC_PROJECTS_FILE"
+: > "$AI_RC_PROJECTS_FILE"
 register_flat_project projl40 "$PROJ_L40_NEW"
 # БЕЗ lessons-relocate: новая задача читает журнал под НОВЫМ ключом - пуст,
 # накопленный урок невидим (сама причина серьезной 4).
@@ -2807,7 +2807,7 @@ WHY_L41=$(python3 -c 'print("w " * 100)')
 HOW_L41=$(python3 -c 'print("h " * 100)')
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=many \
   MOCK_LESSON_WHY="$WHY_L41" MOCK_LESSON_HOW="$HOW_L41" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l41-alert.sh" "$RUN" done-notify "$AGL41" >/dev/null 2>"$TMP/l41.err"
+  AI_AGENT_ALERT_CMD="$TMP/l41-alert.sh" "$RUN" done-notify "$AGL41" >/dev/null 2>"$TMP/l41.err"
 [[ "$(alert_block_count "$TMP/l41-alert.log")" == "1" ]] \
   && ok || fail "L41: fixture - карточка отправлена ровно один раз"
 LCOUNT_L41=$(lesson_id_count "$AGL41/lessons.json" 2>/dev/null)
@@ -2854,9 +2854,9 @@ write_done_requested "$AGL42" "$KL42" "L42 summary"
 mk_done_envelope "$AGL42" "$KL42"
 mk_alert_ok "$TMP/l42-alert.log" "$TMP/l42-alert.sh"
 ARGV_L42="$TMP/l42-argv.json"
-env -u CLAUDE_AGENT_LESSONS_MODEL \
+env -u AI_AGENT_LESSONS_MODEL \
   CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ARGV_FILE="$ARGV_L42" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l42-alert.sh" "$RUN" done-notify "$AGL42" >/dev/null 2>"$TMP/l42.err"
+  AI_AGENT_ALERT_CMD="$TMP/l42-alert.sh" "$RUN" done-notify "$AGL42" >/dev/null 2>"$TMP/l42.err"
 [[ -f "$ARGV_L42" ]] && ok || fail "L42: модель дистилляции реально вызвана"
 grep -qF '"--model", "haiku"' "$ARGV_L42" \
   && ok || fail "L42: дефолт дистилляции - haiku (got $(cat "$ARGV_L42" 2>/dev/null))"
@@ -2864,7 +2864,7 @@ grep -qF "l42-task-expensive-model-marker" "$ARGV_L42" \
   && fail "L42: дистилляция НЕ должна получать модель задачи" || ok
 
 # =============================================================== L43
-echo "=== L43: CLAUDE_AGENT_LESSONS_MODEL переопределяет дефолт глобально ==="
+echo "=== L43: AI_AGENT_LESSONS_MODEL переопределяет дефолт глобально ==="
 AGL43=$(mk_event_with_model evtl43 "l43-task-expensive-model-marker")
 "$RUN" spool-put evtl43 --text "l43-event" >/dev/null
 "$RUN" intake "$AGL43" >/dev/null
@@ -2876,10 +2876,10 @@ mk_done_envelope "$AGL43" "$KL43"
 mk_alert_ok "$TMP/l43-alert.log" "$TMP/l43-alert.sh"
 ARGV_L43="$TMP/l43-argv.json"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ARGV_FILE="$ARGV_L43" \
-  CLAUDE_AGENT_LESSONS_MODEL="l43-env-override-model-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l43-alert.sh" "$RUN" done-notify "$AGL43" >/dev/null 2>"$TMP/l43.err"
+  AI_AGENT_LESSONS_MODEL="l43-env-override-model-marker" \
+  AI_AGENT_ALERT_CMD="$TMP/l43-alert.sh" "$RUN" done-notify "$AGL43" >/dev/null 2>"$TMP/l43.err"
 grep -qF '"--model", "l43-env-override-model-marker"' "$ARGV_L43" \
-  && ok || fail "L43: CLAUDE_AGENT_LESSONS_MODEL переопределяет дефолт (got $(cat "$ARGV_L43" 2>/dev/null))"
+  && ok || fail "L43: AI_AGENT_LESSONS_MODEL переопределяет дефолт (got $(cat "$ARGV_L43" 2>/dev/null))"
 
 # =============================================================== L44
 echo "=== L44: spec .limits.lessons_model переопределяет и дефолт, и env-переменную ==="
@@ -2894,8 +2894,8 @@ mk_done_envelope "$AGL44" "$KL44"
 mk_alert_ok "$TMP/l44-alert.log" "$TMP/l44-alert.sh"
 ARGV_L44="$TMP/l44-argv.json"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=one MOCK_LESSON_ARGV_FILE="$ARGV_L44" \
-  CLAUDE_AGENT_LESSONS_MODEL="l44-env-override-model-marker" \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l44-alert.sh" "$RUN" done-notify "$AGL44" >/dev/null 2>"$TMP/l44.err"
+  AI_AGENT_LESSONS_MODEL="l44-env-override-model-marker" \
+  AI_AGENT_ALERT_CMD="$TMP/l44-alert.sh" "$RUN" done-notify "$AGL44" >/dev/null 2>"$TMP/l44.err"
 grep -qF '"--model", "l44-spec-override-model-marker"' "$ARGV_L44" \
   && ok || fail "L44: spec .limits.lessons_model переопределяет env/дефолт (got $(cat "$ARGV_L44" 2>/dev/null))"
 
@@ -2909,7 +2909,7 @@ grep -qF '"--model", "l44-spec-override-model-marker"' "$ARGV_L44" \
 # L49-L51 доказывают, что "мягче" ровно настолько, насколько нужно, не больше.
 # Falsifiability главного кейса (L45) доказана отдельно, не в файле теста:
 # strict-копия _lessons_extract (без снятия забора) в /tmp дает L45 красным,
-# рабочий bin/claude-agent-run - зеленым (см. финальный отчет задачи).
+# рабочий bin/ai-agent-run - зеленым (см. финальный отчет задачи).
 ####################################################################
 
 # =============================================================== L45
@@ -2917,7 +2917,7 @@ echo "=== L45: ответ модели в заборе \`\`\`json - кандид
 AGL45=$(mk_single_correction_agent evtl45)
 mk_alert_ok "$TMP/l45-alert.log" "$TMP/l45-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=fence_json_one \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l45-alert.sh" "$RUN" done-notify "$AGL45" >/dev/null 2>"$TMP/l45.err"; RCL45=$?
+  AI_AGENT_ALERT_CMD="$TMP/l45-alert.sh" "$RUN" done-notify "$AGL45" >/dev/null 2>"$TMP/l45.err"; RCL45=$?
 [[ "$RCL45" == 0 ]] && ok || fail "L45: done-notify exit 0 (got $RCL45: $(cat "$TMP/l45.err"))"
 [[ -f "$AGL45/lessons.json" ]] && grep -qF "l45-fenced-json-marker" "$AGL45/lessons.json" \
   && ok || fail "L45: кандидат из ответа в заборе \`\`\`json доходит до lessons.json"
@@ -2927,7 +2927,7 @@ echo "=== L46: забор БЕЗ метки языка (\`\`\`) - тоже ра�
 AGL46=$(mk_single_correction_agent evtl46)
 mk_alert_ok "$TMP/l46-alert.log" "$TMP/l46-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=fence_bare_one \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l46-alert.sh" "$RUN" done-notify "$AGL46" >/dev/null 2>"$TMP/l46.err"; RCL46=$?
+  AI_AGENT_ALERT_CMD="$TMP/l46-alert.sh" "$RUN" done-notify "$AGL46" >/dev/null 2>"$TMP/l46.err"; RCL46=$?
 [[ "$RCL46" == 0 ]] && ok || fail "L46: done-notify exit 0 (got $RCL46: $(cat "$TMP/l46.err"))"
 [[ -f "$AGL46/lessons.json" ]] && grep -qF "l46-fenced-bare-marker" "$AGL46/lessons.json" \
   && ok || fail "L46: кандидат из ответа в заборе без метки языка доходит до lessons.json"
@@ -2942,7 +2942,7 @@ register_flat_project projl47 "$PROJ_L47"
 AGL47=$(mk_single_correction_project_agent evtl47 "$PROJ_L47")
 mk_alert_ok "$TMP/l47-alert.log" "$TMP/l47-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=empty \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l47-alert.sh" "$RUN" done-notify "$AGL47" >/dev/null 2>"$TMP/l47.err"; RCL47=$?
+  AI_AGENT_ALERT_CMD="$TMP/l47-alert.sh" "$RUN" done-notify "$AGL47" >/dev/null 2>"$TMP/l47.err"; RCL47=$?
 [[ "$RCL47" == 0 ]] && ok || fail "L47: done-notify exit 0 (got $RCL47: $(cat "$TMP/l47.err"))"
 ATT_L47=$(jq_file "$AGL47/control.json" '(d.get("attention") or {}).get("reason")' 2>/dev/null)
 [[ "$ATT_L47" != "lessons" ]] \
@@ -2955,7 +2955,7 @@ register_flat_project projl48 "$PROJ_L48"
 AGL48=$(mk_single_correction_project_agent evtl48 "$PROJ_L48")
 mk_alert_ok "$TMP/l48-alert.log" "$TMP/l48-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=fence_json_empty \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l48-alert.sh" "$RUN" done-notify "$AGL48" >/dev/null 2>"$TMP/l48.err"; RCL48=$?
+  AI_AGENT_ALERT_CMD="$TMP/l48-alert.sh" "$RUN" done-notify "$AGL48" >/dev/null 2>"$TMP/l48.err"; RCL48=$?
 [[ "$RCL48" == 0 ]] && ok || fail "L48: done-notify exit 0 (got $RCL48: $(cat "$TMP/l48.err"))"
 ATT_L48=$(jq_file "$AGL48/control.json" '(d.get("attention") or {}).get("reason")' 2>/dev/null)
 [[ "$ATT_L48" != "lessons" ]] \
@@ -2968,7 +2968,7 @@ register_flat_project projl49 "$PROJ_L49"
 AGL49=$(mk_single_correction_project_agent evtl49 "$PROJ_L49")
 mk_alert_ok "$TMP/l49-alert.log" "$TMP/l49-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=fence_truncated \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l49-alert.sh" "$RUN" done-notify "$AGL49" >/dev/null 2>"$TMP/l49.err"; RCL49=$?
+  AI_AGENT_ALERT_CMD="$TMP/l49-alert.sh" "$RUN" done-notify "$AGL49" >/dev/null 2>"$TMP/l49.err"; RCL49=$?
 [[ "$RCL49" == 0 ]] && ok || fail "L49: done-notify exit 0 даже на битом ответе в заборе (приемка не сломана, got $RCL49)"
 [[ ! -f "$AGL49/lessons.json" ]] \
   && ok || fail "L49: lessons.json НЕ создан (битый JSON в заборе - не легитимно пустой список)"
@@ -2980,7 +2980,7 @@ echo "=== L50: голый объект (не массив) ВНУТРИ забо
 AGL50=$(mk_single_correction_agent evtl50)
 mk_alert_ok "$TMP/l50-alert.log" "$TMP/l50-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=fence_bare_object \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l50-alert.sh" "$RUN" done-notify "$AGL50" >/dev/null 2>"$TMP/l50.err"
+  AI_AGENT_ALERT_CMD="$TMP/l50-alert.sh" "$RUN" done-notify "$AGL50" >/dev/null 2>"$TMP/l50.err"
 [[ ! -f "$AGL50/lessons.json" ]] && ok || fail "L50: lessons.json НЕ создан (голый объект в заборе - не валидный ответ)"
 
 # =============================================================== L51
@@ -2988,7 +2988,7 @@ echo "=== L51: проза перед массивом БЕЗ забора - ОТ
 AGL51=$(mk_single_correction_agent evtl51)
 mk_alert_ok "$TMP/l51-alert.log" "$TMP/l51-alert.sh"
 CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=prose_before_array \
-  CLAUDE_AGENT_ALERT_CMD="$TMP/l51-alert.sh" "$RUN" done-notify "$AGL51" >/dev/null 2>"$TMP/l51.err"
+  AI_AGENT_ALERT_CMD="$TMP/l51-alert.sh" "$RUN" done-notify "$AGL51" >/dev/null 2>"$TMP/l51.err"
 [[ ! -f "$AGL51/lessons.json" ]] && ok || fail "L51: lessons.json НЕ создан (проза перед массивом без забора - не валидный ответ)"
 
 ####################################################################
@@ -2997,9 +2997,9 @@ CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=prose_before_array \
 # критерий 8 - "существующие проверки остаются зелеными" - подтверждается
 # самим полным прогоном файла, отдельной проверки не заводит).
 #
-# Написано с чистого листа по спеке (RED-фаза): bin/claude-agent-run не
+# Написано с чистого листа по спеке (RED-фаза): bin/ai-agent-run не
 # читался под эту группу, кроме имени функции _lessons_journal_root_safe и
-# переменной LESSONS_JOURNAL_DIR/CLAUDE_AGENT_LESSONS_JOURNAL_DIR (сигнатура
+# переменной LESSONS_JOURNAL_DIR/AI_AGENT_LESSONS_JOURNAL_DIR (сигнатура
 # и однострочный докстринг взяты grep'ом - "def _lessons_journal_root_safe():"
 # без аргументов, True = безопасно). Логика перечисления проектов внутри
 # функции НЕ читалась и под нее тесты не подгонялись.
@@ -3008,7 +3008,7 @@ CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=prose_before_array \
 # _lessons_prompt_block_build (см. выше) - функция вызывается НАПРЯМУЮ, а не
 # через всю цепочку spool/intake/step. Это осознанный выбор: критерии 1-7
 # сформулированы спекой как контракт САМОЙ функции (что она возвращает при
-# данном содержимом $CLAUDE_RC_PROJECTS_FILE и $CLAUDE_AGENT_LESSONS_JOURNAL_DIR),
+# данном содержимом $AI_RC_PROJECTS_FILE и $AI_AGENT_LESSONS_JOURNAL_DIR),
 # а не как контракт всего конвейера промпта - прогон через step примешал бы
 # посторонние переменные (резолв project_name в control.json, кап байт и
 # т.п.), не относящиеся к этой спеке.
@@ -3024,7 +3024,7 @@ CLAUDE_BIN="$LESSON_MOCK" MOCK_LESSON_MODE=prose_before_array \
 # идентифицирует проект", тем же кодом трактуется в project_integrate и
 # project_lessons_path). Если реализация выберет другой механизм ошибки
 # разрешения, этот тест может не покраснеть по нужной причине - см. отчет.
-lessons_root_safe() { # -> stdout "True"/"False" (bool _lessons_journal_root_safe()); $CLAUDE_RC_PROJECTS_FILE и $CLAUDE_AGENT_LESSONS_JOURNAL_DIR берутся из окружения вызова
+lessons_root_safe() { # -> stdout "True"/"False" (bool _lessons_journal_root_safe()); $AI_RC_PROJECTS_FILE и $AI_AGENT_LESSONS_JOURNAL_DIR берутся из окружения вызова
   python3 - "$RUN" <<'PY'
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
@@ -3039,27 +3039,27 @@ PY
 
 # =============================================================== INV-TASK-49 критерий 1 (главный дефект)
 echo "=== INV-TASK-49 к1: проект с именем из двух слов, чей корень накрывает каталог журнала, - проверка отрицательна ==="
-: > "$CLAUDE_RC_PROJECTS_FILE"
+: > "$AI_RC_PROJECTS_FILE"
 MP_ROOT_C1="$TMP/inv49-mp-root"; mkdir -p "$MP_ROOT_C1"
 JOURNAL_C1="$MP_ROOT_C1/sub/journal"   # корень "my project" НАКРЫВАЕТ каталог журнала
 register_flat_project "my project" "$MP_ROOT_C1"
-RESULT_C1=$(CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_C1" lessons_root_safe)
+RESULT_C1=$(AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_C1" lessons_root_safe)
 [[ "$RESULT_C1" == "False" ]] \
   && ok || fail "INV-TASK-49 к1: имя 'my project' (пробел) с корнем, накрывающим журнал, обязано дать False (got $RESULT_C1) - разбиение по пробелу теряет настоящий корень"
 
 # =============================================================== INV-TASK-49 критерий 2
 echo "=== INV-TASK-49 к2: проект с именем с пробелом, чей корень журнал НЕ накрывает, проверке не мешает ==="
-: > "$CLAUDE_RC_PROJECTS_FILE"
+: > "$AI_RC_PROJECTS_FILE"
 OTHER_ROOT_C2="$TMP/inv49-other-root"; mkdir -p "$OTHER_ROOT_C2"
 JOURNAL_C2="$TMP/inv49-journal-c2"; mkdir -p "$JOURNAL_C2"
 register_flat_project "other project" "$OTHER_ROOT_C2"
-RESULT_C2=$(CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_C2" lessons_root_safe)
+RESULT_C2=$(AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_C2" lessons_root_safe)
 [[ "$RESULT_C2" == "True" ]] \
   && ok || fail "INV-TASK-49 к2: имя 'other project' (пробел), корень журнал не накрывает, обязано дать True (got $RESULT_C2)"
 
 # =============================================================== INV-TASK-49 критерий 3
 echo "=== INV-TASK-49 к3: ошибка разрешения пути у ПРОМЕЖУТОЧНОГО (не последнего) проекта проваливает проверку целиком ==="
-: > "$CLAUDE_RC_PROJECTS_FILE"
+: > "$AI_RC_PROJECTS_FILE"
 PROJ_C3_A="$TMP/inv49-proj-c3a"; mkdir -p "$PROJ_C3_A"
 PROJ_C3_C="$TMP/inv49-proj-c3c"; mkdir -p "$PROJ_C3_C"
 JOURNAL_C3="$TMP/inv49-journal-c3"; mkdir -p "$JOURNAL_C3"   # не пересекается ни с A, ни с C
@@ -3067,9 +3067,9 @@ register_flat_project projinv49c3a "$PROJ_C3_A"
 # промежуточная запись (не первая и не последняя): форма B БЕЗ .path - "не
 # идентифицирует проект" (см. ambiguity-заметку выше) - имя ЕСТЬ в реестре,
 # но путь у него не разрешается.
-printf 'projinv49c3b-broken:\n  integrate: merge\n' >> "$CLAUDE_RC_PROJECTS_FILE"
+printf 'projinv49c3b-broken:\n  integrate: merge\n' >> "$AI_RC_PROJECTS_FILE"
 register_flat_project projinv49c3c "$PROJ_C3_C"
-RESULT_C3=$(CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_C3" lessons_root_safe)
+RESULT_C3=$(AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_C3" lessons_root_safe)
 [[ "$RESULT_C3" == "False" ]] \
   && ok || fail "INV-TASK-49 к3: нерешаемый промежуточный проект обязан провалить всю проверку (got $RESULT_C3) - ошибка на промежуточной записи не должна теряться за успехом последней"
 
@@ -3078,9 +3078,9 @@ echo "=== INV-TASK-49 к4: пустой реестр - проверка поло
 # "пустой реестр" = валидная YAML-карта БЕЗ ключей ({}), а не 0-байтный файл:
 # 0-байтный файл парсится в null, и keys(null) - это ошибка чтения (та же
 # ветка, что критерий 5), а не легитимный "реестр прочитан, проектов нет".
-printf '{}\n' > "$CLAUDE_RC_PROJECTS_FILE"
+printf '{}\n' > "$AI_RC_PROJECTS_FILE"
 JOURNAL_C4="$TMP/inv49-journal-c4"; mkdir -p "$JOURNAL_C4"
-RESULT_C4=$(CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_C4" lessons_root_safe)
+RESULT_C4=$(AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_C4" lessons_root_safe)
 [[ "$RESULT_C4" == "True" ]] \
   && ok || fail "INV-TASK-49 к4: пустой реестр обязан дать True (got $RESULT_C4)"
 
@@ -3089,29 +3089,29 @@ echo "=== INV-TASK-49 к5: нечитаемый (битый) реестр - пр
 REGISTRY_C5="$TMP/inv49-registry-c5-invalid.yaml"
 printf 'projinv49c5: [\n' > "$REGISTRY_C5"   # невалидный YAML, как в L34B
 JOURNAL_C5="$TMP/inv49-journal-c5"; mkdir -p "$JOURNAL_C5"
-RESULT_C5=$(CLAUDE_RC_PROJECTS_FILE="$REGISTRY_C5" CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_C5" lessons_root_safe)
+RESULT_C5=$(AI_RC_PROJECTS_FILE="$REGISTRY_C5" AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_C5" lessons_root_safe)
 [[ "$RESULT_C5" == "False" ]] \
   && ok || fail "INV-TASK-49 к5: битый реестр обязан дать False (got $RESULT_C5)"
 
 # =============================================================== INV-TASK-49 критерий 6
 echo "=== INV-TASK-49 к6: файл журнала внутри безопасного каталога - симлинк в корень проекта - проверка отрицательна ==="
-: > "$CLAUDE_RC_PROJECTS_FILE"
+: > "$AI_RC_PROJECTS_FILE"
 PROJ_C6="$TMP/inv49-proj-c6"; mkdir -p "$PROJ_C6"
 register_flat_project projinv49c6 "$PROJ_C6"
 JOURNAL_C6="$TMP/inv49-journal-c6"; mkdir -p "$JOURNAL_C6"   # каталог журнала САМ по себе ни с одним проектом не пересекается
 printf '{"candidate_id":"%s"}\n' "$(python3 -c 'print("6"*64)')" > "$JOURNAL_C6/legit.jsonl"   # обычный файл - baseline
 ln -s "$PROJ_C6" "$JOURNAL_C6/leaked.jsonl"   # отдельный файл журнала - симлинк В КОРЕНЬ зарегистрированного проекта
-RESULT_C6=$(CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_C6" lessons_root_safe)
+RESULT_C6=$(AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_C6" lessons_root_safe)
 [[ "$RESULT_C6" == "False" ]] \
   && ok || fail "INV-TASK-49 к6: файл журнала-симлинк в корень проекта обязан дать False (got $RESULT_C6) - проверка только каталога-корня это не ловит"
 
 # =============================================================== INV-TASK-49 критерий 7
 echo "=== INV-TASK-49 к7: имя проекта с переводом строки - проверка отрицательна с внятным отказом, не тихий пропуск ==="
-: > "$CLAUDE_RC_PROJECTS_FILE"
+: > "$AI_RC_PROJECTS_FILE"
 OTHER_ROOT_C7="$TMP/inv49-other-root-c7"; mkdir -p "$OTHER_ROOT_C7"   # НЕ пересекается с журналом - без разбора по строкам проверка тихо сказала бы "безопасно"
 JOURNAL_C7="$TMP/inv49-journal-c7"; mkdir -p "$JOURNAL_C7"
-printf '"projinv49c7-a\\nprojinv49c7-b": %s\n' "$OTHER_ROOT_C7" >> "$CLAUDE_RC_PROJECTS_FILE"
-RESULT_C7=$(CLAUDE_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_C7" lessons_root_safe)
+printf '"projinv49c7-a\\nprojinv49c7-b": %s\n' "$OTHER_ROOT_C7" >> "$AI_RC_PROJECTS_FILE"
+RESULT_C7=$(AI_AGENT_LESSONS_JOURNAL_DIR="$JOURNAL_C7" lessons_root_safe)
 [[ "$RESULT_C7" == "False" ]] \
   && ok || fail "INV-TASK-49 к7: имя проекта с переводом строки обязано дать False, а не тихо разъехаться на две несуществующие строки (got $RESULT_C7)"
 

@@ -42,13 +42,13 @@ class WiringTests(unittest.TestCase):
                         XDG_RUNTIME_DIR=str(self.base / 'runtime'),
                         CLAUDE_CONFIG_DIR=str(self.base / 'claude'),
                         CODEX_HOME=str(self.base / 'codex'),
-                        CLAUDE_AGENTS_DIR=str(self.agents),
-                        CLAUDE_AGENT_SPOOL_BASE=str(self.base / 'spool'),
-                        CLAUDE_RECONCILER_DIR=str(self.base / 'reconciler'),
-                        CLAUDE_RC_PROJECTS_FILE=str(self.base / 'projects.yaml'),
-                        CLAUDE_RC_TASK_TEMPLATE=str(self.base / 'task-template.yaml'),
-                        CLAUDE_AGENT_PROBE_CMD='/usr/bin/true',
-                        CLAUDE_AGENT_GENERATION='1', CLAUDE_AGENT_ATTEMPT='fixture-attempt',
+                        AI_AGENTS_DIR=str(self.agents),
+                        AI_AGENT_SPOOL_BASE=str(self.base / 'spool'),
+                        AI_RECONCILER_DIR=str(self.base / 'reconciler'),
+                        AI_RC_PROJECTS_FILE=str(self.base / 'projects.yaml'),
+                        AI_RC_TASK_TEMPLATE=str(self.base / 'task-template.yaml'),
+                        AI_AGENT_PROBE_CMD='/usr/bin/true',
+                        AI_AGENT_GENERATION='1', AI_AGENT_ATTEMPT='fixture-attempt',
                         PATH=str(self.mockbin) + ':' + os.environ['PATH'])
         # Boundary stubs use literal paths, never production environment hooks.
         for name in ('claude', 'codex', 'systemd-run', 'systemctl', 'gh'):
@@ -67,7 +67,7 @@ class WiringTests(unittest.TestCase):
         self.codex_template = self.base / 'task-codex-template.yaml'
         if codex_template.is_file():
             shutil.copyfile(codex_template, self.codex_template)
-        self.env['CLAUDE_RC_CODEX_TASK_TEMPLATE'] = str(self.codex_template)
+        self.env['AI_RC_CODEX_TASK_TEMPLATE'] = str(self.codex_template)
         (self.base / 'projects.yaml').write_text(yaml.safe_dump({'fixture': {'path': str(self.project), 'integrate': 'none'}}))
         (self.base / 'task-template.yaml').write_text(self.template())
         self.git('init', '-q', '--initial-branch=main', str(self.project))
@@ -96,7 +96,7 @@ class WiringTests(unittest.TestCase):
         args = ['agent', 'new-task', '--name', name, '--project', 'fixture', '--text', 'owned fixture task']
         if engine is not None:
             args += ['--engine', engine]
-        return self.run_cmd('claude-rc', *args)
+        return self.run_cmd('ai-rc', *args)
 
     def spec(self, name):
         return yaml.safe_load((self.agents / name / 'spec.yaml').read_text())
@@ -111,7 +111,7 @@ cmd,arg=bot.parse_command(sys.argv[2])
 result=bot.handle(cmd,arg,update_id=int(sys.argv[3]),from_id=555)
 print(json.dumps(result,ensure_ascii=False))
 '''
-        return subprocess.run(['python3', '-c', script, str(self.bin / 'claude-agent-tgbot'),
+        return subprocess.run(['python3', '-c', script, str(self.bin / 'ai-agent-tgbot'),
                                text, str(update_id)], env=self.env, text=True,
                               capture_output=True, timeout=25)
 
@@ -275,11 +275,11 @@ print(json.dumps(result,ensure_ascii=False))
     def test_creator_initializes_private_final_binding_before_control_publication(self):
         # INV-CXRUN-01. Intercept established control IO CLI in trusted BIN tree.
         actual_io = self.bin / 'fixture-real-control-io'
-        shutil.copyfile(self.bin / 'claude-agent-io', actual_io)
+        shutil.copyfile(self.bin / 'ai-agent-io', actual_io)
         actual_io.chmod(0o700)
         observed = self.base / 'publication.jsonl'
         state_root = self.base / 'codex-task-state'
-        wrapper = self.bin / 'claude-agent-io'
+        wrapper = self.bin / 'ai-agent-io'
         wrapper.write_text('#!/usr/bin/env python3\nimport os,sys,json,pathlib\n'
             'if __name__ != "__main__":\n'
             ' from importlib.machinery import SourceFileLoader\n'
@@ -323,7 +323,7 @@ print(json.dumps(result,ensure_ascii=False))
         target = pending / inflight.name
         inflight.rename(target)
         before = target.read_bytes()
-        result = self.run_cmd('claude-agent-run', 'drain', agent)
+        result = self.run_cmd('ai-agent-run', 'drain', agent)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertTrue(target.is_file())
         self.assertEqual(target.read_bytes(), before)
@@ -361,7 +361,7 @@ print(json.dumps(result,ensure_ascii=False))
         spec.write_text(yaml.safe_dump(dict(schema=1, name=name, type='event', role='none',
             project=str(self.project), goal='hook fixture', autonomy='suggest', memory_max_mb=100,
             limits=dict(runs_per_day=100, run_timeout_s=20), source=dict(kind='spool'), workspace='worktree')))
-        result = self.run_cmd('claude-rc', 'agent', 'create', name, '--spec', spec)
+        result = self.run_cmd('ai-rc', 'agent', 'create', name, '--spec', spec)
         self.assertEqual(result.returncode, 0, result.stderr)
         agent = self.agents / name
         (agent / 'work/change.txt').write_text('owned committed change\n')
@@ -374,8 +374,8 @@ print(json.dumps(result,ensure_ascii=False))
             source_ns='test', native_id='0', received_at='2026-01-01T00:00:00Z',
             meta=dict(attempts=0, recoveries=0, quarantined=False, next_attempt_at=None, history=[]),
             payload=dict(text='fixture'))))
-        done_env = dict(self.env, CLAUDE_AGENT_DIR=str(agent), CLAUDE_AGENT_EVENT_KEY='fixture-key')
-        done = subprocess.run([str(self.bin / 'claude-agent-done'), '--summary', 'owned done'],
+        done_env = dict(self.env, AI_AGENT_DIR=str(agent), AI_AGENT_EVENT_KEY='fixture-key')
+        done = subprocess.run([str(self.bin / 'ai-agent-done'), '--summary', 'owned done'],
                               env=done_env, capture_output=True, text=True, timeout=15)
         self.assertEqual(done.returncode, 0, done.stderr)
         path = agent / 'done.json'
@@ -456,7 +456,7 @@ print(json.dumps(result,ensure_ascii=False))
         target = pending / inflight.name
         inflight.rename(target)
         before = target.read_bytes()
-        result = self.run_cmd('claude-agent-run', 'drain', agent)
+        result = self.run_cmd('ai-agent-run', 'drain', agent)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertTrue(target.is_file(), 'preflight refusal must leave event unclaimed')
         self.assertEqual(target.read_bytes(), before)
@@ -472,7 +472,7 @@ print(json.dumps(result,ensure_ascii=False))
         spec = yaml.safe_load(spec_path.read_text())
         spec['engine'] = 'unsupported-engine'
         spec_path.write_text(yaml.safe_dump(spec))
-        result = self.run_cmd('claude-agent-run', 'drain', agent)
+        result = self.run_cmd('ai-agent-run', 'drain', agent)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertFalse(self.barrier_log.exists(), 'unknown engine must not dispatch Codex')
         if self.effects.exists():
@@ -482,7 +482,7 @@ print(json.dumps(result,ensure_ascii=False))
     def test_status_reports_codex_and_unknown_usd(self):
         # INV-CXRUN-08
         agent = self.hook_fixture()
-        result = self.run_cmd('claude-rc', 'agent', 'status', agent.name)
+        result = self.run_cmd('ai-rc', 'agent', 'status', agent.name)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('codex', result.stdout.lower())
         self.assertRegex(result.stdout.lower(), r'неизвест|unknown|null')
@@ -495,7 +495,7 @@ print(json.dumps(result,ensure_ascii=False))
             with self.subTest(cost_usd=value):
                 usage.write_text(json.dumps(dict(day='2026-10-03', day_runs=0,
                     week='2026-W40', week_runs=0, cost_usd=value, exhausted_until=None)))
-                result = self.run_cmd('claude-rc', 'agent', 'status', agent.name)
+                result = self.run_cmd('ai-rc', 'agent', 'status', agent.name)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertRegex(result.stdout.lower(), r'неизвест|unknown|null')
                 self.assertNotRegex(result.stdout, r'cost=\$0(?:\s|$)')
@@ -507,7 +507,7 @@ spec=importlib.util.spec_from_loader(loader.name,loader)
 bot=importlib.util.module_from_spec(spec);loader.exec_module(bot)
 print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii=False))
 """
-        result = subprocess.run(['python3', '-c', script, str(self.bin / 'claude-agent-tgbot'),
+        result = subprocess.run(['python3', '-c', script, str(self.bin / 'ai-agent-tgbot'),
                                  function, json.dumps(args)], env=self.env, capture_output=True,
                                 text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -557,7 +557,7 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
             guard.write_text('#!/bin/sh\nexit 91\n')
             guard.chmod(0o700)
         (self.home / 'Library/LaunchAgents').mkdir(parents=True, exist_ok=True)
-        env = dict(self.env, CLAUDE_CONTROL_OS='Darwin')
+        env = dict(self.env, AI_CONTROL_OS='Darwin')
         return subprocess.run([str(ROOT / 'install.sh'), '--prefix', str(self.base / 'installed'),
                                '--label', 'com.test.codex-task-wiring'], env=env,
                               capture_output=True, text=True, timeout=30)
@@ -566,10 +566,10 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
         # INV-CXRUN-01/08
         result = self.isolated_installer()
         self.assertEqual(result.returncode, 0, result.stderr)
-        template = self.home / '.claude-control/task-codex-template.yaml'
+        template = self.home / '.ai-control/task-codex-template.yaml'
         self.assertTrue(template.is_file(), 'installer did not seed dedicated Codex template')
         before = template.read_bytes()
-        legacy = self.home / '.claude-control/task-template.yaml'
+        legacy = self.home / '.ai-control/task-template.yaml'
         legacy_before = legacy.read_bytes()
         result = self.isolated_installer()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -580,7 +580,7 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
 
     def test_install_preserves_custom_codex_and_legacy_templates(self):
         # INV-CXRUN-01/08
-        directory = self.home / '.claude-control'
+        directory = self.home / '.ai-control'
         directory.mkdir()
         codex = directory / 'task-codex-template.yaml'
         legacy = directory / 'task-template.yaml'
@@ -596,7 +596,7 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
         import venv
         hookdir = self.base / 'python-startup-fixture'
         hookdir.mkdir()
-        interpreter = self.home / '.local/share/claude-control/codex-venv/bin/python'
+        interpreter = self.home / '.local/share/ai-control/codex-venv/bin/python'
         venv_root = interpreter.parent.parent
         if with_venv:
             venv.EnvBuilder(with_pip=False, symlinks=symlinks).create(venv_root)
@@ -637,7 +637,7 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
         lockpath = agent / 'inbox/.executor.lock'
         with lockpath.open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            result = self.run_cmd('claude-agent-run', 'drain', agent)
+            result = self.run_cmd('ai-agent-run', 'drain', agent)
         self.assertNotEqual(result.returncode, 5, 'missing dependency was checked after executor flock')
         self.assertNotEqual(result.returncode, 0)
         self.assertRegex((result.stderr + result.stdout).lower(), r'websockets|dependenc|venv')
@@ -654,7 +654,7 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
             for mode in ('loop', 'drain'):
                 with self.subTest(mode=mode):
                     self.reexec_log.unlink(missing_ok=True)
-                    result = self.run_cmd('claude-agent-run', mode, agent)
+                    result = self.run_cmd('ai-agent-run', mode, agent)
                     self.assertTrue(self.reexec_log.is_file(),
                                     'verified venv must start before executor flock; ' + result.stderr)
                     calls = [json.loads(line) for line in self.reexec_log.read_text().splitlines()]
@@ -666,7 +666,7 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
         # matching realpath is not evidence that sys.prefix already is the venv.
         agent = self.hook_fixture()
         self.dependency_fixture(agent, with_venv=True, symlinks=True)
-        interpreter = self.home / '.local/share/claude-control/codex-venv/bin/python'
+        interpreter = self.home / '.local/share/ai-control/codex-venv/bin/python'
         self.assertTrue(interpreter.is_symlink(), 'fixture must exercise actual shared-ELF venv')
         self.assertEqual(interpreter.resolve(), Path(sys.executable).resolve())
         lockpath = agent / 'inbox/.executor.lock'
@@ -675,7 +675,7 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
             for mode in ('loop', 'drain'):
                 with self.subTest(mode=mode):
                     self.reexec_log.unlink(missing_ok=True)
-                    result = self.run_cmd('claude-agent-run', mode, agent)
+                    result = self.run_cmd('ai-agent-run', mode, agent)
                     self.assertTrue(self.reexec_log.is_file(),
                                     'shared-ELF native venv must start before executor flock; ' + result.stderr)
                     calls = [json.loads(line) for line in self.reexec_log.read_text().splitlines()]
@@ -687,7 +687,7 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
         # establish the verified interpreter/prefix required by the launcher.
         agent = self.hook_fixture()
         self.dependency_fixture(agent, with_venv=True, symlinks=True, original_has_websockets=True)
-        venv_root = self.home / '.local/share/claude-control/codex-venv'
+        venv_root = self.home / '.local/share/ai-control/codex-venv'
         probe = subprocess.run([sys.executable, '-c',
             'import json,sys,websockets;print(json.dumps(dict(version=websockets.__version__,prefix=sys.prefix,path=websockets.__file__)))'],
             env=self.env, text=True, capture_output=True, timeout=5)
@@ -703,7 +703,7 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
             for mode in ('loop', 'drain'):
                 with self.subTest(mode=mode):
                     self.reexec_log.unlink(missing_ok=True)
-                    result = self.run_cmd('claude-agent-run', mode, agent)
+                    result = self.run_cmd('ai-agent-run', mode, agent)
                     self.assertTrue(self.reexec_log.is_file(),
                         'importable correct websockets outside verified venv cannot bypass reexec; ' + result.stderr)
                     calls = [json.loads(line) for line in self.reexec_log.read_text().splitlines()]
@@ -732,62 +732,62 @@ print(json.dumps(getattr(bot,sys.argv[2])(*json.loads(sys.argv[3])),ensure_ascii
         # INV-CXRUN-07
         agent = self.hook_fixture()
         sha = json.loads((agent / 'done.json').read_text())['commit_sha']
-        self.assert_refused_effects(agent, 'claude-agent-run', 'done-verdict', agent, '--accept', '--expect-sha', sha[:8])
+        self.assert_refused_effects(agent, 'ai-agent-run', 'done-verdict', agent, '--accept', '--expect-sha', sha[:8])
 
     def test_direct_cancel_must_gate_before_branch_handling(self):
         # INV-CXRUN-07
         agent = self.hook_fixture()
-        self.assert_refused_effects(agent, 'claude-agent-run', 'done-verdict', agent, '--cancel')
+        self.assert_refused_effects(agent, 'ai-agent-run', 'done-verdict', agent, '--cancel')
 
     def test_direct_finalize_must_gate_before_git_checkpoint(self):
         # INV-CXRUN-07
         agent = self.hook_fixture(finalized=False)
-        self.assert_refused_effects(agent, 'claude-agent-run', 'done-advance', agent)
+        self.assert_refused_effects(agent, 'ai-agent-run', 'done-advance', agent)
 
     def test_direct_integrate_must_gate_before_project_git(self):
         # INV-CXRUN-07
         agent = self.hook_fixture(state='accepted')
-        self.assert_refused_effects(agent, 'claude-agent-run', 'done-advance', agent)
+        self.assert_refused_effects(agent, 'ai-agent-run', 'done-advance', agent)
 
     def test_direct_cleanup_must_gate_before_worktree_delete(self):
         # INV-CXRUN-07
         agent = self.hook_fixture(state='integrated')
-        self.assert_refused_effects(agent, 'claude-agent-run', 'done-advance', agent)
+        self.assert_refused_effects(agent, 'ai-agent-run', 'done-advance', agent)
 
     def test_direct_cancelled_cleanup_must_gate_even_with_forced_dirty_policy(self):
         # INV-CXRUN-07
         agent = self.hook_fixture(state='cancelled')
-        self.assert_refused_effects(agent, 'claude-agent-run', 'done-advance', agent)
+        self.assert_refused_effects(agent, 'ai-agent-run', 'done-advance', agent)
 
     def test_direct_archive_must_gate_before_name_reuse(self):
         # INV-CXRUN-07
         agent = self.hook_fixture(state='cleaned')
-        self.assert_refused_effects(agent, 'claude-agent-run', 'done-advance', agent)
+        self.assert_refused_effects(agent, 'ai-agent-run', 'done-advance', agent)
 
     def test_rc_task_cancel_force_cannot_bypass_native_drain(self):
         # INV-CXRUN-07
         agent = self.hook_fixture()
-        self.assert_refused_effects(agent, 'claude-rc', 'agent', 'task-cancel', agent.name, '--force')
+        self.assert_refused_effects(agent, 'ai-rc', 'agent', 'task-cancel', agent.name, '--force')
 
     def test_rc_stop_must_gate_orphan_native_with_no_executor_lease(self):
         # INV-CXRUN-07
         agent = self.hook_fixture()
-        self.assert_refused_effects(agent, 'claude-rc', 'agent', 'stop', agent.name)
+        self.assert_refused_effects(agent, 'ai-rc', 'agent', 'stop', agent.name)
 
     def test_rc_resolve_must_gate_before_releasing_native_hold(self):
         # INV-CXRUN-07
         agent = self.hook_fixture()
-        self.assert_refused_effects(agent, 'claude-rc', 'agent', 'resolve', agent.name, '--resume')
+        self.assert_refused_effects(agent, 'ai-rc', 'agent', 'resolve', agent.name, '--resume')
 
     def test_reconciler_shutdown_must_gate_before_lease_none_fastpath(self):
         # INV-CXRUN-07
         agent = self.hook_fixture(lease='none')
-        self.assert_refused_effects(agent, 'claude-agent-reconciler', '--once')
+        self.assert_refused_effects(agent, 'ai-agent-reconciler', '--once')
 
     def test_reconciler_shutdown_must_gate_before_active_lease_release(self):
         # INV-CXRUN-07
         agent = self.hook_fixture(lease='active')
-        self.assert_refused_effects(agent, 'claude-agent-reconciler', '--once')
+        self.assert_refused_effects(agent, 'ai-agent-reconciler', '--once')
 
 
 if __name__ == '__main__':

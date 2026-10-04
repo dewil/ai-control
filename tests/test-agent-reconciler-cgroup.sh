@@ -6,21 +6,21 @@
 # из захардкоженных сегментов /sys/fs/cgroup/user.slice/..., которого на
 # тестовой машине не существует), поэтому любой сценарий читается как "пусто".
 #
-# Техника: bin/claude-agent-reconciler исполняет "main" (flock + run_pass) на
+# Техника: bin/ai-agent-reconciler исполняет "main" (flock + run_pass) на
 # любое подключение файла, поэтому подключаем не весь файл, а срез до строки
 # `mode=` (начало диспетчера argv) - все функции определены раньше этой строки.
 # systemctl подменяется мок-скриптом в PATH; "файловая система" cgroup - это
 # обычный временный каталог, путь к которому отдает мок
 # `systemctl --user show -p ControlGroup`. $0 при подключении среза выставлен
-# в реальный путь bin/claude-agent-reconciler (через `bash -c '...' "$REAL_RECON"`),
+# в реальный путь bin/ai-agent-reconciler (через `bash -c '...' "$REAL_RECON"`),
 # поэтому BIN_DIR внутри среза резолвится верно и IO указывает на настоящий
-# claude-agent-io.
+# ai-agent-io.
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/.."
-REAL_RECON="$ROOT/bin/claude-agent-reconciler"
-IO="$ROOT/bin/claude-agent-io"
+REAL_RECON="$ROOT/bin/ai-agent-reconciler"
+IO="$ROOT/bin/ai-agent-io"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -30,7 +30,7 @@ ok()   { PASS=$((PASS+1)); }
 fail() { FAIL=$((FAIL+1)); echo "FAIL (INV-RECON-07): $1" >&2; }
 
 if [[ ! -f "$REAL_RECON" ]]; then
-  fail "bin/claude-agent-reconciler не найден - технически невозможно продолжить"
+  fail "bin/ai-agent-reconciler не найден - технически невозможно продолжить"
   echo "test-agent-reconciler-cgroup: $PASS ok, $FAIL FAIL"
   exit 1
 fi
@@ -114,7 +114,7 @@ EOF
 }
 
 # --- фикстура агента: control.json с lease active (валидный минимум по
-# схеме claude-agent-io, образец взят из tests/test-agent-io.sh) ---
+# схеме ai-agent-io, образец взят из tests/test-agent-io.sh) ---
 mk_agent() { # <name> -> печатает путь каталога агента
   local name="$1"
   local dir="$AGENTS_DIR/$name"
@@ -137,12 +137,12 @@ attention_of() { python3 -c 'import json,sys; print(json.dumps(json.load(open(sy
 
 # запуск функции реконсилера в чистом окружении: $0 внутри среза = REAL_RECON,
 # поэтому BIN_DIR/IO резолвятся на настоящий bin/. STOP_GRACE переопределяем
-# переменной CLAUDE_AGENT_STOP_GRACE (та же, что читает реконсилер).
+# переменной AI_AGENT_STOP_GRACE (та же, что читает реконсилер).
 run_recon() { # <stop_grace> <expr-to-eval-after-source>...
   local grace="$1"; shift
   env FUNCS="$FUNCS" PATH="$MOCKBIN:$PATH" SCEN_DIR="$SCEN_DIR" CALL_LOG="$CALL_LOG" \
-      CLAUDE_AGENTS_DIR="$AGENTS_DIR" CLAUDE_RECONCILER_DIR="$RC_DIR" \
-      CLAUDE_CONFIG_DIR="$CFG_DIR" CLAUDE_AGENT_STOP_GRACE="$grace" \
+      AI_AGENTS_DIR="$AGENTS_DIR" AI_RECONCILER_DIR="$RC_DIR" \
+      CLAUDE_CONFIG_DIR="$CFG_DIR" AI_AGENT_STOP_GRACE="$grace" \
       timeout 30 bash -c '. "$FUNCS"; '"$1" "$REAL_RECON" "${@:2}"
 }
 

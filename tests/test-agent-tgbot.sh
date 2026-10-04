@@ -2,7 +2,7 @@
 # Offline-тесты TG-бота (auth/валидация/эскейпинг) - см. selftest в самом боте.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-BOT="$HERE/../bin/claude-agent-tgbot"
+BOT="$HERE/../bin/ai-agent-tgbot"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -11,13 +11,13 @@ ok()   { PASS=$((PASS+1)); }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1" >&2; }
 
 # HOME переопределен: selftest дергает только чистые функции и явно
-# подменяет пути состояния (CLAUDE_AGENT_TG_CARDS_COUNT и т.п.) на
-# временные, но LOG_FILE/OFFSET_FILE в bin/claude-agent-tgbot резолвятся
+# подменяет пути состояния (AI_AGENT_TG_CARDS_COUNT и т.п.) на
+# временные, но LOG_FILE/OFFSET_FILE в bin/ai-agent-tgbot резолвятся
 # от $HOME - страхуемся на случай появления в selftest вызовов log().
 export HOME="$TMP/home"
 mkdir -p "$HOME"
 
-if "$BOT" selftest; then ok; else fail "bin/claude-agent-tgbot selftest (внутренние проверки бота)"; fi
+if "$BOT" selftest; then ok; else fail "bin/ai-agent-tgbot selftest (внутренние проверки бота)"; fi
 
 echo "=== раздел C спеки 2026-09-19-spec-session-titles.md: фон, троттлинг лога, устойчивость карточки ==="
 # Ни один из вызываемых ниже атрибутов модуля (titles_log_step,
@@ -25,7 +25,7 @@ echo "=== раздел C спеки 2026-09-19-spec-session-titles.md: фон, �
 # спека описывает только НАБЛЮДАЕМОЕ поведение бота (троттлинг лога, интервал
 # фона, устойчивость карточки к провалу refresh), а не точки входа. Имена
 # ниже - предположение по конвенции модуля (run_rc(args, timeout=60) в
-# bin/claude-agent-tgbot) и подлежат сверке с тем, что впишет реализация;
+# bin/ai-agent-tgbot) и подлежат сверке с тем, что впишет реализация;
 # если имена будут другими - это ожидаемо и не считается дефектом спеки, а
 # просто требует поправить эти тесты. Модуль импортируется через
 # importlib (без чтения его логики), а не запуском подкоманды: у section C
@@ -113,7 +113,7 @@ scenario("троттлинг: успех после успеха тихий", s_
 
 def s_due():
     # "Первый прогон - при старте бота", дальше не чаще
-    # CLAUDE_TGBOT_TITLES_EVERY секунд (по умолчанию 180).
+    # AI_TGBOT_TITLES_EVERY секунд (по умолчанию 180).
     record("нет предыдущего прогона -> обновление положено сразу (старт бота)",
            mod.titles_refresh_due(None, 1000, 180) is True)
     record("интервал не истек -> обновления не положено",
@@ -128,23 +128,23 @@ scenario("фон: не чаще интервала между прогонами
 
 
 def s_env_default():
-    env_had = "CLAUDE_TGBOT_TITLES_EVERY" in os.environ
-    env_old = os.environ.get("CLAUDE_TGBOT_TITLES_EVERY")
-    os.environ.pop("CLAUDE_TGBOT_TITLES_EVERY", None)
+    env_had = "AI_TGBOT_TITLES_EVERY" in os.environ
+    env_old = os.environ.get("AI_TGBOT_TITLES_EVERY")
+    os.environ.pop("AI_TGBOT_TITLES_EVERY", None)
     try:
-        record("интервал фона по умолчанию 180 с (CLAUDE_TGBOT_TITLES_EVERY не задан)",
+        record("интервал фона по умолчанию 180 с (AI_TGBOT_TITLES_EVERY не задан)",
                mod.titles_every() == 180)
-        os.environ["CLAUDE_TGBOT_TITLES_EVERY"] = "42"
-        record("интервал фона читается из CLAUDE_TGBOT_TITLES_EVERY",
+        os.environ["AI_TGBOT_TITLES_EVERY"] = "42"
+        record("интервал фона читается из AI_TGBOT_TITLES_EVERY",
                mod.titles_every() == 42)
     finally:
         if env_had:
-            os.environ["CLAUDE_TGBOT_TITLES_EVERY"] = env_old
+            os.environ["AI_TGBOT_TITLES_EVERY"] = env_old
         else:
-            os.environ.pop("CLAUDE_TGBOT_TITLES_EVERY", None)
+            os.environ.pop("AI_TGBOT_TITLES_EVERY", None)
 
 
-scenario("фон: CLAUDE_TGBOT_TITLES_EVERY читается с дефолтом 180", s_env_default)
+scenario("фон: AI_TGBOT_TITLES_EVERY читается с дефолтом 180", s_env_default)
 
 
 def s_timeout_safe():
@@ -292,9 +292,9 @@ def make_fake_api(update, sent):
 def run_update(update):
     """Прогоняет ОДИН апдейт через mode_poll с подмененными api/sticky_route/
     log/фоном; возвращает (executed, sent, logs)."""
-    os.environ["CLAUDE_AGENT_TG_TOKEN"] = "testtoken"
-    os.environ["CLAUDE_AGENT_TG_WHITELIST"] = str(OWNER)
-    os.environ["CLAUDE_AGENT_TG_PROXY"] = ""
+    os.environ["AI_AGENT_TG_TOKEN"] = "testtoken"
+    os.environ["AI_AGENT_TG_WHITELIST"] = str(OWNER)
+    os.environ["AI_AGENT_TG_PROXY"] = ""
     executed = []
     sent = []
     logs = []
@@ -734,15 +734,15 @@ scenario("критерий 6: карточка готовности project/bran
 
 
 # --- критерий 6 (продолжение): сигнал ожидания уходит маскированным.
-# tests/test-waiting-hook.sh подменяет claude-agent-tgbot целиком заглушкой
+# tests/test-waiting-hook.sh подменяет ai-agent-tgbot целиком заглушкой
 # (пишет argv в файл) и проверяет только САМ ВЫЗОВ хука ("notify --no-preview
 # ..."), а не то, что бот делает с текстом внутри. Маскировка сигнала ожидания
 # - работа бота на CLI-пути "notify" (mode_notify), поэтому та часть, что
 # реально проходит через границу api(), проверяется здесь, а не в хук-тесте.
 def s_waiting_signal_masked():
-    os.environ["CLAUDE_AGENT_TG_TOKEN"] = "testtoken"
-    os.environ["CLAUDE_AGENT_TG_WHITELIST"] = "4242"
-    os.environ["CLAUDE_AGENT_TG_PROXY"] = ""
+    os.environ["AI_AGENT_TG_TOKEN"] = "testtoken"
+    os.environ["AI_AGENT_TG_WHITELIST"] = "4242"
+    os.environ["AI_AGENT_TG_PROXY"] = ""
     argv = ["--no-preview", "сессия", "ждет:", "token=waitsecret6",
             "выбери", "вариант"]
 

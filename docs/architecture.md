@@ -4,19 +4,19 @@
 > (`/sessions` -> проект -> сессия по имени) и живут транзиентными юнитами
 > `ccsession-<uuid>`; вечной control-сессии, её watchdog'а и tmux в схеме больше нет.
 > Контракт - [design-2026-08-01-v3-layer1-sessions-on-bot.md](./design-2026-08-01-v3-layer1-sessions-on-bot.md).
-> Разделы ниже про `claude-control-session`, `claude-control-watchdog`,
-> `claude-control-project-watchdog` и `claude-control-run` описывают **legacy**-путь.
+> Разделы ниже про `ai-control-session`, `ai-control-watchdog`,
+> `ai-control-project-watchdog` и `ai-control-run` описывают **legacy**-путь.
 > Первые три остались в репозитории для отката: установщик их больше не включает и
 > снимает с уже установленных машин - на обеих ветках, macOS выровнен 2026-08-12.
-> `claude-control-run` удален совсем.
+> `ai-control-run` удален совсем.
 
 ## Слой 1 сегодня
 
 ```text
-Telegram /sessions ──► claude-rc sessions <p> --porcelain   (uuid, имя, live)
+Telegram /sessions ──► ai-rc sessions <p> --porcelain   (uuid, имя, live)
         │                        │
         │ тап по сессии          ▼
-        └──────────────► claude-rc up <p> <uuid>
+        └──────────────► ai-rc up <p> <uuid>
                                  │
                                  ▼
                  systemd-run --user --unit ccsession-<uuid>
@@ -51,14 +51,14 @@ Telegram /sessions ──► claude-rc sessions <p> --porcelain   (uuid, имя,
                               │  Твой Mac / Linux-машина     │
                               │                              │
    супервизор (user-level)    │   ┌────────────────────────┐ │
-   control unit              ─┼─► │ claude-control-session │ │
+   control unit              ─┼─► │ ai-control-session │ │
                               │   │  → claude remote-      │ │
                               │   │    control --name      │ │
                               │   │    control --capacity 1│ │
                               │   └────────────────────────┘ │
                               │                              │
    watchdog unit              │   ┌────────────────────────┐ │
-   (раз в 5 минут)           ─┼─► │ claude-control-watchdog│ │
+   (раз в 5 минут)           ─┼─► │ ai-control-watchdog│ │
                               │   │  читает control.log,   │ │
                               │   │  при отсутствии        │ │
                               │   │  heartbeat'а пинает    │ │
@@ -69,7 +69,7 @@ Telegram /sessions ──► claude-rc sessions <p> --porcelain   (uuid, имя,
                               │   "подними X" в control:     │
                               │                              │
                               │   ┌────────────────────────┐ │
-                              │   │ claude-rc X            │ │
+                              │   │ ai-rc X            │ │
                               │   │  → tmux new-session    │ │
                               │   │    cd $path && claude  │ │
                               │   │    remote-control      │ │
@@ -81,20 +81,20 @@ Telegram /sessions ──► claude-rc sessions <p> --porcelain   (uuid, имя,
 ## Компоненты
 
 > Первые четыре раздела - legacy-путь (см. врезку в начале файла). Актуальны
-> `claude-rc` (в части `sessions/up/new/down/live`), `claude-control-logrotate` и
+> `ai-rc` (в части `sessions/up/new/down/live`), `ai-control-logrotate` и
 > весь агентный слой.
 
-### `claude-control-session` (control) - legacy
+### `ai-control-session` (control) - legacy
 
-Тонкая bash-обертка, которую супервизор держит живой. Внутри - `claude remote-control --name control --capacity 1`, запускается из `~/.claude-control/`. Эта папка для control-сессии - проектная директория, поэтому ее `CLAUDE.md` тоже подгружается как контекст. Назначение `CLAUDE.md` тут - научить control-сессию реагировать на "подними `<имя>`", "что запущено", "убей `<имя>`" соответствующими bash-командами и ничего больше в этой папке не делать.
+Тонкая bash-обертка, которую супервизор держит живой. Внутри - `claude remote-control --name control --capacity 1`, запускается из `~/.ai-control/`. Эта папка для control-сессии - проектная директория, поэтому ее `CLAUDE.md` тоже подгружается как контекст. Назначение `CLAUDE.md` тут - научить control-сессию реагировать на "подними `<имя>`", "что запущено", "убей `<имя>`" соответствующими bash-командами и ничего больше в этой папке не делать.
 
 `--capacity 1` потому что control-сессия одна и параллелизм ей не нужен.
 
-### `claude-rc`
+### `ai-rc`
 
-Bash-скрипт. Ищет `<project>` в `~/.claude-control/projects.yaml` через `yq` (строго `mikefarah/yq` v4) и проверяет существование пути. Дальше работают глаголы V3.0, адресующие **сессию по uuid**, а не проект по имени: `new <project>` (чистая сессия, id придумывает сам claude-rc, чтобы юнит было чем именовать), `up <project> <uuid> [--prompt TEXT]` (подъем из истории; resume обязан нести промпт, по умолчанию нейтральный `на связи, жду задачу`), `down <uuid>`, `live [--porcelain]`, `reap [--dry-run]`. Сессия живет транзиентным юнитом `ccsession-<uuid без дефисов>` (`systemd-run --user`, `script -qec` для pty, `MemoryMax` из `CLAUDE_RC_SESSION_MEMORY_MAX`), поэтому переживает вызвавшего и гасится по имени юнита, без охоты за pid. Формы `claude-rc <project>`, `--resume N`, `--continue`, `status`, `stop` относились к tmux-схеме и удалены; голый `claude-rc <project>` теперь отвечает отказом и называет замену.
+Bash-скрипт. Ищет `<project>` в `~/.ai-control/projects.yaml` через `yq` (строго `mikefarah/yq` v4) и проверяет существование пути. Дальше работают глаголы V3.0, адресующие **сессию по uuid**, а не проект по имени: `new <project>` (чистая сессия, id придумывает сам ai-rc, чтобы юнит было чем именовать), `up <project> <uuid> [--prompt TEXT]` (подъем из истории; resume обязан нести промпт, по умолчанию нейтральный `на связи, жду задачу`), `down <uuid>`, `live [--porcelain]`, `reap [--dry-run]`. Сессия живет транзиентным юнитом `ccsession-<uuid без дефисов>` (`systemd-run --user`, `script -qec` для pty, `MemoryMax` из `AI_RC_SESSION_MEMORY_MAX`), поэтому переживает вызвавшего и гасится по имени юнита, без охоты за pid. Формы `ai-rc <project>`, `--resume N`, `--continue`, `status`, `stop` относились к tmux-схеме и удалены; голый `ai-rc <project>` теперь отвечает отказом и называет замену.
 
-Состояние в `live --porcelain` (`ok` / `stale` / `unknown`) выводится из свежести heartbeat'а в `--debug-file`, а не из ответа самой сессии: `stale` значит "давно молчит", а не "точно мертва". Зомби-случай (юнит жив, мост недостижим - карточка в приложении уже заархивирована) добирает `reap`, и только под `CLAUDE_RC_REAP_ARM=1`.
+Состояние в `live --porcelain` (`ok` / `stale` / `unknown`) выводится из свежести heartbeat'а в `--debug-file`, а не из ответа самой сессии: `stale` значит "давно молчит", а не "точно мертва". Зомби-случай (юнит жив, мост недостижим - карточка в приложении уже заархивирована) добирает `reap`, и только под `AI_RC_REAP_ARM=1`.
 
 **ВАЖНО:** `down` НЕ убирает сессию из списка на телефоне - `claude remote-control` намеренно сохраняет environment для resume при любом локальном завершении (сигнал/клавиша/выход) и дерегистрирует его только после ~10 мин сетевого give-up или серверного таймаута (bridge-pointer TTL ~4ч). Поддерживаемого headless-способа убрать раньше нет (внутренний путь - `DELETE /v1/environments/bridge/{envId}` с OAuth-токеном CLI - осознанно не используем). Поэтому запись висит до ~4ч и уходит сама.
 
@@ -102,47 +102,47 @@ Bash-скрипт. Ищет `<project>` в `~/.claude-control/projects.yaml` ч�
 
 `sessions <project>` печатает то же перечисление как меню выбора при старте: строка `[0] fresh` плюс до 4 последних восстановимых сессий (индекс, возраст, **uuid**, origin, превью), с пометкой у worktree-строк, если восстановить нельзя (залочен/вырезан). Uuid стоит в самой строке не для красоты: подъем идет `up <project> <uuid>`, и без него меню читалось бы человеком, но не исполнялось. Машиночитаемая ветка для бота - `sessions <project> --porcelain` (TSV, плюс `--offset`/`--limit`/`--only`), там же поле живости и занятость окна контекста; поле имени (5-е) отдает серверное имя из кэша `session-titles.json`, если оно есть, иначе `custom-title` (см. ниже).
 
-**Имя, под которым поднимается resume, - имя самой сессии, а не проекта.** Подключаясь к bridge, CLI записывает значение `--name` в `custom-title` транскрипта (проверено 2026-08-01 на подопытной сессии: `ПРОБА` -> `probe-name` ровно перед `agent-name` и `bridge-session`). Пока `claude-rc` передавал туда имя проекта из реестра, восстановление чужой сессии молча переименовывало ее (`support` -> `проект 1`) и уничтожало разметку истории, которую человек навел через `/rename`; в меню при этом появлялись несколько одинаковых `проект 1`, неотличимых друг от друга. Поэтому при `up` в `--name` уходит текущее название сессии (последняя запись `custom-title`, греп терпит и pretty-формат) - перезапись становится холостой, а в приложении видно название человека, а не имя проекта. Своего названия нет - `--name` не передается вовсе: подставить сюда имя проекта значило бы заклеймить безымянную сессию словом "проект 1", и все безымянные сессии проекта стали бы в меню неразличимы (проверено пробой 2026-08-01). Имя дает человек. Гашению имя не нужно в принципе: `down` адресует юнит по uuid (регрессия покрыта `tests/test-rc-up-down.sh`).
+**Имя, под которым поднимается resume, - имя самой сессии, а не проекта.** Подключаясь к bridge, CLI записывает значение `--name` в `custom-title` транскрипта (проверено 2026-08-01 на подопытной сессии: `ПРОБА` -> `probe-name` ровно перед `agent-name` и `bridge-session`). Пока `ai-rc` передавал туда имя проекта из реестра, восстановление чужой сессии молча переименовывало ее (`support` -> `проект 1`) и уничтожало разметку истории, которую человек навел через `/rename`; в меню при этом появлялись несколько одинаковых `проект 1`, неотличимых друг от друга. Поэтому при `up` в `--name` уходит текущее название сессии (последняя запись `custom-title`, греп терпит и pretty-формат) - перезапись становится холостой, а в приложении видно название человека, а не имя проекта. Своего названия нет - `--name` не передается вовсе: подставить сюда имя проекта значило бы заклеймить безымянную сессию словом "проект 1", и все безымянные сессии проекта стали бы в меню неразличимы (проверено пробой 2026-08-01). Имя дает человек. Гашению имя не нужно в принципе: `down` адресует юнит по uuid (регрессия покрыта `tests/test-rc-up-down.sh`).
 
 Если сессия с таким именем уже жива, скрипт делает no-op с сообщением, а не плодит дубль.
 
-**Имя есть у двух источников, и они не синхронизируются сами.** Переименование в приложении (телефон, браузер) хранится только на сервере claude.ai у мостовой сессии - в транскрипт оно не попадает, сервер не ретранслирует `rename_session` в процесс. `_rc_titles.py refresh` листает `GET /v1/code/sessions` и кладет имена в кэш `$CLAUDE_RC_STATE_DIR/session-titles.json` (по умолчанию `~/.claude-control/state/`), обновляя его целиком списком - так покрываются и опущенные, и заархивированные сессии. `_rc_meta.py` (режим `titles`, тот же источник `session_custom_title`) достает из транскрипта `bridgeSessionId` (запись `bridge-session`) и, если для него в кэше есть непустое имя, отдает **его** вместо `custom-title`; приоритет - сервер, потом `custom-title`, потом никак. Кэш обновляет `claude-agent-tgbot`: фоном между итерациями long-poll (не чаще `CLAUDE_TGBOT_TITLES_EVERY`, по умолчанию 180с) и синхронно, коротким таймаутом, перед показом карточки сессии; `claude-rc` кэш только читает. Полный контракт - `docs/dev/2026-09-19-spec-session-titles.md`.
+**Имя есть у двух источников, и они не синхронизируются сами.** Переименование в приложении (телефон, браузер) хранится только на сервере claude.ai у мостовой сессии - в транскрипт оно не попадает, сервер не ретранслирует `rename_session` в процесс. `_rc_titles.py refresh` листает `GET /v1/code/sessions` и кладет имена в кэш `$AI_RC_STATE_DIR/session-titles.json` (по умолчанию `~/.ai-control/state/`), обновляя его целиком списком - так покрываются и опущенные, и заархивированные сессии. `_rc_meta.py` (режим `titles`, тот же источник `session_custom_title`) достает из транскрипта `bridgeSessionId` (запись `bridge-session`) и, если для него в кэше есть непустое имя, отдает **его** вместо `custom-title`; приоритет - сервер, потом `custom-title`, потом никак. Кэш обновляет `ai-agent-tgbot`: фоном между итерациями long-poll (не чаще `AI_TGBOT_TITLES_EVERY`, по умолчанию 180с) и синхронно, коротким таймаутом, перед показом карточки сессии; `ai-rc` кэш только читает. Полный контракт - `docs/dev/2026-09-19-spec-session-titles.md`.
 
-### `claude-control-watchdog` - legacy
+### `ai-control-watchdog` - legacy
 
-Запускается каждые 2 минуты (на macOS - `StartInterval=120` в plist watchdog'а; на Linux - `.timer` с `OnUnitActiveSec=2min`). Основной сигнал живости - `--debug-file` control-сессии: клиент пишет туда heartbeat по таймеру каждые ~20с (`CCRClient: Heartbeat sent` при успехе, `CCRClient: Heartbeat failed: ...` при сбое), без backoff. Пока heartbeat капает, mtime файла свежий - живая сессия (здоровая или ретраящая сеть после 403/обрыва) освежает его ~каждые 20с. Если mtime старше `STALE_SECONDS` (по умолчанию 150с, ~7 пропущенных ударов), таймер heartbeat встал = зомби ("zombie-Connected": TUI еще рисует "Connected", а фоновый цикл мертв). Один промах не вызывает рестарт: watchdog считает подряд пропущенные тики (`.watchdog-misses`) и пинает супервизор только после нескольких промахов подряд (по умолчанию 2), чтобы единичный сетевой blip не дергал control-сессию зря. Если `--debug-file` еще нет (старая или только что перезапущенная сессия) - fallback на прежний способ: ищет имя сессии (`control` по умолчанию) как whitespace-bounded token в хвосте `control.log`. Каждый тик watchdog также вызывает `claude-control-logrotate`.
+Запускается каждые 2 минуты (на macOS - `StartInterval=120` в plist watchdog'а; на Linux - `.timer` с `OnUnitActiveSec=2min`). Основной сигнал живости - `--debug-file` control-сессии: клиент пишет туда heartbeat по таймеру каждые ~20с (`CCRClient: Heartbeat sent` при успехе, `CCRClient: Heartbeat failed: ...` при сбое), без backoff. Пока heartbeat капает, mtime файла свежий - живая сессия (здоровая или ретраящая сеть после 403/обрыва) освежает его ~каждые 20с. Если mtime старше `STALE_SECONDS` (по умолчанию 150с, ~7 пропущенных ударов), таймер heartbeat встал = зомби ("zombie-Connected": TUI еще рисует "Connected", а фоновый цикл мертв). Один промах не вызывает рестарт: watchdog считает подряд пропущенные тики (`.watchdog-misses`) и пинает супервизор только после нескольких промахов подряд (по умолчанию 2), чтобы единичный сетевой blip не дергал control-сессию зря. Если `--debug-file` еще нет (старая или только что перезапущенная сессия) - fallback на прежний способ: ищет имя сессии (`control` по умолчанию) как whitespace-bounded token в хвосте `control.log`. Каждый тик watchdog также вызывает `ai-control-logrotate`.
 
 Зачем это нужно: процесс `claude remote-control` может оставаться живым, при этом **зарегистрированная сессия** на стороне Anthropic-роутинга может исчезнуть (capacity падает до 0). Супервизор этого не видит - процесс-то жив; на телефоне же сессия `control` пропадает. Watchdog ловит это по логу и пинает процесс.
 
-### `claude-control-project-watchdog` - legacy
+### `ai-control-project-watchdog` - legacy
 
-То же самое, но для **проектных** сессий, которые запускает `claude-rc`. У них, в отличие от control, нет ни супервизора (KeepAlive), ни своего watchdog'а: сессия живет в detached tmux-окне `claude-<project>` и после 403-флапа (обрыв VPN, сон/пробуждение) зомбируется - TUI рисует "Ready / Capacity 0/5", а поллинг мертв. Проект молча "пропадает" с телефона на простое.
+То же самое, но для **проектных** сессий, которые запускает `ai-rc`. У них, в отличие от control, нет ни супервизора (KeepAlive), ни своего watchdog'а: сессия живет в detached tmux-окне `claude-<project>` и после 403-флапа (обрыв VPN, сон/пробуждение) зомбируется - TUI рисует "Ready / Capacity 0/5", а поллинг мертв. Проект молча "пропадает" с телефона на простое.
 
-Запускается каждые 2 минуты (macOS - `StartInterval=120`; Linux - `.timer` с `OnUnitActiveSec=2min`). Надзирает **ровно за теми проектами, у кого сейчас есть живое tmux-окно**: сессию, которую пользователь остановил сам, воскрешать не надо (ее окно закрыто), а зомби окно сохраняет. Сигнал живости переиспользован у control-watchdog'а: `claude-rc` теперь запускает проектные сессии с `--debug-file`, так что у каждой есть тот же heartbeat. Свежий mtime debug-файла = жива (в т.ч. ретраит сеть - `Heartbeat failed` тоже капает каждые ~20с, флап не трогаем); молчание дольше `STALE_SECONDS` (150с) = зомби. Для сессий без debug-файла (запущены до инструментации) - fallback на mtime TUI-лога, но этот сигнал НЕ отличает здоровый простой (сессия просто перестала перерисовываться) от смерти, поэтому на fallback watchdog **только логирует, никогда не рестартит** (даже armed). Чтобы взять такую сессию под реальный надзор - один раз перезапустить ее через `claude-rc`, она получит `--debug-file`. После `MISS_THRESHOLD` промахов подряд (2), только если armed (`CLAUDE_CONTROL_PROJECT_WATCHDOG_ARM=1`, дефолт) И вердикт по heartbeat (не fallback) - убивает зависшее окно и перезапускает через `claude-rc` (новая сессия снова получает свой `--debug-file`). Для калибровки нового детектора по реальному трафику можно поставить `ARM=0` - тогда вместо kill+relaunch только пишет "WOULD restart" в `project-watchdog.log`.
+Запускается каждые 2 минуты (macOS - `StartInterval=120`; Linux - `.timer` с `OnUnitActiveSec=2min`). Надзирает **ровно за теми проектами, у кого сейчас есть живое tmux-окно**: сессию, которую пользователь остановил сам, воскрешать не надо (ее окно закрыто), а зомби окно сохраняет. Сигнал живости переиспользован у control-watchdog'а: `ai-rc` теперь запускает проектные сессии с `--debug-file`, так что у каждой есть тот же heartbeat. Свежий mtime debug-файла = жива (в т.ч. ретраит сеть - `Heartbeat failed` тоже капает каждые ~20с, флап не трогаем); молчание дольше `STALE_SECONDS` (150с) = зомби. Для сессий без debug-файла (запущены до инструментации) - fallback на mtime TUI-лога, но этот сигнал НЕ отличает здоровый простой (сессия просто перестала перерисовываться) от смерти, поэтому на fallback watchdog **только логирует, никогда не рестартит** (даже armed). Чтобы взять такую сессию под реальный надзор - один раз перезапустить ее через `ai-rc`, она получит `--debug-file`. После `MISS_THRESHOLD` промахов подряд (2), только если armed (`AI_CONTROL_PROJECT_WATCHDOG_ARM=1`, дефолт) И вердикт по heartbeat (не fallback) - убивает зависшее окно и перезапускает через `ai-rc` (новая сессия снова получает свой `--debug-file`). Для калибровки нового детектора по реальному трафику можно поставить `ARM=0` - тогда вместо kill+relaunch только пишет "WOULD restart" в `project-watchdog.log`.
 
 Вне охвата: смерти, которые сносят и tmux-окно (жесткий краш, ребут, убивший tmux-сервер) - живого окна, за которое можно зацепиться, не остается.
 
-### `claude-control-run` (удален) и `claude-control-logrotate`
+### `ai-control-run` (удален) и `ai-control-logrotate`
 
-`claude-control-run` был тонким launcher'ом проектной сессии в tmux: писал лог с первого байта (без гонки `new-session` -> `pipe-pane`), сохранял код возврата `claude` и добавлял `--debug-file` по `CCR_DEBUG`. **Файла в репозитории нет** - удален вместе с legacy-путем `claude-rc` в `96d49f9`; его работу делает сам `claude-rc`, оборачивая сессию в `script -qec` внутри транзиентного юнита. Раздел оставлен, чтобы упоминания в старых design-доках читались.
+`ai-control-run` был тонким launcher'ом проектной сессии в tmux: писал лог с первого байта (без гонки `new-session` -> `pipe-pane`), сохранял код возврата `claude` и добавлял `--debug-file` по `CCR_DEBUG`. **Файла в репозитории нет** - удален вместе с legacy-путем `ai-rc` в `96d49f9`; его работу делает сам `ai-rc`, оборачивая сессию в `script -qec` внутри транзиентного юнита. Раздел оставлен, чтобы упоминания в старых design-доках читались.
 
-`claude-control-logrotate` - ротация всех логов (`control.log/.err`, `watchdog.*`, `project-watchdog.log`, `tgbot.log/.err`, `sessions/*.log` и их `*.debug.log`) по размеру. Единственный живой вызыватель - свой таймер (`OnUnitActiveSec=1h`), он ставится независимо от `--watchdog`. Legacy-пути (`claude-control-session` на старте, watchdog каждый тик) зовут его же, но эти юниты выключены.
+`ai-control-logrotate` - ротация всех логов (`control.log/.err`, `watchdog.*`, `project-watchdog.log`, `tgbot.log/.err`, `sessions/*.log` и их `*.debug.log`) по размеру. Единственный живой вызыватель - свой таймер (`OnUnitActiveSec=1h`), он ставится независимо от `--watchdog`. Legacy-пути (`ai-control-session` на старте, watchdog каждый тик) зовут его же, но эти юниты выключены.
 
-Обрез держит размер файла, но не их число: каждая поднятая сессия оставляет пару `<проект>-<sid8>.log/.debug.log` навсегда. Поэтому логи сессий, которых уже нет, удаляются по возрасту - `CLAUDE_CONTROL_LOG_TTL_D` (по умолчанию 7 дней). Логи ЖИВОЙ сессии не удаляются никогда, даже если давно не двигались: файл открыт процессом, и удаление увело бы дальнейший вывод в отвязанный инод. Живые узнаются по активным юнитам `ccsession-*`.
+Обрез держит размер файла, но не их число: каждая поднятая сессия оставляет пару `<проект>-<sid8>.log/.debug.log` навсегда. Поэтому логи сессий, которых уже нет, удаляются по возрасту - `AI_CONTROL_LOG_TTL_D` (по умолчанию 7 дней). Логи ЖИВОЙ сессии не удаляются никогда, даже если давно не двигались: файл открыт процессом, и удаление увело бы дальнейший вывод в отвязанный инод. Живые узнаются по активным юнитам `ccsession-*`.
 
 ## Агентный слой (Linux only)
 
 Поверх проектных сессий живет слой **автономных агентов**: миссии, которые работают без человека под надзором reconciler'а. Полный контракт (state machine, lease/fencing, crash-матрица) - в `docs/design-2026-07-11-agent-state-machine.md`; здесь - карта компонентов.
 
-- **`claude-rc agent <verb>`** (диспатчится в `claude-rc-agent`) - операторский CLI: `create/start/pause/stop/status/list/resolve/revise/accept/reject/task-cancel/attach`. Реестр - `~/.claude-control/agents/<name>/` (spec.yaml, mission.md, control.json, state.<gen>.json, events.jsonl, agent-settings.json, work/ - приватный git-worktree агента). `create` фиксирует `mission_base`, создает ветку `agent/<name>` и атомарен: реестр И worktree собираются в staging-каталоге и публикуются единым `mv` (крэш до публикации не оставляет полуагента). Per-agent permissions генерятся там же в `agent-settings.json` по пресету autonomy (act/release = полный Bash + чтение реестра; suggest = минимальные руки; bypassPermissions никогда) - в worktree настройки НЕ сеются, их подхватывает рантайм флагом `--settings` (см. `claude-agent-session`). Stale-scratch прежней одноименной инкарнации (flags-кэш реконсилера, spool, alerts-state) чистится под fcntl-локами, общими с reconciler'ом/продюсером.
-- **`claude-agent-io`** (python3) - единственный писатель `control.json`: durable-write (tmp -> fsync -> rename -> fsync каталога), CAS под flock с монотонным `seq`, schema-валидация при чтении, фенсинг поколений через `state.<gen>.json`, чистая классификация состояния.
-- **`claude-agent-reconciler`** - демон (`--loop`, systemd-юнит) или одиночный проход (`--once`): сводит факт (systemd-юниты, state, relay-heartbeat из `session.debug.log`) к desired. Lease-протокол с CAS-гейтами A/B; гашение по инварианту "lease освобождается только при доказанно пустом cgroup"; admission по RAM-бюджету (`CLAUDE_AGENTS_RAM_BUDGET_MB`, дефолт 2500) с одним стартом за проход; fail-closed hold при запертом `/data` (`CLAUDE_AGENTS_REQUIRE_MOUNT`); alert-леджер `reconciler/alerts.jsonl` с дедупом эпизодов (пуш-канал - hook `CLAUDE_AGENT_ALERT_CMD`, TG-бот - этап 3).
-- **`claude-agent-session`** - обертка рантайма одного поколения (MainPID транзиентного `agent-<name>.service`, Type=exec, KillMode=control-group, MemoryMax из spec): пресидит trust/onboarding в `$CLAUDE_CONFIG_DIR/.claude.json`, держит tmux-клиент форграундом на per-generation сокете `agent-<name>.g<gen>` (внутри - `claude remote-control --name agent-<name>`). Права сессии задает сама: `--settings <реестр>/agent-settings.json` + `--setting-sources user` (без project и local - `.claude/` целевого репо не расширяет права агента молча) + `--permission-mode` по autonomy (act/release -> acceptEdits, suggest -> default). Fail-safe: нет `agent-settings.json` (крэш при create, старый агент) -> деградация к `--permission-mode default` (подтверждения оператора), а НЕ полные права. Attach: `claude-rc agent attach <name>`.
-- **`claude-agent-checkrun`** - bounded-воркер приемки: гоняет детерминированный `acceptance.check` дважды в worktree артефакта, результат собирает reconciler следующими проходами (fencing по `{job_id, generation, artifact}`).
-- **`claude-agent-review`** (python3, этап 7) - bounded-воркер LLM-приёмки с независимым контекстом: судит артефакт mission-агента ТОЛЬКО по `git diff <gen_base>..<artifact>` (в промпте), из пустого приватного cwd, все инструменты запрещены (в т.ч. Read/Glob), reviewer-role проверяется по manifest-sha в рантайме. Строгий парсер вердикта (ровно один валидный JSON, инъекция вторым блоком/accept+blocker -> uncertain), результат durable no-clobber (O_EXCL+link, first-result-wins). Режим приёмки задаётся `acceptance.kind` в spec: `deterministic` (как §8.2), `role-review` (только приёмщик), `both` (детерминированный чек-гейт -> приёмщик). Асимметрия вердикта: auto-accept - опт-ин `auto_accept:true`; reject/uncertain всегда -> needs-human (false-reject не убивает годную работу). Reconciler ведёт phase-FSM both, tuple-fencing {job_id,generation,artifact}, retry с attempts, revoke роли (`claude-rc agent revoke-role`) - durable CAS-поле. Роль приёмщика - замороженный снапшот `reviewer-role/` (manifest+sha). Контракт - `docs/design-2026-07-12-stage7-acceptor-role.md`.
-- **`claude-agent-tgbot`** - TG-дашборд: long-poll getUpdates через mihomo-прокси (webhook и прямой API режутся ТСПУ); auth = private chat + from.id whitelist (группа правом не является); `/agents`, `/agent <name>` (имя валидируется до обращения к ФС, вывод агентов эскейпится как недоверенный), `/new <проект> <текст>` (рождение задачи из шаблона, V2.7a), `/task <name> <текст>` - продюсер событий в spool (идемпотентность по update_id, transient-отказ не двигает offset), `/menu`, `/limits`; карточки вопросов и приёмки с inline-кнопками (V2.5) - тап/reply валидируется и уходит ТОЛЬКО через доверенных писателей (`claude-agent-answer`, вердикт приёмки со сверкой SHA карточки), бот сам состояние не пишет; режим `send` = хук `CLAUDE_AGENT_ALERT_CMD` для пушей reconciler'а (дедуп эпизодов - на стороне alert-леджера). Токен/whitelist - в `~/.config/claude-control/env`. Офлайн-тесты: `claude-agent-tgbot selftest`.
-- **`claude-agent-run`** (python3, этап 4) - событийный слой поверх того же реестра (`type: event` в spec): `spool-put` - producer-протокол durable spool-каталога `~/.claude-control/spool/<name>/` (crash-safe seq-резерв, идемпотентность `--id`, капы с backpressure); `intake` - contiguous-курсор spool -> pending-конверты inbox (зовется каждым проходом reconciler'а, работает и при paused/hold); `loop` - executor (MainPID leased-юнита): PICK -> CLAIM -> headless `claude -p` -> дедуп-леджер -> done (дефолт этапа 4 - deny-by-default инструменты в пустом приватном cwd; task-агенты V2 - worktree проекта и пояс прав из спеки, см. следующий пункт); ретраи 1/5/15 мин, инфра-гейт с auth-сниффом (протухший логин не гонит события в DLQ), 3 попытки -> deadletter, recovery мертвых runner'ов, карантин crash-loop'ящих конвертов; бюджет = durable капы прогонов день/неделя, кап -> exit + hold `budget_exhausted` (intake живет). Операторские глаголы: `claude-rc agent dlq <name> [--requeue|--drop]`, `inbox-restore`. Контракт - `docs/design-2026-07-12-stage4-event-spool.md` (7 adversarial-раундов codex).
-- **Контур задач V2** (V2.0-V2.10, дизайны `docs/design-2026-07-25-v2-runtime-drain.md` ... `docs/design-2026-07-28-v2.10-task-actually-works.md`) - жизненный цикл "/new с телефона" поверх event-слоя. `runtime: drain` - executor гаснет на пустом inbox, reconciler будит по событию (scale-to-zero); `workspace: worktree` - задача работает в `agents/<name>/work`, git-worktree проекта на ветке `agent/<name>`; пояс прав из task-шаблона (`~/.claude-control/task-template.yaml`, fail-closed: нет валидного шаблона - задача не заводится; Write/Edit скоуплены путём worktree); тред-память `thread.jsonl` переживает прогоны; вопрос - durable-исход прогона (`claude-agent-ask` -> `questions/`, ответ пишет только доверенный `claude-agent-answer`), гейт подтверждений `claude-agent-permit` (PreToolUse-hook) - тот же FSM; пуши карточек и лестница напоминаний целиком у reminder-контура reconciler'а (единственный владелец). Заявка о готовности `claude-agent-done` + durable acceptance-FSM `requested -> accepted -> integrated -> cleaned -> archived`, плюс ветка отмены `-> cancelled -> cleaned -> archived` мимо интеграции (19.09.2026). Вердикт приемки - тап на карточке в Telegram; глаголы `claude-rc agent accept/reject` к этой машине НЕ относятся - они пишут `acceptance.status` в `control.json` (машина stage 7). Отмена - `claude-rc agent task-cancel <имя> [--force]`, отказывает после интеграции (`integrated`/`cleaned`/`archived`), потому что уборка сносит ветку. Integrate игнорирует грязь, ограниченную зеркалом уроков. `spec.schedule` (`every`/`at`) - источник событий без новых юнитов; поправки человека дистиллируются в правила проекта (V2.9). **Git у агента отобран целиком** (V2.10: хуки, флаги вроде `git log --output=`, clean-фильтры, fsmonitor - три независимых способа исполнить код агента до приёмки); все git-операции идут единственной чищеной точкой входа `_agent_worktree.py` (`GIT_CONFIG_NOSYSTEM`, обнулённые hooksPath/fsmonitor, guard-отказ на clean-фильтры и подмену gitdir), коммитит рантайм после заявки.
+- **`ai-rc agent <verb>`** (диспатчится в `ai-rc-agent`) - операторский CLI: `create/start/pause/stop/status/list/resolve/revise/accept/reject/task-cancel/attach`. Реестр - `~/.ai-control/agents/<name>/` (spec.yaml, mission.md, control.json, state.<gen>.json, events.jsonl, agent-settings.json, work/ - приватный git-worktree агента). `create` фиксирует `mission_base`, создает ветку `agent/<name>` и атомарен: реестр И worktree собираются в staging-каталоге и публикуются единым `mv` (крэш до публикации не оставляет полуагента). Per-agent permissions генерятся там же в `agent-settings.json` по пресету autonomy (act/release = полный Bash + чтение реестра; suggest = минимальные руки; bypassPermissions никогда) - в worktree настройки НЕ сеются, их подхватывает рантайм флагом `--settings` (см. `ai-agent-session`). Stale-scratch прежней одноименной инкарнации (flags-кэш реконсилера, spool, alerts-state) чистится под fcntl-локами, общими с reconciler'ом/продюсером.
+- **`ai-agent-io`** (python3) - единственный писатель `control.json`: durable-write (tmp -> fsync -> rename -> fsync каталога), CAS под flock с монотонным `seq`, schema-валидация при чтении, фенсинг поколений через `state.<gen>.json`, чистая классификация состояния.
+- **`ai-agent-reconciler`** - демон (`--loop`, systemd-юнит) или одиночный проход (`--once`): сводит факт (systemd-юниты, state, relay-heartbeat из `session.debug.log`) к desired. Lease-протокол с CAS-гейтами A/B; гашение по инварианту "lease освобождается только при доказанно пустом cgroup"; admission по RAM-бюджету (`AI_AGENTS_RAM_BUDGET_MB`, дефолт 2500) с одним стартом за проход; fail-closed hold при запертом `/data` (`AI_AGENTS_REQUIRE_MOUNT`); alert-леджер `reconciler/alerts.jsonl` с дедупом эпизодов (пуш-канал - hook `AI_AGENT_ALERT_CMD`, TG-бот - этап 3).
+- **`ai-agent-session`** - обертка рантайма одного поколения (MainPID транзиентного `agent-<name>.service`, Type=exec, KillMode=control-group, MemoryMax из spec): пресидит trust/onboarding в `$CLAUDE_CONFIG_DIR/.claude.json`, держит tmux-клиент форграундом на per-generation сокете `agent-<name>.g<gen>` (внутри - `claude remote-control --name agent-<name>`). Права сессии задает сама: `--settings <реестр>/agent-settings.json` + `--setting-sources user` (без project и local - `.claude/` целевого репо не расширяет права агента молча) + `--permission-mode` по autonomy (act/release -> acceptEdits, suggest -> default). Fail-safe: нет `agent-settings.json` (крэш при create, старый агент) -> деградация к `--permission-mode default` (подтверждения оператора), а НЕ полные права. Attach: `ai-rc agent attach <name>`.
+- **`ai-agent-checkrun`** - bounded-воркер приемки: гоняет детерминированный `acceptance.check` дважды в worktree артефакта, результат собирает reconciler следующими проходами (fencing по `{job_id, generation, artifact}`).
+- **`ai-agent-review`** (python3, этап 7) - bounded-воркер LLM-приёмки с независимым контекстом: судит артефакт mission-агента ТОЛЬКО по `git diff <gen_base>..<artifact>` (в промпте), из пустого приватного cwd, все инструменты запрещены (в т.ч. Read/Glob), reviewer-role проверяется по manifest-sha в рантайме. Строгий парсер вердикта (ровно один валидный JSON, инъекция вторым блоком/accept+blocker -> uncertain), результат durable no-clobber (O_EXCL+link, first-result-wins). Режим приёмки задаётся `acceptance.kind` в spec: `deterministic` (как §8.2), `role-review` (только приёмщик), `both` (детерминированный чек-гейт -> приёмщик). Асимметрия вердикта: auto-accept - опт-ин `auto_accept:true`; reject/uncertain всегда -> needs-human (false-reject не убивает годную работу). Reconciler ведёт phase-FSM both, tuple-fencing {job_id,generation,artifact}, retry с attempts, revoke роли (`ai-rc agent revoke-role`) - durable CAS-поле. Роль приёмщика - замороженный снапшот `reviewer-role/` (manifest+sha). Контракт - `docs/design-2026-07-12-stage7-acceptor-role.md`.
+- **`ai-agent-tgbot`** - TG-дашборд: long-poll getUpdates через mihomo-прокси (webhook и прямой API режутся ТСПУ); auth = private chat + from.id whitelist (группа правом не является); `/agents`, `/agent <name>` (имя валидируется до обращения к ФС, вывод агентов эскейпится как недоверенный), `/new <проект> <текст>` (рождение задачи из шаблона, V2.7a), `/task <name> <текст>` - продюсер событий в spool (идемпотентность по update_id, transient-отказ не двигает offset), `/menu`, `/limits`; карточки вопросов и приёмки с inline-кнопками (V2.5) - тап/reply валидируется и уходит ТОЛЬКО через доверенных писателей (`ai-agent-answer`, вердикт приёмки со сверкой SHA карточки), бот сам состояние не пишет; режим `send` = хук `AI_AGENT_ALERT_CMD` для пушей reconciler'а (дедуп эпизодов - на стороне alert-леджера). Токен/whitelist - в `~/.config/ai-control/env`. Офлайн-тесты: `ai-agent-tgbot selftest`.
+- **`ai-agent-run`** (python3, этап 4) - событийный слой поверх того же реестра (`type: event` в spec): `spool-put` - producer-протокол durable spool-каталога `~/.ai-control/spool/<name>/` (crash-safe seq-резерв, идемпотентность `--id`, капы с backpressure); `intake` - contiguous-курсор spool -> pending-конверты inbox (зовется каждым проходом reconciler'а, работает и при paused/hold); `loop` - executor (MainPID leased-юнита): PICK -> CLAIM -> headless `claude -p` -> дедуп-леджер -> done (дефолт этапа 4 - deny-by-default инструменты в пустом приватном cwd; task-агенты V2 - worktree проекта и пояс прав из спеки, см. следующий пункт); ретраи 1/5/15 мин, инфра-гейт с auth-сниффом (протухший логин не гонит события в DLQ), 3 попытки -> deadletter, recovery мертвых runner'ов, карантин crash-loop'ящих конвертов; бюджет = durable капы прогонов день/неделя, кап -> exit + hold `budget_exhausted` (intake живет). Операторские глаголы: `ai-rc agent dlq <name> [--requeue|--drop]`, `inbox-restore`. Контракт - `docs/design-2026-07-12-stage4-event-spool.md` (7 adversarial-раундов codex).
+- **Контур задач V2** (V2.0-V2.10, дизайны `docs/design-2026-07-25-v2-runtime-drain.md` ... `docs/design-2026-07-28-v2.10-task-actually-works.md`) - жизненный цикл "/new с телефона" поверх event-слоя. `runtime: drain` - executor гаснет на пустом inbox, reconciler будит по событию (scale-to-zero); `workspace: worktree` - задача работает в `agents/<name>/work`, git-worktree проекта на ветке `agent/<name>`; пояс прав из task-шаблона (`~/.ai-control/task-template.yaml`, fail-closed: нет валидного шаблона - задача не заводится; Write/Edit скоуплены путём worktree); тред-память `thread.jsonl` переживает прогоны; вопрос - durable-исход прогона (`ai-agent-ask` -> `questions/`, ответ пишет только доверенный `ai-agent-answer`), гейт подтверждений `ai-agent-permit` (PreToolUse-hook) - тот же FSM; пуши карточек и лестница напоминаний целиком у reminder-контура reconciler'а (единственный владелец). Заявка о готовности `ai-agent-done` + durable acceptance-FSM `requested -> accepted -> integrated -> cleaned -> archived`, плюс ветка отмены `-> cancelled -> cleaned -> archived` мимо интеграции (19.09.2026). Вердикт приемки - тап на карточке в Telegram; глаголы `ai-rc agent accept/reject` к этой машине НЕ относятся - они пишут `acceptance.status` в `control.json` (машина stage 7). Отмена - `ai-rc agent task-cancel <имя> [--force]`, отказывает после интеграции (`integrated`/`cleaned`/`archived`), потому что уборка сносит ветку. Integrate игнорирует грязь, ограниченную зеркалом уроков. `spec.schedule` (`every`/`at`) - источник событий без новых юнитов; поправки человека дистиллируются в правила проекта (V2.9). **Git у агента отобран целиком** (V2.10: хуки, флаги вроде `git log --output=`, clean-фильтры, fsmonitor - три независимых способа исполнить код агента до приёмки); все git-операции идут единственной чищеной точкой входа `_agent_worktree.py` (`GIT_CONFIG_NOSYSTEM`, обнулённые hooksPath/fsmonitor, guard-отказ на clean-фильтры и подмену gitdir), коммитит рантайм после заявки.
 
 Контур задач V2 одной схемой - от `/new` с телефона до merge в проект:
 
@@ -151,11 +151,11 @@ flowchart TB
     dwl["📱 dwl - Telegram"]
 
     subgraph vm["VM - systemd --user"]
-      tgbot["claude-agent-tgbot<br/>/new /task + карточки с кнопками"]
-      recon["claude-agent-reconciler<br/>intake - пробуждение - напоминания"]
+      tgbot["ai-agent-tgbot<br/>/new /task + карточки с кнопками"]
+      recon["ai-agent-reconciler<br/>intake - пробуждение - напоминания"]
       spool[("spool/&lt;name&gt;/<br/>durable-события")]
-      exec["транзиентный agent-&lt;name&gt;.service<br/>claude-agent-run loop - headless claude"]
-      answer["claude-agent-answer<br/>доверенный писатель ответов"]
+      exec["транзиентный agent-&lt;name&gt;.service<br/>ai-agent-run loop - headless claude"]
+      answer["ai-agent-answer<br/>доверенный писатель ответов"]
       subgraph reg["реестр agents/&lt;name&gt;/"]
         inbox["inbox/ - конверты"]
         qthread["questions/ + thread.jsonl"]
@@ -173,8 +173,8 @@ flowchart TB
     recon -- "scale-to-zero: будит по событию" --> exec
     inbox -- "PICK → CLAIM" --> exec
     exec -- "Write/Edit только в worktree,<br/>git отобран" --> work
-    exec -- "claude-agent-ask" --> qthread
-    exec -- "claude-agent-done,<br/>коммитит рантайм" --> done
+    exec -- "ai-agent-ask" --> qthread
+    exec -- "ai-agent-done,<br/>коммитит рантайм" --> done
     recon -- "карточки вопросов и приёмки,<br/>лестница напоминаний" --> tgbot
     tgbot -- "карточка" --> dwl
     dwl -- "тап / reply" --> tgbot
@@ -185,7 +185,7 @@ flowchart TB
     qthread -. "дистилляция уроков V2.9" .-> proj
 ```
 
-Агентские сессии **вне охвата** `claude-control-project-watchdog` (живут на своих tmux-сокетах и не числятся в projects.yaml; в watchdog есть и явный guard) - их надзирает только reconciler: политика "stale -> stop + fresh" уничтожила бы миссию.
+Агентские сессии **вне охвата** `ai-control-project-watchdog` (живут на своих tmux-сокетах и не числятся в projects.yaml; в watchdog есть и явный guard) - их надзирает только reconciler: политика "stale -> stop + fresh" уничтожила бы миссию.
 
 Тесты: `tests/test-agent-*.sh` - юнит-суиты по компонентам (io, cli, run, review, tgbot, harvest; V2-контур: drain, workspace, thread, question, permit, tg-cards, reminders, task-lifecycle, schedule, lessons), `tests/test-mission-*.sh` (юнит, локально), `tests/fault/run-fault-tests.sh` (fault-injection: crash-матрица + событийные S16-S19 + приёмщик S20-S27, Linux/systemd, mock-агент/mock-CLAUDE_BIN), `tests/corpus/run-corpus.sh` (LLM-корпус приёмщика, требует API - критерий этапа 7).
 
@@ -197,25 +197,25 @@ flowchart TB
 
 Действующие, `install.sh` включает их сам:
 
-- `~/.config/systemd/user/claude-agent-reconciler.service` - reconciler агентного слоя, `Restart=always`, `RestartSec=30`. Ставится безусловно (при пустом реестре - холостой цикл). Установщик после `enable --now` делает еще и `try-restart`: `enable --now` не трогает уже работающий демон, и свежая раскатка до него не доезжала - ловилось на жнеце зомби-сессий, где файлы на диске были новые, а проход шел по старому коду.
-- `~/.config/systemd/user/claude-agent-tgbot.service` - TG-бот, он же слой 1 (подъем сессий тапом), `Restart=on-failure` (без токена выходит с кодом 0 и не рестартится). Включается только при заданном `CLAUDE_AGENT_TG_TOKEN` в `~/.config/claude-control/env`.
-- `~/.config/systemd/user/claude-agent-limits-digest.{service,timer}` - дайджест остатка лимитов. Включается тем же условием, что и бот.
-- `~/.config/systemd/user/claude-control-logrotate.{service,timer}` - ротация логов, `OnUnitActiveSec=1h`. Ставится независимо от `--watchdog`, поэтому логи ограничены всегда.
-- `~/.config/systemd/user/claude-control-backup.{service,timer}` - только при `--with-backup`, и включается руками после `claude-control-backup-init`.
+- `~/.config/systemd/user/ai-agent-reconciler.service` - reconciler агентного слоя, `Restart=always`, `RestartSec=30`. Ставится безусловно (при пустом реестре - холостой цикл). Установщик после `enable --now` делает еще и `try-restart`: `enable --now` не трогает уже работающий демон, и свежая раскатка до него не доезжала - ловилось на жнеце зомби-сессий, где файлы на диске были новые, а проход шел по старому коду.
+- `~/.config/systemd/user/ai-agent-tgbot.service` - TG-бот, он же слой 1 (подъем сессий тапом), `Restart=on-failure` (без токена выходит с кодом 0 и не рестартится). Включается только при заданном `AI_AGENT_TG_TOKEN` в `~/.config/ai-control/env`.
+- `~/.config/systemd/user/ai-agent-limits-digest.{service,timer}` - дайджест остатка лимитов. Включается тем же условием, что и бот.
+- `~/.config/systemd/user/ai-control-logrotate.{service,timer}` - ротация логов, `OnUnitActiveSec=1h`. Ставится независимо от `--watchdog`, поэтому логи ограничены всегда.
+- `~/.config/systemd/user/ai-control-backup.{service,timer}` - только при `--with-backup`, и включается руками после `ai-control-backup-init`.
 
-Legacy, шаблоны еще рендерятся под откат, но установщик их **выключает**, в том числе на уже установленных машинах: `claude-control.service`, `claude-control-watchdog.{service,timer}`, `claude-control-project-watchdog.{service,timer}`. Иначе апгрейд молча оставлял на хосте лишний процесс на ~172 МБ и два таймера, сторожащих tmux-окна, которых схема больше не создает.
+Legacy, шаблоны еще рендерятся под откат, но установщик их **выключает**, в том числе на уже установленных машинах: `ai-control.service`, `ai-control-watchdog.{service,timer}`, `ai-control-project-watchdog.{service,timer}`. Иначе апгрейд молча оставлял на хосте лишний процесс на ~172 МБ и два таймера, сторожащих tmux-окна, которых схема больше не создает.
 
 ### macOS (launchd) - legacy целиком
 
-**Подъем сессий на macOS не работает:** держатель сессии - транзиентный systemd-юнит, `systemd-run` там нет. Доступен только CLI-осмотр (`claude-rc list/sessions/last`), см. "Требования" в README.
+**Подъем сессий на macOS не работает:** держатель сессии - транзиентный systemd-юнит, `systemd-run` там нет. Доступен только CLI-осмотр (`ai-rc list/sessions/last`), см. "Требования" в README.
 
-`install.sh` рендерит `com.<user>.claude-control.plist` и оба watchdog-plist'а (паритет с Linux: файлы лежат под откат), но **не bootstrap'ит их и снимает с уже установленных машин** через `bootout`. До 2026-08-12 он их поднимал: V3.0 лег только в Linux-ветку, и macOS полгода получал бесполезную обвязку при каждом апгрейде - control-сессия вела диспетчера к командам, которые на macOS не выполняются, а watchdog'и надзирали за tmux-окнами, которых схема не создает. Поднятым остается только `com.<user>.claude-control-logrotate.plist` (ротация логов, `StartInterval=3600`).
+`install.sh` рендерит `com.<user>.ai-control.plist` и оба watchdog-plist'а (паритет с Linux: файлы лежат под откат), но **не bootstrap'ит их и снимает с уже установленных машин** через `bootout`. До 2026-08-12 он их поднимал: V3.0 лег только в Linux-ветку, и macOS полгода получал бесполезную обвязку при каждом апгрейде - control-сессия вела диспетчера к командам, которые на macOS не выполняются, а watchdog'и надзирали за tmux-окнами, которых схема не создает. Поднятым остается только `com.<user>.ai-control-logrotate.plist` (ротация логов, `StartInterval=3600`).
 
-Ветка проверяется на Linux: `CLAUDE_CONTROL_OS=Darwin` выбирает macOS-путь, `launchctl` подменяется стабом - `tests/test-install-macos-legacy.sh`. Настоящую семантику launchd тест не покрывает, это остается за живым прогоном на Mac.
+Ветка проверяется на Linux: `AI_CONTROL_OS=Darwin` выбирает macOS-путь, `launchctl` подменяется стабом - `tests/test-install-macos-legacy.sh`. Настоящую семантику launchd тест не покрывает, это остается за живым прогоном на Mac.
 
 Без `loginctl enable-linger $USER` user-сервисы остановятся при logout. `install.sh` проверяет и предупреждает, если lingering выключен.
 
-Опционально: `~/.config/claude-control/env` подхватывается через `EnvironmentFile=-` всеми постоянными юнитами (бот, reconciler, limits-digest, logrotate и legacy-трое); отсутствие файла - не ошибка. На macOS launchd env-файлы не читает, поэтому тот же файл читает сам entrypoint `claude-control-session` - на macOS это влияет на control-сессию (`CLAUDE_BIN`, proxy), но не на watchdog/logrotate. Удобно для проброса `CLAUDE_BIN`, proxy-переменных и т.п. без правки unit'а.
+Опционально: `~/.config/ai-control/env` подхватывается через `EnvironmentFile=-` всеми постоянными юнитами (бот, reconciler, limits-digest, logrotate и legacy-трое); отсутствие файла - не ошибка. На macOS launchd env-файлы не читает, поэтому тот же файл читает сам entrypoint `ai-control-session` - на macOS это влияет на control-сессию (`CLAUDE_BIN`, proxy), но не на watchdog/logrotate. Удобно для проброса `CLAUDE_BIN`, proxy-переменных и т.п. без правки unit'а.
 
 ## Что где лежит после установки
 
@@ -223,28 +223,28 @@ Legacy, шаблоны еще рендерятся под откат, но ус�
 
 ```
 ~/.local/bin/                     # копии скриптов (при --link - симлинки на репо)
-  claude-rc, claude-rc-agent, claude-rc-takeover
-  claude-agent-tgbot, claude-agent-reconciler, claude-agent-run, claude-agent-session
-  claude-agent-io, claude-agent-ask, claude-agent-answer, claude-agent-permit,
-  claude-agent-done, claude-agent-review, claude-agent-checkrun, claude-agent-harvest
-  claude-agent-limits-digest, claude-control-logrotate
+  ai-rc, ai-rc-agent, ai-rc-takeover
+  ai-agent-tgbot, ai-agent-reconciler, ai-agent-run, ai-agent-session
+  ai-agent-io, ai-agent-ask, ai-agent-answer, ai-agent-permit,
+  ai-agent-done, ai-agent-review, ai-agent-checkrun, ai-agent-harvest
+  ai-agent-limits-digest, ai-control-logrotate
   _rc_projects.sh, _rc_ctx.py, _rc_meta.py, _rc_titles.py, _schedule_spec.py,
   _agent_headless_argv.py, _agent_trust_preseed.py, _agent_question_io.py, _agent_worktree.py
-  claude-control-session, claude-control-watchdog, claude-control-project-watchdog   # legacy, юниты выключены
+  ai-control-session, ai-control-watchdog, ai-control-project-watchdog   # legacy, юниты выключены
 
 ~/.config/systemd/user/
-  claude-agent-tgbot.service              # слой 1: подъем сессий тапом
-  claude-agent-reconciler.service         # слой 2: агенты
-  claude-agent-limits-digest.{service,timer}
-  claude-control-logrotate.{service,timer}
-  claude-control-backup.{service,timer}   # только при --with-backup
-  claude-control{,-watchdog,-project-watchdog}.{service,timer}   # legacy, disabled
+  ai-agent-tgbot.service              # слой 1: подъем сессий тапом
+  ai-agent-reconciler.service         # слой 2: агенты
+  ai-agent-limits-digest.{service,timer}
+  ai-control-logrotate.{service,timer}
+  ai-control-backup.{service,timer}   # только при --with-backup
+  ai-control{,-watchdog,-project-watchdog}.{service,timer}   # legacy, disabled
   # юнит-файлов сессий и агентских поколений здесь НЕТ: ccsession-<uuid> и
   # agent-<name> создаются транзиентно через systemd-run
 
-~/.config/claude-control/env      # опционально, env-переменные для unit'ов (токен бота и т.п.)
+~/.config/ai-control/env      # опционально, env-переменные для unit'ов (токен бота и т.п.)
 
-~/.claude-control/
+~/.ai-control/
   projects.yaml                   # твой реестр (в .gitignore репо)
   CLAUDE.md, .claude/settings.local.json
   task-template.yaml              # шаблон задачи /new (пояс прав; fail-closed, мигрируется install.sh)
@@ -263,10 +263,10 @@ Legacy, шаблоны еще рендерятся под откат, но ус�
 
 ```
 ~/Library/LaunchAgents/
-  com.<user>.claude-control.plist             # legacy: вечная control-сессия
-  com.<user>.claude-control-watchdog.plist    # legacy
-  com.<user>.claude-control-project-watchdog.plist   # legacy
-  com.<user>.claude-control-logrotate.plist   # ротация логов (раз в час)
+  com.<user>.ai-control.plist             # legacy: вечная control-сессия
+  com.<user>.ai-control-watchdog.plist    # legacy
+  com.<user>.ai-control-project-watchdog.plist   # legacy
+  com.<user>.ai-control-logrotate.plist   # ротация логов (раз в час)
 ```
 
 Версионный canon-maintainer удален. Install и uninstall используют общий source-only `lib/retire-canon-maintainer.sh`: проверяют остановку legacy timer/service, удаляют только текущие unit/mask/enable links и binary, затем проверяют daemon-reload. Данные, архивы и `.bak` остаются; dry-run не меняет состояние.

@@ -1,8 +1,8 @@
-# claude-control task template (V2.7a §2).
+# ai-control task template (V2.7a §2).
 #
-# Используется `claude-rc agent new-task --name N --project P --text T`
+# Используется `ai-rc agent new-task --name N --project P --text T`
 # для рождения задачи с телефона (/new <проект> <текст>). Путь к файлу -
-# CLAUDE_RC_TASK_TEMPLATE, по умолчанию ~/.claude-control/task-template.yaml.
+# AI_RC_TASK_TEMPLATE, по умолчанию ~/.ai-control/task-template.yaml.
 #
 # Подстановки: {{name}}, {{project}}, {{goal}}. Каждая подставляется как
 # уже ЭКРАНИРОВАННЫЙ YAML-скаляр - в шаблоне плейсхолдеры стоят БЕЗ ручных
@@ -26,7 +26,7 @@
 # Write/Edit, git-фильтры из .gitattributes/info/attributes, core.fsmonitor)
 # - глушить их по одному оказалось гонкой, которую нельзя выиграть.
 # Коммитит рантайм сам, после того как агент объявит готовность
-# (`claude-agent-done`) - агенту коммитить не нужно и нечем.
+# (`ai-agent-done`) - агенту коммитить не нужно и нечем.
 schema: 1
 name: {{name}}
 type: event
@@ -47,7 +47,7 @@ permissions:
     - Grep
     - Write
     - Edit
-    - "Bash(claude-agent-done:*)"
-    - "Bash(claude-agent-ask:*)"
+    - "Bash(ai-agent-done:*)"
+    - "Bash(ai-agent-ask:*)"
   deny: []
   ask: []

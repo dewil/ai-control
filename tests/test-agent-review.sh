@@ -4,7 +4,7 @@
 # инъекция, усечение). FSM/fencing-часть - в fault-сьюте (нужен systemd).
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-REVIEW="$HERE/../bin/claude-agent-review"
+REVIEW="$HERE/../bin/ai-agent-review"
 
 python3 - "$REVIEW" <<'PY'
 import sys
@@ -153,7 +153,7 @@ BEFORE=$(cat "$AD/.reviews/j1.json")
 # мок claude, который вернул бы accept - но воркер не должен его звать
 MC="$TMP/mc"; printf '#!/usr/bin/env bash\ncat>/dev/null\necho "{\\"type\\":\\"result\\",\\"result\\":\\"{\\\\\\"verdict\\\\\\":\\\\\\"accept\\\\\\",\\\\\\"findings\\\\\\":[],\\\\\\"summary\\\\\\":\\\\\\"x\\\\\\"}\\"}"\n' > "$MC"
 chmod +x "$MC"
-CLAUDE_BIN="$MC" "$HERE/../bin/claude-agent-review" "$AD" j1 1 "$ART" "$GB" 30 >/dev/null 2>&1
+CLAUDE_BIN="$MC" "$HERE/../bin/ai-agent-review" "$AD" j1 1 "$ART" "$GB" 30 >/dev/null 2>&1
 [[ "$(cat "$AD/.reviews/j1.json")" == "$BEFORE" ]] \
   && ncok || ncfail "no-clobber: пред-подложенный result перезаписан"
 [[ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["verdict"])' "$AD/.reviews/j1.json")" == "reject" ]] \
@@ -187,7 +187,7 @@ for rev in 2 1; do
     && echo a > f && git add . && git commit -qm base && echo b > f && git commit -qam art )
   GB2=$(git -C "$AD2/work" rev-parse HEAD~1); ART2=$(git -C "$AD2/work" rev-parse HEAD)
   mkrole "$AD2" "$rev"
-  CLAUDE_BIN="$MC2" "$HERE/../bin/claude-agent-review" "$AD2" j 1 "$ART2" "$GB2" 30 >/dev/null 2>&1
+  CLAUDE_BIN="$MC2" "$HERE/../bin/ai-agent-review" "$AD2" j 1 "$ART2" "$GB2" 30 >/dev/null 2>&1
   V=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["verdict"])' "$AD2/.reviews/j.json" 2>/dev/null)
   if [[ "$rev" == 2 ]]; then
     [[ "$V" == "uncertain" ]] && sok || sfail "strict(rev2): reject без цитаты не демотирован (got: ${V:-нет result})"

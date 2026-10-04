@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # uninstall.sh: remove units and bin/ scripts installed by install.sh.
-# Leaves ~/.claude-control/ alone (user data - projects.yaml, logs).
+# Leaves ~/.ai-control/ alone (user data - projects.yaml, logs).
 #
 #   ./uninstall.sh                 Use default paths and labels.
 #   ./uninstall.sh --prefix DIR    Same as install.sh.
 #   ./uninstall.sh --label LABEL   Same as install.sh (macOS only).
-#   ./uninstall.sh --purge         Also delete ~/.claude-control/ and ~/.config/claude-control/.
+#   ./uninstall.sh --purge         Also delete ~/.ai-control/ and ~/.config/ai-control/.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,7 +32,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Как в install.sh: переопределение нужно тестам, чтобы гонять macOS-ветку на Linux.
-OS_KIND="${CLAUDE_CONTROL_OS:-$(uname -s)}"
+OS_KIND="${AI_CONTROL_OS:-$(uname -s)}"
 case "$OS_KIND" in
   Darwin) OS_KIND="darwin" ;;
   Linux)  OS_KIND="linux"  ;;
@@ -47,21 +47,21 @@ if [[ "$OS_KIND" == "linux" && $LABEL_EXPLICIT -eq 1 ]]; then
   exit 2
 fi
 
-[[ -z "$LABEL" ]] && LABEL="com.${USER}.claude-control"
+[[ -z "$LABEL" ]] && LABEL="com.${USER}.ai-control"
 WATCHDOG_LABEL="${LABEL}-watchdog"
 PROJECT_WATCHDOG_LABEL="${LABEL}-project-watchdog"
 LOGROTATE_LABEL="${LABEL}-logrotate"
-SERVICE_UNIT="claude-control.service"
-WATCHDOG_SERVICE_UNIT="claude-control-watchdog.service"
-WATCHDOG_TIMER_UNIT="claude-control-watchdog.timer"
-PROJECT_WATCHDOG_SERVICE_UNIT="claude-control-project-watchdog.service"
-PROJECT_WATCHDOG_TIMER_UNIT="claude-control-project-watchdog.timer"
-LOGROTATE_SERVICE_UNIT="claude-control-logrotate.service"
-LOGROTATE_TIMER_UNIT="claude-control-logrotate.timer"
+SERVICE_UNIT="ai-control.service"
+WATCHDOG_SERVICE_UNIT="ai-control-watchdog.service"
+WATCHDOG_TIMER_UNIT="ai-control-watchdog.timer"
+PROJECT_WATCHDOG_SERVICE_UNIT="ai-control-project-watchdog.service"
+PROJECT_WATCHDOG_TIMER_UNIT="ai-control-project-watchdog.timer"
+LOGROTATE_SERVICE_UNIT="ai-control-logrotate.service"
+LOGROTATE_TIMER_UNIT="ai-control-logrotate.timer"
 
 BIN_DIR="$PREFIX/bin"
-CONTROL_DIR="$HOME/.claude-control"
-ENV_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-control"
+CONTROL_DIR="$HOME/.ai-control"
+ENV_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ai-control"
 if [[ "$OS_KIND" == "darwin" ]]; then
   UNIT_DIR="$HOME/Library/LaunchAgents"
 else
@@ -122,7 +122,7 @@ fi
 
 # Что снимать - берем из того же scripts.manifest, по которому шла установка.
 # Своего списка здесь больше нет: он знал пять имен из 29, и после демонтажа на
-# машине оставались весь пояс claude-agent-*, claude-rc-agent, claude-rc-takeover
+# машине оставались весь пояс ai-agent-*, ai-rc-agent, ai-rc-takeover
 # и python-хелперы - 24 сироты (поймано на Mac 2026-08-13). Расхождение двух
 # списков не видно ни в одном прогоне, поэтому список ровно один.
 MANIFEST="$REPO_DIR/scripts.manifest"

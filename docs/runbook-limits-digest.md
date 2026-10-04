@@ -1,7 +1,7 @@
-# Runbook: дайджест лимитов LLM (claude-agent-limits-digest)
+# Runbook: дайджест лимитов LLM (ai-agent-limits-digest)
 
 Каждые 15 минут пробник снимает остаток подписочных лимитов Claude Code и Codex,
-но панель в Telegram (личка оператора через `claude-agent-tgbot`) уходит только
+но панель в Telegram (личка оператора через `ai-agent-tgbot`) уходит только
 при изменении цифр (дедуп по сигнатуре процентов/статусов; время сброса не
 считается изменением). Внутри окна процент расхода только растет - обратный ход
 гасит клэмп (бегущий минимум остатка), поэтому дрожание цифр у провайдера не
@@ -11,15 +11,15 @@
 не совпадало никогда - клэмп молча не работал, а панель прилетала каждые 15
 минут круглосуточно (найдено 2026-08-02). Причину каждой отправки пишем в
 журнал строкой `шлем: claude.five_hour 3->5`. Все в одной коробке на llm VM: пробник снимает проценты
-у провайдеров, форматтер рендерит панель, отправка - через `claude-agent-tgbot
+у провайдеров, форматтер рендерит панель, отправка - через `ai-agent-tgbot
 notify`. Механизм - порт прежнего PHP-сервиса (пробник + Laravel-форматтер) в
 один stdlib-скрипт.
 
 ```
-llm VM:  claude-agent-limits-digest.timer (*/15)
+llm VM:  ai-agent-limits-digest.timer (*/15)
            -> once: пробник (Claude oauth/usage, Codex wham/usage; через mihomo 7890)
-              -> кэш ~/.claude-control/limits/last.json
-              -> панель -> claude-agent-tgbot notify --pre -> личка оператора
+              -> кэш ~/.ai-control/limits/last.json
+              -> панель -> ai-agent-tgbot notify --pre -> личка оператора
 /limits в tgbot -> render из кэша (вне расписания)
 ```
 
@@ -30,12 +30,12 @@ llm VM:  claude-agent-limits-digest.timer (*/15)
 
 ## Env (все опциональны, дефолты под llm VM)
 
-`~/.config/claude-control/env`: `CLAUDE_AGENT_LIMITS_TZ` (Europe/Moscow),
-`CLAUDE_AGENT_LIMITS_ENABLED` (рубильник, "0" = не слать),
-`CLAUDE_AGENT_LIMITS_STALE_MIN` (45), `LIMITS_PROBE_PROXY`
+`~/.config/ai-control/env`: `AI_AGENT_LIMITS_TZ` (Europe/Moscow),
+`AI_AGENT_LIMITS_ENABLED` (рубильник, "0" = не слать),
+`AI_AGENT_LIMITS_STALE_MIN` (45), `LIMITS_PROBE_PROXY`
 (http://127.0.0.1:7890), `LIMITS_PROBE_CLAUDE_CREDS`, `LIMITS_PROBE_CODEX_AUTH`,
 `LIMITS_PROBE_DATA_MOUNT`, `LIMITS_PROBE_CLAUDE_UA`. Отправка использует
-`CLAUDE_AGENT_TG_TOKEN` / `_WHITELIST` / `_PROXY` бота.
+`AI_AGENT_TG_TOKEN` / `_WHITELIST` / `_PROXY` бота.
 
 ## Асимметрия хранения токенов (важно)
 
@@ -62,10 +62,10 @@ CLI), но протухший Claude-токен с 2026-07-18 чинится с�
 
 ## Диагностика
 
-- Панель без отправки: `set -a; . ~/.config/claude-control/env; set +a;
-  claude-agent-limits-digest once --dry-run`.
-- Из кэша (что покажет /limits): `claude-agent-limits-digest render`.
-- Логи: `journalctl --user -u claude-agent-limits-digest.service -n 50`.
+- Панель без отправки: `set -a; . ~/.config/ai-control/env; set +a;
+  ai-agent-limits-digest once --dry-run`.
+- Из кэша (что покажет /limits): `ai-agent-limits-digest render`.
+- Логи: `journalctl --user -u ai-agent-limits-digest.service -n 50`.
 - Таймер: `systemctl --user list-timers | grep limits`.
 - Оффлайн-тесты форматтера: `tests/test-agent-limits-digest.sh`.
 - `ошибка снятия лимитов` (error) - чаще всего лег mihomo (7890) или
@@ -82,7 +82,7 @@ Claude usage-эндпоинт ~1 запрос/180с - таймер */15 (900с) 
 
 GET `<base_url>/usages` читает пятичасовой, недельный (если доступен) и месячные лимиты. `месяц` - общий месячный расход, `код/м` - месячный расход кода. Проценты расхода с одной десятичной цифрой, даты и время сброса в timezone панели. Kimi участвует в дедупликации по десятым процента и статусу; сброс времени сам по себе сообщения не вызывает. Месячные окна без временной шкалы; клэмп Claude/Codex к Kimi не применяется.
 
-Токен обновляется form POST на официальный OAuth-хост соответствующего региона, до истечения либо один раз после 401. Запись атомарная, 0600, совместимая с CLI блокировка `oauth/<name>.lock` с heartbeat; чужая блокировка не удаляется. При ошибке показывается недоступность, при отказе авторизации - `kimi login`. Config поддерживает официальные .ai и .com endpoints; произвольные хосты не получают токены. Явный `User-Agent: claude-control/1.0` необходим: стандартный Python UA отклонялся Cloudflare.
+Токен обновляется form POST на официальный OAuth-хост соответствующего региона, до истечения либо один раз после 401. Запись атомарная, 0600, совместимая с CLI блокировка `oauth/<name>.lock` с heartbeat; чужая блокировка не удаляется. При ошибке показывается недоступность, при отказе авторизации - `kimi login`. Config поддерживает официальные .ai и .com endpoints; произвольные хосты не получают токены. Явный `User-Agent: ai-control/1.0` необходим: стандартный Python UA отклонялся Cloudflare.
 
 Проверка: `python3 tests/test-agent-limits-kimi.py`; `render` читает только кэш. `once --dry-run` обновляет кэш и при необходимости OAuth, но не отправляет панель.
 

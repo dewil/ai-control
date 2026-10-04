@@ -1085,10 +1085,10 @@ class RuntimeContract(unittest.TestCase):
             case.assertIn('tracked.txt' if native_mode == 'approval_full' else 'outside-candidate.txt', rendered)
             case.assertNotIn('Claude', rendered)
             environment = case.git_env.copy()
-            environment.update(CLAUDE_AGENTS_DIR=str(case.agent.parent),
-                CLAUDE_AGENT_SPOOL_BASE=str(case.root / 'spool'),
-                CLAUDE_AGENT_GENERATION='7', CLAUDE_AGENT_ATTEMPT='attempt-1')
-            executable = Path(__file__).resolve().parents[1] / 'bin/claude-agent-answer'
+            environment.update(AI_AGENTS_DIR=str(case.agent.parent),
+                AI_AGENT_SPOOL_BASE=str(case.root / 'spool'),
+                AI_AGENT_GENERATION='7', AI_AGENT_ATTEMPT='attempt-1')
+            executable = Path(__file__).resolve().parents[1] / 'bin/ai-agent-answer'
             if native_mode == 'approval_outside':
                 case.assertEqual(question['native_callback']['allowed_decisions'], ['reject'])
                 before_question = questions[0].read_bytes()

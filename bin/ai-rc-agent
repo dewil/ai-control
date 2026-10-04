@@ -1,0 +1,1146 @@
+#!/usr/bin/env bash
+# ai-rc-agent: operator CLI for the autonomous-agent registry.
+# Dispatched by `ai-rc agent <verb> ...`; can be run standalone.
+#
+# Contract: docs/design-2026-07-11-agent-state-machine.md (§4.2).
+# All control.json writes go through ai-agent-io (CAS under flock);
+# this script NEVER edits registry JSON by hand.
+#
+# Stage 4: type=event supported (inbox+spool; см. design delta 2026-07-12).
+set -euo pipefail
+
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+IO="$BIN_DIR/ai-agent-io"
+# Single resolver for projects.yaml's scalar-or-object schema (§1 of
+# docs/design-2026-07-26-v2.7b-acceptance-integration.md).
+# shellcheck source=/dev/null
+. "$BIN_DIR/_rc_projects.sh"
+AGENTS_DIR="${AI_AGENTS_DIR:-$HOME/.ai-control/agents}"
+SPOOL_BASE="${AI_AGENT_SPOOL_BASE:-$HOME/.ai-control/spool}"
+NAME_RE='^[a-z][a-z0-9-]{0,30}[a-z0-9]$'
+
+usage() {
+  cat <<EOF
+Usage:
+  ai-rc agent create <name> --spec F [--mission F] [--role DIR]
+  ai-rc agent new-task --name N --project P --text T   (V2.7a §1)
+  ai-rc agent start|pause|stop <name>
+  ai-rc agent status <name> | list
+  ai-rc agent resolve <name> --resume|--stop [--extend-hours N]
+  ai-rc agent revise <name> --note "..."
+  ai-rc agent accept <name> | reject <name> --reason "..."
+  ai-rc agent task-cancel <name> [--force] [--comment "..."]
+  ai-rc agent attach <name>                     (mission)
+  ai-rc agent dlq <name> [--requeue K|--drop K] (event)
+  ai-rc agent inbox-restore <name>              (event)
+
+Registry: $AGENTS_DIR   (override: AI_AGENTS_DIR)
+Exit codes: 0 ok, 2 validation, 3 not found, 4 invalid transition, 5 busy.
+EOF
+}
+
+fail() { echo "ai-rc agent: $1" >&2; exit "${2:-2}"; }
+
+check_name() {
+  [[ "$1" =~ $NAME_RE ]] || fail "bad agent name '$1' (want $NAME_RE)" 2
+}
+
+agent_dir() {
+  local dir="$AGENTS_DIR/$1"
+  [[ -d "$dir" ]] || fail "no such agent: $1" 3
+  echo "$dir"
+}
+
+# jget <json> <python-expr-on-d>  -- tiny JSON accessor (no jq in this repo)
+jget() {
+  python3 -c 'import json,sys
+d=json.loads(sys.argv[1])
+try: print(eval(sys.argv[2], {"d": d}))
+except Exception: print("")' "$1" "$2"
+}
+
+# ------------------------------------------------------------------ create
+
+slug_of() { echo "$1" | sed 's|[^a-zA-Z0-9]|-|g'; }
+
+cmd_create() {
+  local name="$1"; shift
+  check_name "$name"
+  local spec="" mission="" role="" reviewer_role="" base_commit=""
+  local h_sid="" h_pid="" h_pid_start="" h_cwd="" h_expires_min=10
+  local handoff_seen=0   # любой --handoff-* (вкл. -expires-min, у него дефолт)
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --spec)    spec="$2"; shift 2 ;;
+      --mission) mission="$2"; shift 2 ;;
+      --role)    role="$2"; shift 2 ;;
+      --reviewer-role) reviewer_role="$2"; shift 2 ;;
+      --base-commit)         base_commit="$2"; shift 2 ;;
+      --handoff-session)     h_sid="$2"; handoff_seen=1; shift 2 ;;
+      --handoff-pid)         h_pid="$2"; handoff_seen=1; shift 2 ;;
+      --handoff-pid-start)   h_pid_start="$2"; handoff_seen=1; shift 2 ;;
+      --handoff-cwd)         h_cwd="$2"; handoff_seen=1; shift 2 ;;
+      --handoff-expires-min) h_expires_min="$2"; handoff_seen=1; shift 2 ;;
+      *) fail "unknown arg: $1" ;;
+    esac
+  done
+  [[ -f "$spec" ]]    || fail "--spec file not found: $spec"
+  [[ -e "$AGENTS_DIR/$name" ]] && fail "agent '$name' already exists" 4
+  command -v yq >/dev/null || fail "yq v4 required"
+
+  # --base-commit (этап 5) ⊥ handoff (§9): нельзя адоптировать транскрипт этапа 2
+  # в worktree от произвольного commit - рассинхрон (codex-code-15).
+  [[ -n "$base_commit" && "$handoff_seen" == 1 ]] \
+    && fail "--base-commit несовместим с --handoff-* (разные режимы handoff)" 2
+
+  # --- handoff-регистрация (/solo кейс A, §9): все поля или ни одного ---
+  if [[ -n "$h_sid$h_pid$h_pid_start$h_cwd" ]]; then
+    [[ -n "$h_sid" && -n "$h_pid" && -n "$h_pid_start" && -n "$h_cwd" ]] \
+      || fail "handoff требует все: --handoff-session/-pid/-pid-start/-cwd"
+    [[ "$h_sid" =~ ^[0-9a-f-]{36}$ ]] || fail "--handoff-session: не uuid"
+    [[ "$h_pid" =~ ^[0-9]+$ && "$h_pid_start" =~ ^[0-9]+$ ]] \
+      || fail "--handoff-pid/-pid-start: нужны числа"
+    [[ -d "$h_cwd" ]] || fail "--handoff-cwd не существует: $h_cwd"
+    local src="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(slug_of "$h_cwd")/$h_sid.jsonl"
+    [[ -f "$src" ]] || fail "транскрипт origin не найден: $src"
+  fi
+
+  # --- validate spec (YAML plane is yq's job, §19) ---
+  local s_name s_type s_project s_goal s_autonomy
+  s_name=$(yq -r '.name // ""' "$spec")
+  s_type=$(yq -r '.type // ""' "$spec")
+  s_project=$(yq -r '.project // ""' "$spec")
+  local s_engine; s_engine=$(yq -r '.engine // "claude"' "$spec")
+  case "$s_engine" in claude|codex) : ;; *) fail "unsupported engine" 2 ;; esac
+  if [[ "$s_engine" == "codex" ]]; then
+    umask 077
+    [[ "$s_type" == "event" && "$(yq -r '.runtime' "$spec")" == "drain" && "$(yq -r '.workspace' "$spec")" == "worktree" && -z "$h_sid" ]] || fail "incompatible Codex task profile" 2
+  fi
+  s_goal=$(yq -r '.goal // ""' "$spec")
+  s_autonomy=$(yq -r '.autonomy // ""' "$spec")
+  [[ "$s_name" == "$name" ]] || fail "spec.name '$s_name' != '$name'"
+  case "$s_type" in
+    mission|event) : ;;
+    *) fail "spec.type must be mission|event, got '$s_type'" ;;
+  esac
+  case "$s_autonomy" in suggest|act|release) : ;;
+    *) fail "spec.autonomy must be suggest|act|release" ;; esac
+  [[ -n "$s_goal" ]] || fail "spec.goal is empty"
+
+  # spec.schedule (V2.8 §2): допустим только для type: event (с
+  # source.kind: spool - единственная форма источника, проверяется ниже, в
+  # event-ветке). Проверка типа - здесь, до ветвления mission/event, чтобы
+  # ловить schedule на mission-агенте тоже (S7).
+  local s_has_schedule; s_has_schedule=$(yq -r 'has("schedule")' "$spec")
+  if [[ "$s_has_schedule" == "true" && "$s_type" != "event" ]]; then
+    fail "spec.schedule: только для spec.type: event"
+  fi
+
+  # spec.role (этап 7b, Д2): группирующий ключ harvester'а. Опционально
+  # (legacy-агенты без него collector пропускает), но если задано - валидируем
+  # тем же regex, что имя агента: без /, .., заглавных - безопасно как компонент
+  # пути ledger'а harvest/<project_key>/<role>/.
+  local s_role; s_role=$(yq -r '.role // ""' "$spec")
+  [[ -z "$s_role" || "$s_role" =~ ^[a-z][a-z0-9-]{0,30}[a-z0-9]$ ]] \
+    || fail "spec.role '$s_role' невалиден (^[a-z][a-z0-9-]{0,30}[a-z0-9]\$)"
+
+  # --- acceptance.kind (этап 7, §8.5): валидация + требование reviewer-role ---
+  local s_kind; s_kind=$(yq -r '.acceptance.kind // ""' "$spec")
+  case "$s_kind" in
+    ""|deterministic) : ;;
+    role-review|both)
+      [[ "$s_type" == "mission" ]] \
+        || fail "acceptance.kind '$s_kind' - только для mission-агентов"
+      [[ -n "$reviewer_role" && -d "$reviewer_role" ]] \
+        || fail "acceptance.kind '$s_kind' требует --reviewer-role DIR" ;;
+    *) fail "acceptance.kind must be deterministic|role-review|both" ;;
+  esac
+  # both требует детерминированный чек с deterministic:true (§8.2/§8.8,
+  # ревью-3 блокер 5): сначала он-гейт, потом приёмщик
+  if [[ "$s_kind" == "both" ]]; then
+    [[ -n "$(yq -r '.acceptance.check // ""' "$spec")" ]] \
+      || fail "acceptance.kind=both требует acceptance.check"
+    [[ "$(yq -r '.acceptance.deterministic // ""' "$spec")" == "true" ]] \
+      || fail "acceptance.kind=both требует acceptance.deterministic: true"
+  fi
+
+  # mission: обязательны mission.md и git-проект (worktree + mission_base);
+  # event: живет на корне без worktree (Д3), вместо миссии - source в spec
+  local mission_base="" mission_base_branch=""
+  if [[ "$s_type" == "mission" ]]; then
+    [[ -s "$mission" ]] || fail "--mission file missing or empty: $mission"
+    [[ -d "$s_project" ]] || fail "spec.project dir not found: $s_project"
+    git -C "$s_project" rev-parse --git-dir >/dev/null 2>&1 \
+      || fail "spec.project is not a git repo: $s_project"
+    # mission_base + ветка агента фиксируются при create (§4.2, V4/[27]).
+    # --base-commit (этап 5, кросс-машинный handoff): дерево от ТОЧНОГО
+    # запушенного commit - fetch пиновки + verify + worktree от sha, а не HEAD.
+    if [[ -n "$base_commit" ]]; then
+      # полный immutable OID (codex-code-5): префикс слабее pin-контракта
+      [[ "$base_commit" =~ ^[0-9a-f]{40}$ ]] || fail "--base-commit: нужен полный 40-hex OID"
+      git -C "$s_project" fetch --quiet origin 2>/dev/null || true
+      git -C "$s_project" cat-file -e "$base_commit" 2>/dev/null \
+        || fail "--base-commit: commit $base_commit не найден после fetch (origin не запушил / force-push)" 4
+      # вход обязан быть commit-объектом, не tag/tree (codex-code-5)
+      [[ "$(git -C "$s_project" cat-file -t "$base_commit" 2>/dev/null)" == "commit" ]] \
+        || fail "--base-commit: $base_commit не commit-объект" 2
+      # submodule-проверка по ДЕРЕВУ base_commit, не по VM HEAD (codex-code-8)
+      git -C "$s_project" cat-file -e "${base_commit}:.gitmodules" 2>/dev/null \
+        && fail "--base-commit: submodule-проекты в кросс-машинном v1 не поддержаны" 2
+      mission_base="$base_commit"
+    else
+      mission_base=$(git -C "$s_project" rev-parse HEAD)
+      # Целевая ветка для фазы integrate (V2.7b §4 "integrate: merge"):
+      # символическое имя HEAD на момент create; detached HEAD - пусто.
+      mission_base_branch=$(git -C "$s_project" symbolic-ref --quiet --short HEAD 2>/dev/null) || mission_base_branch=""
+    fi
+  else
+    [[ -n "$base_commit" ]] && fail "--base-commit применим только к mission-агентам"
+    [[ -n "$h_sid" ]] && fail "handoff применим только к mission-агентам"
+    local s_source; s_source=$(yq -r '.source.kind // ""' "$spec")
+    [[ "$s_source" == "spool" ]] \
+      || fail "event: spec.source.kind must be 'spool' (v1)"
+    # workspace/permissions (V2.1 §1): пояс прав вместо жесткого blacklist
+    local s_workspace s_has_perms
+    s_workspace=$(yq -r '.workspace // "none"' "$spec")
+    case "$s_workspace" in
+      none|worktree|direct) : ;;
+      *) fail "event: spec.workspace must be none|worktree|direct, got '$s_workspace'" ;;
+    esac
+    if [[ "$s_workspace" == "worktree" ]]; then
+      [[ -n "$s_project" ]] || fail "event: workspace=worktree требует spec.project"
+      [[ -d "$s_project" ]] || fail "event: workspace=worktree - spec.project dir not found: $s_project"
+      git -C "$s_project" rev-parse --git-dir >/dev/null 2>&1 \
+        || fail "event: workspace=worktree - spec.project не git-репозиторий: $s_project"
+      # V2.7a: точка форка фиксируется ЗДЕСЬ - до записи control.json, куда
+      # она и попадает (mission_base: имя историческое, смысл общий -
+      # базовый коммит ветки агента). Ветка ниже создается ровно от этого
+      # sha. Выводить базу потом через merge-base от самого HEAD ветки
+      # нельзя: merge-base по определению предок HEAD, и фенсинг "HEAD -
+      # потомок базы" становится невыполнимым.
+      mission_base=$(git -C "$s_project" rev-parse HEAD 2>/dev/null) \
+        || fail "event: workspace=worktree - не удалось определить HEAD $s_project"
+      [[ -n "$mission_base" ]] \
+        || fail "event: workspace=worktree - пустой HEAD $s_project"
+      # Целевая ветка для фазы integrate (V2.7b §4 "integrate: merge"):
+      # символическое имя HEAD на момент create; detached HEAD - пусто.
+      mission_base_branch=$(git -C "$s_project" symbolic-ref --quiet --short HEAD 2>/dev/null) || mission_base_branch=""
+    elif [[ "$s_workspace" == "direct" ]]; then
+      [[ -n "$s_project" ]] || fail "event: workspace=direct требует spec.project"
+      [[ -d "$s_project" && -w "$s_project" ]] \
+        || fail "event: workspace=direct - spec.project не существует или недоступен для записи: $s_project"
+    fi
+    # permission_mode (V2.1 §1, аудит blocker 1): жесткий белый список -
+    # bypassPermissions и любой другой режим CLI снял бы весь пояс
+    local s_perm_mode; s_perm_mode=$(yq -r '.permission_mode // ""' "$spec")
+    case "$s_perm_mode" in
+      ""|default|acceptEdits) : ;;
+      *) fail "event: spec.permission_mode must be default|acceptEdits, got '$s_perm_mode'" ;;
+    esac
+    s_has_perms=$(yq -r 'has("permissions")' "$spec")
+    # структура permissions (V2.1 §1, аудит major 2): map, allow/deny -
+    # списки строк, иначе exit 2 (runner: то же самое defense-in-depth)
+    if [[ "$s_has_perms" == "true" ]]; then
+      yq -o=json '.permissions' "$spec" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+ok = isinstance(d, dict)
+if ok:
+    for k in ("allow", "deny", "ask"):
+        v = d.get(k, [])
+        ok = ok and isinstance(v, list) and all(isinstance(i, str) for i in v)
+sys.exit(0 if ok else 1)
+' || fail "event: spec.permissions - невалидная структура (нужен map, allow/deny/ask - списки строк)"
+      # ask-паттерны (V2.4 §2a, аудит blocker 2): документированное
+      # подмножество - грамматика реализована ровно один раз, в
+      # ai-agent-permit (--validate-ask); используется и здесь при
+      # create, и самим хуком в рантайме - чтобы они никогда не разошлись
+      local ask_err
+      ask_err=$(yq -o=json '.permissions.ask // []' "$spec" \
+        | "$BIN_DIR/ai-agent-permit" --validate-ask 2>&1) \
+        || fail "event: spec.permissions.ask - $ask_err"
+    fi
+    # недоверенный вход = минимальные руки (модель доверия п.2): без пояса
+    # прав - только suggest (декларативный замок); с permissions - правами
+    # рулит пояс, act допустим (release остается только для mission)
+    if [[ "$s_has_perms" == "true" ]]; then
+      case "$s_autonomy" in suggest|act) : ;;
+        *) fail "event: с permissions autonomy должен быть suggest|act" ;; esac
+    else
+      [[ "$s_autonomy" == "suggest" ]] \
+        || fail "event: autonomy must be 'suggest' (недоверенный вход, без permissions)"
+    fi
+
+    # spec.schedule (V2.8 §2): every XOR at, text XOR json, только известные
+    # ключи - молча проигнорированная опечатка означает задачу, которая
+    # никогда не просыпается, и заметить это нечем. Валидация - в
+    # bin/_schedule_spec.py, тот же код зовет и schedule-tick на каждом тике
+    # (аудит блокер 1: спека - обычный файл, и без этого проверка при
+    # create не ловила бы расписание, появившееся/измененное позже).
+    if [[ "$s_has_schedule" == "true" ]]; then
+      local sch_err
+      sch_err=$(yq -o=json '.schedule' "$spec" | python3 "$BIN_DIR/_schedule_spec.py") \
+        || fail "event: $sch_err"
+      # предусловия (§2, аудит V2.8 серьезная 4): та же validate_preconditions,
+      # что зовет schedule-tick на каждом тике (bin/ai-agent-run) - общий
+      # код, чтобы create и tick проверяли буквально одно и то же и не могли
+      # разойтись после правки одной стороны без другой.
+      local sch_pre_err
+      sch_pre_err=$(python3 "$BIN_DIR/_schedule_spec.py" --preconditions "$s_type" "$s_source") \
+        || fail "event: $sch_pre_err"
+    fi
+  fi
+
+  # --- project_name (V2.7b §1 п.6): ключ реестра фиксируется ЗДЕСЬ, один
+  # раз, при create - а не восстанавливается позже перебором путей на
+  # каждый вызов фазы интеграции (там реестр мог уже уйти вперед). spec.yaml
+  # хранит только путь; имя ищем по нему в projects.yaml СЕЙЧАС, пока
+  # реестр заведомо свежий, и кладем в control.json неизменяемым.
+  # cmd_new_task знает имя без поиска (пришло аргументом --project) и
+  # перезаписывает это поле точным значением сразу после cmd_create -
+  # снимает неоднозначность, если два имени указывают на один путь.
+  local s_project_name=""
+  if [[ -n "$s_project" ]]; then
+    local s_project_real; s_project_real=$(cd "$s_project" 2>/dev/null && pwd -P)
+    local _pn _pp
+    for _pn in $(project_names 2>/dev/null || true); do
+      _pp=$(project_path "$_pn")
+      [[ -n "$_pp" ]] || continue
+      if [[ "$(cd "$_pp" 2>/dev/null && pwd -P)" == "$s_project_real" ]]; then
+        s_project_name="$_pn"; break
+      fi
+    done
+  fi
+
+  # --- atomic registry: fill tmp dir, single rename (§4.2) ---
+  mkdir -p "$AGENTS_DIR"
+  local tmp="$AGENTS_DIR/.new-$name.$$"
+  mkdir "$tmp"
+  # rollback staging на ЛЮБОМ аварийном выходе до публикации (adversarial р2
+  # находка 7 - неатомарность): снимаем tmp и dangling-worktree проекта;
+  # снимается ниже (trap - EXIT) сразу после успешного mv. Пути раскрыты
+  # сейчас, чтобы не зависеть от видимости local в EXIT-трапе.
+  # branch -D нашей ветки agent/<name> - на ЛЮБОМ пути краха после её создания
+  # (codex-code-r2-1: раньше чистилось только на 2 явных путях, region после
+  # post-check тёк). $_BR_OWNED (глобал) вычисляется в МОМЕНТ срабатывания
+  # трапа (\$ отложен), ставится в 1 после того как ветку создали мы.
+  _BR_OWNED=0
+  _BR_NAME=""   # v2.1: имя ветки, которую создали МЫ (mission agent/<name>
+                # или event+worktree task/<name>-<inc8>) - трап читает её
+                # отложенно (\$ ниже), общий для обоих путей
+  # ВСЯ чистка гейтится отсутствием финального реестра (codex-code-r3-1):
+  # успешный атомарный `mv` = структурная граница ownership. Catchable-сигнал
+  # (SIGTERM/SIGINT) в окне mv..(trap - EXIT) иначе снёс бы worktree/ветку уже
+  # опубликованного агента. Есть final -> trap не трогает ничего.
+  trap "if [ ! -e '$AGENTS_DIR/$name' ]; then rm -rf '$tmp' 2>/dev/null; [ -n '$s_project' ] && git -C '$s_project' worktree prune >/dev/null 2>&1; [ \"\$_BR_OWNED\" = 1 ] && [ -n \"\$_BR_NAME\" ] && git -C '$s_project' branch -D \"\$_BR_NAME\" >/dev/null 2>&1; fi; true" EXIT
+  cp "$spec" "$tmp/spec.yaml"
+  [[ -n "$mission" && -s "$mission" ]] && cp "$mission" "$tmp/mission.md"
+  if [[ -n "$role" ]]; then
+    [[ -d "$role" ]] || { rm -rf "$tmp"; fail "--role dir not found: $role"; }
+    cp -R "$role" "$tmp/role"
+  fi
+  # роль приёмщика - отдельный замороженный снапшот (§8.5, атака 4 codex).
+  # Обязателен manifest.yaml + prompt.md; hash prompt.md сверяется с
+  # манифестом (ревью-3 дыра 5: без manifest revoke-role обходится, а
+  # снапшот не верифицируется). Только regular files (symlink = отказ).
+  if [[ -n "$reviewer_role" ]]; then
+    [[ -d "$reviewer_role" ]] \
+      || { rm -rf "$tmp"; fail "--reviewer-role dir not found: $reviewer_role"; }
+    if find "$reviewer_role" ! -type f ! -type d | grep -q .; then
+      rm -rf "$tmp"; fail "--reviewer-role: только обычные файлы (symlink?)"
+    fi
+    [[ -f "$reviewer_role/manifest.yaml" && -f "$reviewer_role/prompt.md" ]] \
+      || { rm -rf "$tmp"; fail "--reviewer-role требует manifest.yaml + prompt.md"; }
+    local rr_role rr_sha act_sha
+    rr_role=$(yq -r '.role // ""' "$reviewer_role/manifest.yaml")
+    [[ "$rr_role" =~ ^[a-z][a-z0-9-]*$ ]] \
+      || { rm -rf "$tmp"; fail "--reviewer-role: manifest.role невалиден"; }
+    rr_sha=$(yq -r '.files[] | select(.path=="prompt.md") | .sha256 // ""' \
+      "$reviewer_role/manifest.yaml")
+    act_sha=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$reviewer_role/prompt.md")
+    [[ "$rr_sha" == "$act_sha" ]] \
+      || { rm -rf "$tmp"; fail "--reviewer-role: sha256 prompt.md != manifest"; }
+    cp -R "$reviewer_role" "$tmp/reviewer-role"
+  fi
+  python3 - "$mission_base" "$mission_base_branch" "$h_sid" "$h_pid" "$h_pid_start" "$h_cwd" \
+      "$h_expires_min" "${AI_AGENT_TEST_INCARNATION:-}" "$s_project_name" \
+      <<'PY' | "$IO" durable-write "$tmp/control.json"
+import json, sys, time, secrets
+from datetime import datetime, timedelta, timezone
+base, base_branch, sid, pid, pid_start, cwd, exp_min, test_inc, proj_name = sys.argv[1:10]
+handoff = None
+if sid:
+    expires = (datetime.now(timezone.utc) + timedelta(minutes=int(exp_min)))
+    handoff = {"phase": "prepared", "origin_pid": int(pid),
+               "origin_pid_start": int(pid_start), "origin_cwd": cwd,
+               "expires_at": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
+               "transcript_digest": None}
+# AI_AGENT_TEST_INCARNATION (V2.1 §2): тестовый шов - детерминированная
+# incarnation ТОЛЬКО для проверки коллизии ветки task/<name>-<inc8>; в проде
+# переменная не выставляется.
+print(json.dumps({
+  "schema": 1, "seq": 0, "desired": "paused", "generation": 0,
+  "incarnation": test_inc or secrets.token_hex(16),
+  "session_id": sid or None, "started_at": None, "deadline_extension_h": 0,
+  "mission_base": base or None,
+  "mission_base_branch": base_branch or None,
+  "project_name": proj_name or None,
+  "lease": {"state": "none", "start_attempt_id": None, "gen_base": None,
+            "socket": None, "unit": None, "main_pid": None,
+            "pid_start": None, "granted_at": None, "renewed_at": None,
+            "ttl_s": 300},
+  "acceptance": {"status": "pending", "artifact": None, "verdict_by": None,
+                 "checked_at": None, "note": None, "check_job": None,
+                 "check_runs": [], "review_job": None, "phase": None,
+                 "reviewer_revoked": None},
+  "attention": None, "hold": None, "handoff": handoff}, indent=1))
+PY
+  # incarnation только что сгенерированного control.json - фенсинг ветки
+  # task/<name>-<inc8> для event+workspace:worktree (V2.1 §2)
+  local inc; inc=$(python3 -c \
+    'import json,sys; print(json.load(open(sys.argv[1]))["incarnation"])' \
+    "$tmp/control.json")
+  # --- AGENT.md: агент-дисциплина для живой сессии (state-контракт §19).
+  # Reconciler после старта вбрасывает kick "выполняй AGENT.md" (13.1) -
+  # адоптированная/свежая сессия сама не начинает без входного сообщения.
+  # event-агенту не нужен: его рантайм - ai-agent-run, не живая сессия.
+  [[ "$s_type" == "mission" ]] && cat > "$tmp/AGENT.md" <<AGENTEOF
+# Ты - автономный агент $name
+
+- Реестр: \$AI_AGENT_DIR (env). Поколение: \$AI_AGENT_GENERATION,
+  attempt: \$AI_AGENT_ATTEMPT (env; подставляй реальные значения).
+- Миссия: \$AI_AGENT_DIR/mission.md. Работай ТОЛЬКО в текущем каталоге
+  (приватный worktree ветки agent/$name).
+- Статус пиши атомарно после каждого значимого шага:
+  echo '<json>' | ai-agent-io durable-write \$AI_AGENT_DIR/state.\$AI_AGENT_GENERATION.json
+  JSON: {"schema":1,"generation":<gen>,"attempt_id":"<attempt>",
+  "phase":"working|sleeping","status_line":"<коротко что делаешь>",
+  "agent_claim":"running|done|blocked","claim_artifact":null,
+  "session_id":"<uuid сессии если знаешь, иначе null>",
+  "iteration_started_at":"<ISO UTC>","last_progress_at":"<ISO UTC>",
+  "next_wakeup_at":null,"iterations":1,"cost_usd":0}
+- Начиная: phase=working, agent_claim=running.
+- Завершив миссию: закоммить результат в текущую ветку (git add + commit),
+  затем state: phase=sleeping, agent_claim=done,
+  claim_artifact="<hash коммита>". После заявки НИЧЕГО не делай - приемку
+  выполняет внешний контур (reconciler/человек), не ты.
+- Заблокирован: agent_claim=blocked + причина в status_line.
+- Входящие сообщения в сессию - наставления оператора: учитывай их в миссии.
+  Наставления приходят с маркером "[оператор #N]"; повтор с уже виденным
+  номером N - дубль доставки (at-least-once), игнорируй его молча.
+AGENTEOF
+
+  # --- per-agent permissions в РЕЕСТРЕ (не в worktree - adversarial находка 5:
+  # файл в worktree попал бы в артефакт через `git add -A`/`-f`). Пишем в
+  # staging; allow ссылается на ФИНАЛЬНЫЙ путь реестра. Передаётся claude
+  # флагом --settings из ai-agent-session; bypassPermissions не выдаётся ---
+  if [[ "$s_type" == "mission" ]]; then
+    python3 - "$tmp/agent-settings.json" "$AGENTS_DIR/$name" "$s_autonomy" <<'PY'
+import json, sys
+path, adir, autonomy = sys.argv[1:4]
+# act/release: Bash целиком (голое имя тула = allow всех вызовов). Узкий
+# префиксный allowlist нежизнеспособен: любая $VAR-экспансия в команде
+# даёт permission-prompt (simple_expansion) и сессия виснет. Это НЕ
+# bypassPermissions: остальные tools под обычным контролем, границы v1
+# держат worktree + приёмка + бюджеты (модель доверия п.1/п.5).
+# suggest: минимальные руки - только чтение реестра, каждый edit/Bash
+# подтверждает оператор (в т.ч. с телефона через relay).
+allow = ["Read(//%s/**)" % adir.strip("/")]  # mission.md/AGENT.md (// = абс. путь)
+if autonomy in ("act", "release"):
+    allow.append("Bash")
+json.dump({"permissions": {"allow": allow}}, open(path, "w"), indent=1)
+PY
+  fi
+
+  # event: inbox (0700) в staging (spool - внешний, чистится ниже под локом)
+  if [[ "$s_type" == "event" ]]; then
+    mkdir -p "$tmp/inbox"/{pending,inflight,done,deadletter} \
+                     "$tmp/run"
+  fi
+
+  # --- worktree агента В STAGING (adversarial р2 находка 7 - атомарность):
+  # создаётся в $tmp/work ДО публикации, чтобы единый mv публиковал реестр И
+  # worktree вместе (крэш до mv не оставляет полуагента; gitdir чинится
+  # `git worktree repair` после mv). fail-closed (находка 3): ветка
+  # agent/<name> переживает worktree prune - add -b на ней падает -> откат
+  # staging (trap) + понятная ошибка, а не ложный успех + hold_worktree. ---
+  if [[ "$s_type" == "mission" ]]; then
+    # fail-closed до создания: ветка agent/<name> уже существует (recreate,
+    # находка 3) - НЕ трогаем чужую ветку. Пред-проверка отделяет "ветка была"
+    # от "ветку создали мы" -> дальше branch -D безопасен (codex-code-1).
+    if git -C "$s_project" show-ref -q "refs/heads/agent/$name"; then
+      fail "ветка agent/$name уже существует. Снеси: git -C $s_project worktree prune; git -C $s_project branch -D agent/$name" 4
+    fi
+    # с этого момента любая ветка agent/<name> создана нами -> EXIT-trap чистит её
+    # branch -D на ЛЮБОМ пути краха до mv (codex-code-r2-1). SIGKILL/параллельный
+    # одноимённый create - остаточный риск (ручное branch -D по сообщению).
+    _BR_OWNED=1; _BR_NAME="agent/$name"
+    if ! git -C "$s_project" worktree add -b "agent/$name" \
+         "$tmp/work" "$mission_base" >/dev/null 2>&1; then
+      fail "worktree agent/$name не создаётся (git worktree add). Проверь: git -C $s_project worktree prune" 4
+    fi
+    # --base-commit: пост-проверка materialization (codex-r3 п.2) - дерево
+    # реально выписано на заданный commit, а не detached-заглушка.
+    if [[ -n "$base_commit" ]]; then
+      [[ "$(git -C "$tmp/work" rev-parse HEAD 2>/dev/null)" == "$mission_base" ]] \
+        || fail "worktree HEAD != base-commit $mission_base (дерево не выписано)"
+    fi
+  elif [[ "$s_type" == "event" && "$s_workspace" == "worktree" ]]; then
+    # V2.1 §2: по образцу mission-пути (staging -> атомарная публикация,
+    # тот же EXIT-trap/откат). Ветка task/<name>-<inc8> от HEAD - фенсинг
+    # против пересозданий тем же инкарнацией, что уже легла в control.json.
+    # Существующая одноименная ветка - fail-closed (exit 2, как прочие
+    # валидации create); остатки прошлых инкарнаций НЕ блокируют.
+    local br="task/$name-${inc:0:8}"
+    if git -C "$s_project" show-ref -q "refs/heads/$br"; then
+      fail "ветка $br уже существует (коллизия по incarnation). Повтори create."
+    fi
+    _BR_OWNED=1; _BR_NAME="$br"
+    # ветка - ровно от зафиксированного выше sha, а не от подвижного HEAD
+    if ! git -C "$s_project" worktree add -b "$br" "$tmp/work" "$mission_base" \
+         >/dev/null 2>&1; then
+      fail "worktree $br не создаётся (git worktree add). Проверь: git -C $s_project worktree prune"
+    fi
+  fi
+
+  # --- stale-scratch прежней одноимённой инкарнации ПОД ЛОКАМИ (находки 2,4,6
+  # + р2 3,4): новый агент снова generation=1/cursor=0, остаток старой
+  # инкарнации ложно применяется - kick_gN глушит start-kick, spool реиграет
+  # старые события, alerts-state дедупит новый инцидент под старый эпизод.
+  # alerts-state - под ОБЩИМ с reconciler локом (иначе гонка RMW с
+  # alert()/alert_clear()); spool - под producer-локом (иначе torn write с
+  # параллельным spool-put). tmux-сокеты/юниты защищены сами (socket_busy). ---
+  local rcdir="${AI_RECONCILER_DIR:-$HOME/.ai-control/reconciler}"
+  mkdir -p "$rcdir/cache"
+  rm -f "$rcdir/cache/$name.flags"
+  # alerts-state - под общим с reconciler fcntl-локом (bash flock Linux-only)
+  python3 - "$rcdir/cache/alerts-state.json" "$rcdir/cache/alerts.lock" "$name" <<'PY'
+import json, os, sys, fcntl
+p, lock, name = sys.argv[1:4]
+lk = os.open(lock, os.O_WRONLY | os.O_CREAT, 0o600)
+fcntl.flock(lk, fcntl.LOCK_EX)
+try:
+    if os.path.exists(p):
+        try:
+            st = json.load(open(p))
+        except ValueError:
+            st = {}
+        for k in [k for k in st if k.split("/", 1)[0] == name]:
+            st.pop(k, None)
+        json.dump(st, open(p, "w"))
+finally:
+    fcntl.flock(lk, fcntl.LOCK_UN); os.close(lk)
+PY
+  if [[ "$s_type" == "event" ]]; then
+    # чистим СОДЕРЖИМОЕ spool под producer-локом (тот же fcntl на sd/.lock,
+    # что берёт spool-put); .lock сохраняем - стабильный инод, без inode-swap
+    mkdir -m 0700 -p "$SPOOL_BASE/$name"
+    python3 - "$SPOOL_BASE/$name" <<'PY'
+import os, sys, fcntl, shutil
+sd = sys.argv[1]
+lk = os.open(os.path.join(sd, ".lock"), os.O_WRONLY | os.O_CREAT, 0o600)
+fcntl.flock(lk, fcntl.LOCK_EX)
+try:
+    for e in os.listdir(sd):
+        if e == ".lock":
+            continue
+        fp = os.path.join(sd, e)
+        shutil.rmtree(fp) if os.path.isdir(fp) else os.remove(fp)
+finally:
+    fcntl.flock(lk, fcntl.LOCK_UN); os.close(lk)
+PY
+  elif [[ -d "$SPOOL_BASE/$name" ]]; then
+    rm -rf "$SPOOL_BASE/$name"   # mission с реюзом имени бывшего event: сирота
+  fi
+
+  if [[ "$s_engine" == "codex" ]]; then
+    local state_id
+    state_id=$(python3 - "$BIN_DIR" "$tmp" "$AGENTS_DIR/$name" "$(dirname "$AGENTS_DIR")/codex-task-state" <<'PYINIT'
+import os, sys, time, uuid
+sys.path.insert(0, sys.argv[1])
+from _codex_task_store import CodexTaskOperationStore
+staging, final, root = sys.argv[2:]
+os.makedirs(root,mode=0o700,exist_ok=True)
+os.chmod(os.path.dirname(final),0o700)
+os.chmod(staging,0o700)
+os.chmod(staging+'/spec.yaml',0o600)
+os.makedirs(os.path.join(os.path.dirname(final),'.locks'),mode=0o700,exist_ok=True)
+for directory in ('questions','inbox','inbox/pending','inbox/inflight','inbox/done','inbox/deadletter'):
+ os.makedirs(staging+'/'+directory,mode=0o700,exist_ok=True)
+for path in (staging+'/.lock',staging+'/done.lock',staging+'/questions/.lock',staging+'/inbox/.inbox.lock',os.path.dirname(final)+'/.locks/new-task-'+os.path.basename(final)+'.lock'):
+ fd=os.open(path,os.O_CREAT|os.O_WRONLY,0o600);os.fchmod(fd,0o600);os.close(fd)
+state=str(uuid.uuid4())
+print(CodexTaskOperationStore.initialize(staging,final,state,state_root=root,deadline=time.monotonic()+10))
+PYINIT
+) || fail "Codex private registry initialization refused" 2
+    # Staging is not a registered agent name: CAS intentionally rejects it.
+    # The existing durable writer publishes the marker in the private staging
+    # control before the creator's atomic final registry rename.
+    python3 - "$tmp/control.json" "$state_id" <<'PYMARKER' | "$IO" durable-write "$tmp/codex_state_id.control.json"
+import json,sys
+with open(sys.argv[1]) as stream: control=json.load(stream)
+control['codex_state_id']=sys.argv[2]
+print(json.dumps(control))
+PYMARKER
+    mv "$tmp/codex_state_id.control.json" "$tmp/control.json" || fail "Codex marker publication refused" 2
+  fi
+
+  # --- атомарная публикация: единый mv (реестр + worktree вместе) ---
+  mv "$tmp" "$AGENTS_DIR/$name"
+  trap - EXIT   # опубликовано - staging больше не откатывается
+  if [[ "$s_type" == "mission" \
+        || ( "$s_type" == "event" && "$s_workspace" == "worktree" ) ]]; then
+    # gitdir worktree указывает на staging-путь - чиним после перемещения.
+    # Провал repair (V2.1 minor 8) НЕ откатывается - trap уже снят, агент
+    # опубликован - но факт обязан быть виден: stderr + событие.
+    if ! git -C "$AGENTS_DIR/$name/work" worktree repair >/dev/null 2>&1 \
+       && ! git -C "$s_project" worktree repair "$AGENTS_DIR/$name/work" \
+              >/dev/null 2>&1; then
+      echo "ai-rc agent: ВНИМАНИЕ - git worktree repair не удался для $name (worktree может быть неисправен, чини вручную)" >&2
+      "$IO" event-append "$AGENTS_DIR/$name" worktree_repair_failed operator "{}" \
+        2>/dev/null || true
+    fi
+  fi
+  "$IO" event-append "$AGENTS_DIR/$name" agent_created operator \
+    "{\"mission_base\":\"${mission_base:-}\"}"
+
+  if [[ "$s_type" == "mission" ]]; then
+    echo "created: $name (desired=paused, mission_base=${mission_base:0:12})"
+  else
+    echo "created: $name (event, desired=paused, spool=$SPOOL_BASE/$name)"
+  fi
+  if [[ -n "$h_sid" ]]; then
+    echo "handoff: prepared (origin pid=$h_pid, окно ${h_expires_min} мин)."
+    echo "         Заверши origin-сессию - reconciler адоптирует транскрипт и запустит агента сам."
+  else
+    echo "start:   ai-rc agent start $name"
+  fi
+}
+
+# -------------------------------------------------------------- new-task
+# V2.7a §1: рождение задачи с телефона. Идемпотентная по имени (имя = имя
+# апдейта, task-tg<update_id>) цепочка create -> spool-put --id -> start;
+# каждый шаг переисполним (redelivery Telegram шлет тот же update_id снова).
+
+cmd_new_task() {
+  local name="" project="" text="" engine="claude" engine_seen=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name)    name="$2"; shift 2 ;;
+      --project) project="$2"; shift 2 ;;
+      --text)    text="$2"; shift 2 ;;
+      --engine) [[ $engine_seen -eq 0 && $# -ge 2 ]] || fail "duplicate/missing engine" 2; engine="$2"; engine_seen=1; shift 2 ;;
+      *) fail "unknown arg: $1" ;;
+    esac
+  done
+  [[ -n "$name" && -n "$project" && -n "$text" ]] \
+    || fail "new-task требует --name/--project/--text" 2
+  case "$engine" in claude|codex) : ;; *) fail "unsupported engine" 2 ;; esac
+  check_name "$name"
+  command -v yq >/dev/null || fail "yq v4 required"
+
+  # --- пер-именной лок на всю цепочку (аудит V2.7a, major 2): без него два
+  # параллельных new-task на одно имя проходят раннюю проверку "каталога
+  # нет" ОБА, строят по своему worktree, и второй делает mv staging ВНУТРЬ
+  # уже опубликованного каталога первого - вложенный .new-*, лишняя ветка,
+  # лишний worktree, оба процесса при этом возвращают успех. Держится до
+  # выхода процесса (exec {fd}> - тот же fd на весь процесс, flock без
+  # аргумента-команды снимается закрытием fd/выходом).
+  mkdir -p "$AGENTS_DIR/.locks"
+  local lockfd
+  exec {lockfd}>"$AGENTS_DIR/.locks/new-task-$name.lock"
+  flock -x "$lockfd"
+
+  # --- надгробие (V2.7b §6 п.3/п.4): /new идемпотентен по имени, произведенному
+  # от update_id - после архива то же имя освобождается, и переотправленный
+  # Telegram-ом старый апдейт завел бы вторую задачу с той же постановкой.
+  # Проверка ОБЯЗАНА идти ПОСЛЕ взятия лока, не до: иначе между проверкой и
+  # create успевает пройти архивация того же имени (TOCTOU) - дубль
+  # появляется в окне, которого проверка ДО лока не видит. Идемпотентный
+  # ответ, не отказ.
+  local tomb_root; tomb_root="$(dirname "$AGENTS_DIR")/tombstones"
+  if [[ -f "$tomb_root/$name.json" ]]; then
+    echo "задача '$name' уже завершена (архивирована) - новая не создается"
+    return 0
+  fi
+
+  # --- 1. project: имя -> путь (§2, projects.yaml - плоская карта как есть) ---
+  local projects_file="${AI_RC_PROJECTS_FILE:-$HOME/.ai-control/projects.yaml}"
+  [[ -f "$projects_file" ]] || fail "реестр проектов не найден: $projects_file" 2
+  local project_path
+  project_path=$(project_path "$project" "$projects_file")
+  [[ -n "$project_path" ]] || fail "проект '$project' не найден в $projects_file" 2
+
+  # --- 2. рендер спеки из шаблона (§2): fail-closed на отсутствующем/
+  # невалидном шаблоне (N5). {{name}}/{{project}}/{{goal}} подставляются
+  # КАЖДЫЙ как экранированный YAML-скаляр (json.dumps - валидное
+  # подмножество YAML double-quoted scalar) - перевод строки, двоеточие,
+  # кавычка или '#' в тексте задачи не ломают структуру шаблона и не
+  # позволяют дописать в спеку постороннее поле через содержимое goal (N4).
+  # Подстановка - ОДНИМ проходом re.sub по исходному тексту шаблона (аудит
+  # V2.7a, minor): re.sub сканирует ИСХОДНЫЙ шаблон один раз и не
+  # пересматривает уже вставленные значения. Прежняя цепочка .replace()
+  # подставляла goal ПЕРВЫМ, а {{project}}/{{name}} - уже ПОСЛЕ него: если
+  # текст задачи содержал буквальное "{{project}}" (json.dumps фигурные
+  # скобки не трогает), второй .replace() находил его уже ВНУТРИ вставленного
+  # goal и подставлял туда путь проекта - ломая спеку (N25).
+  local template="${AI_RC_TASK_TEMPLATE:-$HOME/.ai-control/task-template.yaml}"
+  [[ "$engine" == "codex" ]] && template="${AI_RC_CODEX_TASK_TEMPLATE:-$HOME/.ai-control/task-codex-template.yaml}"
+  [[ -f "$template" ]] || fail "шаблон задачи не найден: $template (AI_RC_TASK_TEMPLATE)" 2
+  local specfile; specfile=$(mktemp)
+  if ! python3 - "$name" "$project_path" "$text" "$template" \
+      > "$specfile" 2>"$specfile.err" <<'PY'
+import json, re, sys
+name, project, goal, tmpl_path = sys.argv[1:5]
+with open(tmpl_path) as f:
+    tmpl = f.read()
+subs = {"name": json.dumps(name, ensure_ascii=False),
+        "project": json.dumps(project, ensure_ascii=False),
+        "goal": json.dumps(goal, ensure_ascii=False)}
+sys.stdout.write(re.sub(r"\{\{(name|project|goal)\}\}",
+                        lambda m: subs[m.group(1)], tmpl))
+PY
+  then
+    local rerr; rerr=$(cat "$specfile.err")
+    rm -f "$specfile" "$specfile.err"
+    fail "шаблон задачи не читается: $rerr" 2
+  fi
+  rm -f "$specfile.err"
+  if ! yq eval '.' "$specfile" >/dev/null 2>"$specfile.err"; then
+    local yerr; yerr=$(cat "$specfile.err")
+    rm -f "$specfile" "$specfile.err"
+    fail "шаблон задачи невалиден (YAML после подстановки): $yerr" 2
+  fi
+  rm -f "$specfile.err"
+  # поля рендера - для сверки с уже существующим агентом (ниже, аудит
+  # major 1); читаем ДО удаления specfile
+  if [[ "$engine" == "codex" ]]; then
+    [[ "$(yq -r '.engine' "$specfile")" == "codex" && "$(yq -r '.type' "$specfile")" == "event" && "$(yq -r '.runtime' "$specfile")" == "drain" && "$(yq -r '.workspace' "$specfile")" == "worktree" ]] || { rm -f "$specfile"; fail "incompatible Codex task template" 2; }
+    [[ "$(yq -r '.limits.week_usd_cap // 0' "$specfile")" == "0" ]] || { rm -f "$specfile"; fail "Codex USD cost is unknown" 2; }
+  fi
+  local rendered_ws; rendered_ws=$(yq -r '.workspace // "none"' "$specfile")
+
+  # --- 3. create: "уже есть" (exit 4, already exists) - трактуется как ok
+  # ТОЛЬКО если это действительно та же задача (аудит V2.7a, major 1):
+  # совпадают type/project/workspace. Иначе вручную заведенный event-агент
+  # с именем task-tg<update_id> принял бы в свой spool недоверенный текст
+  # и был бы запущен - возможно, на другом проекте и с более широким
+  # поясом прав. Прочий отказ create - пробрасывается как есть.
+  local created="created" create_err="" crc=0
+  create_err=$(cmd_create "$name" --spec "$specfile" 2>&1 >/dev/null) && crc=0 || crc=$?
+  if [[ "$crc" == 4 && "$create_err" == *"already exists"* ]]; then
+    local ex_type ex_project ex_ws ex_engine
+    ex_engine=$(yq -r '.engine // "claude"' "$AGENTS_DIR/$name/spec.yaml")
+    ex_type=$(yq -r '.type // ""' "$AGENTS_DIR/$name/spec.yaml")
+    ex_project=$(yq -r '.project // ""' "$AGENTS_DIR/$name/spec.yaml")
+    ex_ws=$(yq -r '.workspace // "none"' "$AGENTS_DIR/$name/spec.yaml")
+    if [[ "$ex_engine" != "$engine" || "$ex_type" != "event" || "$ex_project" != "$project_path" \
+          || "$ex_ws" != "$rendered_ws" ]]; then
+      rm -f "$specfile"
+      fail "агент '$name' уже существует с другим engine/type/project/workspace - не та же задача, отказ" 4
+    fi
+    created="existing"
+  elif [[ "$crc" != 0 ]]; then
+    rm -f "$specfile"
+    fail "$create_err" "$crc"
+  fi
+  rm -f "$specfile"
+
+  # --- 3b. project_name (V2.7b §1 п.6): имя пришло аргументом --project,
+  # искать по пути незачем - фиксируем его точно, перекрывая догадку
+  # cmd_create на случай, если два имени реестра указывают на один путь.
+  local cur_pn; cur_pn=$(jget "$(read_control "$AGENTS_DIR/$name")" 'd.get("project_name") or ""')
+  if [[ "$cur_pn" != "$project" ]]; then
+    local pn_json; pn_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$project")
+    "$IO" control-cas "$AGENTS_DIR/$name" --set "project_name=$pn_json" \
+      --event project_name_fixed --actor new-task >/dev/null
+  fi
+
+  # --- 4. spool-put --id (дедуп продюсера гасит повтор, §1 шаг3); id по
+  # имени - имя уже однозначно адресует апдейт (task-tg<update_id>) ---
+  "$BIN_DIR/ai-agent-run" spool-put "$name" --text "$text" \
+    --producer tgbot --id "tg:$name" >/dev/null
+
+  # Creation/spool publication is durable; start takes this same name lock
+  # itself. Release before entering it rather than recursively flocking.
+  flock -u "$lockfd"
+  exec {lockfd}>&-
+
+  # --- 5. start: CAS paused->running; уже running - ok, без повторного CAS
+  # (§1 шаг4) ---
+  local started
+  local cur_desired; cur_desired=$(jget "$(read_control "$AGENTS_DIR/$name")" 'd["desired"]')
+  if [[ "$cur_desired" == "running" ]]; then
+    started="running"
+  else
+    cmd_start "$name" idempotent >/dev/null
+    started="started"
+  fi
+  echo "$name $created $started"
+}
+
+# ------------------------------------------------------- desired transitions
+
+read_control() { "$IO" control-read "$1"; }
+
+cmd_start() (
+  local dir identity incarnation lockfd c; dir=$(agent_dir "$1")
+  c=$(read_control "$dir") || return 3
+  incarnation=$(jget "$c" 'd.get("incarnation")')
+  identity=$(stat -Lc '%d:%i' "$dir") || return 3
+  mkdir -p "$AGENTS_DIR/.locks"
+  exec {lockfd}>"$AGENTS_DIR/.locks/new-task-$1.lock"
+  flock -x "$lockfd"
+  [[ -d "$dir" && "$(stat -Lc '%d:%i' "$dir" 2>/dev/null)" == "$identity" ]] \
+    || fail "agent incarnation changed before start" 4
+  [[ ! -f "$(dirname "$AGENTS_DIR")/tombstones/$1.json" ]] \
+    || fail "задача архивирована" 4
+  c=$(read_control "$dir") || return 3
+  [[ "$(jget "$c" 'd.get("incarnation")')" == "$incarnation" ]] \
+    || fail "agent incarnation changed before start" 4
+  # Concurrent /new publishers can both observe paused before entering this
+  # lock. Only that internal idempotent path accepts an already-running task.
+  if [[ "${2:-}" == "idempotent" && "$(jget "$c" 'd["desired"]')" == "running" ]]; then
+    return 0
+  fi
+  local acc att
+  acc=$(jget "$c" 'd["acceptance"]["status"]')
+  att=$(jget "$c" 'd["attention"]["reason"] if d["attention"] else ""')
+  [[ "$acc" == "accepted" || "$acc" == "rejected" ]] \
+    && fail "миссия завершена ($acc) - завершенный агент не воскресает, создай нового" 4
+  local att_expect='attention=null'
+  if [[ -n "$att" ]]; then
+    # event: разрешающие reasons §16.1 захват не блокируют - start валиден
+    # (лекарство = drain); прочие/неизвестные - fail-closed (ревью-3, п.9)
+    local et=""
+    [[ "$(yq -r '.type // ""' "$dir/spec.yaml" 2>/dev/null)" == "event" ]] \
+      && [[ " inbox_wedged infra_down crash_loop dlq_overflow " == *" $att "* ]] \
+      && et=allowed
+    [[ -n "$et" ]] \
+      || fail "attention: $att - сначала ai-rc agent resolve $1" 4
+    att_expect="attention.reason=\"$att\""
+  fi
+  # attention пинуется в CAS-expect: смена reason между чтением и записью
+  # проваливает переход, а не проскакивает (ревью-4, п.5)
+  "$IO" control-cas "$dir" --expect 'desired="paused"' \
+    --expect "$att_expect" \
+    --set 'desired="running"' --event agent_start --actor operator >/dev/null \
+    || fail "недопустимый переход (desired не paused / attention сменился?)" 4
+  echo "$1: desired=running (reconciler поднимет в ближайший проход)"
+)
+
+cmd_pause() {
+  local dir; dir=$(agent_dir "$1")
+  "$IO" control-cas "$dir" --expect 'desired="running"' \
+    --set 'desired="paused"' --event agent_pause --actor operator >/dev/null \
+    || fail "недопустимый переход (desired не running?)" 4
+  echo "$1: desired=paused (рантайм погасит reconciler)"
+}
+
+native_barrier() {
+  local dir; dir=$(agent_dir "$1")
+  local engine; engine=$(yq -r '.engine // "claude"' "$dir/spec.yaml")
+  if [[ "$engine" != "codex" ]] && [[ "$(yq -r '.codex_state_id // ""' "$dir/control.json")" != "" ]]; then fail "Codex engine drift refuses destructive action" 2; fi
+  case "$engine" in
+    claude) return 0 ;;
+    codex) "$BIN_DIR/codex-task-runtime" barrier "$dir" --reason "$2" >/dev/null || fail "Codex native drain is unconfirmed" 2 ;;
+    *) fail "unsupported engine" 2 ;;
+  esac
+}
+
+cmd_stop() {
+  native_barrier "$1" shutdown
+  local dir; dir=$(agent_dir "$1")
+  local c d0; c=$(read_control "$dir"); d0=$(jget "$c" 'd["desired"]')
+  [[ "$d0" == "stopped" ]] && { echo "$1: уже stopped"; return 0; }
+  "$IO" control-cas "$dir" --expect "desired=\"$d0\"" \
+    --set 'desired="stopped"' --event agent_stop --actor operator >/dev/null
+  echo "$1: desired=stopped"
+}
+
+# ------------------------------------------------------------- attention ops
+
+cmd_resolve() {
+  native_barrier "$1" recovery
+  local name="$1"; shift
+  local dir; dir=$(agent_dir "$name")
+  local mode="" extend=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --resume) mode=resume; shift ;;
+      --stop)   mode=stop; shift ;;
+      --extend-hours) extend="$2"; shift 2 ;;
+      *) fail "unknown arg: $1" ;;
+    esac
+  done
+  [[ -n "$mode" ]] || fail "resolve требует --resume или --stop"
+  local c reason
+  c=$(read_control "$dir")
+  reason=$(jget "$c" 'd["attention"]["reason"] if d["attention"] else ""')
+  [[ -n "$reason" ]] || fail "attention не установлен" 4
+  if [[ "$reason" == "mission_timeout" && "$mode" == "resume" && -z "$extend" ]]; then
+    fail "mission_timeout: --resume требует --extend-hours N (иначе таймаут вернется немедленно)" 4
+  fi
+  local args=(--expect "attention.reason=\"$reason\"" --set 'attention=null'
+              --event attention_resolved --actor operator)
+  [[ "$mode" == "stop" ]] && args+=(--set 'desired="stopped"')
+  if [[ -n "$extend" ]]; then
+    [[ "$extend" =~ ^[0-9]+$ ]] || fail "--extend-hours: нужно целое число"
+    local cur; cur=$(jget "$c" 'd["deadline_extension_h"]')
+    args+=(--set "deadline_extension_h=$((cur + extend))")
+  fi
+  "$IO" control-cas "$dir" "${args[@]}" >/dev/null
+  echo "$name: attention '$reason' снят (${mode}${extend:+, +${extend}h})"
+}
+
+cmd_revise() {
+  local name="$1"; shift
+  local dir; dir=$(agent_dir "$name")
+  local note=""
+  [[ "${1:-}" == "--note" && -n "${2:-}" ]] && note="$2"
+  [[ -n "$note" ]] || fail "revise требует --note \"...\""
+  local note_json detail_json
+  note_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$note")
+  # Д0 (7b): сырой note в detail события - источник (a) harvester'а. Маскировка
+  # секретов - на экспорте (Д5), не при записи (локальный лог = операторский
+  # текст класса commit-message). best-effort: не под одной транзакцией с set.
+  detail_json=$(python3 -c 'import json,sys; print(json.dumps({"note": sys.argv[1]}))' "$note")
+  "$IO" control-cas "$dir" \
+    --expect 'acceptance.status="needs-human"' \
+    --set 'acceptance.status="revise"' --set "acceptance.note=$note_json" \
+    --event acceptance_revise --actor operator --detail "$detail_json" >/dev/null \
+    || fail "revise допустим только из needs-human" 4
+  echo "$name: revise принят (reconciler погасит рантайм и перезапустит с новым поколением)"
+}
+
+cmd_accept_reject() {
+  local verdict="$1" name="$2"; shift 2
+  local dir; dir=$(agent_dir "$name")
+  local reason=""
+  [[ "${1:-}" == "--reason" && -n "${2:-}" ]] && reason="$2"
+  [[ "$verdict" == "rejected" && -z "$reason" ]] \
+    && fail "reject требует --reason \"...\""
+  local c st claim
+  c=$(read_control "$dir")
+  st=$(jget "$c" 'd["acceptance"]["status"]')
+  [[ "$st" == "accepted" || "$st" == "rejected" ]] \
+    && fail "вердикт уже вынесен: $st" 4
+  claim=$("$IO" state-read "$dir" | python3 -c \
+    'import json,sys
+d=json.load(sys.stdin)
+print((d or {}).get("agent_claim",""))')
+  [[ "$claim" == "done" || "$st" == "needs-human" ]] \
+    || fail "claim не выставлен (agent_claim=$claim, acceptance=$st)" 4
+  # Терминальный вердикт + desired=stopped - ОДНОЙ записью (§4.3, §8.3)
+  local args=(--expect "acceptance.status=\"$st\""
+              --set "acceptance.status=\"$verdict\""
+              --set 'acceptance.verdict_by="operator"'
+              --set "acceptance.checked_at=\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+              --set 'desired="stopped"'
+              --event "acceptance_$verdict" --actor operator)
+  # Д0 (7b): reason в detail события - источник (a) harvester'а (для reject;
+  # accept-ноты collector игнорит). Маскировка на экспорте (Д5), не при записи.
+  if [[ -n "$reason" ]]; then
+    args+=(--set "acceptance.note=$(python3 -c \
+      'import json,sys; print(json.dumps(sys.argv[1]))' "$reason")")
+    args+=(--detail "$(python3 -c \
+      'import json,sys; print(json.dumps({"note": sys.argv[1]}))' "$reason")")
+  fi
+  "$IO" control-cas "$dir" "${args[@]}" >/dev/null
+  echo "$name: $verdict (терминально; desired=stopped той же записью)"
+}
+
+# --------------------------------------------------------------- task-cancel
+
+# Отмена ненужной задачи (INV-TASK-54, docs/dev/2026-09-19-spec-task-cancel.md).
+# Работает поверх done-verdict --cancel (durable-FSM done.json) и НЕ имеет
+# отношения к accept/reject выше - те про acceptance.status в control.json,
+# другую и более старую машину.
+cmd_task_cancel() {
+  native_barrier "$1" cancel
+  local name="$1"; shift
+  local dir; dir=$(agent_dir "$name")
+  local force=0 comment=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force) force=1; shift ;;
+      --comment) [[ -n "${2:-}" ]] || fail "--comment требует текст"; comment="$2"; shift 2 ;;
+      *) fail "unknown arg: $1" ;;
+    esac
+  done
+  # Гейт грязного дерева (§"Принятые размены"): уборка отмененной задачи
+  # сносит worktree вместе с незакоммиченным, поэтому потеря подтверждается
+  # флагом. Неизвестный исход git status - тоже повод требовать флаг
+  # (fail-closed): "не смогли узнать" не равно "чисто".
+  if [[ $force -eq 0 && -d "$dir/work" ]]; then
+    local dirty rc_status=0
+    dirty=$(git -C "$dir/work" status --porcelain 2>/dev/null) || rc_status=$?
+    if [[ $rc_status -ne 0 ]]; then
+      fail "не удалось проверить worktree $dir/work (git status, код $rc_status) - отмена остановлена; повторите с --force, если работа не нужна" 4
+    fi
+    if [[ -n "$dirty" ]]; then
+      fail "в worktree есть незакоммиченная работа - отмена ее уничтожит; повторите с --force, если результат не нужен" 4
+    fi
+  fi
+  local args=("$BIN_DIR/ai-agent-run" done-verdict "$dir" --cancel)
+  [[ -n "$comment" ]] && args+=(--comment "$comment")
+  local out rc=0
+  out=$("${args[@]}") || rc=$?
+  [[ $rc -eq 0 ]] || fail "отмена не применена (done-verdict: код $rc, ${out:-без вывода})" "$rc"
+  if [[ "$out" == "already" ]]; then
+    echo "$name: задача уже отменена (повтор ничего не изменил)"
+  else
+    echo "$name: задача отменена - интеграции не будет, уборка и архив пройдут штатно"
+  fi
+}
+
+# ------------------------------------------------------------------- status
+
+cmd_status() {
+  local dir; dir=$(agent_dir "$1")
+  local c s
+  c=$(read_control "$dir")
+  if [[ "$(yq -r '.engine // "claude"' "$dir/spec.yaml")" == "codex" ]]; then echo "engine=codex USD=неизвестно"; fi
+  s=$("$IO" state-read "$dir")
+  # event: сводка inbox под общей таблицей
+  if [[ "$(yq -r '.type // ""' "$dir/spec.yaml" 2>/dev/null)" == "event" ]]; then
+    _status_table "$1" "$c" "$s"
+    local ist
+    if ist=$("$BIN_DIR/ai-agent-run" inbox-status "$dir" 2>/dev/null); then
+      python3 - "$ist" "$(yq -r '.engine // "claude"' "$dir/spec.yaml")" <<'PY'
+import json, sys
+d = json.loads(sys.argv[1])
+u = d.get("usage") or {}
+if len(sys.argv)>2 and sys.argv[2]=="codex":
+    u["cost_usd"]="неизвестно"
+print("  inbox: pending=%s inflight=%s done=%s dlq=%s quarantined=%s cursor=%s"
+      % (d.get("pending"), d.get("inflight"), d.get("done"),
+         d.get("deadletter"), d.get("quarantined"), d.get("cursor")))
+print("  budget: day=%s week=%s cost=$%s%s"
+      % (u.get("day_runs", 0), u.get("week_runs", 0),
+         u.get("cost_usd", 0),
+         " EXHAUSTED до " + u["exhausted_until"]
+         if u.get("exhausted_until") else ""))
+PY
+    fi
+    return 0
+  fi
+  _status_table "$1" "$c" "$s"
+}
+
+_status_table() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import json, sys
+name, c, s = sys.argv[1], json.loads(sys.argv[2]), json.loads(sys.argv[3])
+lease, acc = c["lease"], c["acceptance"]
+rows = [
+  ("desired", c["desired"]),
+  ("generation", c["generation"]),
+  ("lease", "%s (unit=%s, socket=%s)" % (lease["state"], lease["unit"], lease["socket"])),
+  ("acceptance", acc["status"] + (" -> %s" % acc["artifact"] if acc["artifact"] else "")),
+  ("attention", (c["attention"] or {}).get("reason", "-")),
+  ("hold", c["hold"] or "-"),
+  ("started_at", c["started_at"] or "-"),
+]
+if s:
+    rows += [("phase", s["phase"]), ("claim", s["agent_claim"]),
+             ("status_line", s.get("status_line", "")),
+             ("iterations", s.get("iterations")),
+             ("next_wakeup", s.get("next_wakeup_at") or "-")]
+else:
+    rows += [("state", "нет отчета текущего поколения")]
+w = max(len(k) for k, _ in rows)
+print("agent: %s" % name)
+for k, v in rows:
+    print("  %-*s  %s" % (w, k, v))
+PY
+}
+
+cmd_list() {
+  [[ -d "$AGENTS_DIR" ]] || { echo "агентов нет ($AGENTS_DIR пуст)"; return 0; }
+  local found=0
+  printf '%-22s %-8s %-4s %-10s %-12s %-10s %s\n' \
+    NAME DESIRED GEN LEASE ACCEPTANCE ATTENTION HOLD
+  for dir in "$AGENTS_DIR"/*/; do
+    [[ -d "$dir" ]] || continue
+    local name; name=$(basename "$dir")
+    [[ "$name" =~ $NAME_RE ]] || continue
+    found=1
+    if ! c=$("$IO" control-read "$dir" 2>/dev/null); then
+      printf '%-22s %s\n' "$name" '!! control.json невалиден'
+      continue
+    fi
+    python3 - "$name" "$c" <<'PY'
+import json, sys
+n, d = sys.argv[1], json.loads(sys.argv[2])
+print("%-22s %-8s %-4s %-10s %-12s %-10s %s" % (
+    n, d["desired"], d["generation"], d["lease"]["state"],
+    d["acceptance"]["status"],
+    (d["attention"] or {}).get("reason", "-"), d["hold"] or "-"))
+PY
+  done
+  [[ "$found" == 1 ]] || echo "  (пусто)"
+}
+
+cmd_attach() {
+  local dir; dir=$(agent_dir "$1")
+  [[ "$(yq -r '.type // ""' "$dir/spec.yaml" 2>/dev/null)" == "event" ]] \
+    && fail "attach неприменим к event-агенту (§4.2); смотри status/dlq" 4
+  local c sock
+  c=$(read_control "$dir")
+  sock=$(jget "$c" 'd["lease"]["socket"] or ""')
+  [[ -n "$sock" ]] || fail "нет активного сокета (агент не запущен?)" 4
+  exec tmux -L "$sock" attach
+}
+
+cmd_dlq() { # разбор dead-letter + кварантина (Д6)
+  local dir; dir=$(agent_dir "$1"); shift
+  exec "$BIN_DIR/ai-agent-run" dlq "$dir" "$@"
+}
+
+cmd_inbox_restore() { # §4.2: единственный регламентный путь restore
+  local dir; dir=$(agent_dir "$1")
+  exec "$BIN_DIR/ai-agent-run" restore "$dir"
+}
+
+cmd_revoke_role() { # экстренный отзыв роли приёмщика (§8.8, этап 7).
+  # Durable CAS-поле в control.json каждого агента с этой ролью:
+  # сериализовано с терминальным CAS приёмки через seq по построению
+  # (ревью-2 этапа 7, атака 17 - файловый маркер имел TOCTOU).
+  local rname="$1" n=0
+  [[ "$rname" =~ ^[a-z][a-z0-9-]*$ ]] || fail "bad role name '$rname'"
+  for dir in "$AGENTS_DIR"/*/; do
+    [[ -f "$dir/reviewer-role/manifest.yaml" ]] || continue
+    [[ "$(yq -r '.role // ""' "$dir/reviewer-role/manifest.yaml")" == "$rname" ]] \
+      || continue
+    "$IO" control-cas "$dir" --set 'acceptance.reviewer_revoked=true' \
+      --event reviewer_role_revoked --actor operator >/dev/null 2>&1 \
+      && n=$((n+1))
+  done
+  echo "reviewer-role '$rname': отозвана у $n агентов (приемка уйдет в needs-human)"
+}
+
+# ----------------------------------------------------------------- dispatch
+
+[[ $# -ge 1 ]] || { usage; exit 2; }
+verb="$1"; shift
+case "$verb" in
+  create)  [[ $# -ge 1 ]] || fail "create <name> ..."; cmd_create "$@" ;;
+  new-task) cmd_new_task "$@" ;;
+  start)   [[ $# -eq 1 ]] || fail "start <name>";  check_name "$1"; cmd_start "$1" ;;
+  pause)   [[ $# -eq 1 ]] || fail "pause <name>";  check_name "$1"; cmd_pause "$1" ;;
+  stop)    [[ $# -eq 1 ]] || fail "stop <name>";   check_name "$1"; cmd_stop "$1" ;;
+  status)  [[ $# -eq 1 ]] || fail "status <name>"; check_name "$1"; cmd_status "$1" ;;
+  list)    cmd_list ;;
+  resolve) [[ $# -ge 2 ]] || fail "resolve <name> --resume|--stop"; check_name "$1"; cmd_resolve "$@" ;;
+  revise)  [[ $# -ge 3 ]] || fail "revise <name> --note \"...\"";   check_name "$1"; cmd_revise "$@" ;;
+  accept)  [[ $# -ge 1 ]] || fail "accept <name>"; check_name "$1"; cmd_accept_reject accepted "$@" ;;
+  reject)  [[ $# -ge 1 ]] || fail "reject <name> --reason ..."; check_name "$1"; cmd_accept_reject rejected "$@" ;;
+  task-cancel) [[ $# -ge 1 ]] || fail "task-cancel <name> [--force] [--comment ...]"; check_name "$1"; cmd_task_cancel "$@" ;;
+  attach)  [[ $# -eq 1 ]] || fail "attach <name>"; check_name "$1"; cmd_attach "$1" ;;
+  dlq)     [[ $# -ge 1 ]] || fail "dlq <name> [--requeue K|--drop K]"; check_name "$1"; cmd_dlq "$@" ;;
+  inbox-restore) [[ $# -eq 1 ]] || fail "inbox-restore <name>"; check_name "$1"; cmd_inbox_restore "$1" ;;
+  revoke-role) [[ $# -eq 1 ]] || fail "revoke-role <role-name>"; cmd_revoke_role "$1" ;;
+  -h|--help|help) usage ;;
+  *) fail "unknown verb '$verb' (see --help)" ;;
+esac

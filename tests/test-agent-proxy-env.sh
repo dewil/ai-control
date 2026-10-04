@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Tests for спека docs/dev/2026-09-19-spec-agent-proxy.md (тег INV-RECON-27):
-# прокси-триада (HTTP_PROXY/HTTPS_PROXY/NO_PROXY) переезжает из `claude-rc` в
-# общий `bin/_proxy_env.sh` и подключается оттуда обоими файлами - `claude-rc`
-# и `claude-agent-reconciler` (`acquire_agent`).
+# прокси-триада (HTTP_PROXY/HTTPS_PROXY/NO_PROXY) переезжает из `ai-rc` в
+# общий `bin/_proxy_env.sh` и подключается оттуда обоими файлами - `ai-rc`
+# и `ai-agent-reconciler` (`acquire_agent`).
 #
 # Реализации еще нет: файла `bin/_proxy_env.sh` не существует, поэтому все
 # проверки ниже КРАСНЫЕ. Основная часть (критерии 2-5) идет через прямой вызов
 # `proxy_setenv_args` из общего хелпера - функция вызывается напрямую, а не
-# через claude-rc или reconciler целиком. Критерий 1 и факт подключения в
+# через ai-rc или reconciler целиком. Критерий 1 и факт подключения в
 # acquire_agent проверяются грепом по файлам - это проверка проводки (что файл
 # существует и подключен через `.`), а не поведения функции.
 set -u
@@ -15,8 +15,8 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/.."
 PROXY_ENV_SH="$ROOT/bin/_proxy_env.sh"
-RC_BIN="$ROOT/bin/claude-rc"
-RECONCILER_BIN="$ROOT/bin/claude-agent-reconciler"
+RC_BIN="$ROOT/bin/ai-rc"
+RECONCILER_BIN="$ROOT/bin/ai-agent-reconciler"
 MANIFEST="$ROOT/scripts.manifest"
 
 TMP="$(mktemp -d)"
@@ -26,7 +26,7 @@ PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1" >&2; }
 
-# --- критерий 1: функция переехала в общий файл, у claude-rc своей копии нет ---
+# --- критерий 1: функция переехала в общий файл, у ai-rc своей копии нет ---
 # (проводка, не поведение: смотрим на текст файлов, а не на результат вызова)
 
 if [[ -f "$PROXY_ENV_SH" ]]; then ok
@@ -36,19 +36,19 @@ if [[ -f "$PROXY_ENV_SH" ]] && grep -q 'proxy_setenv_args *()' "$PROXY_ENV_SH"; 
 else fail "bin/_proxy_env.sh не определяет proxy_setenv_args"; fi
 
 if ! grep -q 'proxy_setenv_args *()' "$RC_BIN"; then ok
-else fail "claude-rc все еще содержит свою копию proxy_setenv_args"; fi
+else fail "ai-rc все еще содержит свою копию proxy_setenv_args"; fi
 
 if grep -q '_proxy_env\.sh' "$RC_BIN"; then ok
-else fail "claude-rc не подключает bin/_proxy_env.sh"; fi
+else fail "ai-rc не подключает bin/_proxy_env.sh"; fi
 
 if grep -q '_proxy_env\.sh' "$RECONCILER_BIN"; then ok
-else fail "claude-agent-reconciler не подключает bin/_proxy_env.sh"; fi
+else fail "ai-agent-reconciler не подключает bin/_proxy_env.sh"; fi
 
 # Факт подключения именно в acquire_agent: proxy-переменные должны где-то
 # использоваться в reconciler (иначе подключение файла - мертвый импорт, а не
 # реальная проводка в run_args агента).
 if grep -q 'PROXY_SETENV\|proxy_setenv_args' "$RECONCILER_BIN"; then ok
-else fail "claude-agent-reconciler не использует proxy_setenv_args/PROXY_SETENV нигде в файле"; fi
+else fail "ai-agent-reconciler не использует proxy_setenv_args/PROXY_SETENV нигде в файле"; fi
 
 # --- поведение общей функции: подключаем хелпер напрямую, зовем proxy_setenv_args ---
 

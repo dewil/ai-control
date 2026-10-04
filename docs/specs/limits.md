@@ -6,7 +6,7 @@
 
 ## Границы
 
-**Входит:** периодический пробник остатка лимитов (`bin/claude-agent-limits-digest`),
+**Входит:** периодический пробник остатка лимитов (`bin/ai-agent-limits-digest`),
 монотонный клэмп на занижения реплик провайдера, кэш последнего снимка,
 рендер панели (проценты, градусник, память хоста), дедуп отправки по
 сигнатуре, автовосстановление протухшего Claude-токена дешевым прогоном.
@@ -15,15 +15,15 @@
 
 - сама отправка сообщения в Telegram (транспорт, whitelist, форматирование
   карточек бота) - `BOT/tgbot.md`, здесь только факт вызова
-  `claude-agent-tgbot notify --pre`;
+  `ai-agent-tgbot notify --pre`;
 - живучесть таймера как systemd-юнита, сторожа, жнец зомби - `RECON/reconciler.md`;
-- дайджест канона (`~/.claude-control/canon/digest/`) - тот же термин
+- дайджест канона (`~/.ai-control/canon/digest/`) - тот же термин
   "дайджест", другой домен (`CANON`), общего кода нет.
 
 ## Инварианты
 
 - **INV-LIM-01.** Пробник снимает остаток раз в 15 минут
-  (`claude-agent-limits-digest.timer`, `OnCalendar=*:0/15`), а не чаще.
+  (`ai-agent-limits-digest.timer`, `OnCalendar=*:0/15`), а не чаще.
   Довод: Claude usage-эндпоинт держит rate-limit порядка 1 запроса/180с;
   15 минут дают запас без риска забанить собственный опрос.
 - **INV-LIM-02.** Панель уходит в Telegram только при изменении сигнатуры
@@ -71,13 +71,13 @@
   останавливать весь дайджест из-за одного запертого раздела.
 - **INV-LIM-10.** Рендер панели умеет два независимых режима: `once`
   (снять+сравнить+возможно отправить, с рубильником
-  `CLAUDE_AGENT_LIMITS_ENABLED`) и `render` (собрать панель из уже
+  `AI_AGENT_LIMITS_ENABLED`) и `render` (собрать панель из уже
   сохраненного кэша без сетевого похода к провайдерам). `/limits` бота
   использует только второй режим. Довод: команда пользователя из чата не
   должна тратить rate-limit провайдера и не должна зависеть от сетевой
   доступности в момент запроса.
 - **INV-LIM-11.** Данные считаются устаревшими (`stale`, порог
-  `CLAUDE_AGENT_LIMITS_STALE_MIN`, дефолт 45 минут) в `render`, если кэш не
+  `AI_AGENT_LIMITS_STALE_MIN`, дефолт 45 минут) в `render`, если кэш не
   обновлялся дольше порога. Довод: без явного порога "устарело" молчаливый
   таймер, переставший тикать (упавший systemd-юнит), выглядел бы для
   пользователя как последнее известное состояние, а не как отказ.
@@ -111,24 +111,24 @@
   (оба - через mihomo, `LIMITS_PROBE_PROXY`, дефолт `http://127.0.0.1:7890`);
   `~/.claude/.credentials.json` (Claude-токен); `/data/.codex/auth.json`
   (Codex-токен, требует смонтированного `/data`); env-переменные
-  `CLAUDE_AGENT_LIMITS_TZ`, `CLAUDE_AGENT_LIMITS_ENABLED`,
-  `CLAUDE_AGENT_LIMITS_STALE_MIN`, `LIMITS_PROBE_PROXY`,
+  `AI_AGENT_LIMITS_TZ`, `AI_AGENT_LIMITS_ENABLED`,
+  `AI_AGENT_LIMITS_STALE_MIN`, `LIMITS_PROBE_PROXY`,
   `LIMITS_PROBE_CLAUDE_CREDS`, `LIMITS_PROBE_CODEX_AUTH`,
   `LIMITS_PROBE_DATA_MOUNT`, `LIMITS_PROBE_CLAUDE_UA`;
-  учетные данные бота `CLAUDE_AGENT_TG_TOKEN`/`_WHITELIST`/`_PROXY`.
-- **Пишет:** кэш снимка `~/.claude-control/limits/last.json`; стейт клэмпа
-  `~/.claude-control/limits/clamp.json` (ключ вида
+  учетные данные бота `AI_AGENT_TG_TOKEN`/`_WHITELIST`/`_PROXY`.
+- **Пишет:** кэш снимка `~/.ai-control/limits/last.json`; стейт клэмпа
+  `~/.ai-control/limits/clamp.json` (ключ вида
   `claude:seven_day`/`codex:scoped:fable`); панель в личку оператора через
-  `claude-agent-tgbot notify --pre`; лог решения об отправке в journalctl.
-- **systemd:** `claude-agent-limits-digest.timer` (`OnCalendar=*:0/15`,
+  `ai-agent-tgbot notify --pre`; лог решения об отправке в journalctl.
+- **systemd:** `ai-agent-limits-digest.timer` (`OnCalendar=*:0/15`,
   `Persistent=true` - наверстывает пропуск после простоя хоста).
-- **CLI:** `claude-agent-limits-digest {once [--dry-run], render}`; `/limits`
-  в `claude-agent-tgbot` вызывает `render` из кэша, сети не трогает.
+- **CLI:** `ai-agent-limits-digest {once [--dry-run], render}`; `/limits`
+  в `ai-agent-tgbot` вызывает `render` из кэша, сети не трогает.
 
 ## Решения
 
-- **2026-07-17.** Дайджест лимитов переехал целиком в claude-control
-  (`bin/claude-agent-limits-digest`) с прежней цепочки
+- **2026-07-17.** Дайджест лимитов переехал целиком в ai-control
+  (`bin/ai-agent-limits-digest`) с прежней цепочки
   llm-probe -> POST adm -> cactus-digest; старые юниты и файлы на VM
   удалены, в cactus-adm выставлен `MONITORING_LIMITS_DIGEST_ENABLED=false`.
   Демонтаж кода в cactus-adm - по отдельному handoff, только по явному
@@ -201,7 +201,7 @@
    релиза, учитывая что нарушение - прямая утечка секрета?
 3. Разметка тестов тегами `INV-LIM-NN` - делать отдельной задачей сейчас
    или откладывать до аудита домена?
-4. `WINDOW_MATCH_S=300` и `CLAUDE_AGENT_LIMITS_STALE_MIN=45` (дефолт) -
+4. `WINDOW_MATCH_S=300` и `AI_AGENT_LIMITS_STALE_MIN=45` (дефолт) -
    фиксировать эти числа как часть инварианта (что и сделано выше) или
    держать как параметр эксплуатации без гарантии в спеке?
 5. INV-LIM-05 (нет авто-сброса при падении used без смены окна) назван
