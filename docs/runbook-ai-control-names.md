@@ -20,13 +20,13 @@ sudo systemctl disable --now claude-control-web.service claude-control-web-broke
 systemctl --user list-units --state=active --no-legend --plain
 ```
 
-Проверить Git markers во **всех трёх** product roots, не только `agents/`. Actual host inventory содержит **пять linked `.git` files**: три `agents/*/work` и два control-owned `canon/worktrees/*/*`. Common repositories двух cache entries — nonbare `canon/repos/*`, внутри перемещаемого state root. Прежний agent-only three-entry inventory был неполным. Helper остаётся строгим: любой оставшийся linked `.git` marker блокирует move. Contract — [naming-topology.md](specs/naming-topology.md).
+Проверить Git markers во **всех трёх** product roots, не только `agents/`. Actual host inventory содержит **пять linked `.git` files**: три `agents/*/work` и два control-owned `canon/worktrees/*/*`. Common repositories двух cache entries — nonbare `canon/repos/*`, внутри перемещаемого state root. Прежний agent-only three-entry inventory был неполным. Последующий preflight установил, что только один agent marker имеет действующую Git registration; два других — accepted/stopped historical_orphan с уже отсутствующими external repositories. Их нельзя объявлять восстановленными Git worktrees. Contract — [naming-historical-records.md](specs/naming-historical-records.md). Helper остаётся строгим: любой оставшийся linked `.git` marker блокирует move. Contract — [naming-topology.md](specs/naming-topology.md).
 
-До mutation создать один private owner700/mode600 five-entry plan. Поля каждого entry: `role` agent/cache; `old`, `staged`, `canonical`; `old_repository`, `canonical_repository`; `old_common_git`, `canonical_common_git`; HEAD/branch (null для detached HEAD); Git dirty status; private byte/mode evidence; directory dev/inode. Инвентаризация всех roots обязана закончиться до первого staging move. Task/project paths и содержимое не печатать:
+До mutation создать один private owner700/mode600 five-entry plan. Поля каждого entry: `role` agent/cache/historical_orphan; `old`, `staged`, `canonical`; `old_repository`, `canonical_repository`; `old_common_git`, `canonical_common_git`; HEAD/branch (null для detached HEAD); Git dirty status; private byte/mode evidence; directory dev/inode. Инвентаризация всех roots обязана закончиться до первого staging move. Task/project paths и содержимое не печатать:
 
 ```sh
 python3 - <<'PYPLAN'
-import hashlib, json, os, stat, subprocess
+import errno, fcntl, hashlib, json, os, re, stat, subprocess
 from pathlib import Path
 home = Path('/home/dwl')
 old, new = home / '.claude-control', home / '.ai-control'
@@ -39,6 +39,28 @@ def git(path, *args):
     return subprocess.check_output(['git', '-C', str(path), *args])
 def relocated(path):
     return new / path.relative_to(old) if path.is_relative_to(old) else path
+def absent(path):
+    try:
+        path.lstat()
+    except OSError as error:
+        if error.errno in (errno.ENOENT, errno.ENOTDIR):
+            return True
+        raise SystemExit('missing-path evidence unavailable')
+    return False
+def pairs(rows):
+    value = {}
+    for key, item in rows:
+        if key in value:
+            raise SystemExit('duplicate historical control field')
+        value[key] = item
+    return value
+manager = subprocess.run(['systemctl', '--user', 'list-units', '--state=active', '--no-legend', '--plain'], capture_output=True, timeout=10)
+if manager.returncode != 0:
+    raise SystemExit('writer inventory unavailable')
+for line in manager.stdout.decode(errors='replace').splitlines():
+    fields = line.split()
+    if fields and re.match(r'^(claude-control|claude-agent|ai-control|ai-agent|ccsession-|cctask-)', fields[0]) and fields[0].endswith(('.service', '.timer')):
+        raise SystemExit('active writer blocks operator plan')
 entries = []
 for root in roots:
     # A known config storage pointer is inventoried at its reviewed actual target.
@@ -67,6 +89,64 @@ for root in roots:
             role = 'cache'
         else:
             raise SystemExit('unknown linked worktree layout')
+        if role == 'agent':
+            spec_path, control_path = work.parent / 'spec.yaml', work.parent / 'control.json'
+            raw = subprocess.check_output(['yq', '-r', '.project', str(spec_path)], text=True).strip()
+            project = Path(raw).expanduser()
+            if not project.is_absolute() or os.path.normpath(str(project)) != str(project):
+                raise SystemExit('unsupported historical project path')
+            if absent(project):
+                for path in (spec_path, control_path):
+                    details = path.lstat()
+                    if not stat.S_ISREG(details.st_mode) or details.st_uid != os.getuid() or details.st_nlink != 1 or stat.S_IMODE(details.st_mode) != 0o600:
+                        raise SystemExit('historical control/spec ownership refused')
+                control = json.loads(control_path.read_bytes(), object_pairs_hook=pairs)
+                if type(control) is not dict or type(control.get('schema')) is not int or control['schema'] != 1 or control.get('desired') != 'stopped' or type(control.get('acceptance')) is not dict or control['acceptance'].get('status') != 'accepted':
+                    raise SystemExit('historical record is not accepted/stopped')
+                literal = marker.read_bytes()
+                match = re.fullmatch(rb'gitdir: (/[^\n\x00]+)\n?', literal)
+                if match is None:
+                    raise SystemExit('ambiguous historical Git marker')
+                gitdir = Path(os.fsdecode(match[1]))
+                if os.path.normpath(str(gitdir)) != str(gitdir) or gitdir.parent != project / '.git/worktrees' or gitdir.name in ('.', '..'):
+                    raise SystemExit('historical marker/project mismatch')
+                candidates = {project, relocated(project), gitdir, relocated(gitdir), project / '.git', relocated(project / '.git')}
+                if not all(absent(path) for path in candidates) or not absent(work / '.git.lock'):
+                    raise SystemExit('historical repository/lock candidate exists')
+                fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW)
+                try:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        raise SystemExit('historical marker lock held')
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd)
+                failed = subprocess.run(['git', '-C', str(work), 'rev-parse', '--git-common-dir'], capture_output=True)
+                if failed.returncode == 0:
+                    raise SystemExit('historical Git unexpectedly valid')
+                info = work.stat()
+                canonical, staged = relocated(work), staging / ('historical_orphan-' + str(len(entries)))
+                if os.path.lexists(canonical) or os.path.lexists(staged) or info.st_dev != home.stat().st_dev or info.st_uid != os.getuid():
+                    raise SystemExit('historical destination/ownership/device conflict')
+                evidence = []
+                for path in [work, *sorted(work.rglob('*')), control_path, spec_path]:
+                    details = path.lstat()
+                    if details.st_uid != os.getuid() or details.st_dev != info.st_dev:
+                        raise SystemExit('historical content ownership/device conflict')
+                    record = dict(path=str(path.relative_to(work.parent)), mode=stat.S_IMODE(details.st_mode))
+                    if stat.S_ISREG(details.st_mode):
+                        record['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+                    elif stat.S_ISLNK(details.st_mode):
+                        record['target'] = os.readlink(path)
+                    elif not stat.S_ISDIR(details.st_mode):
+                        raise SystemExit('unsupported historical content')
+                    evidence.append(record)
+                entries.append(dict(role='historical_orphan', old=str(work), staged=str(staged), canonical=str(canonical),
+                    device=info.st_dev, inode=info.st_ino, missing_project=str(project), missing_gitdir=str(gitdir),
+                    canonical_missing_project=str(relocated(project)), canonical_missing_gitdir=str(relocated(gitdir)),
+                    marker_hex=literal.hex(), marker_mode=stat.S_IMODE(marker.stat().st_mode), files=evidence))
+                continue
         common = Path(git(work, 'rev-parse', '--path-format=absolute', '--git-common-dir').decode().strip())
         repository = common.parent
         if common.name != '.git' or common.is_symlink() or not common.is_dir() or common.resolve() != common or common.stat().st_uid != os.getuid():
@@ -115,7 +195,7 @@ for root in roots:
             head=git(work, 'rev-parse', 'HEAD').decode().strip(), branch=branch.stdout.decode().strip() if branch.returncode == 0 else None,
             status_hex=git(work, 'status', '--porcelain=v1', '-z', '--untracked-files=all').hex(),
             device=info.st_dev, inode=info.st_ino, files=files))
-if len(entries) != 5 or sum(entry['role'] == 'agent' for entry in entries) != 3 or sum(entry['role'] == 'cache' for entry in entries) != 2:
+if len(entries) != 5 or sum(entry['role'] == 'agent' for entry in entries) != 1 or sum(entry['role'] == 'cache' for entry in entries) != 2 or sum(entry['role'] == 'historical_orphan' for entry in entries) != 2:
     raise SystemExit('expected five classified entries; reconcile full inventory before mutation')
 plan_dir.mkdir(mode=0o700)
 fd = os.open(plan_dir / 'worktrees.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -128,11 +208,13 @@ for directory in (plan_dir, home):
 PYPLAN
 ```
 
-Private plan данные, не shell instructions. До mutation сверить все пять entries, marker/common paths, bytes/modes и registration; unknown layout/count/refusal оставляет runtime stopped. Staging owner700 находится вне трёх moving roots, на том же filesystem. Для каждого entry переменные ниже берутся только из проверенного exact plan; не исполнять пути как shell code:
+Private plan данные, не shell instructions. До mutation сверить все пять entries, marker/common paths, bytes/modes и registration; unknown layout/count/refusal оставляет runtime stopped. Staging owner700 находится вне трёх moving roots, на том же filesystem. Для каждого valid agent/cache entry переменные ниже берутся только из проверенного exact plan; не исполнять пути как shell code:
 
 ```sh
-# Все пять entries; OLD_REPOSITORY — первоначальный common repository.
+# Три valid agent/cache entries; OLD_REPOSITORY — первоначальный common repository.
 git -C "$OLD_REPOSITORY" worktree move "$OLD_WORK" "$STAGED_WORK"
+# Два historical_orphan entries: whole-directory same-device rename, без Git.
+# Python os.rename(OLD_WORK, STAGED_WORK) после lstat/ownership/device/evidence проверки.
 # Повторно inventory all roots: linked .git files больше не остаются внутри.
 ai-control-migrate-names --home "$HOME" --dry-run
 ai-control-migrate-names --home "$HOME" --retain-checkpoint
@@ -144,13 +226,15 @@ git -C "$CANONICAL_REPOSITORY" worktree move "$STAGED_WORK" "$NEW_WORK"
 git -C "$OLD_REPOSITORY" worktree move "$STAGED_WORK" "$NEW_WORK"
 ```
 
-Команды cache/agent применять только к соответствующему role. Для всех пяти проверить exact Git registration через `git worktree list --porcelain`, `git -C "$NEW_WORK" rev-parse --path-format=absolute --git-common-dir`, HEAD/branch, dirty status, retained file bytes/modes и work directory dev/inode из private plan. Перенос common repository делает старый `.git` pointer staged cache недействительным; нельзя проверять cache или делать final move до exact repair из canonical repository. `git worktree repair` не разрешает unknown repos/paths и не заменяет проверку dirt. Не prune/delete `.git`, не reset/clean и не overwrite destination.
+Historical_orphan entries имеют отдельный opaque flow: ordinary `os.rename(old, staged)` перед helper и `os.rename(staged, canonical)` после helper, target обязан отсутствовать, filesystem/dev/inode и private file evidence проверены для всех пяти до первого move. Не использовать Git move/repair для orphan. Сохранить `.git` literal bytes/mode, все work files/links и control.json/spec.yaml bytes/modes неизменными; verify actual old/canonical missing candidates и уже-invalid Git marker до и после. Это перенос historical данных, не repair/registration acceptance. Не очищать stale lease. Unknown/nonaccepted/running/held-lock/active-writer evidence отказывает до plan/staging.
+
+Команды cache/agent применять только к соответствующему role. Для трёх valid entries проверить exact Git registration через `git worktree list --porcelain`, `git -C "$NEW_WORK" rev-parse --path-format=absolute --git-common-dir`, HEAD/branch, dirty status, retained file bytes/modes и work directory dev/inode из private plan. Перенос common repository делает старый `.git` pointer staged cache недействительным; нельзя проверять cache или делать final move до exact repair из canonical repository. `git worktree repair` не разрешает unknown repos/paths и не заменяет проверку dirt. Не prune/delete `.git`, не reset/clean и не overwrite destination.
 
 Если staging или helper отказал до root move, вернуть ранее staged entries через их OLD_REPOSITORY на точный OLD_WORK. После successful helper при partial final moves определить каждого из пяти ровно в staged либо canonical path по сохранённому dev/inode. Cache registration repair выполняется из canonical repository; external agent project не меняется. При исправимой причине final move продолжить только конкретный verified entry; unknown/missing/two-location state сохраняет plan/checkpoint и блокирует runtime.
 
-Для **полного rollback** после helper success сначала переместить все уже canonical entries обратно в STAGED_WORK через их текущие repositories. Для ещё staged cache сначала exact repair из canonical repository, если его pointer ещё старый. Затем выполнить metadata/validated receipt/root recovery ниже, сохранив plan и helper checkpoint. Только **после** возвращения roots common cache repository снова находится в OLD_REPOSITORY: выполнить `git -C "$OLD_REPOSITORY" worktree repair "$STAGED_WORK"`, затем `git -C "$OLD_REPOSITORY" worktree move "$STAGED_WORK" "$OLD_WORK"`. Agent entries вернуть в OLD_WORK через неизменившийся external repository. Для всех пяти сверить old registration/common directory, branch/HEAD, dirt bytes/modes/status/dev-inode и authoritative metadata; только после полного acceptance завершить checkpoint. При отказе retain evidence, не запускать runtime.
+Для **полного rollback** после helper success сначала переместить все уже canonical entries обратно в STAGED_WORK через их текущие repositories. Для ещё staged cache сначала exact repair из canonical repository, если его pointer ещё старый. Затем выполнить metadata/validated receipt/root recovery ниже, сохранив plan и helper checkpoint. Только **после** возвращения roots common cache repository снова находится в OLD_REPOSITORY: выполнить `git -C "$OLD_REPOSITORY" worktree repair "$STAGED_WORK"`, затем `git -C "$OLD_REPOSITORY" worktree move "$STAGED_WORK" "$OLD_WORK"`. Valid agent entry вернуть в OLD_WORK через неизменившийся external repository. Historical_orphan canonical directories сначала обычным same-device rename вернуть в staged, а после root restoration — в точный OLD_WORK; сохранить original `.git` и все opaque bytes/modes/control/spec/dev-inode, проверить что original marker остаётся уже-invalid. Никакого Git repair для orphan. Для трёх valid entries сверить old registration/common directory, branch/HEAD, dirt bytes/modes/status/dev-inode; для двух historical_orphan — opaque bytes/modes/control/spec/marker и исходный dev/inode без утверждения Git registration. Затем проверить authoritative metadata; только после полного acceptance завершить checkpoint. При отказе retain evidence, не запускать runtime.
 
-Existing stopped TASK store validation не требует cwd work directory существовать во время staging; перед runtime восстановить каждый canonical work. Synthetic five-entry forward/rollback proof включает оба cache common repositories внутри root и все dirty worktrees, не изменяет чужой project code/rules.
+Existing stopped TASK store validation не требует cwd work directory существовать во время staging; перед runtime восстановить каждый canonical work. Synthetic five-entry forward/rollback proof включает один valid agent, оба cache common repositories внутри root и два accepted/stopped opaque historical_orphan, не изменяет чужой project code/rules.
 
 
 ## Пользовательские данные
