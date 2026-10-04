@@ -43,6 +43,10 @@ Known-pattern masking включает весь установленный SECRE
 
 INV-WEB-09: canonical web command ai-control-web, package /opt/ai-control-web, private state /var/lib/ai-control-web, socket /run/ai-control-web/broker.sock and ai-control-web*.service. Broker delegates ai-agent trusted writers against ~/.ai-control/agents. Credentials/replay state preserve contents and permissions on migration. No legacy alias runtime for new installs. See naming.md for full migration contract.
 
+## Тёмная тема (04.10.2026)
+
+INV-WEB-10: интерфейс тёмный по умолчанию, включая login, поля/native controls, карточки, secondary buttons, notices/errors и keyboard focus. Text contrast и phone/desktop layout сохраняются. Theme не меняет auth/access/task operations. Traceability: visual390×844/1280×900 synthetic fixture; существующие web contracts/CI.
+
 ## Восстановление сессии при reload (04.10.2026)
 
 INV-WEB-11: GET /api/session возвращает существующий CSRF по действующей HttpOnly cookie, без создания сессии, продления TTL, TOTP или backend calls. Отсутствующая/истёкшая/отозванная cookie получает401, чужой explicit Origin —403; ответы no-store. UI bootstrap скрывает login до проверки, восстанавливает workspace и mutation CSRF либо показывает login после401. Transient failure оставляет retry восстановления без credentials; browser storage не используется. Traceability: tests/test_control_web_session_reload.py и synthetic browser reload/logout/retry.
