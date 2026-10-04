@@ -336,6 +336,38 @@ class StoppedMetadataMigrationContract(unittest.TestCase):
         reopened = fixture.Store(str(new_agent), state_root=str(new_root / 'codex-task-state'))
         self.assertIs(reopened.snapshot(deadline=time.monotonic() + 10)['reconciliation_required'], False)
 
+    def test_stopped_socket_target_relocates_preserving_identity_pairs(self):
+        for product_owned in (True, False):
+            with self.subTest(product_owned=product_owned):
+                # Each case gets its own private fixture home; prior completed roots
+                # must never be merged into a subsequent source fixture.
+                case_home = self.private / ('socket-product' if product_owned else 'socket-provider')
+                case_home.mkdir(mode=0o700)
+                self.home = case_home
+                self.env['HOME'] = str(case_home)
+                old_root = case_home / '.claude-control'
+                old_root.mkdir(mode=0o700)
+                fixture, operation, _ = self.make_operation()
+                old_host = Path(fixture.read_index()['operations'][operation]['host_state_dir'])
+                journal_path = old_host / 'journal.json'
+                journal = json.loads(journal_path.read_text())
+                target = old_host / 'native.sock' if product_owned else self.private / 'external-provider.sock'
+                identity = {'link': [123, 456], 'target_path': str(target), 'target': [789, 1011]}
+                journal['socket_identity'] = identity
+                journal_path.write_text(json.dumps(journal))
+                self.assertIs(fixture.store.snapshot(deadline=fixture.deadline)['reconciliation_required'], False,
+                              'nonnull identity fixture must validate before migration')
+                result = self.run_migration()
+                self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+                new_root = case_home / '.ai-control'
+                new_host = new_root / old_host.relative_to(old_root)
+                actual = json.loads((new_host / 'journal.json').read_text())['socket_identity']
+                expected = dict(identity, target_path=str(new_host / 'native.sock') if product_owned else str(target))
+                self.assertEqual(actual, expected)
+                reopened = fixture.Store(str(new_root / 'agents/taskone'),
+                                         state_root=str(new_root / 'codex-task-state'))
+                self.assertIs(reopened.snapshot(deadline=time.monotonic() + 10)['reconciliation_required'], False)
+
     def test_unknown_schema_refuses_before_any_root_move(self):
         fixture, _, _ = self.make_operation()
         record = fixture.read_index()
