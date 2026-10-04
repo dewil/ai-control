@@ -26,6 +26,19 @@ jobs:
           python -m py_compile bin/_control_web.py bin/_control_web_broker.py bin/claude-control-web
       - name: Installation regression
         run: |
+          # These install tests mock launchd; they need an inert CLI prerequisite,
+          # not a Claude account or a runnable agent on the hosted runner.
+          fixture_bin=$(mktemp -d "$RUNNER_TEMP/control-web-install.XXXXXX")
+          cat > "$fixture_bin/claude" <<'STUB'
+          #!/bin/sh
+          if [ "${1:-}" = --version ]; then
+            echo 'Claude inert installation fixture'
+            exit 0
+          fi
+          exit 99
+          STUB
+          chmod 700 "$fixture_bin/claude"
+          export CLAUDE_BIN="$fixture_bin/claude"
           bash tests/test-install-completeness.sh
           bash tests/test-install-idempotent.sh
           bash tests/test-install-macos-legacy.sh
