@@ -74,7 +74,7 @@ PYPLAN
 git -C "$PROJECT" worktree move "$OLD_WORK" "$STAGED_WORK"
 # После staging всего набора marker .git больше не находится в migrating roots.
 ai-control-migrate-names --home "$HOME" --dry-run
-ai-control-migrate-names --home "$HOME"
+ai-control-migrate-names --home "$HOME" --retain-checkpoint
 # Только после успешного receipt/metadata validation, для каждого entry:
 git -C "$PROJECT" worktree move "$STAGED_WORK" "$NEW_WORK"
 git -C "$PROJECT" worktree list --porcelain
@@ -92,7 +92,7 @@ Existing authoritative TASK store validation не требует cwd work direct
 
 ```sh
 ai-control-migrate-names --home "$HOME" --dry-run
-ai-control-migrate-names --home "$HOME"
+ai-control-migrate-names --home "$HOME" --retain-checkpoint
 ```
 
 Проверить receipt `.ai-control/naming-migration.json` (version1, только migrated_roots), права/bytes и authoritative TASK validator. Не запускать runtime, пока registry/index/journal/envelope/directory-identity не согласованы и Git worktrees не проверены. Helper обновляет только известные stopped authoritative metadata fields; UUID/token/dev/inode proofs сохраняются.
@@ -103,7 +103,7 @@ ai-control-migrate-names --home "$HOME"
 
 Whole old `codex-venv` переместить в private same-filesystem staging вне migrating roots, сохранив bytes/modes/symlink targets как rollback backup. До staging проверить stopped metadata: если executable/socket/cwd authoritative field ссылается внутрь staged venv и без него validator не проходит — отказ, не force. Новый canonical venv создать по принятому [Codex runbook](runbook-codex-sessions.md): `python3 -m venv ~/.local/share/ai-control/codex-venv`, затем его pip установить именно `websockets==15.0.1`, проверить interpreter imports/version и protected directory modes. Virtualenv shebangs содержат старые absolute paths, поэтому простая move-back прежнего venv в canonical path не считается восстановлением. Старый staged venv оставить приватным rollback evidence до принятой installed native acceptance; aliases к нему не создавать. При helper refusal вернуть whole staged venv в старое место до восстановления links. Известный live package inventory содержит pip24 и websockets15.0.1; unexpected packages требуют отдельной сверки pinned dependency contract.
 
-После config/links/venv/Git staging повторный generic dry-run обязан пройти; перед runtime восстановить все reviewed convenience links, canonical config pointer и worktrees, проверить bytes/modes/provider targets. Operator topology receipt mode600 фиксирует эти отдельные преобразования без секретов. Combined synthetic topology proof должен проверять все эти шаги вместе с stopped store.
+После config/links/venv/Git staging повторный generic dry-run обязан пройти; перед runtime восстановить все reviewed convenience links, canonical config pointer и worktrees, проверить bytes/modes/provider targets. Operator topology receipt mode600 фиксирует эти отдельные преобразования без секретов. После проверки всех entries в canonical Git registration, config bytes/modes, link literal targets, venv version и authoritative TASK/settings validation назначенный оператор завершает retained transaction: повторно сверяет owner700/no-symlinks checkpoint и whitelist plan, удаляет только перечисленные `N.original` и `plan.json`, затем пустой `.ai-control-naming-transaction`, выполняет fsync HOME. До этих проверок checkpoint не удалять, runtime не запускать; при final topology failure сохранённые originals позволяют reviewed rollback всей процедуры. Combined synthetic topology proof должен проверять все эти шаги вместе с stopped store.
 
 Содержимое config/env обновлять локально точными product env keys: CLAUDE_CONTROL_, CLAUDE_RC_, CLAUDE_AGENTS_, CLAUDE_AGENT_, CLAUDE_RECONCILER_, CLAUDE_TGBOT_, CLAUDE_HARVEST_, CLAUDE_EVENT_ → AI_*; CLAUDE_BACKUP_ENV→AI_BACKUP_ENV. Значения секретов не трогать и не печатать. Product-owned commands/paths менять только в trusted config; provider CLAUDE_BIN/CLAUDE_CONFIG_DIR/.claude/.codex сохраняются. Сравнить operator-modified templates/CLAUDE.md/settings с новыми примерами локально; менять только явно reviewed command/path fields. Installer автоматически обновляет только template с известным shipped hash.
 
@@ -115,7 +115,7 @@ Existing `$HOME/.ai-control-naming-transaction` блокирует apply и dry-
 
 После reviewed inventory восстановить **каждый** original metadata backup в соответствующем реально существующем root через новый private temp файл, fsync, atomic replace с исходным mode из плана. Не выводить содержимое. Затем для каждой пары, фактически находящейся в destination, выполнить same-filesystem move обратно в source; source до move обязан отсутствовать. Пары, уже находящиеся в source, не двигать. Каждый parent каталог fsync. Не делать blind reverse количества выполненных moves. Удалять только заведомо созданные пустые parent dirs; provider `.claude/.codex` не трогать.
 
-Проверить все restored original metadata bytes/modes против backups, old CodexTaskOperationStore.snapshot с reconciliation_required=False, directory dev/inode proofs и Git worktree registration/staging план. При неполной/неуспешной проверке checkpoint сохраняется и runtime остаётся остановлен. Только после verified restoration убрать именно этот checkpoint и fsync HOME; helper можно запускать повторно после исправления исходной причины. Caught write failure helper выполняет такой проверенный rollback сам; rollback failure оставляет checkpoint и сообщает recovery required. При полностью успешной migration checkpoint удаляется после durable receipt/authoritative validation.
+Проверить все restored original metadata bytes/modes против backups, old CodexTaskOperationStore.snapshot с reconciliation_required=False, directory dev/inode proofs и Git worktree registration/staging план. При неполной/неуспешной проверке checkpoint сохраняется и runtime остаётся остановлен. Только после verified restoration убрать именно этот checkpoint и fsync HOME; helper можно запускать повторно после исправления исходной причины. Caught write failure helper выполняет такой проверенный rollback сам; rollback failure оставляет checkpoint и сообщает recovery required. В операторской процедуре apply всегда использует `--retain-checkpoint`: durable receipt подтверждает только helper root/metadata phase. Original backups остаются до финальных Git moves, canonical config pointer, convenience links и venv validation. Default apply без этого флага подходит только для plain topology и удаляет checkpoint после своей durable validation.
 
 ## Root web state и новый пакет
 
