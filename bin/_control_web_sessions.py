@@ -17,6 +17,7 @@ from _codex_rc import CodexSessions, PROJECT_RE, canonical
 
 HISTORY_LIMIT = 96 * 1024
 RECEIPT_LIMIT = 10000
+NAMESPACE_ENTRY_LIMIT = 10002
 
 
 class RPCRejected(RuntimeError):
@@ -31,6 +32,11 @@ class _DomainError(Exception):
 def _need(condition, code='unavailable'):
     if not condition:
         raise _DomainError(code)
+
+
+def _budget(deadline):
+    # Check before/after bounded IO; kernel calls are not real-time preemptible.
+    _need(time.monotonic() < deadline)
 
 
 def valid_uuid(value):
@@ -92,30 +98,55 @@ class _Receipts:
         self.path = os.path.abspath(path)
 
     @staticmethod
-    def _check(fd, directory=False):
+    def _check(fd, deadline, directory=False):
+        _budget(deadline)
         info = os.fstat(fd)
+        _budget(deadline)
         _need((stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode))
               and info.st_uid == os.getuid()
               and stat.S_IMODE(info.st_mode) == (0o700 if directory else 0o600)
               and (directory or info.st_nlink == 1))
 
-    def _base(self, create):
+    @staticmethod
+    def _not_git(fd, deadline):
+        markers = {}
+        for name in ('.git', 'HEAD', 'objects', 'refs'):
+            _budget(deadline)
+            try:
+                markers[name] = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                markers[name] = None
+            _budget(deadline)
+        # Worktrees use a .git file. Any .git marker refuses storage, without
+        # opening it. Bare repositories are recognized by metadata alone.
+        _need(markers['.git'] is None)
+        _need(not (markers['HEAD'] is not None and stat.S_ISREG(markers['HEAD'].st_mode)
+                   and markers['objects'] is not None and stat.S_ISDIR(markers['objects'].st_mode)
+                   and markers['refs'] is not None and stat.S_ISDIR(markers['refs'].st_mode)))
+
+    def _base(self, create, deadline):
+        _budget(deadline)
         _need(self.path != '/data' and not self.path.startswith('/data/'))
         parts = self.path.split('/')[1:]
         fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
         try:
             for index, part in enumerate(parts):
+                self._not_git(fd, deadline)
                 _need(part not in ('', '.', '..'))
                 if create and index == len(parts) - 1:
                     try:
                         os.mkdir(part, 0o700, dir_fd=fd)
+                        _budget(deadline)
                         os.fsync(fd)
                     except FileExistsError:
                         pass
+                _budget(deadline)
                 child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
                 os.close(fd)
                 fd = child
-            self._check(fd, True)
+                _budget(deadline)
+            self._not_git(fd, deadline)
+            self._check(fd, deadline, True)
             return fd
         except Exception:
             os.close(fd)
@@ -126,28 +157,34 @@ class _Receipts:
         base = ns = lock = None
         try:
             try:
-                base = self._base(create)
+                base = self._base(create, deadline)
             except FileNotFoundError:
                 if create:
                     raise
+                _budget(deadline)
                 yield None
                 return
             name = hashlib.sha256((root + '\0' + sid).encode('utf-8')).hexdigest()
             if create:
+                _budget(deadline)
                 try:
                     os.mkdir(name, 0o700, dir_fd=base)
+                    _budget(deadline)
                     os.fsync(base)
                 except FileExistsError:
                     pass
+            _budget(deadline)
             try:
                 ns = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=base)
             except FileNotFoundError:
+                _budget(deadline)
                 yield None
                 return
-            self._check(ns, True)
+            self._check(ns, deadline, True)
+            _budget(deadline)
             lock = os.open('.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
                            0o600, dir_fd=ns)
-            self._check(lock)
+            self._check(lock, deadline)
             while True:
                 _need(time.monotonic() < deadline)
                 try:
@@ -157,35 +194,45 @@ class _Receipts:
                     time.sleep(min(.01, max(0, deadline - time.monotonic())))
             # Locks live on stable inodes; reject path replacement after waiting.
             info = os.stat(name, dir_fd=base, follow_symlinks=False)
+            _budget(deadline)
             opened = os.fstat(ns)
             _need((info.st_dev, info.st_ino) == (opened.st_dev, opened.st_ino))
             lock_info = os.stat('.lock', dir_fd=ns, follow_symlinks=False)
+            _budget(deadline)
             _need((lock_info.st_dev, lock_info.st_ino) ==
                   (os.fstat(lock).st_dev, os.fstat(lock).st_ino))
-            current_base = self._base(False)
+            current_base = self._base(False, deadline)
             try:
                 _need((os.fstat(current_base).st_dev, os.fstat(current_base).st_ino) ==
                       (os.fstat(base).st_dev, os.fstat(base).st_ino))
             finally:
                 os.close(current_base)
+            _budget(deadline)
             yield ns
         finally:
             for fd in (lock, ns, base):
                 if fd is not None:
                     os.close(fd)
 
-    def read(self, ns, root, sid, mid):
+    def read(self, ns, root, sid, mid, deadline):
+        _budget(deadline)
         if ns is None:
             return None
         try:
             fd = os.open(mid + '.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=ns)
         except FileNotFoundError:
+            _budget(deadline)
             return None
         try:
-            self._check(fd)
+            self._check(fd, deadline)
             _need(os.fstat(fd).st_size <= 4096)
+            _budget(deadline)
             with os.fdopen(fd, 'rb', closefd=False) as stream:
-                record = json.loads(stream.read(4097), object_pairs_hook=_pairs)
+                data = stream.read(4097)
+                _budget(deadline)
+                _need(len(data) <= 4096)
+                record = json.loads(data, object_pairs_hook=_pairs)
+            _budget(deadline)
             _need(type(record) is dict and set(record) ==
                   {'root', 'sid', 'message_id', 'digest', 'status', 'turn_id', 'created'})
             _need(record['root'] == root and record['sid'] == sid and record['message_id'] == mid)
@@ -198,18 +245,24 @@ class _Receipts:
         finally:
             os.close(fd)
 
-    def write(self, ns, record):
+    def write(self, ns, record, deadline):
+        _budget(deadline)
         data = _json(record)
         _need(len(data) <= 4096)
         temp = '.tmp-' + uuid.uuid4().hex
         fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=ns)
         try:
+            _budget(deadline)
             with os.fdopen(fd, 'wb', closefd=False) as stream:
                 stream.write(data)
                 stream.flush()
+                _budget(deadline)
                 os.fsync(fd)
+            _budget(deadline)
             os.replace(temp, record['message_id'] + '.json', src_dir_fd=ns, dst_dir_fd=ns)
+            _budget(deadline)
             os.fsync(ns)
+            _budget(deadline)
         finally:
             os.close(fd)
             try:
@@ -221,25 +274,41 @@ class _Receipts:
     def result(record):
         return {key: record[key] for key in ('status', 'message_id', 'turn_id')}
 
-    def names(self, ns):
+    def names(self, ns, deadline, reserve=False):
+        _budget(deadline)
         if ns is None:
             return []
         names = []
+        count = 0
         # SIMPLIFIED: bounded per-thread metadata enumeration; retain all dedup
         # records. A future tombstone/index scheme must preserve UUID protection.
         with os.scandir(ns) as entries:
-            for entry in entries:
+            while True:
+                _budget(deadline)
+                try:
+                    entry = next(entries)
+                except StopIteration:
+                    break
+                _budget(deadline)
+                count += 1
+                _need(count <= NAMESPACE_ENTRY_LIMIT)
                 if entry.name == '.lock' or entry.name.startswith('.tmp-'):
                     continue
                 _need(entry.name.endswith('.json') and valid_uuid(entry.name[:-5]))
                 names.append(entry.name[:-5])
                 _need(len(names) <= RECEIPT_LIMIT)
+        _budget(deadline)
+        # A new reserve needs one entry for its atomic-write temporary file.
+        # Existing UUID lookup precedes this check, preserving dedup at capacity.
+        _need(not reserve or count < NAMESPACE_ENTRY_LIMIT)
         return names
 
-    def recent(self, ns, root, sid):
-        records = [self.read(ns, root, sid, mid) for mid in self.names(ns)]
+    def recent(self, ns, root, sid, deadline):
+        records = [self.read(ns, root, sid, mid, deadline) for mid in self.names(ns, deadline)]
+        _budget(deadline)
         _need(all(record is not None for record in records))
         records.sort(key=lambda record: (record['created'], record['message_id']), reverse=True)
+        _budget(deadline)
         return [self.result(record) for record in records[:8]]
 
 
@@ -378,7 +447,7 @@ class SessionChat:
                 items.append({'id': item['id'], 'role': role, 'text': text[:8000], 'truncated': truncated})
             turns.append({'id': turn['id'], 'status': turn['status'], 'items': items})
         with self.receipts.namespace(root, sid, self._local.deadline) as ns:
-            recent = self.receipts.recent(ns, root, sid)
+            recent = self.receipts.recent(ns, root, sid, self._local.deadline)
         result = {'turns': turns, 'next_cursor': page['nextCursor'], 'truncated': clipped, 'recent_sends': recent}
         if _attention(thread):
             result['needs_native_attention'] = True
@@ -407,24 +476,24 @@ class SessionChat:
         self._proof(root, sid)
         digest = hashlib.sha256(text.encode('utf-8')).hexdigest()
         with self.receipts.namespace(root, sid, self._local.deadline, create=True) as ns:
-            record = self.receipts.read(ns, root, sid, message_id)
+            record = self.receipts.read(ns, root, sid, message_id, self._local.deadline)
             if record is not None:
                 _need(record['digest'] == digest, 'invalid_request')
                 return self.receipts.result(record)
-            _need(len(self.receipts.names(ns)) < RECEIPT_LIMIT)
+            _need(len(self.receipts.names(ns, self._local.deadline, reserve=True)) < RECEIPT_LIMIT)
             self._proof(root, sid, 'thread/resume')
             _need(self._root(project) == root, 'stale')
             self._remaining()
             record = {'root': root, 'sid': sid, 'message_id': message_id, 'digest': digest,
                       'status': 'delivery_unknown', 'turn_id': None, 'created': time.time_ns()}
-            self.receipts.write(ns, record)
+            self.receipts.write(ns, record, self._local.deadline)
             try:
                 response = self._rpc('turn/start', {'threadId': sid,
                     'input': [{'type': 'text', 'text': text}], 'clientUserMessageId': message_id})
                 turn = response.get('turn')
                 _need(type(turn) is dict and _identity(turn.get('id')))
                 record.update(status='accepted', turn_id=turn['id'])
-                self.receipts.write(ns, record)
+                self.receipts.write(ns, record, self._local.deadline)
             except Exception:
                 # Reserve remains durable. Server errors, timeout and failed ACK
                 # persistence never authorize automatic turn/start repetition.
@@ -437,7 +506,7 @@ class SessionChat:
         root = self._root(project)
         self._proof(root, sid)
         with self.receipts.namespace(root, sid, self._local.deadline) as ns:
-            record = self.receipts.read(ns, root, sid, message_id)
+            record = self.receipts.read(ns, root, sid, message_id, self._local.deadline)
             _need(record is not None, 'stale')
             if record['status'] != 'delivery_unknown':
                 return self.receipts.result(record)
@@ -450,7 +519,7 @@ class SessionChat:
                     if any(item['type'] == 'userMessage' and item.get('clientId') == message_id
                            for item in turn['items']):
                         record.update(status='accepted', turn_id=turn['id'])
-                        self.receipts.write(ns, record)
+                        self.receipts.write(ns, record, self._local.deadline)
                         return self.receipts.result(record)
                 cursor = page['nextCursor']
                 if cursor is None:

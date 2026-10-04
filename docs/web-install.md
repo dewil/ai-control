@@ -62,6 +62,8 @@ sudo -u dwl install -d -m 0700 /home/dwl/.local/state/ai-control-web
 
 `--session-receipts` задаёт другой private owner-local root; `--codex-socket` — существующий shared socket. Без flag путь сокета определяется штатным `_codex_rc.socket_path()` по owner environment. Приложение не копирует owner OAuth/config/history и не запускает daemon для отсутствующего socket: session операции дают unavailable, TASK работает дальше. Trusted `_codex_rc.py` и `_rc_projects.sh` входят в immutable package, resolver вызывает owner-installed `yq` через фиксированный helper.
 
+Receipt root отвергает Git ancestors по metadata: `.git` directory/file (включая worktree) и bare repository с `HEAD`, `objects`, `refs`; содержимое этих markers не читается. Namespace допускает максимум10002 entries всего, включая lock, temporary files и посторонние entries. Переполнение запрещает новую отправку и не удаляет защитные records; уже сохранённый UUID остаётся доступен для dedup. Receipt traversal/read/write проверяет общий operation deadline до и после bounded I/O; это не обещание прерывать заблокированный kernel call в реальном времени.
+
 ### Отдельная учётная запись
 
 ```bash
@@ -180,10 +182,10 @@ server {
 ```sh
 curl --fail --silent --show-error https://llm-web.dewil.ru:18443/ >/dev/null
 [ "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' https://llm-web.dewil.ru:18443/api/tasks)" = 401 ]
-[ "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' -H 'Host: llm-web.dewil.ru' https://llm-web.dewil.ru:18443/api/tasks)" = 403 ]
+[ "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' -H 'Origin: https://llm-web.dewil.ru' https://llm-web.dewil.ru:18443/api/session)" = 403 ]
 ```
 
-Отсутствие port в Host возвращает403 по exact origin contract. Browser phone login/reject использует origin `https://llm-web.dewil.ru:18443`, cookie Secure/HttpOnly/SameSite=Strict и preserved replay state.
+Explicit Origin без port возвращает403 по exact origin contract. Сохранение Host в proxy — настройка forwarding, приложение не использует Host как ACL. Browser phone login/reject использует origin `https://llm-web.dewil.ru:18443`, cookie Secure/HttpOnly/SameSite=Strict и preserved replay state.
 
 Production готов только после проверки публичного адреса, сертификата и следующих сценариев:
 
