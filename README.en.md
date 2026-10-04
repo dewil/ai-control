@@ -5,7 +5,7 @@
 [![shellcheck](https://github.com/dewil/ai-control/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/dewil/ai-control/actions/workflows/shellcheck.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-`ai-control` manages Claude Code and Codex sessions and background tasks. Telegram helps you launch and resume sessions, answer agents, and accept or reject results; the web panel shows task questions and results for replies and acceptance. The web panel does not launch sessions; user accounts and per-project access are not currently supported.
+`ai-control` manages Claude Code and Codex sessions and background tasks through Telegram and a task-focused web panel.
 
 > The related [**claude-toolkit**](https://github.com/dewil/claude-toolkit) contains rules, roles and skills. Updates use manual SHA-pinned AI sync; harvest retains upstream brief delivery.
 
@@ -120,7 +120,7 @@ The **acceptor** ([stage 7](./docs/design-2026-07-12-stage7-acceptor-role.md)) i
 Every 15 minutes it reads the remaining Claude/Codex subscription limits (quota metadata, not inference — it does not spend the quota) and pushes a panel to Telegram **only when the numbers change** (dedup by a signature of percentages/statuses; reset times do not count as a change). [Runbook](./docs/runbook-limits-digest.md).
 
 ### Web task panel
-The web panel shows task questions and completed results. It supports text replies, permitted approve/reject decisions, and accepting or rejecting results. It does not launch sessions; user accounts and per-project access are not currently supported. Sign-in uses a password and TOTP, and the web process runs under a separate UID through a narrow owner broker. [Installation](./docs/web-install.md) requires pinned Python dependencies, a separate service account, HTTPS, and local enrollment.
+The web panel shows task questions and completed results. It supports text replies, retrying delivery of saved replies, permitted approve/reject decisions, and accepting or rejecting results. It does not launch sessions; user accounts and per-project access are not currently supported. Sign-in uses a password and TOTP, and the web process runs under a separate UID through a narrow owner broker. [Installation](./docs/web-install.md) requires pinned Python dependencies, a separate service account, HTTPS, and local enrollment.
 
 ---
 
