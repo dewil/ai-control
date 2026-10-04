@@ -153,12 +153,14 @@ if 'list-units' in sys.argv:
             directory.mkdir(mode=0o700)
             (directory / 'synthetic-settings.json').write_text('{"provider":"unchanged"}')
 
-    def run_migration(self, dry_run=False):
+    def run_migration(self, dry_run=False, retain_checkpoint=False):
         helper = ROOT / 'bin/ai-control-migrate-names'
         self.assertTrue(helper.is_file(), 'offline canonical migration helper is missing')
         args = [str(helper), '--home', str(self.home)]
         if dry_run:
             args.append('--dry-run')
+        if retain_checkpoint:
+            args.append('--retain-checkpoint')
         return subprocess.run(args, env=self.env, capture_output=True, timeout=15)
 
     def test_apply_preserves_all_data_modes_provider_dirs_and_repeat_is_noop(self):
@@ -240,6 +242,70 @@ if 'list-units' in sys.argv:
         expected['permissions']['allow'][:3] = ['Read(//' + str(new_agent).strip('/') + '/**)',
                                                'Bash(ai-agent-ask:*)', 'Bash(ai-agent-done:*)']
         self.assertEqual(json.loads((new_agent / 'agent-settings.json').read_text()), expected)
+
+    def test_allow_deny_event_scopes_and_generated_hook_relocate_exactly(self):
+        path, settings = self.saved_mission_settings()
+        agent = path.parent
+        old_scope = '///' + str(agent).strip('/')
+        settings['permissions']['allow'] += ['Read(' + old_scope + '/work/**)',
+                                              'Edit(' + old_scope + '/run/**)']
+        settings['permissions']['deny'] += ['Bash(claude-agent-ask:*)',
+                                             'Bash(claude-rc agent run:*)',
+                                             'Bash(claude-control-web:*)']
+        for operation in ('Edit', 'Write', 'NotebookEdit'):
+            for suffix in ('questions/**', 'reject_comments/**', 'lessons.json', 'done.json'):
+                settings['permissions']['deny'].append(operation + '(' + old_scope + '/' + suffix + ')')
+        command = str(ROOT / 'bin/claude-agent-permit') + ' --hook'
+        settings['hooks'] = {'PreToolUse': [{'matcher': 'Bash|Edit|Write|NotebookEdit',
+                           'hooks': [{'type': 'command', 'command': command}]}]}
+        path.write_text(json.dumps(settings))
+        result = self.run_migration()
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+        new_agent = self.home / '.ai-control/agents/taskone'
+        expected = json.loads(json.dumps(settings))
+        for field in ('allow', 'deny'):
+            expected['permissions'][field] = [
+                rule.replace(str(agent), str(new_agent)).replace('claude-agent-', 'ai-agent-')
+                    .replace('claude-control-', 'ai-control-').replace('claude-rc ', 'ai-rc ')
+                for rule in settings['permissions'][field]]
+        expected['hooks']['PreToolUse'][0]['hooks'][0]['command'] = str(ROOT / 'bin/ai-agent-permit') + ' --hook'
+        self.assertEqual(json.loads((new_agent / 'agent-settings.json').read_text()), expected)
+
+    def test_unsupported_permissions_or_legacy_hooks_refuse_inert(self):
+        for number, unsupported in enumerate(('permission-field', 'unknown-hook')):
+            with self.subTest(unsupported=unsupported):
+                self.home = self.private / ('unsupported-case-' + str(number))
+                self.home.mkdir(mode=0o700)
+                self.env['HOME'] = str(self.home)
+                path, settings = self.saved_mission_settings()
+                if unsupported == 'permission-field':
+                    settings['permissions']['ask'] = ['Bash(claude-agent-ask:*)']
+                else:
+                    settings['hooks'] = {'PreToolUse': [{'matcher': 'Bash', 'hooks': [
+                        {'type': 'command', 'command': str(ROOT / 'bin/claude-agent-unknown') + ' --hook'}]}]}
+                path.write_text(json.dumps(settings))
+                before = snapshot(self.home)
+                self.assertNotEqual(self.run_migration().returncode, 0)
+                self.assertEqual(snapshot(self.home), before)
+
+    def test_retain_checkpoint_success_preserves_original_settings_and_blocks_repeat(self):
+        settings_path, _ = self.saved_mission_settings()
+        original = settings_path.read_bytes()
+        result = self.run_migration(retain_checkpoint=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+        self.assertTrue((self.home / '.ai-control/naming-migration.json').is_file())
+        checkpoint = self.home / '.ai-control-naming-transaction'
+        self.assertTrue(checkpoint.is_dir())
+        self.assertEqual(stat.S_IMODE(checkpoint.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE((checkpoint / 'plan.json').stat().st_mode), 0o600)
+        backups = [path for path in checkpoint.rglob('*') if path.is_file() and path.name != 'plan.json']
+        self.assertIn(original, [path.read_bytes() for path in backups])
+        for backup in backups:
+            self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)
+        before = snapshot(self.home)
+        for dry_run in (False, True):
+            self.assertNotEqual(self.run_migration(dry_run=dry_run).returncode, 0)
+            self.assertEqual(snapshot(self.home), before)
 
     def test_malformed_known_mission_settings_refuse_before_any_move(self):
         for number, malformed in enumerate(('{', '[]', '{"permissions":{"allow":"Read(*)","deny":[]}}',
