@@ -163,15 +163,14 @@ def main():
                     fail("поврежден сохраненный текст ответа")
             elif d.get("decision") not in ("approve", "reject"):
                 fail("поврежден сохраненное решение")
-        if d["status"] == "closed":
-            if mode == "recover":
-                return
+        closed_recovery = d["status"] == "closed" and mode == "recover"
+        if d["status"] == "closed" and not closed_recovery:
             fail("вопрос уже закрыт: %s" % qid)
         if mode in ("approve", "reject") and qkind != "permission":
             fail("--approve/--reject допустимы только для permission-вопроса")
         if mode == "text" and qkind == "permission":
             fail("--text не допустим для permission-вопроса")
-        if not saved and mode == "recover":
+        if not saved and mode == "recover" and not closed_recovery:
             fail("нет сохраненного ответа")
         callback = d.get('native_callback')
         if callback is not None or (d.get('engine') == 'codex' and qkind == 'permission'):
@@ -195,12 +194,14 @@ def main():
             if d.get('engine') != 'codex' \
                     or qkind != 'permission' \
                     or (callback.get('status') != 'pending' \
-                        and not (mode == 'recover' and saved \
-                                 and d.get('event_published_at') is not None)) \
+                        and not (closed_recovery or (mode == 'recover' and saved \
+                                 and d.get('event_published_at') is not None))) \
                     or allowed not in (['reject'], ['approve','reject']) \
                     or (mode != 'recover' and mode not in allowed) \
                     or (saved and d.get('decision') not in allowed):
                 fail('решение запрещено фиксированным профилем Codex')
+        if closed_recovery:
+            return
         if saved and d.get("event_published_at") is not None:
             if mode == "recover":
                 return
