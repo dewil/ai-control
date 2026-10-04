@@ -3,6 +3,7 @@
 Only synthetic private homes are used. Migration never reaches the real user
 manager: a PATH stub records invocations and supplies deterministic unit states.
 """
+import contextlib
 import importlib.util
 import json
 import os
@@ -607,6 +608,72 @@ runpy.run_path(helper, run_name='__main__')
         else:
             self.assertEqual(snapshot(self.home), before, 'verified clean rollback must restore bytes/modes/roots')
             self.assertIs(fixture.store.snapshot(deadline=fixture.deadline)['reconciliation_required'], False)
+
+    def stopped_bridge(self):
+        fixture, operation, _ = self.make_operation()
+        module = importlib.import_module('_codex_task_bridge')
+        host = Path(fixture.read_index()['operations'][operation]['host_state_dir'])
+        bridge_dir = host.parent / 'bridge'
+        binding = module.TaskBinding(fixture.control['incarnation'], 'event-1',
+                                     str(fixture.agent), 'thread-1', 'turn-1')
+        @contextlib.contextmanager
+        def guard(actual, *, deadline):
+            self.assertEqual(actual, binding)
+            yield True
+        calls = []
+        result = {'qid': str(uuid.uuid4())}
+        def writer(actual, tool, arguments, *, deadline):
+            self.assertEqual(actual, binding)
+            calls.append((tool, arguments))
+            return result
+        request = {'id': 1, 'method': 'item/tool/call', 'params': {
+            'threadId': 'thread-1', 'turnId': 'turn-1', 'callId': 'retained-call',
+            'tool': 'task_ask', 'arguments': {'question': 'synthetic retained question'}}}
+        bridge = module.CodexTaskBridge(bridge_dir, binding, guard=guard, writer=writer, clock=lambda: 1.0)
+        response = bridge.handle(request, deadline=100.0)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(bridge.handle(request, deadline=100.0), response)
+        self.assertEqual(len(calls), 1, 'baseline bridge must already replay cached result')
+        return fixture, module, binding, bridge_dir, request, response
+
+    def test_stopped_bridge_binding_relocates_and_cached_call_never_rewrites(self):
+        fixture, module, binding, bridge_dir, request, response = self.stopped_bridge()
+        journal = bridge_dir / 'journal.json'
+        original = json.loads(journal.read_text())
+        result = self.run_migration()
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+        old_root = self.home / '.claude-control'
+        new_root = self.home / '.ai-control'
+        new_agent = new_root / 'agents/taskone'
+        new_bridge_dir = new_root / bridge_dir.relative_to(old_root)
+        expected = json.loads(json.dumps(original))
+        expected['binding']['agent_dir'] = str(new_agent)
+        self.assertEqual(json.loads((new_bridge_dir / 'journal.json').read_text()), expected)
+        new_binding = module.TaskBinding(binding.task_incarnation, binding.event_key, str(new_agent),
+                                         binding.thread_id, binding.turn_id)
+        @contextlib.contextmanager
+        def guard(actual, *, deadline):
+            self.assertEqual(actual, new_binding)
+            yield True
+        def forbidden_writer(*args, **kwargs):
+            self.fail('cached migrated call must not invoke writer again')
+        replay = module.CodexTaskBridge(new_bridge_dir, new_binding, guard=guard,
+                                       writer=forbidden_writer, clock=lambda: 1.0)
+        self.assertEqual(replay.handle(request, deadline=100.0), response)
+
+    def test_unknown_or_malformed_bridge_refuses_before_any_move(self):
+        for number in (0, 1):
+            with self.subTest(case=number):
+                self.home = self.private / ('bridge-malformed-' + str(number))
+                self.home.mkdir(mode=0o700)
+                self.env['HOME'] = str(self.home)
+                fixture, _, _, bridge_dir, _, _ = self.stopped_bridge()
+                path = bridge_dir / 'journal.json'
+                record = json.loads(path.read_text())
+                path.write_text('{' if number == 0 else json.dumps(dict(record, schema=987654)))
+                before = snapshot(self.home)
+                self.assertNotEqual(self.run_migration().returncode, 0)
+                self.assertEqual(snapshot(self.home), before)
 
     def test_unknown_schema_refuses_before_any_root_move(self):
         fixture, _, _ = self.make_operation()
