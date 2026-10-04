@@ -50,3 +50,11 @@ INV-WEB-10: интерфейс тёмный по умолчанию, включ�
 ## Восстановление сессии при reload (04.10.2026)
 
 INV-WEB-11: GET /api/session возвращает существующий CSRF по действующей HttpOnly cookie, без создания сессии, продления TTL, TOTP или backend calls. Отсутствующая/истёкшая/отозванная cookie получает401, чужой explicit Origin —403; ответы no-store. UI bootstrap скрывает login до проверки, восстанавливает workspace и mutation CSRF либо показывает login после401. Transient failure оставляет retry восстановления без credentials; browser storage не используется. Traceability: tests/test_control_web_session_reload.py и synthetic browser reload/logout/retry.
+
+
+## Пользователи и project grants (05.10.2026)
+INV-WEB-12: В явно включённом multiuser режиме administrator только один — owner. Delegate view/answer/verdict/recover разрешены только явным project grants, привязанным к authoritative alias/root; empty/missing/disabled/malformed не дают доступ. Не доверять project/principal/grants из HTTP body или task content. Проверять policy и project на защищённой writer границе до side effects, включая barrier; фильтрация UI не является контролем доступа. Корни реализации: docs/dev/2026-10-05-spec-web-project-users.md.
+
+Известная дыра multiuser: текущий owner-only contract не имеет per-user policy/authentication/project filtering и writer fence guards. Multiuser нельзя включать до закрытия всех корней; первый policy-only корень сам по себе доступов не выдаёт.
+
+Трассируемость policy-only части INV-WEB-12: tests/test_control_web_access_policy.py (21 independent methods; owner-bypass и same-root/wrong-alias sensitivity controls). Брокерная/writer/auth часть остаётся известной дырой до следующих корней.
