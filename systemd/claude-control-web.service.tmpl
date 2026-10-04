@@ -1,0 +1,30 @@
+[Unit]
+Description=Control task web frontend (isolated UID)
+After=network.target
+
+[Service]
+Type=simple
+User=claude-panel
+Group=claude-panel
+WorkingDirectory=/opt/claude-control-web
+ExecStart=/opt/claude-control-web/venv/bin/python /opt/claude-control-web/bin/claude-control-web web --auth /var/lib/claude-control-web/auth.json --totp-state /var/lib/claude-control-web/totp-state.json --socket /run/claude-control-web/broker.sock
+Restart=on-failure
+RestartSec=3
+UMask=0077
+MemoryMax=256M
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/claude-control-web
+InaccessiblePaths=/data
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

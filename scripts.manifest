@@ -69,3 +69,11 @@ claude-control-project-watchdog
 
 _codex_task_runtime.py
 codex-task-runtime
+
+# Optional task web frontend; installation does not activate services.
+claude-control-web
+_control_web.py
+_control_web_broker.py
+_control_web.html
+_control_web.css
+_control_web.js
