@@ -14,3 +14,5 @@ Canonical code и offline helper реализованы; recovery checkpoint и 
 
 ## Уточнения после сверки
 04.10 свежая user-selected сверка обнаружила четыре корня: сохранённые deny/event/hook permissions, retained bridge/native task bindings, generated triple-slash scopes и срок хранения checkpoint при финальном Git move. Домен c9101dd/c1488b3 уточнён; независимые tests c4a3c96/cb9f6fb до реализации дали 4 semantic failures/0 errors. Нельзя удалять originals до combined operator validation или менять immutable provider history. Восстановление прежних задач проверяется authoritative replay/recovery, не только Store.snapshot.
+
+Code/spec/runbook accepted: same user-selected gpt-6.1-sol/medium review034a3cd PASS, allfourrootsclosed. Main28naming+bothcombinedproofmodesPASS; production651e unchanged. Public rollout/enrollment acceptance продолжает отдельный владелец.
