@@ -167,6 +167,7 @@ def replace_private(path, payload, mode):
             os.fsync(stream.fileno())
         os.chmod(name, mode)
         os.replace(name, path)
+        sync_directory(path.parent)
     finally:
         if os.path.exists(name):
             os.unlink(name)
