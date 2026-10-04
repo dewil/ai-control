@@ -1,0 +1,33 @@
+[Unit]
+Description=Control owner task broker
+After=network.target
+
+[Service]
+Type=simple
+# Administrator replaces these exact placeholders before installation.
+User=@OWNER@
+Group=claude-panel
+Environment=HOME=@OWNER_HOME@
+Environment=PATH=@BIN_DIR@:/usr/local/bin:/usr/bin:/bin
+Environment=XDG_RUNTIME_DIR=/run/user/@OWNER_UID@
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@OWNER_UID@/bus
+ExecStart=/usr/bin/python3 /opt/claude-control-web/bin/claude-control-web broker --registry @REGISTRY@ --bin-dir @BIN_DIR@ --socket /run/claude-control-web/broker.sock --allowed-uid @WEB_UID@
+RuntimeDirectory=claude-control-web
+RuntimeDirectoryMode=0750
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+# Writers retain owner runtime, cgroup barriers and existing TASK policy.
+# A read-only registry here would disable trusted writers.
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
