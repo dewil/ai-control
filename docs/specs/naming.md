@@ -22,3 +22,6 @@ scripts.manifest перечисляет только canonical installed files. 
 
 ## Трассируемость
 INV-NAME-01..06 → tests/test_ai_control_names.py и installer/runtime regression suites.
+
+### Уточнение публичного migration contract
+Exact user roots: --home/.claude-control → --home/.ai-control; --home/.config/claude-control → --home/.config/ai-control; --home/.local/share/claude-control → --home/.local/share/ai-control. Registry/spool/lessons/projects/history сохраняются как произвольное содержимое первого root; provider dirs .claude/.codex не входят. Receipt хранится в --home/.ai-control/naming-migration.json (mode600, новый файл, если source absent и все target absent, no-op без создания). Receipt минимально содержит version=1, migrated_roots список относительных новых путей; никаких содержимых/секретов. Existing receipt не перезаписывается, повтор completed migration no-op. Ни один move не выполняется до preflight всех корней. Canonical installed список получается из baseline scripts.manifest при точных basename replacements и добавлении ai-control-migrate-names; backup optional scripts также canonical rename. Template basenames меняются теми же replacements. systemctl manager failure apply отказ, dry-run may report unavailable manager but must not move.
