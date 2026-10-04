@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import shutil
 import threading
 import sys
 import tempfile
@@ -328,9 +329,11 @@ class SessionChatContract(unittest.TestCase):
     def test_INV_WSESS_06_receipt_directory_symlink_fails_closed(self):
         target = self.base / 'unsafe-target'
         target.mkdir(mode=0o700)
+        if self.receipts.exists():
+            shutil.rmtree(self.receipts)
         self.receipts.symlink_to(target, target_is_directory=True)
         try:
-            result = self.send()
+            result = self.new_chat().send('demo', SID, MID, 'Hello')
         except (ValueError, OSError, RuntimeError):
             result = {'error': 'unavailable'}
         self.assert_error(result, 'unavailable')
