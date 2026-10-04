@@ -15,28 +15,23 @@ NAME = re.compile(r'[a-z][a-z0-9-]{0,30}[a-z0-9]\Z')
 GEN = re.compile(r'[0-9a-f]{8}\Z')
 
 
-# Intentional per-binary copy of the existing Control export policy
-# (claude-agent-tgbot SECRET_RE/redact), without importing bot initialization.
+# Intentional per-binary copy of claude-agent-run's complete export policy.
+# Keep the established credential aliases without importing writer runtime.
 SECRET_RE = re.compile(
-    r'(?i)((?:api[_-]?key|token|secret|password|authorization)"?\s*[=:]\s*"?'
+    # покрытие расширено (аудит V2.7a, major 7): pwd/passwd/access_key -
+    # смежные формы того же класса секрета, которые прежний список слов не
+    # ловил (changes теперь тоже проходят через redact(), см. ниже).
+    r'(?i)((?:api[_-]?key|access[_-]?key|token|secret|password|passwd|pwd|'
+    r'authorization)"?\s*[=:]\s*"?'
     r'(?:bearer\s+)?)[^\s&"]+'
     r'|(\bbearer\s+)\S+'
     r'|\b(?:sk|xox[a-z]|ghp|gho|github_pat)-[A-Za-z0-9_-]{8,}'
     r'|\b[A-Za-z0-9+/_-]{40,}\b')
-_SESSION_LINK_RE = re.compile(r"https://claude\.ai/code/session_[A-Za-z0-9]+")
-_LINK_SLOT = "\x00SL%d\x00"
 
 
-def redact(value):
-    links = []
-    def hold(match):
-        links.append(match.group(0))
-        return _LINK_SLOT % (len(links) - 1)
-    held = _SESSION_LINK_RE.sub(hold, value)
-    result = SECRET_RE.sub(lambda match: (match.group(1) or match.group(2) or "") + "***", held)
-    for index, link in enumerate(links):
-        result = result.replace(_LINK_SLOT % index, link)
-    return result
+def redact(s):
+    return SECRET_RE.sub(lambda m: (m.group(1) or m.group(2) or "") + "***", s)
+
 
 
 def canonical_callback(callback, saved):
