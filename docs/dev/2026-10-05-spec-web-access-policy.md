@@ -4,13 +4,13 @@
 
 ## Schema
 
-Validated document — обычный Python dict:
+Validated document — обычный Python dict. Все container/scalar типы — exact built-in dict/list/str/int/bool; subclasses отвергаются:
 - корень содержит ровно version, owner, projects, users;
 - version — integer 1 (bool не integer);
 - owner — username, существующий ключ users;
 - username соответствует [a-z][a-z0-9_-]{0,31};
 - projects — dict alias → pinned root. Alias — непустая строка до128 символов, без крайних пробелов, ASCII control/DEL и wildcard символов * ? [ ]. Unicode и внутренние пробелы разрешены;
-- root — абсолютный POSIX path до4096 символов, без NUL/control/DEL и лексических . или .., нормализованный без trailing slash; / запрещён. Проверки существования/realpath выполняет будущий authority resolver, а не этот чистый модуль;
+- root — абсолютный POSIX path до4096 символов, без NUL/control/DEL и лексических . или .., нормализованный без trailing slash; / запрещён. Повторные separators (включая leading //) отвергаются; posixpath.normpath(root)==root и root начинается с ровно одного /. Проверки существования/realpath выполняет будущий authority resolver, а не этот чистый модуль;
 - users — непустой dict username → запись с ровно enabled, auth_epoch, projects;
 - enabled — plain bool; auth_epoch — plain int от1 до2147483647;
 - projects записи — список уникальных alias, каждый есть в корневом projects;
