@@ -50,3 +50,5 @@ INV-WEB-12:
 - валидные Unicode alias и внутренние пробелы поддерживаются.
 
 Тесты пишутся независимо по этому документу без чтения реализации. Runner: Python unittest, fixtures только synthetic (для этой части filesystem вообще не нужен). Existing helper load_feature в tests/test_control_web_contract.py допустим как публичный import harness.
+
+Установка helper: _control_web_access.py добавляется в scripts.manifest для install/uninstall completeness. Это копирует модуль, но не подключает auth/broker/writers и не включает multiuser. Existing installation regression подтверждает полноту manifest.
