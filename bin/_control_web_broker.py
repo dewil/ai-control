@@ -223,6 +223,7 @@ class RegistryBackend:
                           'commit_sha': commit, 'finalized': done.get('finalized') is True}
             return {'agent': name, 'name': redact(_field(spec, 'name', name)), 'engine': engine,
                     'state': redact(_field(state, 'phase', 'unknown')), 'summary': redact(_field(state, 'status_line')),
+                    'status_line': redact(_field(state, 'status_line')),
                     'questions': questions, 'result': result}
         finally:
             os.close(fd)
