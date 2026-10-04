@@ -166,6 +166,7 @@ if 'list-units' in sys.argv:
         providers = {name: snapshot(self.home / name) for name in ('.claude', '.codex')}
         result = self.run_migration()
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+        self.assertFalse((self.home / '.ai-control-naming-transaction').exists())
         for source, target in MOVES:
             self.assertFalse((self.home / source).exists())
             actual = snapshot(self.home / target)
@@ -394,6 +395,87 @@ class StoppedMetadataMigrationContract(unittest.TestCase):
         reopened = fixture.Store(str(new_root / 'agents/taskone'),
                                  state_root=str(new_root / 'codex-task-state'))
         self.assertIs(reopened.snapshot(deadline=time.monotonic() + 10)['reconciliation_required'], False)
+
+    def injected_migration(self, injection):
+        helper = ROOT / 'bin/ai-control-migrate-names'
+        self.assertTrue(helper.is_file(), 'offline canonical migration helper is missing')
+        script = """import json, os, pathlib, runpy, sys
+helper, home, injection = sys.argv[1:]
+original_rename = os.rename
+original_replace = os.replace
+original_fsync = os.fsync
+fsynced = []
+root = pathlib.Path(home)
+def fsync(fd):
+    result = original_fsync(fd)
+    fsynced.append(os.readlink('/proc/self/fd/' + str(fd)))
+    return result
+os.fsync = fsync
+def rename(source, target, *args, **kwargs):
+    result = original_rename(source, target, *args, **kwargs)
+    if injection == 'interrupt' and pathlib.Path(source) == root / '.claude-control' and pathlib.Path(target) == root / '.ai-control':
+        (root.parent / 'fsync-events.json').write_text(json.dumps(fsynced))
+        os._exit(73)
+    return result
+failed = False
+def replace(source, target, *args, **kwargs):
+    global failed
+    target_path = pathlib.Path(target)
+    if injection == 'write-failure' and not failed and (root / '.ai-control').exists() and not (root / '.claude-control').exists() and target_path.is_relative_to(root / '.ai-control'):
+        failed = True
+        raise OSError('synthetic metadata write failure')
+    return original_replace(source, target, *args, **kwargs)
+os.rename = rename
+os.replace = replace
+sys.argv = [helper, '--home', home]
+runpy.run_path(helper, run_name='__main__')
+"""
+        return subprocess.run(['python3', '-c', script, str(helper), str(self.home), injection],
+                              env=self.env, capture_output=True, timeout=15)
+
+    def test_interruption_retains_private_checkpoint_originals_and_blocks_repeat(self):
+        fixture, _, _ = self.make_operation()
+        originals = [path.read_bytes() for path in (self.home / '.claude-control').rglob('*.json')
+                     if path.name in ('index.json', 'directory-identity.json', 'journal.json', 'event-1.json')]
+        self.assertTrue(originals)
+        result = self.injected_migration('interrupt')
+        self.assertEqual(result.returncode, 73, result.stderr.decode(errors='replace'))
+        checkpoint = self.home / '.ai-control-naming-transaction'
+        self.assertTrue(checkpoint.is_dir(), 'checkpoint must precede first root rename')
+        self.assertEqual(stat.S_IMODE(checkpoint.stat().st_mode), 0o700)
+        plan_path = checkpoint / 'plan.json'
+        self.assertEqual(stat.S_IMODE(plan_path.stat().st_mode), 0o600)
+        plan = json.loads(plan_path.read_text())
+        self.assertEqual(plan.get('version', plan.get('schema')), 1)
+        backups = [path for path in checkpoint.rglob('*') if path.is_file() and path != plan_path]
+        backup_bytes = [path.read_bytes() for path in backups]
+        for original in originals:
+            self.assertIn(original, backup_bytes, 'checkpoint must retain each original metadata file')
+        for path in backups:
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        synced = json.loads((self.home.parent / 'fsync-events.json').read_text())
+        for path in [checkpoint, plan_path, *backups]:
+            self.assertIn(str(path), synced, 'checkpoint file/directory must be fsynced before rename')
+        before = snapshot(self.home)
+        for dry_run in (False, True):
+            self.assertNotEqual(self.run_migration(dry_run=dry_run).returncode, 0)
+            self.assertEqual(snapshot(self.home), before)
+
+    def test_injected_metadata_failure_restores_verified_original_state(self):
+        fixture, _, _ = self.make_operation()
+        before = snapshot(self.home)
+        result = self.injected_migration('write-failure')
+        self.assertNotEqual(result.returncode, 0, 'write failure must not report completed migration')
+        checkpoint = self.home / '.ai-control-naming-transaction'
+        if checkpoint.exists():
+            self.assertEqual(stat.S_IMODE(checkpoint.stat().st_mode), 0o700)
+            self.assertTrue((checkpoint / 'plan.json').is_file())
+            preserved = snapshot(self.home)
+            self.assertNotEqual(self.run_migration().returncode, 0)
+            self.assertEqual(snapshot(self.home), preserved)
+        else:
+            self.assertEqual(snapshot(self.home), before, 'verified clean rollback must restore bytes/modes/roots')
+            self.assertIs(fixture.store.snapshot(deadline=fixture.deadline)['reconciliation_required'], False)
 
     def test_unknown_schema_refuses_before_any_root_move(self):
         fixture, _, _ = self.make_operation()
