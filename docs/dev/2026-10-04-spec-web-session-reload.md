@@ -1,0 +1,7 @@
+# Reload сохраняет действующий вход
+
+При reload JavaScript теряет CSRF и показывает форму, хотя HttpOnly cookie ещё действительна. Страница должна восстановить текущую серверную сессию через GET /api/session: ответ 200 содержит существующий csrf; отсутствующая, истёкшая или отозванная cookie даёт 401. Сессию не создавать и TTL не продлевать. Endpoint не обращается к backend. Cache-Control no-store; same-origin запрос разрешён без Origin (обычный browser GET), явно чужой Origin получает 403 без раскрытия csrf. Существующие cookie flags и проверки Origin+CSRF всех mutations сохраняются.
+
+При загрузке UI запрашивает /api/session. Успех показывает workspace, запрашивает tasks и позволяет mutation с восстановленным CSRF; 401 показывает форму входа. Прочая ошибка показывает понятное сообщение и позволяет повторить восстановление сессии без ввода credentials. Во время восстановления форма не должна кратко появляться и позволять параллельный login. Ответ session не переносится в localStorage/sessionStorage; cookie остаётся HttpOnly. Logout удаляет сессию; следующий reload вновь показывает login. Reload не вызывает login/TOTP и не продлевает срок входа. Restart сервера по-прежнему завершает memory sessions; persistent store вне scope.
+
+Критерии INV-WEB-11: действующая cookie восстанавливает тот же CSRF, expiry/logout не восстанавливаются, foreign Origin запрещён, ответы no-store; нет broker calls при session lookup. Browser reload сохраняет workspace и mutation проходит; 401, transient outage/retry, logout и отсутствие browser storage проверяются.
