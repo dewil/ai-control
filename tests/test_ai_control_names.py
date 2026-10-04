@@ -247,6 +247,10 @@ if 'list-units' in sys.argv:
         path, settings = self.saved_mission_settings()
         agent = path.parent
         old_scope = '///' + str(agent).strip('/')
+        custom = self.stub / 'ai-agent-mine'
+        custom.write_text('#!/bin/sh\nexit 0\n')
+        custom.chmod(0o700)
+        settings['permissions']['allow'].append('Bash(claude-agent-mine:*)')
         settings['permissions']['allow'] += ['Read(' + old_scope + '/work/**)',
                                               'Edit(' + old_scope + '/run/**)']
         settings['permissions']['deny'] += ['Bash(claude-agent-ask:*)',
@@ -265,8 +269,9 @@ if 'list-units' in sys.argv:
         expected = json.loads(json.dumps(settings))
         for field in ('allow', 'deny'):
             expected['permissions'][field] = [
-                rule.replace(str(agent), str(new_agent)).replace('claude-agent-', 'ai-agent-')
-                    .replace('claude-control-', 'ai-control-').replace('claude-rc ', 'ai-rc ')
+                rule.replace(str(agent), str(new_agent)).replace('Bash(claude-agent-ask:', 'Bash(ai-agent-ask:')
+                    .replace('Bash(claude-agent-done:', 'Bash(ai-agent-done:')
+                    .replace('Bash(claude-control-web:', 'Bash(ai-control-web:').replace('Bash(claude-rc ', 'Bash(ai-rc ')
                 for rule in settings['permissions'][field]]
         expected['hooks']['PreToolUse'][0]['hooks'][0]['command'] = str(ROOT / 'bin/ai-agent-permit') + ' --hook'
         self.assertEqual(json.loads((new_agent / 'agent-settings.json').read_text()), expected)
