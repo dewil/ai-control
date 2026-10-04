@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Local enrollment, unprivileged HTTP frontend, and narrow owner broker."""
+import argparse
+import base64
+import getpass
+import json
+import os
+from pathlib import Path
+import secrets
+import stat
+import sys
+
+
+def private_path(value):
+    path = Path(value).absolute()
+    resolved = path.resolve()
+    if resolved == Path('/data') or Path('/data') in resolved.parents:
+        raise ValueError('private files must be outside /data')
+    if path.is_symlink():
+        raise ValueError('symlink private files forbidden')
+    parent = path.parent
+    info = parent.stat()
+    if info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError('private parent must be owned by current UID and mode700')
+    return path
+
+
+def read_auth(value):
+    path = private_path(value)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 16384:
+            raise ValueError('private authentication file must be regular owner-only')
+        with os.fdopen(fd, closefd=False) as stream:
+            return json.load(stream)
+    finally:
+        os.close(fd)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest='command', required=True)
+    enrollment = commands.add_parser('init-auth', help='enrollment to private local file; no secret stdout')
+    enrollment.add_argument('--output', required=True)
+    enrollment.add_argument('--origin', required=True)
+    enrollment.add_argument('--totp-state', required=True)
+    enrollment.add_argument('--loopback-development', action='store_true')
+    web = commands.add_parser('web')
+    web.add_argument('--auth', required=True)
+    web.add_argument('--totp-state', required=True)
+    web.add_argument('--socket', required=True)
+    web.add_argument('--host', default='127.0.0.1', choices=['127.0.0.1', 'localhost'])
+    web.add_argument('--port', default=8787, type=int)
+    broker = commands.add_parser('broker')
+    broker.add_argument('--registry', required=True)
+    broker.add_argument('--bin-dir', default=str(Path(__file__).resolve().parent))
+    broker.add_argument('--socket', required=True)
+    broker.add_argument('--allowed-uid', type=int, required=True)
+    args = parser.parse_args()
+    os.umask(0o077)
+    if args.command == 'init-auth':
+        from _control_web import hash_password, create_app
+        output = private_path(args.output)
+        state_path = private_path(args.totp_state)
+        if output == state_path or output.exists() or state_path.exists():
+            raise ValueError('new distinct authentication and replay paths required')
+        password = getpass.getpass('Пароль Control: ')
+        if len(password) < 12 or password != getpass.getpass('Повторите пароль: '):
+            raise ValueError('password requires at least12 characters and matching confirmation')
+        config = {'origin': args.origin, 'password_hash': hash_password(password),
+                  'totp_secret': base64.b32encode(secrets.token_bytes(20)).decode().rstrip('='),
+                  'secure_cookie': not args.loopback_development, 'session_ttl': 3600}
+        create_app(config, None)  # Validate before writing an enrollment artifact.
+        fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(config, stream)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        fd = os.open(state_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as stream:
+            json.dump({'last_step': -1}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        print('Enrollment сохранён в приватный файл. Добавьте totp_secret в аутентификатор локально.')
+    elif args.command == 'web':
+        import uvicorn
+        from _control_web import create_app
+        from _control_web_broker import SocketBackend
+        config = read_auth(args.auth)
+        config['totp_state_path'] = str(private_path(args.totp_state))
+        if Path(args.auth).absolute() == Path(config['totp_state_path']):
+            raise ValueError('distinct authentication and replay paths required')
+        app = create_app(config, SocketBackend(args.socket))
+        uvicorn.run(app, host=args.host, port=args.port, workers=1, proxy_headers=False, access_log=False, log_level='warning')
+    else:
+        from _control_web_broker import RegistryBackend, serve_broker
+        serve_broker(args.socket, RegistryBackend(args.registry, args.bin_dir), args.allowed_uid)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, ValueError, KeyError, RuntimeError):
+        print('Control web: configuration or private runtime unavailable.', file=sys.stderr)
+        sys.exit(1)

@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Control · Задачи</title><link rel="stylesheet" href="/web.css"><script src="/web.js" defer></script></head>
+<body><main><header><div><span class="eyebrow">CONTROL</span><h1>Ваши задачи</h1></div><button id="logout" hidden>Выйти</button></header><p id="notice" role="status" aria-live="polite"></p>
+<section id="login"><h2>Войти в Control</h2><p>Введите пароль и код из приложения аутентификации.</p><form id="login-form"><label>Пароль<input id="password" type="password" autocomplete="current-password" required maxlength="1024"></label><label>Код подтверждения<input id="login-totp" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required></label><button type="submit">Войти</button></form></section>
+<section id="workspace" hidden><div class="toolbar"><p id="count"></p><button id="refresh">Обновить</button></div><div id="cards"></div></section>
+</main></body></html>
