@@ -232,6 +232,16 @@ def create_app(config, backend, clock=None):
         response.set_cookie('control_session', token, max_age=ttl, httponly=True, secure=secure, samesite='strict', path='/')
         return response
 
+    @app.get('/api/session')
+    def current_session(request: Request):
+        supplied_origin = request.headers.get('origin')
+        if supplied_origin is not None and supplied_origin != origin:
+            return error('forbidden', 403)
+        current, failure = session(request)
+        if failure:
+            return failure
+        return JSONResponse({'csrf': current['csrf']})
+
     @app.get('/api/tasks')
     def tasks(request: Request):
         _, failure = session(request)
