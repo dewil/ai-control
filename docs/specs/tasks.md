@@ -84,7 +84,7 @@
 
 **INV-TASK-23.** Поврежденный файл в `questions/` трактуется как "открытый вопрос есть": заморозка держится, уходит алерт, `ask` отказывает. *Почему:* молчаливый пропуск битой записи одновременно ломает singleton и снимает заморозку - худший из возможных исходов.
 
-**INV-TASK-24.** Текст ответа и решение по подтверждению кладет в файл вопроса **доверенный писатель** (`claude-agent-answer`); событие в спуле несет только адресацию, `payload.text`/`payload.approve` игнорируются полностью. Адресующее событие на вопрос без записанного ответа - `stale_answer` без спавна. *Почему:* `spool-put` принимает произвольный payload от произвольного продюсера; доверие дает право писать в каталог, а не поле в полезной нагрузке. Иначе знание `qid` равно праву говорить голосом dwl.
+**INV-TASK-24.** Текст ответа и решение по подтверждению кладет в файл вопроса **доверенный писатель** (`claude-agent-answer`); событие в спуле несет только адресацию, `payload.text`/`payload.approve` игнорируются полностью. Адресующее событие на вопрос без записанного ответа - `stale_answer` без спавна. Первый durable ответ неизменяем и до публикации события: повтор только допубликовывает исходные answer/decision и автора под questions/.lock со стабильным ans:<qid>. Periodic question-reminders восстанавливает open answered-unpublished через доверенного писателя независимо от alert/snooze; closed recovery не публикует. *Почему:* `spool-put` принимает произвольный payload от произвольного продюсера; доверие дает право писать в каталог, а не поле в полезной нагрузке. Иначе знание `qid` равно праву говорить голосом dwl.
 
 **INV-TASK-25.** Вопрос закрывается только в успешной ветке answer-прогона и только после фиксации результата; повтор идемпотентен по `closed_by_envelope`. Упавший answer-прогон оставляет вопрос открытым и заморозку - действующей. *Почему:* обратный порядок теряет `result`/`cost_usd` при падении между записями и превращает законный повтор в `stale_answer`.
 
@@ -301,12 +301,12 @@
 | INV-TASK-18 | `test-agent-workspace.sh` U8, U15; `test-trust-preseed-lock.sh` |
 | INV-TASK-19 | `test-agent-workspace.sh` U7, U13, U14 |
 | INV-TASK-20 | `test-agent-question.sh` Q3, Q4 |
-| INV-TASK-21 | `test-agent-question.sh` Q2 |
+| INV-TASK-21 | `test-agent-question.sh` Q2; `test-bot-answer-recovery.py`: immutable answer, recovery, crash/concurrency, native/unsafe rejection |
 | INV-TASK-22 | `test-agent-question.sh` Q18; `test-agent-permit.sh` P16, P16b, P16c |
 | INV-TASK-23 | `test-agent-question.sh` Q19 |
-| INV-TASK-24 | `test-agent-question.sh` Q15, Q16; `test-agent-permit.sh` P11 |
-| INV-TASK-25 | `test-agent-question.sh` Q7, Q8, Q9, Q21 |
-| INV-TASK-26 | `test-agent-question.sh` Q17, Q17b |
+| INV-TASK-24 | `test-agent-question.sh` Q15, Q16; `test-agent-permit.sh` P11; `test-bot-answer-recovery.py`: immutable answer, recovery, crash/concurrency, native/unsafe rejection |
+| INV-TASK-25 | `test-agent-question.sh` Q7, Q8, Q9, Q21; `test-bot-answer-recovery.py`: immutable answer, recovery, crash/concurrency, native/unsafe rejection |
+| INV-TASK-26 | `test-agent-question.sh` Q17, Q17b; `test-bot-answer-recovery.py`: immutable answer, recovery, crash/concurrency, native/unsafe rejection |
 | INV-TASK-27 | `test-agent-permit.sh` P3, P3b, P15 |
 | INV-TASK-28 | `test-agent-permit.sh` P4, P5, P6 |
 | INV-TASK-29 | `test-agent-permit.sh` P7, P7b, P12, P12b |
