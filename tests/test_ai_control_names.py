@@ -39,16 +39,21 @@ def snapshot(root):
 class NamingContract(unittest.TestCase):
     def test_canonical_commands_and_manifest_without_aliases(self):
         manifest = (ROOT / 'scripts.manifest').read_text()
+        backup_manifest = (ROOT / 'scripts.manifest.backup').read_text()
+        required_entries = {line.strip() for line in manifest.splitlines() if line.strip() and not line.lstrip().startswith('#')}
+        optional_entries = {line.strip() for line in backup_manifest.splitlines() if line.strip() and not line.lstrip().startswith('#')}
         for name in COMMANDS:
             with self.subTest(command=name):
                 command = ROOT / 'bin' / name
                 self.assertTrue(command.is_file(), f'missing canonical command {name}')
                 self.assertFalse(command.is_symlink(), 'canonical command must not be alias')
                 self.assertTrue(os.access(command, os.X_OK))
-                self.assertIn(name, manifest)
+                # Baseline backup commands have an explicit optional installation manifest.
+                entries = optional_entries if name in ('ai-control-backup', 'ai-control-backup-init', 'ai-control-backup-restore-test') else required_entries
+                self.assertIn(name, entries)
         for prefix in ('claude-control', 'claude-agent', 'claude-rc'):
             self.assertFalse(list((ROOT / 'bin').glob(prefix + '*')))
-            self.assertNotIn(prefix, manifest)
+            self.assertFalse(any(prefix in entry for entry in required_entries | optional_entries))
         self.assertTrue((ROOT / 'bin/codex-rc').is_file())
 
     def test_public_defaults_and_env_names_are_canonical(self):
