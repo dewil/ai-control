@@ -1,0 +1,3 @@
+# Проверка восстановления сессии
+
+Спека9addab4, blind tests1b15da4: 10 tests,12 meaningful failing assertions404 до реализации. Автор233b9ca:56webtestsPASS. Main synthetic browser390×844/1280×900: login→reload без новогоlogin→answer mutation→logout→reload; transientbootstrap503→retry; local/sessionStorageemptyPASS. Independentread-only compliancegpt-6-sol/medium SID01a1089b-328f-7cb0-8f9f-9aca7073da58 PASS без замечаний, authorgpt-6.1-sol. Main merge dark2aa68d1 затронул только CSS+docs, конфликт domainappend разрешён сохранением INV-WEB-10 и INV-WEB-11. Root deployment и installed acceptance учитываются отдельно.

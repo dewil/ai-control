@@ -46,3 +46,7 @@ INV-WEB-09: canonical web command ai-control-web, package /opt/ai-control-web, p
 ## Тёмная тема (04.10.2026)
 
 INV-WEB-10: интерфейс тёмный по умолчанию, включая login, поля/native controls, карточки, secondary buttons, notices/errors и keyboard focus. Text contrast и phone/desktop layout сохраняются. Theme не меняет auth/access/task operations. Traceability: visual390×844/1280×900 synthetic fixture; существующие web contracts/CI.
+
+## Восстановление сессии при reload (04.10.2026)
+
+INV-WEB-11: GET /api/session возвращает существующий CSRF по действующей HttpOnly cookie, без создания сессии, продления TTL, TOTP или backend calls. Отсутствующая/истёкшая/отозванная cookie получает401, чужой explicit Origin —403; ответы no-store. UI bootstrap скрывает login до проверки, восстанавливает workspace и mutation CSRF либо показывает login после401. Transient failure оставляет retry восстановления без credentials; browser storage не используется. Traceability: tests/test_control_web_session_reload.py и synthetic browser reload/logout/retry.
