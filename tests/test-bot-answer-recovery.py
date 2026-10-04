@@ -216,6 +216,64 @@ class Recovery(unittest.TestCase):
         self.assertEqual(r.returncode,0,r.stderr);self.assertEqual(self.read(closed),before)
         self.assertEqual(len(self.events()),1)
 
+    def test_native_recovery_rejects_missing_partial_and_mistyped_binding(self):
+        # Binding shape comes from test-codex-task-native-answer.py's public
+        # native question fixture, independently of the writer implementation.
+        invalid=[('missing',None),('partial',dict(status='pending',allowed_decisions=['reject']))]
+        for field,value in (('operation_id',[]),('task_incarnation',42),('generation','7'),
+                            ('attempt_id',[]),('thread_id',7),('turn_id',False),
+                            ('request_id',{}),('method',7),('item_id',[]),
+                            ('payload_fingerprint',{}),('changes_digest',42)):
+            cb=self.native_callback();cb[field]=value;invalid.append((field,cb))
+        for label,callback in invalid:
+            with self.subTest(binding=label):
+                extras=dict(engine='codex')
+                if callback is not None:extras['native_callback']=callback
+                q=self.question('permission',saved=True,**extras);before=self.read(q)
+                r=self.answer(q,'--recover')
+                self.assertEqual(r.returncode,2,r.stderr)
+                self.assertEqual(self.read(q),before)
+                self.assertEqual(self.events(),[])
+
+    def test_closed_malformed_question_is_not_a_successful_recovery_noop(self):
+        cases=[dict(status='closed'),dict(status='closed',kind='info'),
+               dict(status='closed',qid=str(uuid.uuid4()),kind='unknown')]
+        valid=self.question(saved=True,status='closed');valid_record=self.read(valid)
+        for label,change in (('missing qid',None),('wrong qid',str(uuid.uuid4())),
+                             ('wrong kind','bogus')):
+            record=dict(valid_record)
+            if label=='missing qid':record.pop('qid')
+            elif label=='wrong qid':record['qid']=change
+            else:record['kind']=change
+            cases.append(record)
+        for field in ('envelope_key','asked_at','question'):
+            missing=dict(valid_record);missing.pop(field);cases.append(missing)
+            mistyped=dict(valid_record);mistyped[field]=[];cases.append(mistyped)
+        for index,record in enumerate(cases):
+            with self.subTest(case=index):
+                qid=str(uuid.uuid4())
+                # Preserve matching identity for the wrong-kind complete case.
+                if index>=5:record['qid']=qid
+                self.save(self.agent/'questions'/f'{qid}.json',record)
+                r=self.answer(qid,'--recover')
+                self.assertEqual(r.returncode,2,r.stderr)
+                self.assertEqual(self.read(qid),record);self.assertEqual(self.events(),[])
+        for qid in (valid,self.question(status='closed')):
+            before=self.read(qid);r=self.answer(qid,'--recover')
+            self.assertEqual(r.returncode,0,r.stderr);self.assertEqual(self.read(qid),before)
+        self.assertEqual(self.events(),[])
+
+    def test_poll_restart_reads_previously_committed_offset(self):
+        q=self.question();self.register(q)
+        offset,_,first_requests=self.poll([self.update(q)])
+        self.assertEqual(first_requests[0]['offset'],40)
+        self.assertEqual(offset,42)
+        # A second real mode_poll entry must read disk, without fixture reset.
+        offset,_,restart_requests=self.poll([])
+        self.assertEqual(restart_requests[0]['offset'],42)
+        self.assertEqual(offset,42)
+        self.one_address(q)
+
     def register(self,qid,message=10):
         self.bot.sent_map_register(1001,[message],self.agent.name,None,kind='question',qid=qid)
     def update(self,qid,uid=41,message=10,reply=False,from_id=1001):
@@ -226,7 +284,8 @@ class Recovery(unittest.TestCase):
             message=dict(chat=dict(id=1001,type='private'),message_id=message),data=f'q:{qid}:0'))
 
     def poll(self,updates,writer_fault=None,spinner_fail=False):
-        offset=Path(self.bot.OFFSET_FILE);offset.write_text('40')
+        offset=Path(self.bot.OFFSET_FILE)
+        if not offset.exists():offset.write_text('40')
         calls=[];requests=[]
         def api(token,proxy,method,http_timeout=30,**kw):
             calls.append((method,kw))
@@ -258,6 +317,7 @@ class Recovery(unittest.TestCase):
         for reply in (False,True):
             for fault in ('spool','timeout','oserror','unknown'):
                 with self.subTest(reply=reply,fault=fault):
+                    Path(self.bot.OFFSET_FILE).write_text('40')
                     q=self.question();other=self.question();self.register(q);self.register(other,11)
                     self.fault.write_text('fail' if fault=='spool' else 'off')
                     offset,calls,requests=self.poll([self.update(q,reply=reply),self.update(other,42,11)],
@@ -267,7 +327,8 @@ class Recovery(unittest.TestCase):
                     self.assertEqual(requests[1]['offset'],40)
                     if not reply:self.assertTrue(any(m=='answerCallbackQuery' for m,_ in calls))
                     self.fault.write_text('off')
-                    offset,_,_=self.poll([self.update(q,reply=reply),self.update(other,42,11)])
+                    offset,_,redelivery_requests=self.poll([self.update(q,reply=reply),self.update(other,42,11)])
+                    self.assertEqual(redelivery_requests[0]['offset'],40)
                     self.assertEqual(offset,43);self.assertTrue(self.read(q).get('event_published_at'))
                     self.assertEqual(sum(e.get('payload',e).get('question_id')==q for e in self.events()),1)
 
