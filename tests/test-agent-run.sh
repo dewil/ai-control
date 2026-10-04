@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Tests for bin/claude-agent-run: spool/intake/executor/dlq/restore (этап 4).
+# Tests for bin/ai-agent-run: spool/intake/executor/dlq/restore (этап 4).
 # Контракт: design §10-11 + design delta 2026-07-12 (Д1-Д6).
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RUN="$HERE/../bin/claude-agent-run"
+RUN="$HERE/../bin/ai-agent-run"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-export CLAUDE_AGENTS_DIR="$TMP/agents"
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
-export CLAUDE_AGENT_PROBE_CMD=/usr/bin/true   # infra здорова по умолчанию
+export AI_AGENTS_DIR="$TMP/agents"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_AGENT_PROBE_CMD=/usr/bin/true   # infra здорова по умолчанию
 
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); }
@@ -38,9 +38,9 @@ drain() { # выгрести готовые pending, чтобы секции н�
 }
 
 # --- fixture: event-агент вручную (без CLI - юнит-скоуп) ---
-AG="$CLAUDE_AGENTS_DIR/evt"
+AG="$AI_AGENTS_DIR/evt"
 IB="$AG/inbox"
-SP="$CLAUDE_AGENT_SPOOL_BASE/evt"
+SP="$AI_AGENT_SPOOL_BASE/evt"
 mkdir -p "$AG" "$SP"
 chmod 0700 "$SP"
 cat > "$AG/spec.yaml" <<EOF
@@ -54,7 +54,7 @@ memory_max_mb: 100
 limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 EOF
-export CLAUDE_AGENT_GENERATION=1 CLAUDE_AGENT_ATTEMPT=test-attempt
+export AI_AGENT_GENERATION=1 AI_AGENT_ATTEMPT=test-attempt
 
 # mock claude: исход управляется файлом $TMP/mock-mode
 MOCK="$TMP/mock-claude"
@@ -98,10 +98,10 @@ assert "spool-put после дыры" 0 "$RUN" spool-put evt --text "после
 # argv-элемент >128KiB не проходит exec - E2BIG раньше проверяемого кода)
 big=$(python3 -c 'print("x" * 2000)')
 assert "event too large"     6 \
-  env CLAUDE_AGENT_EVENT_MAX_BYTES=1000 "$RUN" spool-put evt --text "$big"
+  env AI_AGENT_EVENT_MAX_BYTES=1000 "$RUN" spool-put evt --text "$big"
 
 # безопасность: symlink вместо spool - отказ
-mkdir -p "$TMP/elsewhere"; ln -s "$TMP/elsewhere" "$CLAUDE_AGENT_SPOOL_BASE/lnk"
+mkdir -p "$TMP/elsewhere"; ln -s "$TMP/elsewhere" "$AI_AGENT_SPOOL_BASE/lnk"
 assert "symlink spool отбит" 7 "$RUN" spool-put lnk --text x
 
 # ------------------------------------------------------------- intake (Д2)
@@ -175,7 +175,7 @@ drain
 IS=$("$RUN" spool-put evt --text "инфра-тест"); IK=$(key_of "$IS")
 "$RUN" intake "$AG" >/dev/null
 echo fail > "$MOCK_MODE_FILE"
-export CLAUDE_AGENT_PROBE_CMD=/usr/bin/false
+export AI_AGENT_PROBE_CMD=/usr/bin/false
 assert "step infra-fail" 0 "$RUN" step "$AG"
 [[ "$(jq_file "$IB/pending/$IK.json" 'd["meta"]["attempts"]')" == "0" ]] \
   && ok || fail "инфра больна: attempt НЕ засчитан"
@@ -185,7 +185,7 @@ assert "step infra-fail" 0 "$RUN" step "$AG"
 assert "step infra_wait" 0 "$RUN" step "$AG"
 [[ "$(cat "$TMP/out")" == "infra_wait" ]] && ok || fail "step: infra_wait"
 # выздоровление
-export CLAUDE_AGENT_PROBE_CMD=/usr/bin/true
+export AI_AGENT_PROBE_CMD=/usr/bin/true
 echo ok > "$MOCK_MODE_FILE"
 assert "step после infra" 0 "$RUN" step "$AG"
 [[ "$(cat "$TMP/out")" == "ran" ]] && ok || fail "после probe ok - ran"
@@ -289,11 +289,11 @@ PY
 
 # ------------------------------------------------------- wedge/backpressure
 # свежий агент: кап inbox=2 (spool-кап 2x2=4 - хватает на 3 события)
-AG2="$CLAUDE_AGENTS_DIR/evt2"; IB2="$AG2/inbox"
-mkdir -p "$AG2" "$CLAUDE_AGENT_SPOOL_BASE/evt2"
-chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/evt2"
+AG2="$AI_AGENTS_DIR/evt2"; IB2="$AG2/inbox"
+mkdir -p "$AG2" "$AI_AGENT_SPOOL_BASE/evt2"
+chmod 0700 "$AI_AGENT_SPOOL_BASE/evt2"
 sed 's/name: evt/name: evt2/' "$AG/spec.yaml" > "$AG2/spec.yaml"
-export CLAUDE_AGENT_INBOX_MAX_EVENTS=2
+export AI_AGENT_INBOX_MAX_EVENTS=2
 for i in 1 2 3; do "$RUN" spool-put evt2 --text "событие $i" >/dev/null; done
 assert "intake wedged" 0 "$RUN" intake "$AG2"
 [[ "$(jq_file "$IB2/intake-status.json" 'd["state"]')" == "wedged" ]] \
@@ -310,7 +310,7 @@ mv "$IB2/pending/$K2.json" "$IB2/done/$K2.json"
 "$RUN" intake "$AG2" >/dev/null
 [[ "$(jq_file "$IB2/cursor.json" 'd["position"]')" != "$CUR" ]] \
   && ok || fail "после drain курсор двинулся"
-unset CLAUDE_AGENT_INBOX_MAX_EVENTS
+unset AI_AGENT_INBOX_MAX_EVENTS
 
 # ---------------------------------------- ротация леджера + транскрипты
 # ключ старше 3x окна выротируется, свежий останется

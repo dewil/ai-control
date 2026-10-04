@@ -11,20 +11,20 @@ set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-RC="$REPO/bin/claude-rc"
-RECON="$REPO/bin/claude-agent-reconciler"
-IO="$REPO/bin/claude-agent-io"
+RC="$REPO/bin/ai-rc"
+RECON="$REPO/bin/ai-agent-reconciler"
+IO="$REPO/bin/ai-agent-io"
 
 TMP="$(mktemp -d)"
-export CLAUDE_AGENTS_DIR="$TMP/agents"
-export CLAUDE_RECONCILER_DIR="$TMP/reconciler"
-export CLAUDE_AGENT_RUNTIME_CMD="MOCK_IO=$IO $HERE/mock-agent.sh"
-export CLAUDE_AGENT_STOP_GRACE=3
-export CLAUDE_AGENT_START_GRACE=8
-export CLAUDE_AGENT_SLEEP_GRACE=5
-export CLAUDE_AGENT_HB_MAX=10
-export CLAUDE_AGENTS_RAM_BUDGET_MB=250
-unset CLAUDE_AGENTS_REQUIRE_MOUNT 2>/dev/null || true
+export AI_AGENTS_DIR="$TMP/agents"
+export AI_RECONCILER_DIR="$TMP/reconciler"
+export AI_AGENT_RUNTIME_CMD="MOCK_IO=$IO $HERE/mock-agent.sh"
+export AI_AGENT_STOP_GRACE=3
+export AI_AGENT_START_GRACE=8
+export AI_AGENT_SLEEP_GRACE=5
+export AI_AGENT_HB_MAX=10
+export AI_AGENTS_RAM_BUDGET_MB=250
+unset AI_AGENTS_REQUIRE_MOUNT 2>/dev/null || true
 
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ok: $1"; }
@@ -44,7 +44,7 @@ trap cleanup EXIT
 
 pass()  { "$RECON" --once; }
 cfield() { # <name> <py-expr over d>
-  "$IO" control-read "$CLAUDE_AGENTS_DIR/$1" | python3 -c \
+  "$IO" control-read "$AI_AGENTS_DIR/$1" | python3 -c \
     "import json,sys; d=json.load(sys.stdin); print($2)"
 }
 wait_for() { # <sec> <desc> <cmd...>: poll до успеха, гоняя проходы
@@ -87,7 +87,7 @@ EOF
   [[ -n "${3:-}" ]] && extra=(--reviewer-role "$3")
   "$RC" agent create "$name" --spec "$TMP/$name.spec.yaml" \
     --mission "$TMP/$name.mission.md" "${extra[@]}" >/dev/null
-  echo healthy > "$CLAUDE_AGENTS_DIR/$name/mock.mode"
+  echo healthy > "$AI_AGENTS_DIR/$name/mock.mode"
 }
 
 # reviewer-role снапшот для stage-7 сценариев (manifest + sha)
@@ -139,7 +139,7 @@ echo "=== S3 (C11): SIGSTOP -> нет прогресса -> кварантин/�
 MIM=1 make_agent s3
 start_and_settle s3
 sleep 62  # granted_age > max_iteration_minutes(1)*60с
-echo overrun > "$CLAUDE_AGENTS_DIR/s3/mock.mode"
+echo overrun > "$AI_AGENTS_DIR/s3/mock.mode"
 sleep 3
 pass  # OVERRUN 1-й раз: попытка interrupt (send-keys), кэш-флаг
 sleep 2
@@ -155,10 +155,10 @@ pass  # attention блокирует resume
 echo "=== S4 (T5): OVERSLEPT -> пинок -> рестарт ==="
 make_agent s4
 start_and_settle s4
-echo oversleep > "$CLAUDE_AGENTS_DIR/s4/mock.mode"
+echo oversleep > "$AI_AGENTS_DIR/s4/mock.mode"
 sleep 3; pass   # пинок Enter + кэш
 sleep 2; pass   # рецидив: гашение + новый захват в след. проходах
-echo healthy > "$CLAUDE_AGENTS_DIR/s4/mock.mode"
+echo healthy > "$AI_AGENTS_DIR/s4/mock.mode"
 sleep 1; pass; sleep 3; pass
 wait_for 12 "s4: recovered after oversleep" check_active s4
 "$RC" agent stop s4 >/dev/null; pass
@@ -166,7 +166,7 @@ wait_for 12 "s4: recovered after oversleep" check_active s4
 echo "=== S5 (T6/§5.2): нет heartbeat при живом процессе -> MODAL -> рестарты -> attention ==="
 make_agent s5
 start_and_settle s5
-echo nohb > "$CLAUDE_AGENTS_DIR/s5/mock.mode"
+echo nohb > "$AI_AGENTS_DIR/s5/mock.mode"
 sleep 12   # heartbeat протухает (HB_MAX=10)
 pass; sleep 2; pass; sleep 2; pass; sleep 2; pass
 wait_for 30 "s5: modal_screen attention после рестартов" check_att s5 modal_screen
@@ -175,11 +175,11 @@ wait_for 30 "s5: modal_screen attention после рестартов" check_att
 echo "=== S6 (T7/§8): claim done -> provenance -> needs-human -> accept ==="
 make_agent s6
 start_and_settle s6
-echo claim > "$CLAUDE_AGENTS_DIR/s6/mock.mode"
+echo claim > "$AI_AGENTS_DIR/s6/mock.mode"
 sleep 4
 pass  # CLAIMED: гашение + приемка (нет check -> needs-human)
 wait_for 10 "s6: needs-human" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s6 | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s6 | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
 ART=$(cfield s6 'd["acceptance"]["artifact"]')
 [[ -n "$ART" && "$ART" != "None" ]] && ok "s6: artifact recorded" || fail "s6: no artifact"
 "$RC" agent accept s6 >/dev/null \
@@ -191,34 +191,34 @@ pass
 echo "=== S7 (§8.2): deterministic check -> auto-accept ==="
 make_agent s7 'acceptance: { check: "test -f result.txt", deterministic: true, timeout_s: 30 }'
 start_and_settle s7
-echo claim > "$CLAUDE_AGENTS_DIR/s7/mock.mode"
+echo claim > "$AI_AGENTS_DIR/s7/mock.mode"
 sleep 4
 pass          # гашение + запуск check-воркера
 sleep 4; pass # сбор результата: [0,0] -> accepted
 wait_for 30 "s7: auto-accepted" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s7 | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == accepted ]]"
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s7 | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == accepted ]]"
 [[ "$(cfield s7 'd["desired"]')" == "stopped" ]] \
   && ok "s7: desired stopped той же записью" || fail "s7: desired"
 
 echo "=== S8 (C9): fail-closed mount hold ==="
 make_agent s8
-export CLAUDE_AGENTS_REQUIRE_MOUNT="/nonexistent-mount-$$"
+export AI_AGENTS_REQUIRE_MOUNT="/nonexistent-mount-$$"
 "$RC" agent start s8 >/dev/null
 pass
 [[ "$(cfield s8 'd["hold"]')" == "luks_locked" ]] \
   && ok "s8: hold luks_locked" || fail "s8: no hold"
 [[ "$(cfield s8 'd["lease"]["state"]')" == "none" ]] \
   && ok "s8: no start under hold" || fail "s8: started under hold!"
-grep -q '"reason": "luks_locked"' "$CLAUDE_RECONCILER_DIR/alerts.jsonl" \
+grep -q '"reason": "luks_locked"' "$AI_RECONCILER_DIR/alerts.jsonl" \
   && ok "s8: alert in ledger" || fail "s8: no alert"
-N1=$(grep -c luks_locked "$CLAUDE_RECONCILER_DIR/alerts.jsonl")
+N1=$(grep -c luks_locked "$AI_RECONCILER_DIR/alerts.jsonl")
 pass  # повторный проход не спамит
-N2=$(grep -c luks_locked "$CLAUDE_RECONCILER_DIR/alerts.jsonl")
+N2=$(grep -c luks_locked "$AI_RECONCILER_DIR/alerts.jsonl")
 [[ "$N1" == "$N2" ]] && ok "s8: alert deduped" || fail "s8: alert spam"
 pass; pass; pass  # регресс ребут-теста 2026-07-11: hold не растит retry (§16.3/C9)
 [[ "$(cfield s8 '(d["attention"] or {}).get("reason","-")')" == "-" ]] \
   && ok "s8: hold не растит retry (нет resume_failed)" || fail "s8: hold вырастил attention"
-unset CLAUDE_AGENTS_REQUIRE_MOUNT
+unset AI_AGENTS_REQUIRE_MOUNT
 pass; sleep 3
 wait_for 15 "s8: starts after unlock" check_active s8
 [[ "$(cfield s8 'd["hold"]')" == "None" ]] \
@@ -239,8 +239,8 @@ QUEUED=$(for a in s9a s9b s9c; do cfield "$a" 'd["hold"]'; done | grep -c admiss
 for a in s9a s9b s9c; do "$RC" agent stop "$a" >/dev/null; done; pass; pass
 
 echo "=== S9d (C12/§10.1, event/drain): три drain-агента с событиями в spool - admission/RAM-бюджет разводит старты, не все три сразу ==="
-RUNB="$REPO/bin/claude-agent-run"
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool-s9d"
+RUNB="$REPO/bin/ai-agent-run"
+export AI_AGENT_SPOOL_BASE="$TMP/spool-s9d"
 MOCKCL_S9D="$TMP/mock-claude-s9d"
 cat > "$MOCKCL_S9D" <<'EOF'
 #!/usr/bin/env bash
@@ -254,8 +254,8 @@ export CLAUDE_BIN="$MOCKCL_S9D"
 # claude-вызова (мок спит 60с) - боевой HB_MAX=10 (задан вверху файла ради
 # быстрых MODAL-кейсов S5) счел бы это зависанием и загасил юнит раньше
 # времени. На окно этого сценария порог поднимается, снаружи не течет.
-HB_MAX_SAVE_S9D="$CLAUDE_AGENT_HB_MAX"
-export CLAUDE_AGENT_HB_MAX=120
+HB_MAX_SAVE_S9D="$AI_AGENT_HB_MAX"
+export AI_AGENT_HB_MAX=120
 for a in s9d1 s9d2 s9d3; do
   cat > "$TMP/$a.spec.yaml" <<EOF
 schema: 1
@@ -284,30 +284,30 @@ QUEUED=$(for a in s9d1 s9d2 s9d3; do cfield "$a" 'd["hold"]'; done | grep -c adm
 for a in s9d1 s9d2 s9d3; do "$RC" agent stop "$a" >/dev/null 2>&1; done
 pass  # гасим досрочно (не ждём естественного завершения sleep 60 в моке)
 unset CLAUDE_BIN
-export CLAUDE_AGENT_HB_MAX="$HB_MAX_SAVE_S9D"
+export AI_AGENT_HB_MAX="$HB_MAX_SAVE_S9D"
 
 echo "=== S10 (C21): crash посреди гашения -> recovery ==="
 make_agent s10
 start_and_settle s10
 # имитируем crash reconciler'а после шага 1 гашения: stopping + живой юнит
-"$IO" control-cas "$CLAUDE_AGENTS_DIR/s10" --expect 'lease.state="active"' \
+"$IO" control-cas "$AI_AGENTS_DIR/s10" --expect 'lease.state="active"' \
   --set 'lease.state="stopping"' --event test_crash_stopping >/dev/null
 "$RC" agent stop s10 >/dev/null
 pass  # STOPPING_RECOVERY: должен довести гашение
 wait_for 10 "s10: stopping recovered to none" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s10 | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"lease\"][\"state\"])')\" == none ]]"
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s10 | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"lease\"][\"state\"])')\" == none ]]"
 systemctl --user is-active agent-s10.service >/dev/null 2>&1 \
   && fail "s10: unit still alive" || ok "s10: unit gone"
 
 echo "=== S11 (§8.4): revise -> gen++ -> рестарт ==="
 make_agent s11
 start_and_settle s11
-echo claim > "$CLAUDE_AGENTS_DIR/s11/mock.mode"
+echo claim > "$AI_AGENTS_DIR/s11/mock.mode"
 sleep 4; pass
 wait_for 10 "s11: needs-human" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s11 | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s11 | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
 G=$(cfield s11 'd["generation"]')
-echo healthy > "$CLAUDE_AGENTS_DIR/s11/mock.mode"
+echo healthy > "$AI_AGENTS_DIR/s11/mock.mode"
 "$RC" agent revise s11 --note "доделай" >/dev/null && ok "s11: revise" || fail "s11: revise"
 pass  # R1: pending + gen++
 [[ "$(cfield s11 'd["acceptance"]["status"]')" == "pending" ]] \
@@ -323,7 +323,7 @@ make_agent s12
 start_and_settle s12
 # имитация: возвращаем lease в acquiring при живом юните и state
 ATT_ID=$(cfield s12 'd["lease"]["start_attempt_id"]')
-"$IO" control-cas "$CLAUDE_AGENTS_DIR/s12" --expect 'lease.state="active"' \
+"$IO" control-cas "$AI_AGENTS_DIR/s12" --expect 'lease.state="active"' \
   --set 'lease.state="acquiring"' --set 'lease.main_pid=null' \
   --event test_crash_gate_b >/dev/null
 pass  # ACQUIRING_READY -> R2: гейт B довершен
@@ -345,13 +345,13 @@ sleep 300 & OPID=$!
 OSTART=$(awk '{print $22}' "/proc/$OPID/stat")
 make_agent s13
 sed "s/^name: s13\$/name: s13h/" "$TMP/s13.spec.yaml" > "$TMP/s13h.spec.yaml"
-"$REPO/bin/claude-rc" agent create s13h --spec "$TMP/s13h.spec.yaml" \
+"$REPO/bin/ai-rc" agent create s13h --spec "$TMP/s13h.spec.yaml" \
   --mission "$TMP/s13.mission.md" \
   --handoff-session "$SID" --handoff-pid "$OPID" \
   --handoff-pid-start "$OSTART" --handoff-cwd "$ORIGIN_CWD" \
   --handoff-expires-min 10 >/dev/null \
   && ok "s13: handoff-create" || fail "s13: handoff-create"
-echo healthy > "$CLAUDE_AGENTS_DIR/s13h/mock.mode"
+echo healthy > "$AI_AGENTS_DIR/s13h/mock.mode"
 pass
 [[ "$(cfield s13h 'd["handoff"]["phase"]')" == "prepared" ]] \
   && ok "s13: prepared ждет живой origin" || fail "s13: prepared ($(cfield s13h 'd["handoff"]["phase"]'))"
@@ -360,14 +360,14 @@ pass
 kill "$OPID" 2>/dev/null; wait "$OPID" 2>/dev/null
 pass  # триада ок -> adopting -> move -> adopted + desired=running
 wait_for 10 "s13: adopted + running" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s13h | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[\"handoff\"][\"phase\"], d[\"desired\"])')\" == \"adopted running\" ]]"
-SLUG_W=$(echo "$CLAUDE_AGENTS_DIR/s13h/work" | sed 's|[^a-zA-Z0-9]|-|g')
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s13h | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[\"handoff\"][\"phase\"], d[\"desired\"])')\" == \"adopted running\" ]]"
+SLUG_W=$(echo "$AI_AGENTS_DIR/s13h/work" | sed 's|[^a-zA-Z0-9]|-|g')
 [[ -f "$CFG/projects/$SLUG_W/$SID.jsonl" ]] \
   && ok "s13: транскрипт в namespace агента" || fail "s13: транскрипт не переехал"
 [[ ! -f "$CFG/projects/$SLUG_O/$SID.jsonl" ]] \
   && ok "s13: origin-файла больше нет (--continue не найдет)" || fail "s13: origin остался"
 wait_for 15 "s13: агент стартовал после адопции" check_active s13h
-"$REPO/bin/claude-rc" agent stop s13h >/dev/null; pass
+"$REPO/bin/ai-rc" agent stop s13h >/dev/null; pass
 rm -rf "$CFG/projects/$SLUG_O" "$CFG/projects/$SLUG_W"
 
 echo "=== S14 (C26): crash посреди адопции -> recovery ==="
@@ -376,29 +376,29 @@ mkdir -p "$CFG/projects/$SLUG_O"
 echo '{"type":"fake","line":2}' > "$CFG/projects/$SLUG_O/$SID2.jsonl"
 D2=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$CFG/projects/$SLUG_O/$SID2.jsonl")
 sed "s/^name: s13\$/name: s14h/" "$TMP/s13.spec.yaml" > "$TMP/s14h.spec.yaml"
-"$REPO/bin/claude-rc" agent create s14h --spec "$TMP/s14h.spec.yaml" \
+"$REPO/bin/ai-rc" agent create s14h --spec "$TMP/s14h.spec.yaml" \
   --mission "$TMP/s13.mission.md" \
   --handoff-session "$SID2" --handoff-pid 1 --handoff-pid-start 999999999 \
   --handoff-cwd "$ORIGIN_CWD" >/dev/null 2>&1 || true
 # имитация crash ПОСЛЕ входа в adopting, ДО move
-"$IO" control-cas "$CLAUDE_AGENTS_DIR/s14h" --expect 'handoff.phase="prepared"' \
+"$IO" control-cas "$AI_AGENTS_DIR/s14h" --expect 'handoff.phase="prepared"' \
   --set 'handoff.phase="adopting"' --set "handoff.transcript_digest=\"$D2\"" \
   --event test_crash_adopting >/dev/null
-echo healthy > "$CLAUDE_AGENTS_DIR/s14h/mock.mode"
+echo healthy > "$AI_AGENTS_DIR/s14h/mock.mode"
 pass  # recovery: origin есть/dest нет -> move -> adopted
 wait_for 10 "s14: adopting recovery -> adopted" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s14h | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"handoff\"][\"phase\"])')\" == adopted ]]"
-"$REPO/bin/claude-rc" agent stop s14h >/dev/null; pass; pass
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s14h | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"handoff\"][\"phase\"])')\" == adopted ]]"
+"$REPO/bin/ai-rc" agent stop s14h >/dev/null; pass; pass
 
 echo "=== S15 (§9.4): чужой dest -> adoption_failed, ничего не удалено ==="
 SID3=$(python3 -c 'import uuid; print(uuid.uuid4())')
 echo '{"type":"fake","line":3}' > "$CFG/projects/$SLUG_O/$SID3.jsonl"
 sed "s/^name: s13\$/name: s15h/" "$TMP/s13.spec.yaml" > "$TMP/s15h.spec.yaml"
-"$REPO/bin/claude-rc" agent create s15h --spec "$TMP/s15h.spec.yaml" \
+"$REPO/bin/ai-rc" agent create s15h --spec "$TMP/s15h.spec.yaml" \
   --mission "$TMP/s13.mission.md" \
   --handoff-session "$SID3" --handoff-pid 1 --handoff-pid-start 999999999 \
   --handoff-cwd "$ORIGIN_CWD" >/dev/null 2>&1 || true
-SLUG_W15=$(echo "$CLAUDE_AGENTS_DIR/s15h/work" | sed 's|[^a-zA-Z0-9]|-|g')
+SLUG_W15=$(echo "$AI_AGENTS_DIR/s15h/work" | sed 's|[^a-zA-Z0-9]|-|g')
 mkdir -p "$CFG/projects/$SLUG_W15"
 echo '{"foreign":"file"}' > "$CFG/projects/$SLUG_W15/$SID3.jsonl"  # чужой dest
 pass; pass
@@ -407,24 +407,24 @@ grep -q foreign "$CFG/projects/$SLUG_W15/$SID3.jsonl" \
   && ok "s15: чужой файл не тронут" || fail "s15: чужой файл поврежден"
 [[ -f "$CFG/projects/$SLUG_O/$SID3.jsonl" ]] \
   && ok "s15: origin цел" || fail "s15: origin пропал"
-"$REPO/bin/claude-rc" agent resolve s15h --stop >/dev/null 2>&1 || true
+"$REPO/bin/ai-rc" agent resolve s15h --stop >/dev/null 2>&1 || true
 rm -rf "$CFG/projects/$SLUG_O" "$CFG/projects/$SLUG_W15"
 
 # =========================================================================
 # Этап 4: event-агенты (design delta 2026-07-12). Рантайм - НАСТОЯЩИЙ
-# claude-agent-run loop; мокается только claude (CLAUDE_BIN).
+# ai-agent-run loop; мокается только claude (CLAUDE_BIN).
 # =========================================================================
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
-export CLAUDE_AGENT_CYCLE_S=1
-export CLAUDE_AGENT_RETRY_DELAYS="1,2,3"
-export CLAUDE_AGENT_PROBE_CMD="$(command -v true)"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_AGENT_CYCLE_S=1
+export AI_AGENT_RETRY_DELAYS="1,2,3"
+export AI_AGENT_PROBE_CMD="$(command -v true)"
 ALERTLOG="$TMP/alerts-hook.log"
 cat > "$TMP/alert-hook.sh" <<EOF
 #!/usr/bin/env bash
 echo "\$1 \$2 \$3" >> "$ALERTLOG"
 EOF
 chmod +x "$TMP/alert-hook.sh"
-export CLAUDE_AGENT_ALERT_CMD="$TMP/alert-hook.sh"
+export AI_AGENT_ALERT_CMD="$TMP/alert-hook.sh"
 MOCKCL="$TMP/mock-claude"
 cat > "$MOCKCL" <<'EOF'
 #!/usr/bin/env bash
@@ -443,7 +443,7 @@ echo '{"type":"result","result":"обработано","total_cost_usd":0.001}'
 EOF
 chmod +x "$MOCKCL"
 export CLAUDE_BIN="$MOCKCL"
-RUNB="$REPO/bin/claude-agent-run"
+RUNB="$REPO/bin/ai-agent-run"
 
 make_event_agent() { # <name> [runs_per_day] [extra-spec-yaml]
   cat > "$TMP/$1.spec.yaml" <<EOF
@@ -461,7 +461,7 @@ EOF
   "$RC" agent create "$1" --spec "$TMP/$1.spec.yaml" >/dev/null
 }
 resume_fails_of() { # <name>: 0 если счетчик отсутствует (см. cget/cset)
-  local v; v=$(grep '^resume_fails=' "$CLAUDE_RECONCILER_DIR/cache/$1.flags" \
+  local v; v=$(grep '^resume_fails=' "$AI_RECONCILER_DIR/cache/$1.flags" \
     2>/dev/null | cut -d= -f2)
   echo "${v:-0}"
 }
@@ -474,7 +474,7 @@ sys.exit(0 if sys.argv[2] in d.get(sys.argv[3], []) else 1)' "$1" "$2" "$3"
 
 echo "=== S16 (Д1-Д3): event-агент - intake, прогоны, kill -9 без потери ==="
 make_event_agent e16
-IB16="$CLAUDE_AGENTS_DIR/e16/inbox"
+IB16="$AI_AGENTS_DIR/e16/inbox"
 "$RUNB" spool-put e16 --text "быстрое событие" >/dev/null
 "$RUNB" spool-put e16 --text "медленное событие" >/dev/null
 "$RC" agent start e16 >/dev/null
@@ -496,7 +496,7 @@ wait_for 40 "s16: kill -9 -> resume, оба события done (потери н
 
 echo "=== S17 (Д5): бюджет-кап -> executor выходит, hold + алерт, intake живет ==="
 make_event_agent e17 1
-IB17="$CLAUDE_AGENTS_DIR/e17/inbox"
+IB17="$AI_AGENTS_DIR/e17/inbox"
 "$RUNB" spool-put e17 --text "первое в кап" >/dev/null
 "$RUNB" spool-put e17 --text "второе за капом" >/dev/null
 "$RC" agent start e17 >/dev/null
@@ -516,9 +516,9 @@ systemctl --user is-active agent-e17.service >/dev/null 2>&1 \
 "$RC" agent stop e17 >/dev/null 2>&1; pass
 
 echo "=== S18 (§10.3/§16.1): wedge -> attention, захват РАЗРЕШЕН, drain лечит ==="
-export CLAUDE_AGENT_INBOX_MAX_EVENTS=1
+export AI_AGENT_INBOX_MAX_EVENTS=1
 make_event_agent e18
-IB18="$CLAUDE_AGENTS_DIR/e18/inbox"
+IB18="$AI_AGENTS_DIR/e18/inbox"
 "$RUNB" spool-put e18 --text "раз" >/dev/null
 "$RUNB" spool-put e18 --text "два" >/dev/null
 pass; pass   # intake при desired=paused (§11.1)
@@ -527,13 +527,13 @@ wait_for 10 "s18: attention inbox_wedged" check_att e18 inbox_wedged
 wait_for 40 "s18: drain при wedged - оба события done" \
   bash -c "[[ \$(ls '$IB18/done' | wc -l) -eq 2 ]]"
 wait_for 10 "s18: wedge самоснялся" \
-  bash -c "[[ -z \$(\"$IO\" control-read \"$CLAUDE_AGENTS_DIR/e18\" | python3 -c 'import json,sys; print((json.load(sys.stdin).get(\"attention\") or {}).get(\"reason\",\"\"))') ]]"
-unset CLAUDE_AGENT_INBOX_MAX_EVENTS
+  bash -c "[[ -z \$(\"$IO\" control-read \"$AI_AGENTS_DIR/e18\" | python3 -c 'import json,sys; print((json.load(sys.stdin).get(\"attention\") or {}).get(\"reason\",\"\"))') ]]"
+unset AI_AGENT_INBOX_MAX_EVENTS
 "$RC" agent stop e18 >/dev/null 2>&1; pass
 
 echo "=== S19 (§11.2): ядовитое событие -> DLQ, очередь живет, алерт ==="
 make_event_agent e19
-IB19="$CLAUDE_AGENTS_DIR/e19/inbox"
+IB19="$AI_AGENTS_DIR/e19/inbox"
 "$RUNB" spool-put e19 --text "poison событие" >/dev/null
 "$RUNB" spool-put e19 --text "здоровое событие" >/dev/null
 "$RC" agent start e19 >/dev/null
@@ -551,7 +551,7 @@ DLK=$(ls "$IB19/deadletter" | sed 's/.json//')
 
 echo "=== S20a (v2 §4.2/§6): runtime=drain - юнит не стартует на пустом spool, событие -> старт-обработка-выход, resume_fails не растет ==="
 make_event_agent e20a 100 'runtime: drain'
-IB20A="$CLAUDE_AGENTS_DIR/e20a/inbox"
+IB20A="$AI_AGENTS_DIR/e20a/inbox"
 "$RC" agent start e20a >/dev/null
 pass; pass; pass   # 3 прохода на пустом spool (контракт §6 S20a)
 systemctl --user is-active agent-e20a.service >/dev/null 2>&1 \
@@ -568,7 +568,7 @@ wait_for 20 "s20a: событие обработано (done)" \
   bash -c "[[ \$(ls '$IB20A/done' 2>/dev/null | wc -l) -eq 1 ]]"
 wait_for 15 "s20a: юнит вышел, lease освобожден" \
   bash -c "! systemctl --user is-active agent-e20a.service >/dev/null 2>&1 \
-    && [[ \$(\"$IO\" control-read \"$CLAUDE_AGENTS_DIR/e20a\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"lease\"][\"state\"])') == none ]]"
+    && [[ \$(\"$IO\" control-read \"$AI_AGENTS_DIR/e20a\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"lease\"][\"state\"])') == none ]]"
 [[ -z "$(cfield e20a '(d["attention"] or {}).get("reason","")')" ]] \
   && ok "s20a: attention пуст после выхода" || fail "s20a: attention появился"
 RF1=$(resume_fails_of e20a)
@@ -577,7 +577,7 @@ RF1=$(resume_fails_of e20a)
   || fail "s20a: resume_fails вырос ($RF0 -> $RF1) - подозреваемая гонка с gate_b на быстром drain-выходе"
 GEN_A=$(cfield e20a 'd["generation"]')
 # pause, не stop: agent start требует desired=paused (stop - терминален,
-# см. cmd_stop/cmd_start в bin/claude-rc-agent) - S20b переиспользует агента
+# см. cmd_stop/cmd_start в bin/ai-rc-agent) - S20b переиспользует агента
 "$RC" agent pause e20a >/dev/null 2>&1; pass
 
 echo "=== S20b (v2 §4.2): второе событие тому же drain-агенту - цикл повторился, generation вырос ==="
@@ -589,7 +589,7 @@ wait_for 20 "s20b: второе событие обработано (done)" \
   bash -c "[[ \$(ls '$IB20A/done' 2>/dev/null | wc -l) -eq 2 ]]"
 wait_for 15 "s20b: юнит вышел повторно, lease освобожден" \
   bash -c "! systemctl --user is-active agent-e20a.service >/dev/null 2>&1 \
-    && [[ \$(\"$IO\" control-read \"$CLAUDE_AGENTS_DIR/e20a\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"lease\"][\"state\"])') == none ]]"
+    && [[ \$(\"$IO\" control-read \"$AI_AGENTS_DIR/e20a\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"lease\"][\"state\"])') == none ]]"
 GEN_B=$(cfield e20a 'd["generation"]')
 [[ "$GEN_B" -gt "$GEN_A" ]] \
   && ok "s20b: generation вырос ($GEN_A -> $GEN_B)" \
@@ -607,7 +607,7 @@ wait_for 15 "s20c: loop-агент стартовал на пустом spool (�
 
 echo "=== S20d (аудит: inflight-гейт + Gate-B fast-exit): kill mid-inflight -> восстановление БЕЗ нового события ==="
 make_event_agent e20d 100 'runtime: drain'
-IB20D="$CLAUDE_AGENTS_DIR/e20d/inbox"
+IB20D="$AI_AGENTS_DIR/e20d/inbox"
 "$RC" agent start e20d >/dev/null
 "$RUNB" spool-put e20d --text "медленное событие" >/dev/null
 pass
@@ -623,7 +623,7 @@ wait_for 40 "s20d: юнит поднялся снова БЕЗ нового со
   bash -c "[[ \$(ls '$IB20D/done' 2>/dev/null | wc -l) -eq 1 ]]"
 wait_for 15 "s20d: юнит вышел, lease освобожден" \
   bash -c "! systemctl --user is-active agent-e20d.service >/dev/null 2>&1 \
-    && [[ \$(\"$IO\" control-read \"$CLAUDE_AGENTS_DIR/e20d\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"lease\"][\"state\"])') == none ]]"
+    && [[ \$(\"$IO\" control-read \"$AI_AGENTS_DIR/e20d\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"lease\"][\"state\"])') == none ]]"
 GEN_D1=$(cfield e20d 'd["generation"]')
 [[ "$GEN_D1" -gt "$GEN_D0" ]] \
   && ok "s20d: generation вырос после восстановления ($GEN_D0 -> $GEN_D1)" \
@@ -651,8 +651,8 @@ BASE21A=$(git -C "$PROJ21A" rev-parse main)
 make_event_agent e21a 100 "project: $PROJ21A
 workspace: worktree
 runtime: drain"
-IB21A="$CLAUDE_AGENTS_DIR/e21a/inbox"
-[[ -d "$CLAUDE_AGENTS_DIR/e21a/work" ]] \
+IB21A="$AI_AGENTS_DIR/e21a/inbox"
+[[ -d "$AI_AGENTS_DIR/e21a/work" ]] \
   && ok "s21a: worktree создан при create" || fail "s21a: worktree/ отсутствует"
 INC21A=$(cfield e21a 'd["incarnation"]')
 BR21A="task/e21a-${INC21A:0:8}"
@@ -665,7 +665,7 @@ wait_for 20 "s21a: событие обработано (done)" \
   bash -c "[[ \$(ls '$IB21A/done' 2>/dev/null | wc -l) -eq 1 ]]"
 wait_for 15 "s21a: юнит вышел, lease освобожден" \
   bash -c "! systemctl --user is-active agent-e21a.service >/dev/null 2>&1 \
-    && [[ \$(\"$IO\" control-read \"$CLAUDE_AGENTS_DIR/e21a\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"lease\"][\"state\"])') == none ]]"
+    && [[ \$(\"$IO\" control-read \"$AI_AGENTS_DIR/e21a\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"lease\"][\"state\"])') == none ]]"
 CUR21A=$(git -C "$PROJ21A" rev-parse "$BR21A")
 [[ "$CUR21A" != "$BASE21A" ]] \
   && ok "s21a: ветка $BR21A получила новый коммит" || fail "s21a: ветка не продвинулась"
@@ -685,7 +685,7 @@ echo two > "$PROJ21B/two.txt"
 make_event_agent e21b 100 "project: $PROJ21B
 workspace: direct
 runtime: drain"
-IB21B="$CLAUDE_AGENTS_DIR/e21b/inbox"
+IB21B="$AI_AGENTS_DIR/e21b/inbox"
 "$RC" agent start e21b >/dev/null
 "$RUNB" spool-put e21b --text "direct-touch задача" >/dev/null
 pass
@@ -693,11 +693,11 @@ wait_for 20 "s21b: событие обработано (done)" \
   bash -c "[[ \$(ls '$IB21B/done' 2>/dev/null | wc -l) -eq 1 ]]"
 wait_for 15 "s21b: юнит вышел, lease освобожден" \
   bash -c "! systemctl --user is-active agent-e21b.service >/dev/null 2>&1 \
-    && [[ \$(\"$IO\" control-read \"$CLAUDE_AGENTS_DIR/e21b\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"lease\"][\"state\"])') == none ]]"
+    && [[ \$(\"$IO\" control-read \"$AI_AGENTS_DIR/e21b\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"lease\"][\"state\"])') == none ]]"
 [[ -f "$PROJ21B/direct-output.txt" ]] \
   && ok "s21b: файл создан прямо в живой папке проекта" || fail "s21b: файла нет в проекте"
 DONEKEY21B=$(ls "$IB21B/done" | sed 's/.json//' | head -1)
-CH21B="$CLAUDE_AGENTS_DIR/e21b/changes/$DONEKEY21B.json"
+CH21B="$AI_AGENTS_DIR/e21b/changes/$DONEKEY21B.json"
 [[ -f "$CH21B" ]] \
   && ok "s21b: changes/<key>.json создан" || fail "s21b: changes-файл не создан"
 changes_has "$CH21B" direct-output.txt added \
@@ -717,7 +717,7 @@ start_and_settle s30
 GEN=$(cfield s30 'd["generation"]')
 # заглушить рантайм, чтобы hb mock-агента не перезаписал инъекцию
 systemctl --user kill -s SIGKILL agent-s30.service 2>/dev/null; sleep 1
-python3 - "$CLAUDE_AGENTS_DIR/s30" "$GEN" <<'PY'
+python3 - "$AI_AGENTS_DIR/s30" "$GEN" <<'PY'
 import json, os, sys
 adir, gen = sys.argv[1], sys.argv[2]
 p = os.path.join(adir, "state.%s.json" % gen)
@@ -735,19 +735,19 @@ pass; pass  # classify каждого прохода читает claim_artifact
 
 # =========================================================================
 # Этап 7: ролевой приёмщик (design 2026-07-12-stage7). Мокается ТОЛЬКО
-# вывод приёмщика (CLAUDE_AGENT_REVIEW_CMD -> mock-review.sh); FSM/fencing/
+# вывод приёмщика (AI_AGENT_REVIEW_CMD -> mock-review.sh); FSM/fencing/
 # phase/retry/revoke - настоящие.
 # =========================================================================
-# НАСТОЯЩИЙ claude-agent-review, мокается только claude (CLAUDE_BIN) -
+# НАСТОЯЩИЙ ai-agent-review, мокается только claude (CLAUDE_BIN) -
 # проверяются реальные git diff, mission gate, role verification, пустой
 # cwd, строгий парсер, no-clobber (ревью-4 п.9)
-unset CLAUDE_AGENT_REVIEW_CMD 2>/dev/null || true
+unset AI_AGENT_REVIEW_CMD 2>/dev/null || true
 export CLAUDE_BIN="$HERE/mock-review-claude.sh"
 REVROLE=$(mk_reviewer_role)
 rm -f /tmp/agent-review-pwned   # $()-зонд из summary мока (см. S21 и финал)
 acc_status() { cfield "$1" 'd["acceptance"]["status"]'; }
 drive_claim() { # <name>: погнать mock-агента в claim done с артефактом
-  echo claim > "$CLAUDE_AGENTS_DIR/$1/mock.mode"; sleep 4; pass; sleep 3; pass
+  echo claim > "$AI_AGENTS_DIR/$1/mock.mode"; sleep 4; pass; sleep 3; pass
 }
 
 echo "=== S20 (§8.6): role-review + auto_accept -> accepted ==="
@@ -756,7 +756,7 @@ make_agent s20 'acceptance: { kind: role-review, auto_accept: true }' "$REVROLE"
 start_and_settle s20
 drive_claim s20
 wait_for 20 "s20: reviewer accept -> accepted" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s20 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == accepted ]]"
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s20 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == accepted ]]"
 [[ "$(cfield s20 'd["desired"]')" == "stopped" ]] \
   && ok "s20: terminal stopped" || fail "s20: desired"
 [[ "$(cfield s20 'd["acceptance"]["verdict_by"]')" == "reviewer" ]] \
@@ -767,7 +767,7 @@ make_agent s21 'acceptance: { kind: role-review }' "$REVROLE"
 start_and_settle s21
 drive_claim s21
 wait_for 20 "s21: accept без auto -> needs-human" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s21 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s21 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
 [[ "$(cfield s21 'd["desired"]')" != "stopped" ]] \
   && ok "s21: не терминален (человек решает)" || fail "s21: desired stopped!"
 # note из summary приемщика: читаемая кириллица (не \uXXXX-эскейпы)...
@@ -788,22 +788,22 @@ make_agent s22 'acceptance: { kind: role-review, auto_accept: true }' "$REVROLE"
 start_and_settle s22
 drive_claim s22
 wait_for 20 "s22: reject -> needs-human (не rejected терминал)" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s22 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s22 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
 "$RC" agent stop s22 >/dev/null; pass
 
 echo "=== S23 (§8.8): both - чек зелёный -> review -> accepted (phase-FSM) ==="
 export MOCK_REVIEW_VERDICT=accept
 make_agent s23 'acceptance: { kind: both, check: "test -f base.txt", deterministic: true, auto_accept: true }' "$REVROLE"
 start_and_settle s23
-echo claim > "$CLAUDE_AGENTS_DIR/s23/mock.mode"; sleep 4; pass; sleep 3
+echo claim > "$AI_AGENTS_DIR/s23/mock.mode"; sleep 4; pass; sleep 3
 # промежуточные фазы наблюдаемы: переходы требуют ОТДЕЛЬНОГО прохода
 # reconciler'а, а между двумя poll'ами wait_for - максимум один проход
 wait_for 15 "s23: phase=check_running (стартовый CAS чека)" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s23 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"].get(\"phase\") or \"\")')\" == check_running ]]"
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s23 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"].get(\"phase\") or \"\")')\" == check_running ]]"
 wait_for 20 "s23: phase=review_running (чек-гейт зелёный)" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s23 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"].get(\"phase\") or \"\")')\" == review_running ]]"
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s23 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"].get(\"phase\") or \"\")')\" == review_running ]]"
 wait_for 25 "s23: both -> accepted через phase-FSM" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s23 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == accepted ]]"
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s23 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == accepted ]]"
 [[ -z "$(cfield s23 '(d["acceptance"].get("phase") or "")')" ]] \
   && ok "s23: phase сброшена терминальным CAS" || fail "s23: phase не сброшена"
 
@@ -813,8 +813,8 @@ start_and_settle s24
 drive_claim s24
 sleep 4; pass
 wait_for 25 "s24: красный чек -> needs-human" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s24 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
-[[ ! -d "$CLAUDE_AGENTS_DIR/s24/.reviews" || -z "$(ls -A "$CLAUDE_AGENTS_DIR/s24/.reviews" 2>/dev/null)" ]] \
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s24 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
+[[ ! -d "$AI_AGENTS_DIR/s24/.reviews" || -z "$(ls -A "$AI_AGENTS_DIR/s24/.reviews" 2>/dev/null)" ]] \
   && ok "s24: приёмщик не запускался при красном чеке" || fail "s24: reviewer запущен зря"
 "$RC" agent stop s24 >/dev/null; pass
 
@@ -825,12 +825,12 @@ start_and_settle s25
 drive_claim s25
 pass; pass; pass; pass; pass  # проходы растят attempts до 3
 wait_for 25 "s25: reviewer_failed -> needs-human" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s25 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
-"$IO" control-read "$CLAUDE_AGENTS_DIR/s25" | grep -q "reviewer_failed после 3" \
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s25 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
+"$IO" control-read "$AI_AGENTS_DIR/s25" | grep -q "reviewer_failed после 3" \
   && ok "s25: note reviewer_failed (attempts=3)" || fail "s25: note без reviewer_failed/attempts"
 # retry держит ТОТ ЖЕ job (review_started ровно один - слот не задваивается,
 # новый job не заводится), attempts растут через review_retry
-EV25="$CLAUDE_AGENTS_DIR/s25/events.jsonl"
+EV25="$AI_AGENTS_DIR/s25/events.jsonl"
 [[ "$(grep -c review_started "$EV25")" -eq 1 ]] \
   && ok "s25: один review_started (retry того же job)" || fail "s25: review_started != 1"
 [[ "$(grep -c review_retry "$EV25")" -eq 2 ]] \
@@ -847,12 +847,12 @@ start_and_settle s26
 "$RC" agent revoke-role mockrev >/dev/null 2>&1
 drive_claim s26
 wait_for 20 "s26: revoke -> needs-human (не accepted)" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s26 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
-[[ ! -d "$CLAUDE_AGENTS_DIR/s26/.reviews" || -z "$(ls -A "$CLAUDE_AGENTS_DIR/s26/.reviews" 2>/dev/null)" ]] \
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s26 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
+[[ ! -d "$AI_AGENTS_DIR/s26/.reviews" || -z "$(ls -A "$AI_AGENTS_DIR/s26/.reviews" 2>/dev/null)" ]] \
   && ok "s26: review-result не появился" || fail "s26: review отработал при отозванной роли"
-grep -q review_started "$CLAUDE_AGENTS_DIR/s26/events.jsonl" \
+grep -q review_started "$AI_AGENTS_DIR/s26/events.jsonl" \
   && fail "s26: review_started при отозванной роли" || ok "s26: review не стартовал (нет review_started)"
-"$IO" control-read "$CLAUDE_AGENTS_DIR/s26" | grep -q "reviewer role revoked" \
+"$IO" control-read "$AI_AGENTS_DIR/s26" | grep -q "reviewer role revoked" \
   && ok "s26: note revoked" || fail "s26: note без revoked"
 "$RC" agent stop s26 >/dev/null 2>&1; pass
 
@@ -862,7 +862,7 @@ make_agent s27 'acceptance: { kind: role-review, auto_accept: true }' "$REVROLE"
 start_and_settle s27
 drive_claim s27
 wait_for 20 "s27: невалидный JSON вывода -> needs-human" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s27 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s27 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == needs-human ]]"
 unset MOCK_REVIEW_MODE
 "$RC" agent stop s27 >/dev/null 2>&1; pass
 
@@ -875,16 +875,16 @@ make_agent s28 'acceptance: { kind: role-review, auto_accept: true }' "$REVROLE"
 start_and_settle s28
 drive_claim s28
 wait_for 15 "s28: review_job создан" \
-  bash -c "[[ -n \"\$($IO control-read $CLAUDE_AGENTS_DIR/s28 | python3 -c 'import json,sys;print((json.load(sys.stdin)[\"acceptance\"].get(\"review_job\") or {}).get(\"job_id\") or \"\")')\" ]]"
-"$IO" control-cas "$CLAUDE_AGENTS_DIR/s28" \
+  bash -c "[[ -n \"\$($IO control-read $AI_AGENTS_DIR/s28 | python3 -c 'import json,sys;print((json.load(sys.stdin)[\"acceptance\"].get(\"review_job\") or {}).get(\"job_id\") or \"\")')\" ]]"
+"$IO" control-cas "$AI_AGENTS_DIR/s28" \
   --set 'acceptance.review_job.artifact="0000000000000000000000000000000000000000"' \
   --event test_artifact_switch --actor test >/dev/null
 unset MOCK_REVIEW_MODE   # новый job отработает штатно (accept)
 wait_for 30 "s28: stale -> новый review -> accepted" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s28 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == accepted ]]"
-grep -q review_stale "$CLAUDE_AGENTS_DIR/s28/events.jsonl" \
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s28 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == accepted ]]"
+grep -q review_stale "$AI_AGENTS_DIR/s28/events.jsonl" \
   && ok "s28: review_stale зафиксирован" || fail "s28: нет review_stale"
-[[ "$(grep -c review_started "$CLAUDE_AGENTS_DIR/s28/events.jsonl")" -eq 2 ]] \
+[[ "$(grep -c review_started "$AI_AGENTS_DIR/s28/events.jsonl")" -eq 2 ]] \
   && ok "s28: второй review стартовал заново (не retry старого)" || fail "s28: review_started != 2"
 A28=$(cfield s28 'd["acceptance"]["artifact"]')
 [[ -n "$A28" && "$A28" != "0000000000000000000000000000000000000000" ]] \
@@ -896,14 +896,14 @@ make_agent s29 'acceptance: { kind: role-review, auto_accept: true }' "$REVROLE"
 start_and_settle s29
 drive_claim s29
 wait_for 15 "s29: review_job создан" \
-  bash -c "[[ -n \"\$($IO control-read $CLAUDE_AGENTS_DIR/s29 | python3 -c 'import json,sys;print((json.load(sys.stdin)[\"acceptance\"].get(\"review_job\") or {}).get(\"job_id\") or \"\")')\" ]]"
-"$IO" control-cas "$CLAUDE_AGENTS_DIR/s29" \
+  bash -c "[[ -n \"\$($IO control-read $AI_AGENTS_DIR/s29 | python3 -c 'import json,sys;print((json.load(sys.stdin)[\"acceptance\"].get(\"review_job\") or {}).get(\"job_id\") or \"\")')\" ]]"
+"$IO" control-cas "$AI_AGENTS_DIR/s29" \
   --set 'acceptance.review_job.generation=999' \
   --event test_stale_generation --actor test >/dev/null
 unset MOCK_REVIEW_MODE
 wait_for 30 "s29: stale generation -> новый review -> accepted" \
-  bash -c "[[ \"\$($IO control-read $CLAUDE_AGENTS_DIR/s29 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == accepted ]]"
-grep -q review_stale "$CLAUDE_AGENTS_DIR/s29/events.jsonl" \
+  bash -c "[[ \"\$($IO control-read $AI_AGENTS_DIR/s29 | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"acceptance\"][\"status\"])')\" == accepted ]]"
+grep -q review_stale "$AI_AGENTS_DIR/s29/events.jsonl" \
   && ok "s29: review_stale зафиксирован" || fail "s29: нет review_stale"
 
 unset MOCK_REVIEW_VERDICT CLAUDE_BIN

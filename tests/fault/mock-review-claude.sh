@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Мок claude ДЛЯ приёмщика (этап 7 fault-suite): подменяет только CLAUDE_BIN,
-# НАСТОЯЩИЙ claude-agent-review вокруг него работает (git diff, mission gate,
+# НАСТОЯЩИЙ ai-agent-review вокруг него работает (git diff, mission gate,
 # role verification, пустой cwd, строгий парсер, no-clobber). Эмулирует
 # `claude -p --output-format json`: читает промпт со stdin, печатает
 # result-JSON с вердиктом из $MOCK_REVIEW_VERDICT (accept|reject|uncertain).

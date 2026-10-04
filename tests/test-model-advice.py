@@ -8,7 +8,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-COMMAND = ROOT / "bin" / "claude-agent-model-advice"
+COMMAND = ROOT / "bin" / "ai-agent-model-advice"
 QUESTIONS = ROOT / "tests" / "fixtures" / "jev-executor-questions.json"
 QUESTION_SHA = "b6fc89cde27e47a909978ae763a25e0d41b9fee65296c5b235b5a25e880ae5a5"
 
@@ -37,7 +37,7 @@ class ModelAdviceCLITests(unittest.TestCase):
         shutil.copyfile(QUESTIONS, self.questions)
         self.assertEqual(self.questions.read_bytes(), QUESTIONS.read_bytes())
         self.helper = self.helper_base / "synthetic-helper.py"
-        self.config_dir = self.base / ".config" / "claude-control"
+        self.config_dir = self.base / ".config" / "ai-control"
         self.config_dir.mkdir(parents=True)
         self.config_file = self.config_dir / "env"
         self.config_file.write_text(f"CONTROL_JEV_HELPER={self.helper}\nCONTROL_JEV_CHEAP_MODEL=file-codex/cheap\n", encoding="utf-8")

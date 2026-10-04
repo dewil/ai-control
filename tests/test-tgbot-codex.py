@@ -3,7 +3,7 @@ import importlib.util
 import unittest
 import pathlib
 
-loader=importlib.machinery.SourceFileLoader('tgbot_codex_test',str(pathlib.Path(__file__).resolve().parents[1] / 'bin' / 'claude-agent-tgbot'))
+loader=importlib.machinery.SourceFileLoader('tgbot_codex_test',str(pathlib.Path(__file__).resolve().parents[1] / 'bin' / 'ai-agent-tgbot'))
 spec=importlib.util.spec_from_loader(loader.name,loader)
 bot=importlib.util.module_from_spec(spec)
 loader.exec_module(bot)

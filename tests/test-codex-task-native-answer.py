@@ -63,9 +63,9 @@ class NativeAnswerContract(unittest.TestCase):
             path.touch(mode=0o600)
         self.env = dict(os.environ, HOME=str(self.home), XDG_CONFIG_HOME=str(self.home / 'config'),
             CLAUDE_CONFIG_DIR=str(self.root / 'claude'), CODEX_HOME=str(self.root / 'codex'),
-            CLAUDE_AGENTS_DIR=str(self.agent.parent), CLAUDE_AGENT_SPOOL_BASE=str(self.root / 'spool'),
-            CLAUDE_RECONCILER_DIR=str(self.root / 'reconciler'), CLAUDE_AGENT_PROBE_CMD='/usr/bin/true',
-            CLAUDE_AGENT_GENERATION='7', CLAUDE_AGENT_ATTEMPT='attempt-1')
+            AI_AGENTS_DIR=str(self.agent.parent), AI_AGENT_SPOOL_BASE=str(self.root / 'spool'),
+            AI_RECONCILER_DIR=str(self.root / 'reconciler'), AI_AGENT_PROBE_CMD='/usr/bin/true',
+            AI_AGENT_GENERATION='7', AI_AGENT_ATTEMPT='attempt-1')
         self.effects = self.root / 'forbidden-native-effects.jsonl'
         mockbin = self.root / 'mockbin'
         mockbin.mkdir(mode=0o700)
@@ -154,7 +154,7 @@ class NativeAnswerContract(unittest.TestCase):
             args = ['--text', 'continue with the own fixture']
         else:
             args = ['--' + decision]
-        result = self.cli('claude-agent-answer', self.agent, '--qid', self.qid,
+        result = self.cli('ai-agent-answer', self.agent, '--qid', self.qid,
                           *args, '--by', 'tg:555')
         self.assertEqual(result.returncode, 0, result.stderr)
         if native:
@@ -177,7 +177,7 @@ class NativeAnswerContract(unittest.TestCase):
         self.assertEqual(self.answer_payload['question_id'], self.qid)
 
     def intake(self, *, may_hold=False):
-        result = self.cli('claude-agent-run', 'intake', self.agent, '--batch', '50')
+        result = self.cli('ai-agent-run', 'intake', self.agent, '--batch', '50')
         self.assertIn(result.returncode, (0, 2) if may_hold else (0,), result.stderr)
 
     def answers(self, folder):
@@ -217,7 +217,7 @@ class NativeAnswerContract(unittest.TestCase):
         runtime_spec = importlib.util.spec_from_file_location('fixture_native_runtime', self.bin / '_codex_task_runtime.py')
         runtime = importlib.util.module_from_spec(runtime_spec)
         runtime_spec.loader.exec_module(runtime)
-        loader = importlib.machinery.SourceFileLoader('fixture_native_answer_runner', str(self.bin / 'claude-agent-run'))
+        loader = importlib.machinery.SourceFileLoader('fixture_native_answer_runner', str(self.bin / 'ai-agent-run'))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         runner = importlib.util.module_from_spec(spec)
         with mock.patch.dict(os.environ, self.env), mock.patch.dict(sys.modules, {'_codex_task_runtime': runtime}):

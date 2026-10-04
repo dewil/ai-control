@@ -50,7 +50,7 @@ class RegistryReviewContract(unittest.TestCase):
         self.saved()
         result=self.backend.answer('task-one',QID,'recover','')
         self.assertEqual(result,{'status':'already'})
-        self.assertEqual(self.calls[-1][0],[str(self.bin/'claude-agent-answer'),str(self.agent),'--qid',QID,'--recover','--by','web'])
+        self.assertEqual(self.calls[-1][0],[str(self.bin/'ai-agent-answer'),str(self.agent),'--qid',QID,'--recover','--by','web'])
         self.assertEqual(json.loads((self.agent/'questions'/f'{QID}.json').read_text())['answer'],'original answer')
     def test_answered_pending_projection_readonly_saved_original(self):
         self.saved()

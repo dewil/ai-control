@@ -30,7 +30,7 @@ _USAGE_KEYS = ("input_tokens", "cache_read_input_tokens",
 
 
 def window_tokens(config_dir=None, project_dir=None):
-    env = os.environ.get("CLAUDE_RC_CTX_WINDOW")
+    env = os.environ.get("AI_RC_CTX_WINDOW")
     if env and env.isdigit() and int(env) > 0:
         return int(env)
     cfg = config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or \

@@ -78,7 +78,7 @@ LIFE="$(rows --limit 8 --offset 0 "$D/lifecycle.jsonl" "$D/a.jsonl" | cut -f1 | 
   && ok || fail "rows: транскрипт без реплики человека выпал, соседний остался (got '$LIFE')"
 
 echo "=== rows: названная сессия видна и БЕЗ человеческой реплики ==="
-# `claude-rc new` с телефона поднимает сессию, в которой человек еще ничего не
+# `ai-rc new` с телефона поднимает сессию, в которой человек еще ничего не
 # сказал: записи только служебные. По правилу "нет реплики - нет строки" она
 # выпадала из меню целиком - создал сессию, а список пуст. Отличаем от мусора
 # по имени: --name пишет custom-title при создании, а брошенный служебный файл
@@ -163,7 +163,7 @@ echo "=== titles: побеждает ПОСЛЕДНЯЯ запись custom-titl
   && ok || fail "titles: последняя запись побеждает"
 
 echo "--- пробелы ПОСЛЕ двоеточия (не компактный JSON) тоже считаются ---"
-# Ровно та терпимость, что была у grep в claude-rc: запись, дописанную не самим
+# Ровно та терпимость, что была у grep в ai-rc: запись, дописанную не самим
 # CLI, иначе прочитали бы как отсутствие имени.
 printf '{"type": "custom-title", "customTitle": "с пробелами"}\n' > "$D/pretty.jsonl"
 [[ "$(titles "$D/pretty.jsonl" | cut -f2)" == "с пробелами" ]] \
@@ -224,7 +224,7 @@ echo "=== занятость окна: расход ДО сжатия больш
 # транскрипте НЕ остается ни одной записи расхода, последняя лежит ДО него, и
 # счетчик, читающий файл с хвоста, показывает докомпактный контекст.
 CTX="$HERE/../bin/_rc_ctx.py"
-ctx_of() { CLAUDE_RC_CTX_WINDOW=200000 python3 "$CTX" "$1" | cut -f2; }
+ctx_of() { AI_RC_CTX_WINDOW=200000 python3 "$CTX" "$1" | cut -f2; }
 
 {
   printf '{"type":"assistant","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":149990,"cache_creation_input_tokens":0}}}\n'
@@ -254,10 +254,10 @@ titles >/dev/null 2>&1 && ok || fail "titles: без файлов выходит
 
 echo "=== titles: имя с сервера (раздел B спеки, кэш session-titles.json) ==="
 # head_meta достает bridgeSessionId из записи bridge-session в первых 200
-# строках; titles ищет ее в $CLAUDE_RC_STATE_DIR/session-titles.json и, если
+# строках; titles ищет ее в $AI_RC_STATE_DIR/session-titles.json и, если
 # там есть непустое имя, отдает ЕГО, иначе - custom-title как раньше.
 STATE="$TMP/state"; mkdir -p "$STATE"
-export CLAUDE_RC_STATE_DIR="$STATE"
+export AI_RC_STATE_DIR="$STATE"
 
 write_cache_titles() { # <bridge_id> <title>
   python3 - "$STATE/session-titles.json" "$1" "$2" <<'PY'

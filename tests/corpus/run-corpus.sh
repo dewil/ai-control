@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # LLM-корпус приёмщика (этап 7, критерий этапа). Гоняет НАСТОЯЩИЙ
-# claude-agent-review по фикстурам build-corpus R раз каждую и проверяет
+# ai-agent-review по фикстурам build-corpus R раз каждую и проверяет
 # пороги (§корпус design): ошибочная фикстура - count_accept==0; корректная
 # - count_accept >= R-1; глобально доля uncertain <= 40%. Требует сети/API,
 # в обычный unit-прогон НЕ входит.
@@ -9,7 +9,7 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-REVIEW="$REPO/bin/claude-agent-review"
+REVIEW="$REPO/bin/ai-agent-review"
 R="${R:-3}"
 MODEL="${MODEL:-}"
 ROLE="$REPO/roles/acceptor"

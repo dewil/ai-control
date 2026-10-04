@@ -1,4 +1,4 @@
-# claude-control
+# ai-control
 
 **[Русский](./README.md) · English**
 
@@ -26,7 +26,7 @@ flowchart TB
       direction TB
       subgraph L1["Layer 1 — sessions from the bot"]
         menu["/sessions in Telegram<br/>projects → sessions by name"]
-        rc["claude-rc up/down/new<br/>one transient unit per session"]
+        rc["ai-rc up/down/new<br/>one transient unit per session"]
         menu --> rc
       end
       subgraph L2["Layer 2 — autonomous agent layer (Linux)"]
@@ -56,9 +56,9 @@ Both layers are **stdlib Python + shell, zero external dependencies**, user-leve
 
 Claude Code can open a session for remote control that you attach to from your phone. On its own that does not close the gap: to enter a project you must physically sit at the machine, `cd` into the repo and run `claude --remote-control`. And to get back into yesterday's conversation you also have to remember which of the dozens it was.
 
-`claude-control` closes both gaps with one screen in Telegram:
+`ai-control` closes both gaps with one screen in Telegram:
 
-- `/sessions` -> the project list from `~/.claude-control/projects.yaml`;
+- `/sessions` -> the project list from `~/.ai-control/projects.yaml`;
 - a project -> its sessions **under the same names you see in Cursor** (`/rename` writes the name into the transcript, the bot reads it from there), raised ones marked with a dot;
 - tap a session -> `▶ bring up` / `⏹ put down`; a separate button starts `➕ a new session`.
 
@@ -70,7 +70,7 @@ What it buys you: any project and any past session two taps away, no pre-opened 
 
 ```
 You (in Telegram)  - /sessions
-Bot                - [claude-control] [проект 1] [проект 2] ...
+Bot                - [ai-control] [проект 1] [проект 2] ...
 You                - проект 1
 Bot                - ➕ new session
                      ● control-v2      <- raised
@@ -83,11 +83,11 @@ You                - open Claude Code, pick "сессия 1" - you are inside
 The same from the machine, when the bot is not around:
 
 ```sh
-claude-rc sessions <project> --porcelain   # uuid, name, whether raised
-claude-rc up <project> <uuid>              # bring up
-claude-rc new <project>                    # a new empty one
-claude-rc down <uuid>                      # put down
-claude-rc live                             # what is raised right now
+ai-rc sessions <project> --porcelain   # uuid, name, whether raised
+ai-rc up <project> <uuid>              # bring up
+ai-rc new <project>                    # a new empty one
+ai-rc down <uuid>                      # put down
+ai-rc live                             # what is raised right now
 ```
 
 ---
@@ -103,7 +103,7 @@ The autonomy core. A durable event **spool** (at-least-once with producer idempo
 On top of the spool: a full task lifecycle with no open session. `/new <project> <text>` in Telegram births a task from a template with a strict permission belt (fail-closed: no valid template — no task), the agent works in a git worktree of the project and files a "done" claim; an acceptance card lands in your DMs, tapping "accept" merges the branch into the project, cleanup and archival are automatic. Eleven stages [V2.0](./docs/design-2026-07-25-v2-runtime-drain.md)–[V2.10](./docs/design-2026-07-28-v2.10-task-actually-works.md), each with its own SDD contract and adversarial audit:
 
 - **Scale-to-zero and memory.** The executor exits on an empty inbox and the reconciler wakes it per event ([V2.0](./docs/design-2026-07-25-v2-runtime-drain.md)); per-agent worktrees and permission belts ([V2.1](./docs/design-2026-07-25-v2.1-workspace-permissions.md)); task thread memory survives across runs ([V2.2](./docs/design-2026-07-26-v2.2-thread-memory.md)).
-- **Questions and confirmations** are a durable run outcome, not task death: the agent asks (`claude-agent-ask`) or hits the permission gate, a card with buttons goes to TG, and the tap/reply answer comes back exactly once ([V2.3](./docs/design-2026-07-26-v2.3-question-fsm.md)–[V2.6](./docs/design-2026-07-26-v2.6-reminder-ladder.md)).
+- **Questions and confirmations** are a durable run outcome, not task death: the agent asks (`ai-agent-ask`) or hits the permission gate, a card with buttons goes to TG, and the tap/reply answer comes back exactly once ([V2.3](./docs/design-2026-07-26-v2.3-question-fsm.md)–[V2.6](./docs/design-2026-07-26-v2.6-reminder-ladder.md)).
 - **Acceptance** is a durable FSM `requested -> accepted -> integrated -> cleaned -> archived` with the claim's SHA pinned ([V2.7a](./docs/design-2026-07-26-v2.7a-task-birth-and-done.md), [V2.7b](./docs/design-2026-07-26-v2.7b-acceptance-integration.md)); schedules as an event source ([V2.8](./docs/design-2026-07-27-v2.8-schedule-source.md)); human corrections given mid-task are distilled into project rules ([V2.9](./docs/design-2026-07-27-v2.9-lesson-distillation.md)).
 - **The agent has no git.** Three audit rounds found three independent ways to execute agent-authored code before human acceptance via git machinery (hooks, flags like `git log --output=`, clean filters, fsmonitor) — silencing them one by one proved an unwinnable race. Git is removed entirely: the runtime commits, after the done claim ([V2.10](./docs/design-2026-07-28-v2.10-task-actually-works.md)).
 
@@ -125,14 +125,14 @@ Every 15 minutes it reads the remaining Claude/Codex subscription limits (quota 
 
 ## Backups (optional)
 
-The `claude-control-backup` module: client-encrypted, deduplicated backup of arbitrary paths to **two independent S3 repositories** via [restic](https://restic.net). Installed with `--with-backup` (Linux).
+The `ai-control-backup` module: client-encrypted, deduplicated backup of arbitrary paths to **two independent S3 repositories** via [restic](https://restic.net). Installed with `--with-backup` (Linux).
 
 - **Client-side encryption** - the provider only ever sees ciphertext, so you can keep backups with a host you would not trust with plaintext.
 - **Two independent providers** - two `backup` runs (not `copy`); a failure or ban of one does not block the other, and either one restores on its own.
 - **Dedup + zstd compression** - typically 5-10x savings on text data.
 - **systemd timer** (daily) + **restore drill** - an unverified backup is no backup.
 
-Paths, repo URLs and credentials live in `~/.config/claude-control/backup-env` (outside git, `chmod 600`); nothing machine-specific is in the scripts. Setup and recovery: [docs/runbook-backup.md](docs/runbook-backup.md).
+Paths, repo URLs and credentials live in `~/.config/ai-control/backup-env` (outside git, `chmod 600`); nothing machine-specific is in the scripts. Setup and recovery: [docs/runbook-backup.md](docs/runbook-backup.md).
 
 ## Engineering decisions and verification
 
@@ -150,7 +150,7 @@ Per-stage design docs live in [`docs/`](./docs/); the architecture of both layer
 
 ## Requirements
 
-- Linux with `systemd --user` (Ubuntu 22.04+, Debian 12+) — both layers. On macOS the CLI works (`claude-rc sessions/up/down`), but the session holder is a transient systemd unit, so bringing sessions up does not.
+- Linux with `systemd --user` (Ubuntu 22.04+, Debian 12+) — both layers. On macOS the CLI works (`ai-rc sessions/up/down`), but the session holder is a transient systemd unit, so bringing sessions up does not.
 - [Claude Code CLI](https://docs.claude.com/claude-code) ≥ 2.1.51, logged in via `claude /login` (Claude subscription).
 - `yq` by mikefarah, v4 — `brew install yq` (macOS); on Linux the **binary from [GitHub releases](https://github.com/mikefarah/yq/releases)** (the apt `yq` is a different project). `install.sh` checks the version.
 - macOS: keep the Mac awake while you work remotely (launchd does not tick while asleep). The usual trick is a separate `caffeinate -i` agent; this repo does not install one.
@@ -158,28 +158,28 @@ Per-stage design docs live in [`docs/`](./docs/); the architecture of both layer
 
 ## Manual model-tier advice
 
-`claude-agent-model-advice --public-text-file ./public-task.txt --task ./docs/task.md` is an opt-in command. It sends only the explicitly named public file to a trusted Jev helper, then appends a fenced JSON receipt to the Markdown task. Input is capped at 4,000 characters and 16 KiB. Set the helper as an absolute `CONTROL_JEV_HELPER` path in `~/.config/claude-control/env` or the process environment; its sibling `jev-executor-questions.json` must match the pinned SHA-256. Optional `CONTROL_JEV_CHEAP_MODEL`, `CONTROL_JEV_STANDARD_MODEL`, and `CONTROL_JEV_DEEP_MODEL` values map tiers to Codex model slugs; without one, the command records the tier only.
+`ai-agent-model-advice --public-text-file ./public-task.txt --task ./docs/task.md` is an opt-in command. It sends only the explicitly named public file to a trusted Jev helper, then appends a fenced JSON receipt to the Markdown task. Input is capped at 4,000 characters and 16 KiB. Set the helper as an absolute `CONTROL_JEV_HELPER` path in `~/.config/ai-control/env` or the process environment; its sibling `jev-executor-questions.json` must match the pinned SHA-256. Optional `CONTROL_JEV_CHEAP_MODEL`, `CONTROL_JEV_STANDARD_MODEL`, and `CONTROL_JEV_DEEP_MODEL` values map tiers to Codex model slugs; without one, the command records the tier only.
 
 This is a manual recommendation: it does not launch an executor or change the current model. `--risk` and `--current-model` suppress the helper call and candidate; `clarify` also produces no model proposal. The receipt is appended only to an existing regular `.md` file. Each explicit rerun may call the helper again. Do not use a candidate for tasks involving secrets, production access, or other sensitive risks; the advisory cannot certify that such risks are absent. Contract: [model-advice](docs/specs/model-advice.md).
 
 ## Quick start
 
 ```sh
-git clone https://github.com/dewil/claude-control.git
-cd claude-control
+git clone https://github.com/dewil/claude-control.git ai-control
+cd ai-control
 ./install.sh
-$EDITOR ~/.claude-control/projects.yaml   # add your projects
+$EDITOR ~/.ai-control/projects.yaml   # add your projects
 ```
 
-Done. Session control lives in the Telegram bot: **`/sessions` -> project -> session -> bring up**; the bot, reconciler and limits-digest come up from the same `install.sh` once `~/.config/claude-control/env` has the needed variables (see the runbooks in `docs/`). Without the bot the same actions are available from the machine: `claude-rc sessions <project> --porcelain`, `claude-rc up <project> <uuid>`.
+Done. Session control lives in the Telegram bot: **`/sessions` -> project -> session -> bring up**; the bot, reconciler and limits-digest come up from the same `install.sh` once `~/.config/ai-control/env` has the needed variables (see the runbooks in `docs/`). Without the bot the same actions are available from the machine: `ai-rc sessions <project> --porcelain`, `ai-rc up <project> <uuid>`.
 
 Hacking on the repo itself? Use `./install.sh --link` (scripts in `~/.local/bin/` become symlinks to `bin/`, so `git pull` updates the running code immediately).
 
 ## Security
 
-- **`projects.yaml` is a trusted file.** `claude-rc` parses paths through `yq` as data, with no shell interpolation, and validates the project name; the contents are under your control. Do not edit it on an LLM's request from chat.
-- **The bot launches nothing itself.** A tap goes into `claude-rc up/down/new`; the project name and the short session id from `callback_data` are rejected unless they match a strict shape, and never reach a shell. Access is private chat plus a `from.id` whitelist.
-- **Project sessions inherit your `~/.claude/settings.json`.** `claude-rc` passes nothing on top — if `bypassPermissions` is set, a remote session will silently do whatever is asked. Want otherwise? Add a per-project `.claude/settings.local.json` with an explicit allow-list.
+- **`projects.yaml` is a trusted file.** `ai-rc` parses paths through `yq` as data, with no shell interpolation, and validates the project name; the contents are under your control. Do not edit it on an LLM's request from chat.
+- **The bot launches nothing itself.** A tap goes into `ai-rc up/down/new`; the project name and the short session id from `callback_data` are rejected unless they match a strict shape, and never reach a shell. Access is private chat plus a `from.id` whitelist.
+- **Project sessions inherit your `~/.claude/settings.json`.** `ai-rc` passes nothing on top — if `bypassPermissions` is set, a remote session will silently do whatever is asked. Want otherwise? Add a per-project `.claude/settings.local.json` with an explicit allow-list.
 - **Prompt injection.** Text from READMEs, branch names and other files is data, not instructions. A session's own name comes from the transcript and counts as data too: it is escaped on its way into a button or card, and `%q`-quoted on its way into a command line.
 - **The agent layer** — private chats + a Telegram whitelist, budgets and a circuit breaker against runaway, secrets only in env files (never in the repo/chat).
 - **V2 task agents have no git.** They work in a worktree under a strict template-defined permission belt (fail-closed: no valid template — no task is born); the runtime does the committing, and nothing reaches the project's default branch until a human explicitly accepts.
@@ -187,22 +187,22 @@ Hacking on the repo itself? Use `./install.sh --link` (scripts in `~/.local/bin/
 ## Structure
 
 Layer 1 (dispatcher):
-- [`bin/claude-rc`](./bin/claude-rc) — `sessions --porcelain`, `up`, `new`, `down`, `live`: the named session list and bringing one up in a transient unit.
-- [`bin/claude-agent-tgbot`](./bin/claude-agent-tgbot) — the `/sessions` screen (also the agent dashboard, see Layer 2).
-- [`bin/claude-control-session`](./bin/claude-control-session) — legacy entrypoint of the always-on control session; the installer no longer enables it and disables it on machines that already have it.
-- [`bin/claude-control-watchdog`](./bin/claude-control-watchdog), [`claude-control-project-watchdog`](./bin/claude-control-project-watchdog) — session liveness.
+- [`bin/ai-rc`](./bin/ai-rc) — `sessions --porcelain`, `up`, `new`, `down`, `live`: the named session list and bringing one up in a transient unit.
+- [`bin/ai-agent-tgbot`](./bin/ai-agent-tgbot) — the `/sessions` screen (also the agent dashboard, see Layer 2).
+- [`bin/ai-control-session`](./bin/ai-control-session) — legacy entrypoint of the always-on control session; the installer no longer enables it and disables it on machines that already have it.
+- [`bin/ai-control-watchdog`](./bin/ai-control-watchdog), [`ai-control-project-watchdog`](./bin/ai-control-project-watchdog) — session liveness.
 
 Layer 2 (agent):
-- [`bin/claude-agent-reconciler`](./bin/claude-agent-reconciler) — the autonomous-agent reconciler.
-- [`bin/claude-agent-run`](./bin/claude-agent-run), [`claude-agent-io`](./bin/claude-agent-io), [`claude-agent-session`](./bin/claude-agent-session) — agent execution/spool/sessions.
-- [`bin/claude-agent-tgbot`](./bin/claude-agent-tgbot) — the Telegram dashboard (`/agents`, `/new`, `/task`, `/limits`, question and acceptance cards).
-- [`bin/claude-agent-done`](./bin/claude-agent-done), [`claude-agent-ask`](./bin/claude-agent-ask), [`claude-agent-answer`](./bin/claude-agent-answer), [`claude-agent-permit`](./bin/claude-agent-permit) — the V2 task protocol: the "done" claim, mid-run questions, the trusted answer writer, the confirmation gate.
-- [`bin/claude-agent-limits-digest`](./bin/claude-agent-limits-digest) — the LLM limits digest.
-- [`bin/claude-agent-harvest`](./bin/claude-agent-harvest), [`claude-agent-review`](./bin/claude-agent-review), [`claude-agent-checkrun`](./bin/claude-agent-checkrun) — acceptance/review/checks.
-- [`bin/claude-rc-takeover`](./bin/claude-rc-takeover), [`claude-rc-agent`](./bin/claude-rc-agent) — cross-machine takeover.
+- [`bin/ai-agent-reconciler`](./bin/ai-agent-reconciler) — the autonomous-agent reconciler.
+- [`bin/ai-agent-run`](./bin/ai-agent-run), [`ai-agent-io`](./bin/ai-agent-io), [`ai-agent-session`](./bin/ai-agent-session) — agent execution/spool/sessions.
+- [`bin/ai-agent-tgbot`](./bin/ai-agent-tgbot) — the Telegram dashboard (`/agents`, `/new`, `/task`, `/limits`, question and acceptance cards).
+- [`bin/ai-agent-done`](./bin/ai-agent-done), [`ai-agent-ask`](./bin/ai-agent-ask), [`ai-agent-answer`](./bin/ai-agent-answer), [`ai-agent-permit`](./bin/ai-agent-permit) — the V2 task protocol: the "done" claim, mid-run questions, the trusted answer writer, the confirmation gate.
+- [`bin/ai-agent-limits-digest`](./bin/ai-agent-limits-digest) — the LLM limits digest.
+- [`bin/ai-agent-harvest`](./bin/ai-agent-harvest), [`ai-agent-review`](./bin/ai-agent-review), [`ai-agent-checkrun`](./bin/ai-agent-checkrun) — acceptance/review/checks.
+- [`bin/ai-rc-takeover`](./bin/ai-rc-takeover), [`ai-rc-agent`](./bin/ai-rc-agent) — cross-machine takeover.
 
 Optional module (`--with-backup`):
-- [`bin/claude-control-backup`](./bin/claude-control-backup), [`claude-control-backup-init`](./bin/claude-control-backup-init), [`claude-control-backup-restore-test`](./bin/claude-control-backup-restore-test) — restic backup to two S3 providers (see [runbook](./docs/runbook-backup.md)).
+- [`bin/ai-control-backup`](./bin/ai-control-backup), [`ai-control-backup-init`](./bin/ai-control-backup-init), [`ai-control-backup-restore-test`](./bin/ai-control-backup-restore-test) — restic backup to two S3 providers (see [runbook](./docs/runbook-backup.md)).
 
 Shared:
 - [`launchd/`](./launchd/) / [`systemd/`](./systemd/) — unit templates; `install.sh` renders them.
@@ -214,15 +214,15 @@ Shared:
 ## Principles
 
 - **Idempotency** — `install.sh` is re-runnable; `projects.yaml`, `CLAUDE.md`, logs are left alone.
-- **Runtime separate from the repo** — code wherever is convenient (`~/Work/claude-control/`), data in `~/.claude-control/`.
+- **Runtime separate from the repo** — code wherever is convenient (`~/Work/ai-control/`), data in `~/.ai-control/`.
 - **User-level supervisor only** — launchd user agent / `systemctl --user`, no `sudo`.
-- **No magic in supervision** — the watchdog reads the log and kicks the supervisor; everything is visible in `~/.claude-control/*.log`.
+- **No magic in supervision** — the watchdog reads the log and kicks the supervisor; everything is visible in `~/.ai-control/*.log`.
 
 ## Uninstall
 
 ```sh
 ./uninstall.sh           # remove agents, delete scripts from ~/.local/bin/
-./uninstall.sh --purge   # also remove ~/.claude-control/
+./uninstall.sh --purge   # also remove ~/.ai-control/
 ```
 
 ## License

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # mock-agent: fake mission runtime for fault-injection tests.
-# Runs inside the agent tmux (injected via CLAUDE_AGENT_RUNTIME_CMD), obeys
+# Runs inside the agent tmux (injected via AI_AGENT_RUNTIME_CMD), obeys
 # the same env contract as real claude and reports through state.<gen>.json
 # + fake relay heartbeats in session.debug.log.
 #
-# Behavior is driven by $CLAUDE_AGENT_DIR/mock.mode (re-read every loop):
+# Behavior is driven by $AI_AGENT_DIR/mock.mode (re-read every loop):
 #   healthy     sleeping, fresh next_wakeup, heartbeats     -> HEALTHY_SLEEPING
 #   overrun     working since long ago, heartbeats          -> OVERRUN
 #   oversleep   sleeping, next_wakeup in the past, hb       -> OVERSLEPT
@@ -14,10 +14,10 @@
 #   blocked     agent_claim=blocked                         -> CLAIMED(blocked)
 set -u
 
-DIR="$CLAUDE_AGENT_DIR"
-GEN="$CLAUDE_AGENT_GENERATION"
-ATT="$CLAUDE_AGENT_ATTEMPT"
-IO="$(command -v claude-agent-io || echo "$MOCK_IO")"
+DIR="$AI_AGENT_DIR"
+GEN="$AI_AGENT_GENERATION"
+ATT="$AI_AGENT_ATTEMPT"
+IO="$(command -v ai-agent-io || echo "$MOCK_IO")"
 STATE="$DIR/state.$GEN.json"
 DEBUG="$DIR/session.debug.log"
 

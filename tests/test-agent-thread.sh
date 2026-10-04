@@ -10,13 +10,13 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RUN="$HERE/../bin/claude-agent-run"
+RUN="$HERE/../bin/ai-agent-run"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-export CLAUDE_AGENTS_DIR="$TMP/agents"
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
-export CLAUDE_AGENT_PROBE_CMD=/usr/bin/true
-export CLAUDE_AGENT_GENERATION=1 CLAUDE_AGENT_ATTEMPT=test-attempt
+export AI_AGENTS_DIR="$TMP/agents"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_AGENT_PROBE_CMD=/usr/bin/true
+export AI_AGENT_GENERATION=1 AI_AGENT_ATTEMPT=test-attempt
 
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); }
@@ -54,9 +54,9 @@ mask_prompt() { # <file> <key-hex> <native_id> - вычищаем волатил
 
 mk_event() { # <name> -> печатает путь к agent-dir
   local name="$1"
-  local ag="$CLAUDE_AGENTS_DIR/$name"
-  mkdir -p "$ag" "$CLAUDE_AGENT_SPOOL_BASE/$name"
-  chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/$name"
+  local ag="$AI_AGENTS_DIR/$name"
+  mkdir -p "$ag" "$AI_AGENT_SPOOL_BASE/$name"
+  chmod 0700 "$AI_AGENT_SPOOL_BASE/$name"
   cat > "$ag/spec.yaml" <<EOF
 schema: 1
 name: $name
@@ -172,17 +172,17 @@ grep -qF "t4-good-event" "$PROMPT4" && ok || fail "T4: валидная запи
 grep -qF "t4-good-result" "$PROMPT4" && ok || fail "T4: валидный результат до битой строки остался в промпте"
 
 # =============================================================== T5
-echo "=== T5: кап хвоста CLAUDE_AGENT_THREAD_TAIL_MAX_BYTES=512 - маркер усечения ==="
+echo "=== T5: кап хвоста AI_AGENT_THREAD_TAIL_MAX_BYTES=512 - маркер усечения ==="
 AGT5=$(mk_event evtt5)
 for i in $(seq 1 20); do
   "$RUN" spool-put evtt5 --text "t5-event-$i-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" >/dev/null
   "$RUN" intake "$AGT5" >/dev/null
-  CLAUDE_AGENT_THREAD_TAIL_MAX_BYTES=512 MOCK_RESULT_TEXT="t5-result-$i" "$RUN" step "$AGT5" >/dev/null 2>"$TMP/errt5_$i"
+  AI_AGENT_THREAD_TAIL_MAX_BYTES=512 MOCK_RESULT_TEXT="t5-result-$i" "$RUN" step "$AGT5" >/dev/null 2>"$TMP/errt5_$i"
 done
 "$RUN" spool-put evtt5 --text "t5-final-event" >/dev/null
 "$RUN" intake "$AGT5" >/dev/null
 PROMPT5="$TMP/prompt5.txt"
-CLAUDE_AGENT_THREAD_TAIL_MAX_BYTES=512 PROMPT_DUMP_FILE="$PROMPT5" "$RUN" step "$AGT5" >/dev/null 2>"$TMP/errt5b"
+AI_AGENT_THREAD_TAIL_MAX_BYTES=512 PROMPT_DUMP_FILE="$PROMPT5" "$RUN" step "$AGT5" >/dev/null 2>"$TMP/errt5b"
 [[ -s "$PROMPT5" ]] && ok || fail "T5: промпт сдампен"
 grep -qF "тред усечен" "$PROMPT5" && ok || fail "T5: маркер усечения '[тред усечен: ...]' присутствует"
 grep -qF "t5-event-1-" "$PROMPT5" \
@@ -215,15 +215,15 @@ L6=$(sed -n '1p' "$THJ6" 2>/dev/null)
 [[ "$(jline "$L6" 'd.get("key")' 2>/dev/null)" == "$KT6" ]] && ok || fail "T6: key note = key отброшенного конверта"
 
 # =============================================================== T7
-echo "=== T7: компакция CLAUDE_AGENT_THREAD_MAX_BYTES=2048 - архив + note о переносе ==="
+echo "=== T7: компакция AI_AGENT_THREAD_MAX_BYTES=2048 - архив + note о переносе ==="
 AGT7=$(mk_event evtt7)
 for i in $(seq 1 20); do
   "$RUN" spool-put evtt7 --text "t7-event-$i-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy" >/dev/null
   "$RUN" intake "$AGT7" >/dev/null
-  CLAUDE_AGENT_THREAD_MAX_BYTES=2048 MOCK_RESULT_TEXT="t7-result-$i" "$RUN" step "$AGT7" >/dev/null 2>"$TMP/errt7_$i"
+  AI_AGENT_THREAD_MAX_BYTES=2048 MOCK_RESULT_TEXT="t7-result-$i" "$RUN" step "$AGT7" >/dev/null 2>"$TMP/errt7_$i"
 done
 ARCH7="$AGT7/thread-archive.jsonl"
-[[ -f "$ARCH7" ]] && ok || fail "T7: thread-archive.jsonl появился после превышения CLAUDE_AGENT_THREAD_MAX_BYTES"
+[[ -f "$ARCH7" ]] && ok || fail "T7: thread-archive.jsonl появился после превышения AI_AGENT_THREAD_MAX_BYTES"
 SZ7=$(bytecount "$AGT7/thread.jsonl")
 [[ -n "$SZ7" && "$SZ7" -lt 3000 ]] \
   && ok || fail "T7: активный thread.jsonl сжат компакцией (размер '$SZ7' байт при капе 2048)"
@@ -240,7 +240,7 @@ grep -qF "перенесено в архив" <<<"$FIRST7" && ok || fail "T7: т
 # v2.3 меняет семантику этого сценария (обнаружено регрессом при
 # реализации question-FSM, не баг теста, а намеренная эволюция контракта):
 # answer-конверт без валидного backing-вопроса теперь staled ЦЕЛИКОМ
-# (claude-agent-run/design-2026-07-26-v2.3-question-fsm.md §3 инв.6) -
+# (ai-agent-run/design-2026-07-26-v2.3-question-fsm.md §3 инв.6) -
 # claude не спавнится и тред не пишется вовсе, поэтому написать сюда
 # "answer без вопроса, но записанный в тред и БЕЗ доверенной пометки" уже
 # невозможно ни при какой корректной реализации: запись в тред и доверие
@@ -271,21 +271,21 @@ MOCK_RESULT_TEXT="golden-result-text" PROMPT_DUMP_FILE="$PROMPTG" "$RUN" step "$
 GOLDEN_MASKED=$(mask_prompt "$PROMPTG" "$KG" "1")
 
 # =============================================================== T9
-echo "=== T9: CLAUDE_AGENT_THREAD_ENABLED=0 - тред не читается/не пишется, промпт = голден ==="
+echo "=== T9: AI_AGENT_THREAD_ENABLED=0 - тред не читается/не пишется, промпт = голден ==="
 "$RUN" spool-put evtthreadgolden --text "thread-golden-shared-text" >/dev/null
 "$RUN" intake "$AGTG" >/dev/null
 K9=$(ls "$AGTG/inbox/pending" | sed 's/.json//')
 LC_BEFORE=$(linecount "$AGTG/thread.jsonl")
 PROMPT9="$TMP/prompt_t9.txt"
-CLAUDE_AGENT_THREAD_ENABLED=0 MOCK_RESULT_TEXT="golden-result-text" PROMPT_DUMP_FILE="$PROMPT9" \
+AI_AGENT_THREAD_ENABLED=0 MOCK_RESULT_TEXT="golden-result-text" PROMPT_DUMP_FILE="$PROMPT9" \
   "$RUN" step "$AGTG" >/dev/null 2>"$TMP/errt9"
-[[ -s "$PROMPT9" ]] && ok || fail "T9: CLAUDE_AGENT_THREAD_ENABLED=0 не роняет прогон, mock вызван"
+[[ -s "$PROMPT9" ]] && ok || fail "T9: AI_AGENT_THREAD_ENABLED=0 не роняет прогон, mock вызван"
 LC_AFTER=$(linecount "$AGTG/thread.jsonl")
 [[ "$LC_AFTER" == "$LC_BEFORE" ]] \
-  && ok || fail "T9: CLAUDE_AGENT_THREAD_ENABLED=0 не дописывает тред (было '$LC_BEFORE', стало '$LC_AFTER')"
+  && ok || fail "T9: AI_AGENT_THREAD_ENABLED=0 не дописывает тред (было '$LC_BEFORE', стало '$LC_AFTER')"
 T9_MASKED=$(mask_prompt "$PROMPT9" "$K9" "2")
 [[ "$GOLDEN_MASKED" == "$T9_MASKED" ]] \
-  && ok || fail "T9: промпт с CLAUDE_AGENT_THREAD_ENABLED=0 не совпадает с голденом T10 (после маскировки key/native_id/ts)"
+  && ok || fail "T9: промпт с AI_AGENT_THREAD_ENABLED=0 не совпадает с голденом T10 (после маскировки key/native_id/ts)"
 
 # =============================================================== T11 (аудит V2.2 blocker 1, второй путь)
 echo "=== T11: подделка тега внутри текста не создает доверенной строки ==="
@@ -355,7 +355,7 @@ printf '{"key": "%s", "seq": 1, "at": "2026-07-26T09:00:10Z", "kind": "result", 
 "$RUN" spool-put evtt14 --text "t14-second-event" >/dev/null
 "$RUN" intake "$AGT14" >/dev/null
 PROMPT14="$TMP/prompt14.txt"
-CLAUDE_AGENT_THREAD_TAIL_MAX_BYTES=200 PROMPT_DUMP_FILE="$PROMPT14" "$RUN" step "$AGT14" >/dev/null 2>"$TMP/errt14b"
+AI_AGENT_THREAD_TAIL_MAX_BYTES=200 PROMPT_DUMP_FILE="$PROMPT14" "$RUN" step "$AGT14" >/dev/null 2>"$TMP/errt14b"
 grep -qF "t14-new-result-should-survive-cap" "$PROMPT14" \
   && ok || fail "T14: финальная версия дубля (result,seq=1) не выброшена капом хвоста (последняя позиция)"
 grep -qF "t14-old-result-xxx" "$PROMPT14" \
@@ -394,7 +394,7 @@ MOCK_RESULT_TEXT="$LONG16" "$RUN" step "$AGT16" >/dev/null 2>"$TMP/errt16a"
 "$RUN" spool-put evtt16 --text "t16-second-event" >/dev/null
 "$RUN" intake "$AGT16" >/dev/null
 PROMPT16="$TMP/prompt16.txt"
-CLAUDE_AGENT_THREAD_TAIL_MAX_BYTES=512 PROMPT_DUMP_FILE="$PROMPT16" "$RUN" step "$AGT16" >/dev/null 2>"$TMP/errt16b"
+AI_AGENT_THREAD_TAIL_MAX_BYTES=512 PROMPT_DUMP_FILE="$PROMPT16" "$RUN" step "$AGT16" >/dev/null 2>"$TMP/errt16b"
 [[ -s "$PROMPT16" ]] && ok || fail "T16: промпт построен"
 grep -qF "yyyy" "$PROMPT16" \
   && ok || fail "T16: усеченная запись все же присутствует частично"
@@ -404,15 +404,15 @@ BASE16=$(( $(bytecount "$AGT16/thread.jsonl") ))
   && ok || fail "T16: промпт заметно меньше полной 1000-байтовой записи (усечена по месту), got $SZ16"
 
 # =============================================================== T17 (аудит V2.2 minor 7)
-echo "=== T17: CLAUDE_AGENT_THREAD_MAX_BYTES=мусор - модуль не падает, работают базовые команды ==="
+echo "=== T17: AI_AGENT_THREAD_MAX_BYTES=мусор - модуль не падает, работают базовые команды ==="
 AGT17=$(mk_event evtt17)
 assert "T17 spool-put не падает при мусорном THREAD_MAX_BYTES" 0 \
-  env CLAUDE_AGENT_THREAD_MAX_BYTES=garbage "$RUN" spool-put evtt17 --text "t17-event"
-assert "T17 intake не падает" 0 env CLAUDE_AGENT_THREAD_MAX_BYTES=garbage "$RUN" intake "$AGT17"
+  env AI_AGENT_THREAD_MAX_BYTES=garbage "$RUN" spool-put evtt17 --text "t17-event"
+assert "T17 intake не падает" 0 env AI_AGENT_THREAD_MAX_BYTES=garbage "$RUN" intake "$AGT17"
 assert "T17 inbox-status не падает" 0 \
-  env CLAUDE_AGENT_THREAD_MAX_BYTES=garbage "$RUN" inbox-status "$AGT17"
+  env AI_AGENT_THREAD_MAX_BYTES=garbage "$RUN" inbox-status "$AGT17"
 assert "T17 step не падает (дефолт капа применен)" 0 \
-  env CLAUDE_AGENT_THREAD_MAX_BYTES=garbage "$RUN" step "$AGT17"
+  env AI_AGENT_THREAD_MAX_BYTES=garbage "$RUN" step "$AGT17"
 
 echo
 echo "test-agent-thread: PASS=$PASS FAIL=$FAIL"

@@ -6,10 +6,10 @@ from pathlib import Path
 import sys
 
 if importlib.util.find_spec('websockets') is None:
-    interpreter = os.environ.get('CODEX_RC_PYTHON') or str(Path.home()/'.local/share/claude-control/codex-venv/bin/python')
+    interpreter = os.environ.get('CODEX_RC_PYTHON') or str(Path.home()/'.local/share/ai-control/codex-venv/bin/python')
     if Path(interpreter).is_file() and os.path.abspath(interpreter) != os.path.abspath(sys.executable):
         os.execv(interpreter, [interpreter, str(Path(__file__).resolve()), *sys.argv[1:]])
-    print('Codex: install websockets==15.0.1 in ~/.local/share/claude-control/codex-venv', file=sys.stderr)
+    print('Codex: install websockets==15.0.1 in ~/.local/share/ai-control/codex-venv', file=sys.stderr)
     sys.exit(1)
 
 from _codex_rc import main

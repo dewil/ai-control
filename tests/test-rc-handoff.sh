@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for `claude-rc handoff <project> <uuid>` - передача работы в свежую сессию.
+# Tests for `ai-rc handoff <project> <uuid>` - передача работы в свежую сессию.
 #
 # Зачем это отдельно от сжатия. Сжатие оставляет сводку "про все понемногу" и
 # продолжает ту же сессию: на замере 745 000 токенов ужались до 95 400 (74% -> 10%
@@ -12,7 +12,7 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RC="$HERE/../bin/claude-rc"
+RC="$HERE/../bin/ai-rc"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -21,14 +21,14 @@ ok()   { PASS=$((PASS+1)); }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1" >&2; }
 
 export CLAUDE_CONFIG_DIR="$TMP/claude"
-export CLAUDE_RC_PROJECTS_FILE="$TMP/projects.yaml"
-export CLAUDE_RC_LOG_DIR="$TMP/logs"
-export CLAUDE_RC_STATE_DIR="$TMP/state"
-export CLAUDE_RC_HANDOFF_DIR="$TMP/handoffs"
-mkdir -p "$CLAUDE_RC_LOG_DIR"
+export AI_RC_PROJECTS_FILE="$TMP/projects.yaml"
+export AI_RC_LOG_DIR="$TMP/logs"
+export AI_RC_STATE_DIR="$TMP/state"
+export AI_RC_HANDOFF_DIR="$TMP/handoffs"
+mkdir -p "$AI_RC_LOG_DIR"
 
 PROJ="$TMP/proj"; mkdir -p "$PROJ"
-printf 'proj: %s\n' "$PROJ" > "$CLAUDE_RC_PROJECTS_FILE"
+printf 'proj: %s\n' "$PROJ" > "$AI_RC_PROJECTS_FILE"
 SLUG="$(printf '%s' "$PROJ" | sed 's/[^a-zA-Z0-9]/-/g')"
 TDIR="$CLAUDE_CONFIG_DIR/projects/$SLUG"; mkdir -p "$TDIR"
 

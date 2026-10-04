@@ -10,18 +10,18 @@
 # самим тестом через cryptography (см. gen_yandex_key ниже), в реальный
 # Yandex Cloud тест не ходит.
 #
-# Модуль bin/claude-agent-limits-digest (без расширения) импортируется через
+# Модуль bin/ai-agent-limits-digest (без расширения) импортируется через
 # importlib.machinery.SourceFileLoader, как в tests/test-agent-limits-openrouter.sh -
 # spec_from_file_location без явного loader'а файл без .py не опознает.
 #
-# CLAUDE_CONTROL_DIR и LIMITS_YANDEX_KEY_FILE читаются модулем на этапе
+# AI_CONTROL_DIR и LIMITS_YANDEX_KEY_FILE читаются модулем на этапе
 # импорта, поэтому переменные окружения выставляются в bash ДО запуска
 # python3 - каждый python-блок получает свой набор путей через отдельный env
 # для подпроцесса (грабли из test-agent-limits-openrouter.sh: перепутанное
 # имя переменной пишет в боевой каталог - здесь имя проверено по спеке).
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-BIN="$HERE/../bin/claude-agent-limits-digest"
+BIN="$HERE/../bin/ai-agent-limits-digest"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -53,13 +53,13 @@ PY
 }
 
 run_block() {
-  # $1 - имя python-файла в TMP, $2 - CLAUDE_CONTROL_DIR, $3 - KEY_FILE
+  # $1 - имя python-файла в TMP, $2 - AI_CONTROL_DIR, $3 - KEY_FILE
   # (может не существовать - это сам по себе сценарий "не настроен").
   local pyfile="$1" control_dir="$2" key_file="$3"
   local out="$TMP/$(basename "$pyfile").out" err="$TMP/$(basename "$pyfile").err"
   mkdir -p "$control_dir"
   BIN_PATH="$BIN" YA_CONTROL_DIR="$control_dir" YA_KEY_FILE="$key_file" \
-    CLAUDE_CONTROL_DIR="$control_dir" LIMITS_YANDEX_KEY_FILE="$key_file" \
+    AI_CONTROL_DIR="$control_dir" LIMITS_YANDEX_KEY_FILE="$key_file" \
     python3 "$pyfile" >"$out" 2>"$err"
   local rc=$?
   if [[ "$rc" != 0 ]]; then
@@ -80,7 +80,7 @@ run_block() {
 
 # ===========================================================================
 # YAMAIN: нарратив одного счета во времени - критерии 1, 2, 3, 4, 13, 14.
-# Один и тот же CLAUDE_CONTROL_DIR/KEY_FILE на весь блок: history накапливается
+# Один и тот же AI_CONTROL_DIR/KEY_FILE на весь блок: history накапливается
 # последовательными вызовами build_yandex(now=...).
 # ===========================================================================
 KEY_MAIN="$TMP/keys/main-key.json"
@@ -873,10 +873,10 @@ fi
 
 export HOME="$TMP/home-selftest"
 mkdir -p "$HOME"
-if CLAUDE_CONTROL_DIR="$TMP/control-selftest" "$BIN" selftest >"$TMP/selftest.out" 2>"$TMP/selftest.err"; then
+if AI_CONTROL_DIR="$TMP/control-selftest" "$BIN" selftest >"$TMP/selftest.out" 2>"$TMP/selftest.err"; then
   ok
 else
-  fail "критерий 15 (тривиально): bin/claude-agent-limits-digest selftest сломан - см. stderr ниже"
+  fail "критерий 15 (тривиально): bin/ai-agent-limits-digest selftest сломан - см. stderr ниже"
   cat "$TMP/selftest.err" >&2
 fi
 

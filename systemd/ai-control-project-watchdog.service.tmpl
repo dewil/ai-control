@@ -1,0 +1,19 @@
+[Unit]
+Description=Claude Code project-session watchdog (oneshot)
+
+[Service]
+Type=oneshot
+ExecStart=__BIN_DIR__/ai-control-project-watchdog
+Environment=AI_CONTROL_DIR=__CONTROL_DIR__
+Environment=AI_CONTROL_PROJECT_WATCHDOG_LOG=__CONTROL_DIR__/project-watchdog.log
+Environment=AI_CONTROL_PROJECT_STALE_SECONDS=150
+# Auto-restart on by default. Set to 0 for observe-only (logs "WOULD restart" to
+# __CONTROL_DIR__/project-watchdog.log instead of killing+relaunching) when
+# calibrating thresholds against real traffic.
+Environment=AI_CONTROL_PROJECT_WATCHDOG_ARM=1
+Environment=PATH=__BIN_DIR__:/usr/local/bin:/usr/bin:/bin
+# ai-rc (invoked on restart) needs the same CLAUDE_BIN/proxy env the control
+# session uses; the script also sources this file itself for macOS/manual runs.
+EnvironmentFile=-%h/.config/ai-control/env
+StandardOutput=append:__CONTROL_DIR__/project-watchdog.out
+StandardError=append:__CONTROL_DIR__/project-watchdog.err

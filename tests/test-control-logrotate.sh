@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for claude-control-logrotate.
+# Tests for ai-control-logrotate.
 #
 # Логротейт умел ровно одно - обрезать файл по размеру. Числа файлов это не
 # трогало: каждая поднятая сессия оставляет пару <проект>-<sid8>.log/.debug.log
@@ -9,7 +9,7 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ROT="$HERE/../bin/claude-control-logrotate"
+ROT="$HERE/../bin/ai-control-logrotate"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -17,8 +17,8 @@ PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1" >&2; }
 
-export CLAUDE_CONTROL_DIR="$TMP/cc"
-SESS="$CLAUDE_CONTROL_DIR/sessions"
+export AI_CONTROL_DIR="$TMP/cc"
+SESS="$AI_CONTROL_DIR/sessions"
 mkdir -p "$SESS"
 
 # Живой юнит ровно один - сессия deadbeef.
@@ -42,27 +42,27 @@ chmod +x "$TMP/bin/systemctl"
 export PATH="$TMP/bin:$PATH"
 
 big() { yes "строка лога $1" | head -n 40000 > "$2"; }   # ~800 КБ при лимите 10 КБ
-export CLAUDE_CONTROL_LOG_MAX_BYTES=10000
-export CLAUDE_CONTROL_LOG_KEEP_LINES=50
-export CLAUDE_CONTROL_LOG_TTL_D=7
+export AI_CONTROL_LOG_MAX_BYTES=10000
+export AI_CONTROL_LOG_KEEP_LINES=50
+export AI_CONTROL_LOG_TTL_D=7
 
 # 1. Регрессия: распухший файл обрезается, короткий не трогаем.
-big a "$CLAUDE_CONTROL_DIR/control.log"
-printf 'коротко\n' > "$CLAUDE_CONTROL_DIR/control.err"
+big a "$AI_CONTROL_DIR/control.log"
+printf 'коротко\n' > "$AI_CONTROL_DIR/control.err"
 "$ROT" >/dev/null 2>&1
-if [[ "$(wc -c < "$CLAUDE_CONTROL_DIR/control.log")" -lt 10000 ]]; then ok
+if [[ "$(wc -c < "$AI_CONTROL_DIR/control.log")" -lt 10000 ]]; then ok
 else fail "распухший control.log не обрезан"; fi
-if [[ "$(cat "$CLAUDE_CONTROL_DIR/control.err")" == "коротко" ]]; then ok
+if [[ "$(cat "$AI_CONTROL_DIR/control.err")" == "коротко" ]]; then ok
 else fail "короткий файл тронут зря"; fi
 
 # 2. Логи бота тоже под обрезом - после V3 это главный компонент, а его в
 #    списке не было вовсе.
-big b "$CLAUDE_CONTROL_DIR/tgbot.log"
-big c "$CLAUDE_CONTROL_DIR/tgbot.err"
+big b "$AI_CONTROL_DIR/tgbot.log"
+big c "$AI_CONTROL_DIR/tgbot.err"
 "$ROT" >/dev/null 2>&1
-if [[ "$(wc -c < "$CLAUDE_CONTROL_DIR/tgbot.log")" -lt 10000 ]]; then ok
+if [[ "$(wc -c < "$AI_CONTROL_DIR/tgbot.log")" -lt 10000 ]]; then ok
 else fail "tgbot.log не обрезан"; fi
-if [[ "$(wc -c < "$CLAUDE_CONTROL_DIR/tgbot.err")" -lt 10000 ]]; then ok
+if [[ "$(wc -c < "$AI_CONTROL_DIR/tgbot.err")" -lt 10000 ]]; then ok
 else fail "tgbot.err не обрезан"; fi
 
 # 3. Логи давно погашенной сессии удаляются целиком: обрез размера оставлял бы
@@ -94,7 +94,7 @@ else fail "удален лог живой сессии"; fi
 # 6. Срок настраивается: с TTL в 60 дней тридцатидневка переживает прогон.
 printf 'старье\n' > "$SESS/proj-cccccccc.log"
 touch -d '-30 days' "$SESS/proj-cccccccc.log"
-CLAUDE_CONTROL_LOG_TTL_D=60 "$ROT" >/dev/null 2>&1
+AI_CONTROL_LOG_TTL_D=60 "$ROT" >/dev/null 2>&1
 if [[ -f "$SESS/proj-cccccccc.log" ]]; then ok
 else fail "TTL из окружения не учтен"; fi
 
@@ -104,7 +104,7 @@ printf 'двухдневка\n' > "$SESS/proj-dddddddd.log"
 touch -d '-2 days' "$SESS/proj-dddddddd.log"   # внутри дефолтных 7 дней, но старше суток:
 printf 'старье\n' > "$SESS/proj-eeeeeeee.log"
 touch -d '-30 days' "$SESS/proj-eeeeeeee.log"
-CLAUDE_CONTROL_LOG_TTL_D='ой' "$ROT" >/dev/null 2>&1
+AI_CONTROL_LOG_TTL_D='ой' "$ROT" >/dev/null 2>&1
 if [[ -f "$SESS/proj-dddddddd.log" ]]; then ok
 else fail "мусорный TTL снес двухдневный файл (откат к нулю вместо дефолта)"; fi
 if [[ ! -e "$SESS/proj-eeeeeeee.log" ]]; then ok
@@ -129,7 +129,7 @@ case "${*}" in *list-units*) exit 1 ;; esac
 exit 0
 MOCK
 chmod +x "$BIN5/systemctl"
-env CLAUDE_CONTROL_DIR="$R5" PATH="$BIN5:$PATH" CLAUDE_CONTROL_LOG_TTL_D=7 "$ROT" >/dev/null 2>&1; rc=$?
+env AI_CONTROL_DIR="$R5" PATH="$BIN5:$PATH" AI_CONTROL_LOG_TTL_D=7 "$ROT" >/dev/null 2>&1; rc=$?
 if [[ "$rc" != 0 ]]; then ok
 else fail "INV-RECON-21: ненулевой код опроса в логротейте дал rc=0"; fi
 if [[ -f "$R5/sessions/proj-aaaaaaaa.log" ]]; then ok
@@ -149,8 +149,8 @@ case "${*}" in *list-units*) exit 1 ;; esac
 exit 0
 MOCK
 chmod +x "$BIN6/systemctl"
-env CLAUDE_CONTROL_DIR="$R6" PATH="$BIN6:$PATH" \
-  CLAUDE_CONTROL_LOG_MAX_BYTES=10000 CLAUDE_CONTROL_LOG_KEEP_LINES=50 "$ROT" >/dev/null 2>&1; rc=$?
+env AI_CONTROL_DIR="$R6" PATH="$BIN6:$PATH" \
+  AI_CONTROL_LOG_MAX_BYTES=10000 AI_CONTROL_LOG_KEEP_LINES=50 "$ROT" >/dev/null 2>&1; rc=$?
 if [[ "$(wc -c < "$R6/control.log")" -lt 10000 ]]; then ok
 else fail "INV-RECON-21: обрез размера не сработал при недоступном опросе"; fi
 if [[ "$rc" != 0 ]]; then ok
@@ -174,7 +174,7 @@ for ext in log debug.log; do
 done
 printf 'старье\n' > "$R7/sessions/proj-aaaaaaaa.log"
 touch -d '-30 days' "$R7/sessions/proj-aaaaaaaa.log"
-env CLAUDE_CONTROL_DIR="$R7" PATH="$BIN7:$PATH" CLAUDE_CONTROL_LOG_TTL_D=7 "$ROT" >/dev/null 2>&1; rc=$?
+env AI_CONTROL_DIR="$R7" PATH="$BIN7:$PATH" AI_CONTROL_LOG_TTL_D=7 "$ROT" >/dev/null 2>&1; rc=$?
 if [[ "$rc" == 0 ]]; then ok
 else fail "INV-RECON-21: исправный опрос дал ненулевой код ($rc)"; fi
 if [[ -f "$R7/sessions/proj-deadbeef.log" && -f "$R7/sessions/proj-deadbeef.debug.log" ]]; then ok

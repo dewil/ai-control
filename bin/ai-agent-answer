@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""ai-agent-answer: доверенный писатель ответа на вопрос (V2.3 §4,
+аудит blocker 1 - закрывает самозаверение через payload.text; V2.4 §3,
+исправление контракта - то же самое для permission-решения через
+payload.approve; V2.5 §7.2, аудит blocker - обе фазы ниже под ОДНИМ
+удержанием questions/.lock).
+
+usage: ai-agent-answer <agent-dir> --qid <qid>
+                            (--text "..." | --approve | --reject | --recover) [--by NAME]
+
+Единственный легитимный источник текста ответа/решения. Под ОДНИМ
+удержанием questions/.lock (аудит V2.5 blocker - разрыв лока между фазами
+давал второму параллельному вызову окно переписать чужое решение):
+1. Перечитать файл вопроса, убедиться, что status == open, что режим
+   ответа соответствует виду вопроса (--approve/--reject только для
+   kind=permission, --text только для kind=info - аудит V2.5 major:
+   иначе --approve на info писал бы decision, а стейл-гейт V2.3 закрыл
+   бы вопрос без текста, которого ждет агент), записать answer/decision
+   + answered_at/answered_by, durable_write.
+2. Тем же удержанием лока положить в spool АДРЕСУЮЩЕЕ событие
+   {"kind": "answer", "question_id": "<qid>"} - payload несет ИСКЛЮЧИТЕЛЬНО
+   question_id, runner текст/решение из него не берет НИКОГДА - и сразу
+   пометить event_published_at (deadlock исключен: spool-put берет
+   .inbox.lock, не questions/.lock).
+
+Право писать в questions/ и есть доверие (в V2.5 этим писателем стал
+tgbot после whitelist-проверки).
+"""
+
+import fcntl
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from uuid import UUID
+
+QID_RE = re.compile(r"^[0-9a-f-]{36}$")
+
+
+def canonical_uuid(value):
+    if type(value) is not str:
+        return False
+    try:
+        return str(UUID(value)) == value
+    except ValueError:
+        return False
+
+
+def now_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def fsync_dir(path):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def durable_write(path, data):
+    d = os.path.dirname(os.path.abspath(path)) or "."
+    tmp = os.path.join(d, ".%s.tmp.%d" % (os.path.basename(path), os.getpid()))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        mv = memoryview(data.encode() if isinstance(data, str) else data)
+        while mv:
+            mv = mv[os.write(fd, mv):]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+    fsync_dir(d)
+
+
+def durable_json(path, doc):
+    durable_write(path, json.dumps(doc, ensure_ascii=False) + "\n")
+
+
+def fail(msg, code=2):
+    sys.stderr.write("ai-agent-answer: %s\n" % msg)
+    sys.exit(code)
+
+
+def qid_safe_path(agent_dir, qid):
+    """uuid4-подобный qid + containment внутри questions/ этого агента
+    (аудит V2.3 major 2 - тот же протокол, что в ai-agent-run)."""
+    if not qid or not QID_RE.match(qid):
+        return None
+    qdir = os.path.realpath(os.path.join(agent_dir, "questions"))
+    path = os.path.realpath(os.path.join(qdir, qid + ".json"))
+    if path != os.path.join(qdir, qid + ".json"):
+        return None
+    return path
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
+        fail("usage: ai-agent-answer <agent-dir> --qid Q "
+             "(--text T | --approve | --reject | --recover) [--by NAME]")
+    agent_dir = sys.argv[1]
+    args = sys.argv[2:]
+    qid, text, by, mode = None, None, "operator", None
+    modes = 0
+    while args:
+        a = args.pop(0)
+        if a == "--qid" and args:
+            qid = args.pop(0)
+        elif a == "--text" and args:
+            text, mode = args.pop(0), "text"
+            modes += 1
+        elif a == "--approve":
+            mode = "approve"
+            modes += 1
+        elif a == "--reject":
+            mode = "reject"
+            modes += 1
+        elif a == "--recover":
+            mode = "recover"
+            modes += 1
+        elif a == "--by" and args:
+            by = args.pop(0)
+        else:
+            fail("unknown/incomplete arg %r" % a)
+    if not qid:
+        fail("--qid is required")
+    if modes != 1:
+        fail("нужен ровно один из --text/--approve/--reject/--recover")
+
+    if not os.path.isdir(agent_dir):
+        fail("agent dir не существует: %s" % agent_dir)
+    path = qid_safe_path(agent_dir, qid)
+    if not path:
+        fail("некорректный qid (ожидается uuid4)")
+
+    qdir = os.path.dirname(path)
+    os.makedirs(qdir, mode=0o700, exist_ok=True)
+    name = os.path.basename(agent_dir.rstrip("/"))
+    bin_dir = os.path.dirname(os.path.abspath(__file__))
+    lk = os.open(os.path.join(qdir, ".lock"), os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            d = json.load(open(path))
+        except (FileNotFoundError, ValueError):
+            fail("вопрос не найден или поврежден: %s" % qid)
+        if not isinstance(d, dict) or d.get("qid") != qid \
+                or d.get("kind") not in ("info", "permission") \
+                or d.get("status") not in ("open", "closed") \
+                or any(type(d.get(key)) is not str or not d[key]
+                       for key in ("envelope_key", "asked_at", "question")):
+            fail("вопрос поврежден: %s" % qid)
+        qkind = d["kind"]
+        saved = d.get("answered_at") is not None
+        if saved:
+            if not isinstance(d.get("answered_at"), str) or not d["answered_at"] \
+                    or not isinstance(d.get("answered_by"), str) or not d["answered_by"]:
+                fail("поврежден сохраненный ответ")
+            if qkind == "info":
+                if not isinstance(d.get("answer"), str):
+                    fail("поврежден сохраненный текст ответа")
+            elif d.get("decision") not in ("approve", "reject"):
+                fail("поврежден сохраненное решение")
+        closed_recovery = d["status"] == "closed" and mode == "recover"
+        if d["status"] == "closed" and not closed_recovery:
+            fail("вопрос уже закрыт: %s" % qid)
+        if mode in ("approve", "reject") and qkind != "permission":
+            fail("--approve/--reject допустимы только для permission-вопроса")
+        if mode == "text" and qkind == "permission":
+            fail("--text не допустим для permission-вопроса")
+        if not saved and mode == "recover" and not closed_recovery:
+            fail("нет сохраненного ответа")
+        callback = d.get('native_callback')
+        if callback is not None or (d.get('engine') == 'codex' and qkind == 'permission'):
+            # Static binding only; live operation authorization remains in runtime.
+            if type(callback) is not dict \
+                    or any(type(callback.get(key)) is not str or not callback[key]
+                           for key in ('attempt_id', 'thread_id', 'turn_id', 'item_id')) \
+                    or not canonical_uuid(callback.get('operation_id')) \
+                    or type(callback.get('task_incarnation')) is not str \
+                    or not re.fullmatch(r'[0-9a-f]{32}', callback['task_incarnation']) \
+                    or type(callback.get('generation')) is not int or callback['generation'] < 1 \
+                    or not (type(callback.get('request_id')) is int
+                            or (type(callback.get('request_id')) is str and callback['request_id'])) \
+                    or callback.get('method') != 'item/fileChange/requestApproval' \
+                    or callback.get('status') not in ('pending', 'answered') \
+                    or any(type(callback.get(key)) is not str
+                           or not re.fullmatch(r'[0-9a-f]{64}', callback[key])
+                           for key in ('payload_fingerprint', 'changes_digest')):
+                fail('поврежден native callback Codex')
+            allowed = callback.get('allowed_decisions')
+            if d.get('engine') != 'codex' \
+                    or qkind != 'permission' \
+                    or (callback.get('status') != 'pending' \
+                        and not (closed_recovery or (mode == 'recover' and saved \
+                                 and d.get('event_published_at') is not None))) \
+                    or allowed not in (['reject'], ['approve','reject']) \
+                    or (mode != 'recover' and mode not in allowed) \
+                    or (saved and d.get('decision') not in allowed):
+                fail('решение запрещено фиксированным профилем Codex')
+        if closed_recovery:
+            return
+        if saved and d.get("event_published_at") is not None:
+            if mode == "recover":
+                return
+            fail("на вопрос уже отвечено: %s" % qid)
+        # INV-TASK-24: a retry finishes publication of the first durable
+        # response; a later tap cannot replace its decision or author.
+        if not saved:
+            if mode == "text":
+                d["answer"] = text
+            else:
+                d["decision"] = mode
+            d["answered_at"] = now_iso()
+            d["answered_by"] = by
+            durable_json(path, d)
+
+        # адресующее событие И отметка о публикации - ПОД ТЕМ ЖЕ локом
+        # (аудит V2.5 blocker): разрыв лока между фазами давал второму
+        # параллельному вызову окно прочитать "answered_at без
+        # event_published_at" как "еще не отвечено" и переписать чужое
+        # решение до того, как первый вызов успевал опубликовать событие.
+        # Deadlock исключен: spool-put берет .inbox.lock, не questions/.lock.
+        r = subprocess.run(
+            [os.path.join(bin_dir, "ai-agent-run"), "spool-put", name,
+             "--json", json.dumps({"kind": "answer", "question_id": qid}),
+             "--id", "ans:%s" % qid],
+            capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            fail("ответ записан, но адресующее событие не опубликовано: %s"
+                 % (r.stderr.strip() or r.returncode), code=7)
+        d["event_published_at"] = now_iso()
+        durable_json(path, d)
+    finally:
+        fcntl.flock(lk, fcntl.LOCK_UN)
+        os.close(lk)
+    print(qid)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        fail("временный отказ записи/публикации: %s" % e, code=7)

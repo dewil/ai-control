@@ -1,7 +1,7 @@
 """Shared spec.schedule validation (V2.8 §2) + fingerprint (§4).
 
-Одно определение, используемое и bin/claude-rc-agent (create-time, вызов
-как скрипт - JSON блока schedule на stdin), и bin/claude-agent-run
+Одно определение, используемое и bin/ai-rc-agent (create-time, вызов
+как скрипт - JSON блока schedule на stdin), и bin/ai-agent-run
 (tick-time, импортом) - иначе создание и тик валидируют по-разному, и
 именно такой дрейф был блокером аудита V2.8 (спека - обычный файл,
 расписание может появиться или измениться в ней уже ПОСЛЕ create, когда
@@ -50,7 +50,7 @@ def validate_preconditions(spec_type, source_kind):
     """None, если предусловия schedule (§2) для окружающей спеки выполнены:
     spec.type == "event" и spec.source.kind == "spool" - единственная форма
     источника, допускающая schedule. Иначе строка-причина. Тот же вызов на
-    create (bin/claude-rc-agent) и на тике (bin/claude-agent-run) - иначе
+    create (bin/ai-rc-agent) и на тике (bin/ai-agent-run) - иначе
     смена spec.type/spec.source.kind ПОСЛЕ create молча оставляет schedule
     публиковать события в spool вместо отказа (аудит V2.8 серьезная 4)."""
     if spec_type != "event":
@@ -71,7 +71,7 @@ def fingerprint(d):
 
 
 if __name__ == "__main__":
-    # CLI-обертка для bin/claude-rc-agent (bash). Два режима:
+    # CLI-обертка для bin/ai-rc-agent (bash). Два режима:
     # - без аргументов: JSON блока schedule на stdin -> текст ошибки на
     #   stdout + exit 1, либо тишина + exit 0 (валидация содержимого, §2);
     # - "--preconditions <type> <source_kind>": та же проверка предусловий,

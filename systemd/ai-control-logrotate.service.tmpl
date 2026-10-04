@@ -1,0 +1,12 @@
+[Unit]
+Description=Claude Code log rotation (oneshot)
+
+[Service]
+Type=oneshot
+ExecStart=__BIN_DIR__/ai-control-logrotate
+Environment=AI_CONTROL_DIR=__CONTROL_DIR__
+Environment=PATH=__BIN_DIR__:/usr/local/bin:/usr/bin:/bin
+# Optional override file (AI_CONTROL_LOG_MAX_BYTES etc.); missing is fine.
+EnvironmentFile=-%h/.config/ai-control/env
+# stdout/stderr go to the journal (no extra file); logrotate appends its trim
+# notes to watchdog.log itself.

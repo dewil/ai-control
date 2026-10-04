@@ -77,7 +77,7 @@ if 'show' in args:
         self.check_refuses_deletion('uninstall.sh', 'reactivate')
 
     def test_INV_CANONRET_04_pending_help_is_manual_read_only(self):
-        result = subprocess.run([str(base.ROOT/'bin/claude-agent-harvest'), '--help'], env=self.env, capture_output=True, text=True, timeout=30)
+        result = subprocess.run([str(base.ROOT/'bin/ai-agent-harvest'), '--help'], env=self.env, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0)
         text = result.stdout + result.stderr
         pending_lines = [line for line in text.splitlines() if 'pending' in line.lower()]

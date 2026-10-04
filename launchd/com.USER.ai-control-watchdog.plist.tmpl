@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__WATCHDOG_LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__BIN_DIR__/ai-control-watchdog</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AI_CONTROL_LABEL</key>
+    <string>__LABEL__</string>
+    <key>AI_CONTROL_LOG</key>
+    <string>__CONTROL_DIR__/control.log</string>
+    <key>AI_CONTROL_WATCHDOG_LOG</key>
+    <string>__CONTROL_DIR__/watchdog.log</string>
+    <key>AI_CONTROL_DEBUG_FILE</key>
+    <string>__CONTROL_DIR__/control.debug.log</string>
+    <key>AI_CONTROL_STALE_SECONDS</key>
+    <string>150</string>
+    <!-- Auto-heal on by default. Set to 0 for observe-only (the watchdog then
+         logs "WOULD kick" instead of restarting) when calibrating thresholds. -->
+    <key>AI_CONTROL_WATCHDOG_ARM</key>
+    <string>1</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>120</integer>
+  <key>StandardOutPath</key>
+  <string>__CONTROL_DIR__/watchdog.out</string>
+  <key>StandardErrorPath</key>
+  <string>__CONTROL_DIR__/watchdog.err</string>
+</dict>
+</plist>

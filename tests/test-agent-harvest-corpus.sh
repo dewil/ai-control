@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
 # LLM-корпус тест harvester propose (СЕТЬ, реальный claude). Гоняется на VM.
-# Локально пропускается, если нет claude или не задан CLAUDE_HARVEST_CORPUS=1.
+# Локально пропускается, если нет claude или не задан AI_HARVEST_CORPUS=1.
 #
 # Проверяет качество кластеризации реальной моделью (design тест-план):
 # 2 разные сути по 3 агента -> РОВНО 2 disjoint-кластера; одиночка не
 # кластеризуется; инъекция в тексте ноты не ломает вывод.
 set -u
 
-if [[ "${CLAUDE_HARVEST_CORPUS:-0}" != "1" ]]; then
-  echo "corpus: пропущен (задай CLAUDE_HARVEST_CORPUS=1 и claude в PATH для сети)"
+if [[ "${AI_HARVEST_CORPUS:-0}" != "1" ]]; then
+  echo "corpus: пропущен (задай AI_HARVEST_CORPUS=1 и claude в PATH для сети)"
   exit 0
 fi
 command -v "${CLAUDE_BIN:-claude}" >/dev/null 2>&1 || {
   echo "corpus: claude не найден - пропуск"; exit 0; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-HARV="$HERE/../bin/claude-agent-harvest"
+HARV="$HERE/../bin/ai-agent-harvest"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-export CLAUDE_AGENTS_DIR="$TMP/agents"; export CLAUDE_HARVEST_DIR="$TMP/harvest"
-mkdir -p "$CLAUDE_AGENTS_DIR"
+export AI_AGENTS_DIR="$TMP/agents"; export AI_HARVEST_DIR="$TMP/harvest"
+mkdir -p "$AI_AGENTS_DIR"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); }; bad(){ FAIL=$((FAIL+1)); echo "FAIL: $1" >&2; }
 
 pkey(){ python3 -c 'import hashlib,os,sys;print(hashlib.sha256(os.path.realpath(sys.argv[1]).encode()).hexdigest()[:16])' "$1"; }
 mk(){ # <name> <role> <proj> <inc> <note>
-  local d="$CLAUDE_AGENTS_DIR/$1"; mkdir -p "$d"
+  local d="$AI_AGENTS_DIR/$1"; mkdir -p "$d"
   cat > "$d/spec.yaml" <<EOF
 schema: 1
 name: $1
@@ -39,7 +39,7 @@ EOF
   printf '{"at":"2026-07-13T00:00:00Z","event":"agent_created","actor":"operator"}\n' > "$d/events.jsonl"
   python3 -c 'import json,sys;print(json.dumps({"at":"2026-07-13T00:00:05Z","event":"acceptance_revise","actor":"operator","seq":5,"detail":{"note":sys.argv[1]}},ensure_ascii=False))' "$5" >> "$d/events.jsonl"
 }
-cand_cnt(){ grep -c '"kind": "candidate"' "$CLAUDE_HARVEST_DIR/$1/$2/emitted.jsonl" 2>/dev/null || echo 0; }
+cand_cnt(){ grep -c '"kind": "candidate"' "$AI_HARVEST_DIR/$1/$2/emitted.jsonl" 2>/dev/null || echo 0; }
 
 P="$TMP/proj"; mkdir -p "$P"; K="$(pkey "$P")"
 # суть A (пиши тесты сразу) - 3 перефразировки
@@ -60,7 +60,7 @@ N="$(cand_cnt "$K" coder)"
 [[ "$N" == "2" ]] && ok || bad "ожидалось 2 кластера, получено $N"
 
 # кластеры disjoint и по 3 id, покрывают A и B, singleton s1 не в кластерах
-python3 - "$CLAUDE_HARVEST_DIR/$K/coder/emitted.jsonl" "$CLAUDE_HARVEST_DIR/$K/coder/ledger.jsonl" <<'PY'
+python3 - "$AI_HARVEST_DIR/$K/coder/emitted.jsonl" "$AI_HARVEST_DIR/$K/coder/ledger.jsonl" <<'PY'
 import json,sys
 cands=[json.loads(l) for l in open(sys.argv[1]) if l.strip() and json.loads(l).get("kind")=="candidate"]
 led={json.loads(l)["correction_id"]:json.loads(l) for l in open(sys.argv[2]) if l.strip()}

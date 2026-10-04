@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for claude-agent-voice-hook - озвучка итога сессии на остановке.
+# Tests for ai-agent-voice-hook - озвучка итога сессии на остановке.
 #
 # Хук висит на КАЖДОЙ остановке сессии, поэтому цена ошибки несимметрична:
 # лишняя отправка будит человека и слышна окружающим, пропущенная - всего лишь
@@ -8,7 +8,7 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-HOOK="${HOOK_BIN:-$HERE/../bin/claude-agent-voice-hook}"
+HOOK="${HOOK_BIN:-$HERE/../bin/ai-agent-voice-hook}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -17,10 +17,10 @@ ok()   { PASS=$((PASS+1)); }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1" >&2; }
 
 export HOME="$TMP"
-mkdir -p "$TMP/.claude-control" "$TMP/.cache" "$TMP/bin"
+mkdir -p "$TMP/.ai-control" "$TMP/.cache" "$TMP/bin"
 
-VOICE_PREF="$TMP/.claude-control/tgbot.voice.json"
-STATE="$TMP/.claude-control/voice-hook.json"
+VOICE_PREF="$TMP/.ai-control/tgbot.voice.json"
+STATE="$TMP/.ai-control/voice-hook.json"
 SENT="$TMP/sent"; : > "$SENT"
 
 # Подменяем и systemctl (чтобы сессия "существовала"), и сам бот (чтобы ни один
@@ -55,14 +55,14 @@ chmod +x "$TMP/bin/systemd-run"
 export PATH="$TMP/bin:$PATH"
 
 BOTDIR="$TMP/botbin"; mkdir -p "$BOTDIR"
-cp "$HOOK" "$BOTDIR/claude-agent-voice-hook"
-cat > "$BOTDIR/claude-agent-tgbot" <<MOCK
+cp "$HOOK" "$BOTDIR/ai-agent-voice-hook"
+cat > "$BOTDIR/ai-agent-tgbot" <<MOCK
 #!/usr/bin/env python3
 import sys
 open("$SENT", "a").write(repr(sys.argv[1:]) + "\\n")
 MOCK
-chmod +x "$BOTDIR/claude-agent-tgbot"
-HOOK="$BOTDIR/claude-agent-voice-hook"
+chmod +x "$BOTDIR/ai-agent-tgbot"
+HOOK="$BOTDIR/ai-agent-voice-hook"
 
 SID="11111111-1111-4111-8111-111111111111"
 TR="$TMP/transcript.jsonl"
@@ -82,7 +82,7 @@ run_hook() { # [sid] -> запускает хук с текущим транск
   local sid="${1:-$SID}"
   printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s"}' \
     "$sid" "$TR" "$TMP" \
-    | env ${CLAUDE_AGENT_SYSTEMD_RUN:+CLAUDE_AGENT_SYSTEMD_RUN="$CLAUDE_AGENT_SYSTEMD_RUN"} \
+    | env ${AI_AGENT_SYSTEMD_RUN:+AI_AGENT_SYSTEMD_RUN="$AI_AGENT_SYSTEMD_RUN"} \
       "$HOOK" >/dev/null 2>&1
   # Отправка уходит ОТВЯЗАННЫМ процессом, и это не деталь реализации, а
   # требование: хук не имеет права ждать синтез. Значит тесту надо дать ему
@@ -130,7 +130,7 @@ echo "=== без systemd-run молчим, а не лезем в cgroup сесс
 # Прячем не только мок, но и системный systemd-run: PATH сужаем до каталога
 # моков, иначе хук найдет настоящий в /usr/bin и кейс проверит не то.
 rm -f "$STATE"; : > "$SENT"
-CLAUDE_AGENT_SYSTEMD_RUN="$TMP/нет-такого-бинаря" run_hook
+AI_AGENT_SYSTEMD_RUN="$TMP/нет-такого-бинаря" run_hook
 [[ ! -s "$SENT" ]] \
   && ok || fail "без systemd-run синтез НЕ запускается внутри сессии"
 grep -q "systemd-run" "$TMP/.cache/voice-hook.log" \

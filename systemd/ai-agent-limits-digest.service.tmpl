@@ -1,0 +1,13 @@
+[Unit]
+Description=LLM limits digest (probe + TG panel, oneshot)
+
+[Service]
+Type=oneshot
+ExecStart=__BIN_DIR__/ai-agent-limits-digest once
+Environment=AI_CONTROL_DIR=__CONTROL_DIR__
+Environment=PATH=__BIN_DIR__:/usr/local/bin:/usr/bin:/bin
+# LIMITS_PROBE_* / AI_AGENT_LIMITS_* / AI_AGENT_TG_* - в env-файле;
+# дефолты рабочие для llm VM (creds на корне, codex на /data, mihomo 7890).
+EnvironmentFile=-%h/.config/ai-control/env
+# Два GET через прокси + отправка; зависший прокси не должен жить вечно.
+TimeoutStartSec=5min

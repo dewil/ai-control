@@ -1,4 +1,4 @@
-# Инвентарь fleet canon-sync (этап 8c). Боевой файл: ~/.claude-control/canon/fleet.yaml
+# Инвентарь fleet canon-sync (этап 8c). Боевой файл: ~/.ai-control/canon/fleet.yaml
 # Наличие проекта в файле = fleet-managed (standalone /canon на нем отказывает).
 #
 # Поля:

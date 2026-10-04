@@ -9,7 +9,7 @@
 #
 # Формат: одно имя файла из bin/ в строке. Пустые строки и # - комментарии.
 
-claude-rc
+ai-rc
 codex-rc
 _codex_rc.py
 # Общие helpers отдельного Codex TASK runtime.
@@ -22,32 +22,32 @@ _codex_task_bridge.py
 _codex_task_backend.py
 _codex_task_files.py
 _codex_task_store.py
-claude-rc-agent
-claude-rc-takeover
-claude-control-logrotate
+ai-rc-agent
+ai-rc-takeover
+ai-control-logrotate
 
 # Пояс агентов (Linux)
-claude-agent-io
-claude-agent-run
-claude-agent-session
-claude-agent-reconciler
-claude-agent-checkrun
-claude-agent-review
-claude-agent-ask
-claude-agent-answer
-claude-agent-permit
-claude-agent-done
-claude-agent-harvest
-claude-agent-tgbot
-claude-agent-limits-digest
-claude-agent-model-advice
+ai-agent-io
+ai-agent-run
+ai-agent-session
+ai-agent-reconciler
+ai-agent-checkrun
+ai-agent-review
+ai-agent-ask
+ai-agent-answer
+ai-agent-permit
+ai-agent-done
+ai-agent-harvest
+ai-agent-tgbot
+ai-agent-limits-digest
+ai-agent-model-advice
 
-# Синтез речи: зовет claude-agent-tgbot рядом с собой (BIN_DIR), но и сам
+# Синтез речи: зовет ai-agent-tgbot рядом с собой (BIN_DIR), но и сам
 # запускается напрямую
 voice-report
-claude-agent-voice-hook
-claude-control-transcript-gc
-claude-agent-waiting-hook
+ai-agent-voice-hook
+ai-control-transcript-gc
+ai-agent-waiting-hook
 
 # Помощники: их не запускают напрямую, их зовет соседний скрипт по $(dirname $0)
 _rc_projects.sh
@@ -63,17 +63,19 @@ _agent_done_io.py
 _agent_worktree.py
 
 # Legacy: юниты выключены с V3.0, файлы остаются под откат
-claude-control-session
-claude-control-watchdog
-claude-control-project-watchdog
+ai-control-session
+ai-control-watchdog
+ai-control-project-watchdog
 
 _codex_task_runtime.py
 codex-task-runtime
 
 # Optional task web frontend; installation does not activate services.
-claude-control-web
+ai-control-web
 _control_web.py
 _control_web_broker.py
 _control_web.html
 _control_web.css
 _control_web.js
+
+ai-control-migrate-names

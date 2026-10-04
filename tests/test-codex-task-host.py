@@ -38,7 +38,7 @@ class Manager:
         if self.on_start:
             self.on_start()
         self.status = dict(invocation_id='a' * 32,
-            description='claude-control task ' + token, kill_mode='control-group',
+            description='ai-control task ' + token, kill_mode='control-group',
             active_state='active', sub_state='running', main_pid=123,
             control_group='/user.slice/task', type='exec', exit_type='main', restart='no',
             remain_after_exit=False, send_sigkill=True)
@@ -433,7 +433,7 @@ class AdapterTests(unittest.TestCase):
         return subprocess.CompletedProcess(argv, self.returncode, self.output, 'SECRET-PAYLOAD')
 
     def status(self, **changes):
-        fields = dict(LoadState='loaded', Description='claude-control task ' + self.token,
+        fields = dict(LoadState='loaded', Description='ai-control task ' + self.token,
                       InvocationID='a' * 32, ActiveState='active', SubState='running',
                       MainPID='123', ControlGroup='/task', KillMode='control-group',
                       Type='exec', ExitType='main', Restart='no', RemainAfterExit='no', SendSIGKILL='yes')
@@ -449,7 +449,7 @@ class AdapterTests(unittest.TestCase):
             self.manager.start(self.unit, ['/bin/true', 'app-server'], '/tmp/$HOME', self.token, deadline=200)
         argv = self.calls[-1][0]
         for value in ('--user', '--no-ask-password', '--quiet', '--unit=' + self.unit,
-                      '--description=claude-control task ' + self.token, '--service-type=exec',
+                      '--description=ai-control task ' + self.token, '--service-type=exec',
                       '--property=KillMode=control-group', '--property=Restart=no', '--property=UMask=0077',
                       '--property=TimeoutStopSec=5s', '--working-directory=/tmp/$HOME', '--expand-environment=no'):
             self.assertIn(value, argv)
@@ -657,7 +657,7 @@ class FencedStopTests(unittest.TestCase):
         self.commands = []
         self.open_calls = []
         self.now = 100.0
-        self.state = dict(LoadState='loaded', Description='claude-control task ' + self.token,
+        self.state = dict(LoadState='loaded', Description='ai-control task ' + self.token,
             InvocationID=self.invocation, ActiveState='active', SubState='running', MainPID='123',
             ControlGroup='/owned/task', KillMode='control-group', Type='exec', ExitType='main',
             Restart='no', RemainAfterExit='no', SendSIGKILL='yes')
@@ -801,7 +801,7 @@ class FencedStopTests(unittest.TestCase):
             with self.subTest(exited=exited, drained=drained), self.assertRaises(HostError):
                 self.stop()
             self.assertEqual(self.closed, 1)
-            self.state = dict(LoadState='loaded', Description='claude-control task ' + self.token,
+            self.state = dict(LoadState='loaded', Description='ai-control task ' + self.token,
                 InvocationID=self.invocation, ActiveState='active', SubState='running', MainPID='123',
                 ControlGroup='/owned/task', KillMode='control-group', Type='exec', ExitType='main',
                 Restart='no', RemainAfterExit='no', SendSIGKILL='yes')

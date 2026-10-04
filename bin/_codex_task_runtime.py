@@ -1128,7 +1128,7 @@ class CodexTaskRuntime:
             receipt.update(commit_sha=head,no_commit=True)
         else:
             require(git(['write-tree'],index)==receipt['tree_sha'])
-            git(['-c','user.name=claude-control','-c','user.email=claude-control@localhost','commit','--no-verify','--no-gpg-sign','-m',summary,'-m',trailer,'-m',intent_trailer],index)
+            git(['-c','user.name=ai-control','-c','user.email=ai-control@localhost','commit','--no-verify','--no-gpg-sign','-m',summary,'-m',trailer,'-m',intent_trailer],index)
             new_head=git(['rev-parse','HEAD'])
             require(git(['rev-parse',new_head+'^'])==receipt['parent_sha'] and git(['rev-parse',new_head+'^{tree}'])==receipt['tree_sha'])
             receipt.update(commit_sha=new_head,no_commit=False)
@@ -1200,7 +1200,7 @@ class CodexTaskRuntime:
         require(row['fingerprint']==digest(arguments))
 
     def _shared_runner(self):
-        loader=importlib.machinery.SourceFileLoader('_codex_runtime_shared_runner',os.path.join(os.path.dirname(__file__),'claude-agent-run'))
+        loader=importlib.machinery.SourceFileLoader('_codex_runtime_shared_runner',os.path.join(os.path.dirname(__file__),'ai-agent-run'))
         spec=importlib.util.spec_from_loader(loader.name,loader);module=importlib.util.module_from_spec(spec)
         loader.exec_module(module)
         return module
@@ -1440,7 +1440,7 @@ def task_engine(agent_dir):
 
 
 def ensure_native_python():
-    target=os.path.abspath(os.environ.get('CODEX_RC_PYTHON',os.path.expanduser('~/.local/share/claude-control/codex-venv/bin/python')))
+    target=os.path.abspath(os.environ.get('CODEX_RC_PYTHON',os.path.expanduser('~/.local/share/ai-control/codex-venv/bin/python')))
     require(os.path.isfile(target) and os.access(target,os.X_OK))
     if target!=os.path.abspath(os.sys.executable):
         os.execv(target,[target]+os.sys.argv)

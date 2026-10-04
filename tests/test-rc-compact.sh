@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Tests for `claude-rc compact <project> <uuid> [--up]`.
+# Tests for `ai-rc compact <project> <uuid> [--up]`.
 #
 # Сжатие контекста - это полноценный запрос к модели по ВСЕЙ переписке: на
 # большой сессии минуты и заметные деньги. Поэтому:
 #   - оно уходит в свой транзиентный юнит, а не выполняется в лоб: бот вызывает
-#     claude-rc синхронно, и минутная блокировка заморозила бы весь опрос;
+#     ai-rc синхронно, и минутная блокировка заморозила бы весь опрос;
 #   - живую сессию сжимать нельзя - транскрипт держит ее процесс, и второй
 #     claude --resume на тот же файл дает то самое задвоение, на котором мы уже
 #     обжигались;
@@ -13,7 +13,7 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RC="$HERE/../bin/claude-rc"
+RC="$HERE/../bin/ai-rc"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -22,12 +22,12 @@ ok()   { PASS=$((PASS+1)); }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1" >&2; }
 
 export CLAUDE_CONFIG_DIR="$TMP/claude"
-export CLAUDE_RC_PROJECTS_FILE="$TMP/projects.yaml"
-export CLAUDE_RC_LOG_DIR="$TMP/logs"
-mkdir -p "$CLAUDE_RC_LOG_DIR"
+export AI_RC_PROJECTS_FILE="$TMP/projects.yaml"
+export AI_RC_LOG_DIR="$TMP/logs"
+mkdir -p "$AI_RC_LOG_DIR"
 
 PROJ="$TMP/proj"; mkdir -p "$PROJ"
-printf 'proj: %s\n' "$PROJ" > "$CLAUDE_RC_PROJECTS_FILE"
+printf 'proj: %s\n' "$PROJ" > "$AI_RC_PROJECTS_FILE"
 SLUG="$(printf '%s' "$PROJ" | sed 's/[^a-zA-Z0-9]/-/g')"
 TDIR="$CLAUDE_CONFIG_DIR/projects/$SLUG"; mkdir -p "$TDIR"
 
@@ -90,12 +90,12 @@ else fail "причина отказа не названа: '$out'"; fi
 # 5. --up дописывает подъем ПОСЛЕ сжатия: сначала сжали, потом подняли готовой.
 : > "$RUN_ARGS"
 "$RC" compact proj "$SID" --up >/dev/null 2>&1
-if grep -q "claude-rc" "$RUN_ARGS" && grep -q "up" "$RUN_ARGS"; then ok
+if grep -q "ai-rc" "$RUN_ARGS" && grep -q "up" "$RUN_ARGS"; then ok
 else fail "--up не дописал подъем после сжатия"; fi
 # Без флага подъема быть не должно - иначе сжатие молча поднимает сессию.
 : > "$RUN_ARGS"
 "$RC" compact proj "$SID" >/dev/null 2>&1
-if ! grep -q "claude-rc.*up" "$RUN_ARGS"; then ok
+if ! grep -q "ai-rc.*up" "$RUN_ARGS"; then ok
 else fail "сжатие без --up все равно поднимает сессию"; fi
 
 # 6. Повторный запуск, пока сжатие идет, не плодит второй прогон по тому же

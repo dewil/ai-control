@@ -10,7 +10,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-path = Path(__file__).resolve().parents[1] / 'bin/claude-agent-limits-digest'
+path = Path(__file__).resolve().parents[1] / 'bin/ai-agent-limits-digest'
 loader = importlib.machinery.SourceFileLoader('digest_authoritative_tests', str(path))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 m = importlib.util.module_from_spec(spec)

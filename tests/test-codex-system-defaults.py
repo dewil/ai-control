@@ -10,7 +10,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('codex_defaults_test', ROOT / 'bin' / '_codex_rc.py')
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-loader = importlib.machinery.SourceFileLoader('bot_defaults_test', str(ROOT / 'bin' / 'claude-agent-tgbot'))
+loader = importlib.machinery.SourceFileLoader('bot_defaults_test', str(ROOT / 'bin' / 'ai-agent-tgbot'))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 bot = importlib.util.module_from_spec(spec)
 loader.exec_module(bot)

@@ -10,7 +10,7 @@
   candidate-id (не текст правки, не blob-SHA); завершение записи (переход
   в терминал) идет только через явный хук `mark-applied` по candidate-id,
   вызываемый по присутствию правила в post-merge дереве, а не по событию
-  merge и не по авто-переходу. Довод: у реального `bin/claude-agent-harvest`
+  merge и не по авто-переходу. Довод: у реального `bin/ai-agent-harvest`
   нет durable mapping candidate-id -> целевой путь на момент создания брифа,
   авто-переход при таком контракте недостижим честно.
 - **INV-CANON-14.** Кандидат в `emitted.jsonl` неизменяем после первой
@@ -50,7 +50,7 @@
 
 ## Интерфейсы и данные
 
-`claude-agent-harvest {collect,propose,digest,approve,reject,dismiss,mark-applied,pending,list}` сохраняет прежний CLI. `pending` выводит JSON-строки `{pkey, role, cid}` и не меняет данные. `approve` durable-записывает бриф в `toolkit-log/upstream-pending`, добавляет `canon.yaml.upstream_pending` под локом и фиксирует pending-upstream. Он не пишет wake-маркер и не запускает systemd/operator. Повторная доставка идемпотентна. `mark-applied` остается явным ручным подтверждением.
+`ai-agent-harvest {collect,propose,digest,approve,reject,dismiss,mark-applied,pending,list}` сохраняет прежний CLI. `pending` выводит JSON-строки `{pkey, role, cid}` и не меняет данные. `approve` durable-записывает бриф в `toolkit-log/upstream-pending`, добавляет `canon.yaml.upstream_pending` под локом и фиксирует pending-upstream. Он не пишет wake-маркер и не запускает systemd/operator. Повторная доставка идемпотентна. `mark-applied` остается явным ручным подтверждением.
 
 Пер-project/role ledger и emitted.jsonl сохраняются; cleanup удаленного оператора не удаляет fleet registry, зеркала, рабочие деревья, PR, бэкапы, harvest ledger, клиентские архивы или env. Установка и демонтаж удаляют только текущий legacy binary и service/timer после проверенной остановки; повторная очистка безопасна.
 

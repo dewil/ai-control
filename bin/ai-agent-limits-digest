@@ -1,0 +1,2580 @@
+#!/usr/bin/env python3
+"""
+Дайджест остатков подписочных лимитов Claude/Codex -> Telegram.
+
+Порт прежнего PHP-сервиса (пробник + Laravel-форматтер) в один stdlib-скрипт:
+одна коробка на VM - снял, отрендерил панель, отправил через ai-agent-tgbot
+notify. Токены провайдеров не покидают хост и не попадают ни в снапшот, ни в
+панель (только проценты и время сброса).
+
+Отправка каждые 15 мин, но ТОЛЬКО при изменении цифр (проценты/статусы/кредиты)
+относительно прошлой отправки - время сброса не считается изменением. Снапшот
+снимается каждый проход (иначе изменение не поймать), кэш /limits всегда свежий.
+
+Клэмп окон: used_percent недельных/5ч-окон OpenAI приходит с рассинхронизированных
+реплик - при одном и том же reset_at значение прыгает вниз (недосчет узла) и
+обратно (веб-Codex при этом стабилен). Реальный расход монотонен до сброса,
+поэтому держим max usage (min remaining) с последнего reset_at в clamp.json и
+показываем его; занижения гасим, max сбрасывается при смене reset_at.
+
+Подкоманды:
+  ai-agent-limits-digest once [--dry-run] [--force]
+                                               снять снапшот, закэшировать,
+                                               отправить если цифры изменились
+                                               (dry-run: печать; force: слать
+                                               даже без изменений)
+  ai-agent-limits-digest render            панель из последнего кэша
+                                               (для /limits в tgbot)
+  ai-agent-limits-digest selftest          offline-тесты форматтера
+
+env (~/.config/ai-control/env; все со здравыми дефолтами):
+  AI_AGENT_LIMITS_TZ         display-TZ панели (деф. Europe/Moscow)
+  AI_AGENT_LIMITS_ENABLED    "0"/"false" = не слать (снапшот и кэш работают)
+  AI_AGENT_LIMITS_STALE_MIN  порог "данные устарели" для render (деф. 45)
+  LIMITS_PROBE_PROXY             прокси провайдерских вызовов (деф.
+                                 http://127.0.0.1:7890 - гео-блок RU-IP)
+  LIMITS_PROBE_CLAUDE_CREDS      деф. ~/.claude/.credentials.json (на корне)
+  LIMITS_PROBE_CODEX_AUTH        деф. /data/.codex/auth.json (LUKS-том)
+  LIMITS_PROBE_DATA_MOUNT        точка монтирования codex-тома (деф. /data;
+                                 пусто = не проверять); заперт -> status locked
+  LIMITS_PROBE_CLAUDE_UA         User-Agent для Claude (деф. из `claude --version`)
+  AI_CONTROL_DIR             кэш снапшота: <dir>/limits/last.json,
+                                 стейт клэмпа: <dir>/limits/clamp.json,
+                                 стейт OpenRouter: <dir>/limits/openrouter-state.json,
+                                 стейт Yandex Cloud: <dir>/limits/yandex-state.json,
+                                 кэш IAM-токена Яндекса: <dir>/limits/yandex-iam.json (600)
+  LIMITS_KIMI_HOME             Kimi Code config + credentials (деф. KIMI_CODE_HOME
+                                 или ~/.kimi-code; Python 3.11+)
+  LIMITS_OPENROUTER_KEY_FILE     ключ OpenRouter, одна строка (деф.
+                                 ~/.config/openrouter/key); файла нет -
+                                 блока OpenRouter в панели нет
+  LIMITS_YANDEX_KEY_FILE         ключ сервисного аккаунта Yandex Cloud, JSON
+                                 (деф. ~/.config/yandex-cloud/billing-reader.json);
+                                 файла нет - блока Yandex Cloud в панели нет
+  LIMITS_YANDEX_BILLING_ACCOUNT  id платежного аккаунта (деф. dn22u5lstpfdyawuhtfk)
+
+Протухший Claude-токен (401) чинится сам: дешевый прогон CLI (haiku) рефрешит
+credentials, запрос повторяется один раз; stale остается только если рефреш
+не помог (нужен relogin).
+
+Graceful: проблемы токенов/тома не роняют exit (секция помечается статусом).
+Ненулевой exit только при недоставке в Telegram или сломанном selftest.
+"""
+from __future__ import annotations
+
+import json
+import math
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta, timezone
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # py<3.9 не поддерживаем, но не падаем на импорте
+    ZoneInfo = None
+
+BIN_DIR = os.path.dirname(os.path.realpath(__file__))
+CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+TIMEOUT = 20
+
+PROXY = os.environ.get("LIMITS_PROBE_PROXY", "http://127.0.0.1:7890")
+CLAUDE_CREDS = os.environ.get(
+    "LIMITS_PROBE_CLAUDE_CREDS",
+    os.path.expanduser("~/.claude/.credentials.json"))
+CODEX_AUTH = os.environ.get("LIMITS_PROBE_CODEX_AUTH", "/data/.codex/auth.json")
+DATA_MOUNT = os.environ.get("LIMITS_PROBE_DATA_MOUNT", "/data")
+CONTROL_DIR = os.environ.get(
+    "AI_CONTROL_DIR", os.path.expanduser("~/.ai-control"))
+CACHE_FILE = os.path.join(CONTROL_DIR, "limits", "last.json")
+SENT_SIG_FILE = os.path.join(CONTROL_DIR, "limits", "last-sent.sig")
+CLAMP_FILE = os.path.join(CONTROL_DIR, "limits", "clamp.json")
+
+# Здоровье хоста. Мгновенные значения - локально (/proc и локальный экспортер),
+# тренды - из VictoriaMetrics на хосте метрик через ssh. Так секция работает и когда хост метрик
+# недоступен: пропадают только тренды.
+PROC_EXPORTER = os.environ.get("LIMITS_PROBE_PROC_EXPORTER", "127.0.0.1:9256")
+METRICS_SSH = os.environ.get("LIMITS_PROBE_METRICS_SSH", "metrics-host")
+METRICS_ADDR = os.environ.get("LIMITS_PROBE_METRICS_ADDR", "127.0.0.1:8428")
+HOST_LOW_MB = 700        # порог тесноты по available
+HOST_PSI_PCT = 1.0       # порог тесноты по PSI памяти (full avg60)
+HOST_PREDICT_H = 4.0     # прогноз исчерпания показываем только ближе этого
+HOST_STEAL_PCT = 5.0     # steal выше - тормозит гипервизор, а не мы
+HOST_SWAP_BUSY_MB = 512  # ниже - своп простаивает, коэффициент zram бессмыслен
+HOST_DISK_LOW_PCT = 10.0
+
+# OpenRouter - предоплата без окон: деньги просто кончаются. Ключ - секрет, в
+# снапшот/стейт/лог/панель не попадает; сюда кладем только путь к файлу.
+OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
+OPENROUTER_KEY_FILE = os.environ.get(
+    "LIMITS_OPENROUTER_KEY_FILE", os.path.expanduser("~/.config/openrouter/key"))
+OPENROUTER_STATE_FILE = os.path.join(CONTROL_DIR, "limits", "openrouter-state.json")
+# Пороги ниже - общие для всех предоплатных счетов (OpenRouter, Yandex Cloud):
+# их читает общее ядро, а не адаптеры. Префикс OR_ остался от первой версии.
+OR_HISTORY_DAYS = 8       # хранимая история замеров (неделя расхода + запас)
+OR_FORECAST_DAYS = 7      # окно среднего суточного расхода для прогноза
+OR_LOW_DAYS = 3           # прогноз меньше - "пора пополнить" (решение dwl)
+OR_FAIL_STREAK = 3        # отказов подряд до сообщения (~45 мин при опросе 15 мин)
+
+# Yandex Cloud - предоплата платежного аккаунта (спека docs/dev/2026-09-25-
+# spec-yandex-cloud-balance.md). Закрытый ключ сервисного аккаунта, JWT и
+# IAM-токен - секреты: в снапшот/стейт/лог/панель не попадают. IAM-токен
+# хранится только в своем кэше (права 600), чтобы не выпускать новый на
+# каждом опросе.
+YANDEX_KEY_FILE = os.environ.get(
+    "LIMITS_YANDEX_KEY_FILE",
+    os.path.expanduser("~/.config/yandex-cloud/billing-reader.json"))
+YANDEX_BILLING_ACCOUNT = os.environ.get(
+    "LIMITS_YANDEX_BILLING_ACCOUNT", "dn22u5lstpfdyawuhtfk")
+YANDEX_IAM_URL = "https://iam.api.cloud.yandex.net/iam/v1/tokens"
+YANDEX_BILLING_URL = "https://billing.api.cloud.yandex.net/billing/v1/billingAccounts/"
+YANDEX_STATE_FILE = os.path.join(CONTROL_DIR, "limits", "yandex-state.json")
+YANDEX_IAM_CACHE_FILE = os.path.join(CONTROL_DIR, "limits", "yandex-iam.json")
+YA_JWT_TTL_S = 3600       # срок жизни JWT для обмена (спека: час)
+YA_IAM_RENEW_S = 3600     # до истечения токена меньше - выпускаем новый
+
+
+def log(msg):
+    sys.stderr.write("limits-digest: %s\n" % msg)
+
+
+def iso_now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def get_in(data, *keys):
+    for key in keys:
+        if not isinstance(data, dict):
+            return None
+        data = data.get(key)
+    return data
+
+
+def read_json(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+# ------------------------------------------------------------------ probe
+# Порт прежнего python-пробника (минус POST на приемник).
+
+def normalize_reset(value):
+    # Claude отдает resets_at строкой ISO; Codex reset_at - epoch-секундами.
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def http_get(url, headers, proxy):
+    handler = urllib.request.ProxyHandler(
+        {"http": proxy, "https": proxy} if proxy else {})
+    opener = urllib.request.build_opener(handler)
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with opener.open(req, timeout=TIMEOUT) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return exc.code, None
+    except Exception as exc:  # сеть/прокси/таймаут
+        log("GET %s failed: %s" % (url, type(exc).__name__))
+        return 0, None
+
+
+def http_post(url, body, headers, proxy):
+    """POST с JSON-телом, тот же вид ответа, что у http_get: (status, json).
+    Тело в лог не идет - в нем бывает JWT."""
+    handler = urllib.request.ProxyHandler(
+        {"http": proxy, "https": proxy} if proxy else {})
+    opener = urllib.request.build_opener(handler)
+    hdrs = dict(headers or {})
+    hdrs.setdefault("Content-Type", "application/json")
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
+                                 headers=hdrs, method="POST")
+    try:
+        with opener.open(req, timeout=TIMEOUT) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return exc.code, None
+    except Exception as exc:  # сеть/прокси/таймаут
+        log("POST %s failed: %s" % (url, type(exc).__name__))
+        return 0, None
+
+
+def window_entry(window):
+    util = window.get("utilization") if isinstance(window, dict) else None
+    if not isinstance(util, (int, float)):
+        return None
+    entry = {"remaining": round(100 - util)}
+    reset = normalize_reset(window.get("resets_at"))
+    if reset:
+        entry["resets_at"] = reset
+    return entry
+
+
+def claude_ua():
+    ua = os.environ.get("LIMITS_PROBE_CLAUDE_UA")
+    if ua:
+        return ua
+    try:
+        out = subprocess.run(["claude", "--version"], capture_output=True,
+                             text=True, timeout=10)
+        match = re.search(r"(\d+\.\d+\.\d+)", out.stdout or "")
+        if match:
+            return "claude-code/%s" % match.group(1)
+    except Exception:
+        pass
+    return "claude-code/2.1.0"
+
+
+def refresh_claude_cli():
+    """Обновить протухший OAuth-токен штатным путем: любой API-вызов CLI
+    рефрешит ~/.claude/.credentials.json сам (ротация refresh_token остается
+    на CLI, самодельный OAuth-рефреш не делаем). Цена - один haiku-промпт."""
+    try:
+        r = subprocess.run(
+            ["claude", "-p", "ok", "--model", "claude-haiku-4-5-20251001"],
+            capture_output=True, text=True, timeout=90)
+    except Exception as exc:
+        log("CLI-рефреш токена не запустился: %s" % type(exc).__name__)
+        return False
+    if r.returncode != 0:
+        log("CLI-рефреш токена: exit %s" % r.returncode)
+        return False
+    return True
+
+
+def build_claude():
+    creds = read_json(CLAUDE_CREDS)
+    token = get_in(creds, "claudeAiOauth", "accessToken")
+    if not token:
+        return {"status": "stale", "detail": "no credentials"}
+
+    headers = {
+        "Authorization": "Bearer %s" % token,
+        "anthropic-beta": "oauth-2025-04-20",
+        "User-Agent": claude_ua(),
+        "Content-Type": "application/json",
+    }
+    status, body = http_get(CLAUDE_USAGE_URL, headers, PROXY)
+    if status == 401 and refresh_claude_cli():
+        creds = read_json(CLAUDE_CREDS)
+        token = get_in(creds, "claudeAiOauth", "accessToken") or token
+        headers["Authorization"] = "Bearer %s" % token
+        status, body = http_get(CLAUDE_USAGE_URL, headers, PROXY)
+    if status == 401:
+        return {"status": "stale", "detail": "token expired"}
+    if status != 200 or not isinstance(body, dict):
+        return {"status": "error", "detail": "http %s" % status}
+
+    section = {"status": "ok"}
+    plan = get_in(creds, "claudeAiOauth", "subscriptionType")
+    if isinstance(plan, str) and plan:
+        section["plan"] = plan.capitalize()
+    for key in ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"):
+        entry = window_entry(body.get(key))
+        if entry:
+            section[key] = entry
+
+    # Пер-модельные недельные окна (Fable и будущие) приходят уже не
+    # отдельными seven_day_* полями (те null), а в limits[]: kind
+    # weekly_scoped + scope.model.display_name.
+    scoped = []
+    for lim in body.get("limits") or []:
+        if not isinstance(lim, dict) or lim.get("kind") != "weekly_scoped":
+            continue
+        name = get_in(lim, "scope", "model", "display_name")
+        pct = lim.get("percent")
+        if not name or not isinstance(pct, (int, float)):
+            continue
+        entry = {"label": str(name).lower(), "remaining": round(100 - pct)}
+        reset = normalize_reset(lim.get("resets_at"))
+        if reset:
+            entry["resets_at"] = reset
+        scoped.append(entry)
+    if scoped:
+        section["scoped"] = scoped
+    return section
+
+
+def build_codex():
+    if DATA_MOUNT and not os.path.ismount(DATA_MOUNT):
+        return {"status": "locked", "detail": "%s not mounted" % DATA_MOUNT}
+
+    auth = read_json(CODEX_AUTH)
+    token = get_in(auth, "tokens", "access_token")
+    if not token:
+        return {"status": "stale", "detail": "no codex auth"}
+
+    headers = {"Authorization": "Bearer %s" % token}
+    account = get_in(auth, "tokens", "account_id")
+    if account:
+        headers["chatgpt-account-id"] = account
+
+    status, body = http_get(CODEX_USAGE_URL, headers, PROXY)
+    if status == 401:
+        return {"status": "stale", "detail": "token expired"}
+    if status != 200 or not isinstance(body, dict):
+        return {"status": "error", "detail": "http %s" % status}
+
+    section = {"status": "ok"}
+    plan = body.get("plan_type")
+    if isinstance(plan, str) and plan:
+        section["plan"] = plan.capitalize()
+
+    # Окна Codex бывают разной длительности (у Plus primary - недельное,
+    # 604800с). Бакетируем по limit_window_seconds: <1 сут -> five_hour,
+    # иначе seven_day. Обходим оба окна, если присутствуют.
+    rate_limit = body.get("rate_limit") or {}
+    for wkey in ("primary_window", "secondary_window"):
+        w = rate_limit.get(wkey)
+        if not isinstance(w, dict) or not isinstance(
+                w.get("used_percent"), (int, float)):
+            continue
+        entry = {"remaining": round(100 - w["used_percent"])}
+        reset = normalize_reset(w.get("reset_at"))
+        if reset:
+            entry["resets_at"] = reset
+        secs = w.get("limit_window_seconds")
+        bucket = ("five_hour"
+                  if isinstance(secs, (int, float)) and secs < 86400
+                  else "seven_day")
+        section.setdefault(bucket, entry)
+
+    # Кредиты - только у кредитной модели (has_credits); balance бывает строкой.
+    credits_obj = body.get("credits") or {}
+    if isinstance(credits_obj, dict) and credits_obj.get("has_credits"):
+        try:
+            section["credits"] = int(float(credits_obj.get("balance")))
+        except (TypeError, ValueError):
+            pass
+    return section
+
+
+# --------------------------------------------------------------- host health
+# Секция едет ПРИЦЕПОМ: добавляется к сообщению, которое и так уходит по смене
+# лимитов, и НЕ участвует в digits_signature. Иначе бот слал бы дайджест каждый
+# прогон (память меняется всегда) и его перестали бы читать.
+
+def _mem_available_mb(meminfo):
+    """MemAvailable в МБ из текста /proc/meminfo. free не годится: ядро отдает
+    свободную память под дисковый кеш и он всегда мал."""
+    m = re.search(r"^MemAvailable:\s+(\d+) kB", meminfo, re.M)
+    return int(m.group(1)) // 1024 if m else None
+
+
+def _mem_total_mb(meminfo):
+    """MemTotal в МБ - без него абсолютные "8490 МБ" не читаются: непонятно,
+    это половина машины или последние крохи."""
+    m = re.search(r"^MemTotal:\s+(\d+) kB", meminfo, re.M)
+    return int(m.group(1)) // 1024 if m else None
+
+
+def _swap_used_mb(meminfo):
+    """Занято свопа, МБ. Нужен, чтобы не ругать сжатие zram, когда свопом никто
+    не пользуется: там коэффициент считается на накладных расходах аллокатора."""
+    tot = re.search(r"^SwapTotal:\s+(\d+) kB", meminfo, re.M)
+    free = re.search(r"^SwapFree:\s+(\d+) kB", meminfo, re.M)
+    if not tot or not free:
+        return None
+    return max(0, (int(tot.group(1)) - int(free.group(1)))) // 1024
+
+
+def _psi_pct(pressure):
+    """Давление по памяти: full avg60 в процентах из /proc/pressure/memory.
+    full = все процессы стояли одновременно, самый честный признак нехватки."""
+    m = re.search(r"^full .*avg60=([\d.]+)", pressure, re.M)
+    return float(m.group(1)) if m else None
+
+
+def _zram_ratio(mm_stat):
+    """Во сколько раз zram ужимает: orig_data_size / mem_used_total.
+    Ниже ~2.5 - жмется плохо, своп перестает спасать.
+
+    Поля mm_stat: orig_data_size, compr_data_size, mem_used_total, mem_limit,
+    mem_used_max, ... Берем ТРЕТЬЕ (текущее), а не пятое: пятое - исторический
+    пик, он не убывает, и предупреждение горело бы вечно после одного всплеска."""
+    parts = mm_stat.split()
+    if len(parts) < 3:
+        return None
+    try:
+        orig, used = float(parts[0]), float(parts[2])
+    except ValueError:  # мусор вместо чисел - показателя просто нет
+        return None
+    return round(orig / used, 1) if used > 0 else None
+
+
+def _read_capped(resp, limit=2 * 1024 * 1024, deadline_s=8):
+    """Чтение с потолком по объему И по времени. urlopen(timeout=) ограничивает
+    только отдельную socket-операцию: экспортер, шлющий по байту раз в секунду,
+    держал бы read() бесконечно - и весь дайджест вместе с ним."""
+    deadline = time.monotonic() + deadline_s
+    chunks, total = [], 0
+    while total < limit and time.monotonic() < deadline:
+        chunk = resp.read(65536)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    return b"".join(chunks)
+
+
+def _local_groups():
+    try:
+        with urllib.request.urlopen("http://%s/metrics" % PROC_EXPORTER,
+                                    timeout=5) as resp:
+            body = _read_capped(resp).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 - экспортер лежит, секция просто короче
+        return {}
+    groups = {}
+    for line in body.splitlines():
+        if not line.startswith("namedprocess_namegroup_"):
+            continue
+        if 'memtype="resident"' in line:
+            kind = "rss"
+        elif line.startswith("namedprocess_namegroup_num_procs"):
+            kind = "n"
+        elif line.startswith("namedprocess_namegroup_oldest_start_time_seconds"):
+            kind = "oldest"
+        else:
+            continue
+        m = re.search(r'groupname="([^"]+)".*?\s([\d.e+-]+)$', line)
+        if not m:
+            continue
+        try:
+            groups.setdefault(m.group(1), {})[kind] = float(m.group(2))
+        except ValueError:  # обрезанное число в выдаче - пропускаем строку
+            continue
+    return groups
+
+
+# Все выражения ЯВНО сужены на llm: в хранилище может появиться второй хост
+# (например, хост метрик), и незауженный запрос молча смешал бы чужие цифры со своими.
+_HOST_SEL = 'host="llm"'
+_VM_EXPRS = {
+    # Считаем ЖИВЫЕ цели, а не мертвые: исчезнувшая серия дает пустой ответ,
+    # и "== 0" такого отказа не увидит - сторож молчал бы ровно тогда, когда нужен.
+    # Окно 10 минут, а не мгновенное значение: одиночный промах скрейпа (или
+    # штатный перезапуск туннеля) иначе поднимал бы ложную тревогу - проверено
+    # живой остановкой туннеля, после старта цель числилась мертвой еще полминуты.
+    "healthy": 'count(max_over_time(up{job=~"llm-.*"}[10m]) == 1)',
+    "avail_delta_mb": '(node_memory_MemAvailable_bytes{%s} - '
+                      'node_memory_MemAvailable_bytes{%s} offset 1h) '
+                      '/ 1024 / 1024' % (_HOST_SEL, _HOST_SEL),
+    "steal_pct": 'avg(rate(node_cpu_seconds_total{%s,mode="steal"}[15m])) * 100'
+                 % _HOST_SEL,
+    "growth": 'topk(1, namedprocess_namegroup_memory_bytes'
+              '{%s,memtype="resident"} - namedprocess_namegroup_memory_bytes'
+              '{%s,memtype="resident"} offset 1h)' % (_HOST_SEL, _HOST_SEL),
+}
+VM_TARGETS = 2  # llm-node и llm-process
+
+
+def _vm_parse(stdout):
+    """Ответы размечены префиксом ключа: пустой ответ одного запроса иначе
+    сдвинул бы все остальные на одну позицию, и рост процесса приехал бы в
+    steal_pct."""
+    out = {}
+    for line in stdout.splitlines():
+        key, _, payload = line.partition("\t")
+        if key not in _VM_EXPRS or not payload:
+            continue
+        try:
+            result = json.loads(payload)["data"]["result"]
+            if not result:
+                continue
+            value = float(result[0]["value"][1])
+            if not math.isfinite(value):
+                continue
+            if key == "growth":
+                out[key] = (str(result[0]["metric"].get("groupname", "?")), value)
+            else:
+                out[key] = value
+        except Exception:  # noqa: BLE001 - кривой ответ по одному ключу
+            continue
+    return out
+
+
+def _vm_query_all():
+    """Один ssh на все тренды сразу: отдельные заходы стоили бы дороже самого
+    дайджеста. Сеть/ключ отвалились - возвращаем None, секция обходится
+    локальными цифрами."""
+    url = "http://%s/api/v1/query" % METRICS_ADDR
+    script = "; ".join(
+        "printf %s; curl -sf --max-time 5 --get --data-urlencode %s %s; echo"
+        % (shlex.quote(key + "\t"), shlex.quote("query=" + expr),
+           shlex.quote(url))  # адрес тоже из окружения - экранируем
+        for key, expr in _VM_EXPRS.items())
+    try:
+        r = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+             METRICS_SSH, script],
+            capture_output=True, text=True, timeout=25)
+    except Exception:  # noqa: BLE001
+        return None
+    if r.returncode != 0:
+        return None
+    return _vm_parse(r.stdout)
+
+
+def build_host():
+    def read(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return fh.read()
+        except OSError:
+            return ""
+
+    section = {"status": "ok"}
+    meminfo = read("/proc/meminfo")
+    avail = _mem_available_mb(meminfo)
+    if avail is None:
+        return {"status": "error", "detail": "no meminfo"}
+    section["available_mb"] = avail
+    total = _mem_total_mb(meminfo)
+    if total:
+        section["total_mb"] = total
+    swap_used = _swap_used_mb(meminfo)
+    if swap_used is not None:
+        section["swap_used_mb"] = swap_used
+    psi = _psi_pct(read("/proc/pressure/memory"))
+    if psi is not None:
+        section["psi_pct"] = psi
+    ratio = _zram_ratio(read("/sys/block/zram0/mm_stat"))
+    if ratio is not None:
+        section["zram_ratio"] = ratio
+
+    groups = _local_groups()
+    claude = groups.get("claude") or {}
+    if claude.get("n"):
+        section["claude"] = {
+            "n": int(claude["n"]),
+            "rss_mb": int(claude.get("rss", 0) / 1048576),
+        }
+        oldest = claude.get("oldest")
+        if oldest:
+            age_h = (datetime.now(timezone.utc).timestamp() - oldest) / 3600
+            if age_h > 0:
+                section["claude"]["oldest_h"] = round(age_h, 1)
+
+    disks = {}
+    for path in ("/", DATA_MOUNT):
+        try:
+            st = os.statvfs(path)
+        except OSError:
+            continue
+        if st.f_blocks:
+            disks[path] = round(100.0 * st.f_bavail / st.f_blocks, 1)
+    if disks:
+        section["disk_free_pct"] = disks
+
+    # Тренды - отдельным try: сломанный ответ хранилища не должен уносить с
+    # собой локальные показатели, ради которых секция и нужна.
+    try:
+        _apply_trends(section, avail)
+    except Exception:  # noqa: BLE001
+        section["metrics"] = "unreachable"
+    return section
+
+
+def _apply_trends(section, avail):
+    trends = _vm_query_all()
+    if trends is None:
+        section["metrics"] = "unreachable"
+        return
+    healthy = trends.get("healthy")
+    # Пустой ответ = серий нет вообще (сбор мертв), а не "все живы".
+    section["metrics"] = "ok" if healthy is not None and healthy >= VM_TARGETS \
+        else "down"
+    delta = trends.get("avail_delta_mb")
+    if delta is not None:
+        section["avail_delta_mb"] = int(delta)
+        # Линейная экстраполяция последнего часа: сколько осталось до нуля.
+        if delta < -50:
+            section["predict_h"] = round(avail / -delta, 1)
+    growth = trends.get("growth")
+    if growth and growth[1] > 100 * 1048576:
+        section["growth"] = {"group": growth[0],
+                             "mb": int(growth[1] / 1048576)}
+    steal = trends.get("steal_pct")
+    if steal is not None:
+        section["steal_pct"] = round(steal, 1)
+
+
+# ---------------------------------------------------------- prepaid core
+# Предоплатные счета без окон (OpenRouter, Yandex Cloud): деньги просто
+# кончаются. Спеки docs/dev/done/2026-09-24-spec-openrouter-balance.md и
+# docs/dev/2026-09-25-spec-yandex-cloud-balance.md. Логика истории, шкалы от
+# последнего пополнения, расхода, прогноза, состояний, отдельных сообщений и
+# отката - ОДНА на все счета: две копии разъехались бы молча (так уже было с
+# защитой, которую приходилось чинить в двух местах). Счета отличаются только
+# способом получить замер (адаптер), файлом состояния, названием блока и
+# валютой - это и есть _Prepaid.
+#
+# Секции идут прицепом, вне digits_signature: баланс меняется на каждом
+# запросе, и каждая потраченная копейка слала бы новую панель раз в 15
+# минут. Важное (порог прогноза, серия отказов) уходит отдельными сообщениями
+# через *_alerts.
+
+class _Prepaid:
+    """Описание счета для общего ядра. Путь состояния - функцией, чтобы он
+    читался в момент вызова, а не фиксировался при создании описания."""
+
+    def __init__(self, name, state_file, money, debt_is_low=False):
+        self.name = name              # заголовок блока и префикс сообщений
+        self._state_file = state_file
+        self.money = money            # число -> строка суммы в валюте счета
+        # Долг (остаток ниже нуля) сам по себе "пора пополнить". Включено
+        # только у Yandex Cloud: спека называет этот случай для него, а
+        # поведение OpenRouter не должно меняться ни в одном байте.
+        self.debt_is_low = debt_is_low
+
+    @property
+    def state_file(self):
+        return self._state_file()
+
+
+def _pp_state_read(acct):
+    state = read_json(acct.state_file)
+    return state if isinstance(state, dict) else {}
+
+
+def _pp_state_write(acct, state):
+    path = acct.state_file
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError as exc:
+        # Только тип: текст OSError несет путь, но не ключ; и все же держим
+        # формат одинаковым с остальными ветками.
+        log("стейт %s не записан: %s" % (acct.name, type(exc).__name__))
+
+
+def _or_usage_at_or_before(history, moment):
+    """total_usage последнего замера не позже moment (или None)."""
+    found = None
+    for entry in history:
+        at = parse_iso(entry.get("at"))
+        if at is not None and at <= moment:
+            found = entry
+    return found
+
+
+def _prepaid_build(acct, now, measure):
+    """Замер через адаптер и пересчет по истории. measure(state, now) ->
+    (total_credits, total_usage, None) или (None, None, причина); адаптеру
+    можно дописать в state свои ключи - ядро запишет state целиком. Все
+    сравнения по времени - от now, чтобы тест мог прокрутить время."""
+    state = _pp_state_read(acct)
+    history = [e for e in state.get("history") or [] if isinstance(e, dict)]
+    credits, usage, reason = measure(state, now)
+
+    if reason is not None:
+        streak = int(state.get("fail_streak") or 0) + 1
+        state["fail_streak"] = streak
+        state["history"] = history
+        state.setdefault("last_ok", None)
+        _pp_state_write(acct, state)
+        last_ok = state.get("last_ok")
+        section = {"status": "nodata", "reason": reason, "fail_streak": streak}
+        # Последний известный остаток со временем - иначе отказ выглядел бы
+        # нулевым балансом.
+        if isinstance(last_ok, dict):
+            section["last_balance"] = last_ok.get("balance")
+            section["last_at"] = last_ok.get("at")
+        return section
+
+    balance = round(credits - usage, 6)
+    at_iso = now.isoformat()
+    prev = history[-1] if history else None
+    scale = state.get("scale") if isinstance(state.get("scale"), dict) else None
+    prev_credits = prev.get("total_credits") if prev else None
+    # Градусник - от последнего платежа, а не от суммы всех пополнений: после
+    # пяти пополнений по $10 свежий платеж на суммарной шкале выглядел бы как
+    # 18%. Сумму и дату платежа API не отдает, поэтому платеж ловим ростом
+    # total_credits между успешными опросами (пропущенный опрос его не теряет).
+    if isinstance(prev_credits, (int, float)) and credits > prev_credits:
+        scale = {"amount": balance, "at": at_iso, "kind": "payment"}
+    elif isinstance(prev_credits, (int, float)) and credits < prev_credits:
+        # Возврат или корректировка: не платеж, но старая шкала уже врет.
+        log("%s: total_credits уменьшился %.2f -> %.2f, шкала "
+            "сброшена на остаток" % (acct.name, prev_credits, credits))
+        scale = {"amount": balance, "at": at_iso, "kind": "reset"}
+    elif scale is None:
+        scale = {"amount": round(credits, 6), "at": None, "kind": "start"}
+
+    history.append({"at": at_iso, "total_credits": credits,
+                    "total_usage": usage})
+    # Граница включительная: замер ровно 8-суточной давности остается.
+    cutoff = now.timestamp() - OR_HISTORY_DAYS * 86400
+    history = [e for e in history
+               if parse_iso(e.get("at")) is not None
+               and parse_iso(e.get("at")).timestamp() >= cutoff]
+
+    state.update({"history": history, "scale": scale, "fail_streak": 0,
+                  "last_ok": {"at": at_iso, "balance": balance}})
+    _pp_state_write(acct, state)
+
+    section = {"status": "ok", "balance": balance,
+               "scale": scale["amount"], "scale_kind": scale["kind"],
+               "scale_at": scale["at"], "captured_at": at_iso,
+               "spend_day": None, "spend_week": None, "forecast_days": None,
+               "burn_per_day": None}
+    # Расход - по total_usage СЧЕТА, а не по счетчикам отдельного ключа:
+    # через OpenRouter пойдут разные ключи, и счетчик одного ключа показал бы
+    # копейки при реальном расходе счета.
+    oldest = parse_iso(history[0]["at"])
+    if (now - oldest).total_seconds() < 86400:
+        return section  # истории меньше суток - "копим историю"
+    day_base = _or_usage_at_or_before(history, now - timedelta(days=1))
+    week_base = (_or_usage_at_or_before(history, now - timedelta(days=7))
+                 or history[0])  # истории меньше недели - за всю доступную
+    section["spend_day"] = round(max(0.0, usage - day_base["total_usage"]), 6)
+    section["spend_week"] = round(max(0.0, usage - week_base["total_usage"]), 6)
+    # Прогноз - по среднему суточному расходу за доступную историю, но не
+    # глубже OR_FORECAST_DAYS: давний темп говорит о сегодняшнем меньше.
+    window_start = now - timedelta(days=OR_FORECAST_DAYS)
+    base = next(e for e in history if parse_iso(e["at"]) >= window_start)
+    span_days = (now - parse_iso(base["at"])).total_seconds() / 86400
+    if span_days > 0:
+        burn = max(0.0, usage - base["total_usage"]) / span_days
+        section["burn_per_day"] = round(burn, 6)
+        if burn > 0:
+            section["forecast_days"] = round(max(0.0, balance) / burn, 3)
+    return section
+
+
+# ------------------------------------------------------------- openrouter
+# Адаптер OpenRouter: /api/v1/credits сам отдает total_credits/total_usage
+# счета - ровно то, что ждет ядро.
+
+OPENROUTER = _Prepaid("OpenRouter", lambda: OPENROUTER_STATE_FILE,
+                      lambda x: _usd(x))
+
+
+def _or_read_key():
+    """Ключ из файла. None - файла нет (функция не настроена, это не сбой и не
+    повод для лога); "" - файл есть, но пустой или не читается."""
+    try:
+        with open(OPENROUTER_KEY_FILE, "r", encoding="utf-8") as fh:
+            return fh.read().strip()
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _or_fetch(key):
+    """(total_credits, total_usage, None) или (None, None, причина). Причина -
+    человеческий текст без ключа: заголовки и объект запроса сюда не попадают."""
+    code, payload = http_get(OPENROUTER_CREDITS_URL,
+                             {"Authorization": "Bearer " + key}, PROXY)
+    if code == 0:
+        return None, None, "нет ответа (таймаут или сеть)"
+    if code in (401, 403):
+        return None, None, "HTTP %d - ключ не принят" % code
+    if code == 429:
+        return None, None, "HTTP 429 - лимит запросов"
+    if code != 200:
+        return None, None, "HTTP %d" % code
+    data = get_in(payload, "data")
+    credits = get_in(data, "total_credits")
+    usage = get_in(data, "total_usage")
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+               for v in (credits, usage)):
+        return None, None, "неожиданный ответ API"
+    return float(credits), float(usage), None
+
+
+def build_openrouter(now=None):
+    """Опрос /credits и пересчет в общем ядре. None - файла ключа нет (блока
+    в панели нет вовсе)."""
+    now = now or datetime.now(timezone.utc)
+    key = _or_read_key()
+    if key is None:
+        return None
+
+    def measure(state, now):
+        # Ключ живет только в этом замыкании: ни в стейт, ни в секцию он не идет.
+        if not key:
+            return None, None, "файл ключа пуст или не читается"
+        return _or_fetch(key)
+
+    return _prepaid_build(OPENROUTER, now, measure)
+
+
+# ----------------------------------------------------------- yandex cloud
+# Адаптер Yandex Cloud. Биллинг отдает только текущий остаток - отдельных
+# счетчиков пополнений и расхода нет. Поэтому адаптер сам ведет два
+# накопительных счетчика (рост остатка между успешными замерами - в
+# пополнения, падение - в расход) и кормит ядро замером того же вида, что у
+# OpenRouter. Размен из спеки: пополнение и расход в одном промежутке между
+# опросами сливаются в одну разницу.
+
+YANDEX = _Prepaid("Yandex Cloud", lambda: YANDEX_STATE_FILE,
+                  lambda x: _rub(x), debt_is_low=True)
+
+
+def _ya_read_key():
+    """Ключ сервисного аккаунта. None - файла нет (функция не настроена, не
+    сбой и не повод для лога); {} - файл есть, но не читается или не JSON."""
+    try:
+        with open(YANDEX_KEY_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _ya_parse_expiry(value):
+    """expiresAt Яндекса несет наносекунды (9 знаков) - datetime их не
+    принимает, поэтому дробь срезаем до микросекунд."""
+    if not isinstance(value, str) or not value:
+        return None
+    return parse_iso(re.sub(r"(\.\d{6})\d+", r"\1", value))
+
+
+def _ya_iam_cached(now):
+    data = read_json(YANDEX_IAM_CACHE_FILE)
+    token = get_in(data, "token")
+    expires = _ya_parse_expiry(get_in(data, "expires_at"))
+    if (isinstance(token, str) and token and expires is not None
+            and (expires - now).total_seconds() >= YA_IAM_RENEW_S):
+        return token
+    return None
+
+
+def _ya_iam_store(token, expires):
+    """Кэш токена - единственное место, где он лежит на диске; права 600 с
+    момента создания файла, а не chmod после записи."""
+    path = YANDEX_IAM_CACHE_FILE
+    tmp = path + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)  # файл мог остаться от прошлого прогона
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump({"token": token, "expires_at": expires.isoformat()}, fh)
+        os.replace(tmp, path)
+    except OSError as exc:
+        log("кэш IAM-токена Yandex Cloud не записан: %s" % type(exc).__name__)
+
+
+def _ya_iam_drop():
+    try:
+        os.remove(YANDEX_IAM_CACHE_FILE)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        log("кэш IAM-токена Yandex Cloud не сброшен: %s" % type(exc).__name__)
+
+
+def _ya_jwt(key, now):
+    import jwt  # PyJWT; импорт здесь - без него остальная панель работает
+
+    ts = int(now.timestamp())
+    return jwt.encode(
+        {"iss": key["service_account_id"], "aud": YANDEX_IAM_URL,
+         "iat": ts, "exp": ts + YA_JWT_TTL_S},
+        key["private_key"], algorithm="PS256", headers={"kid": key["id"]})
+
+
+def _ya_iam_token(key, now):
+    """(токен, None) или (None, причина). Токен живет до 12 часов, поэтому
+    берется из кэша и обменивается заново, только когда до истечения меньше
+    часа. Причина - без ключа, JWT и токена: только код или тип исключения."""
+    token = _ya_iam_cached(now)
+    if token:
+        return token, None
+    if not all(isinstance(key.get(k), str) and key.get(k)
+               for k in ("id", "service_account_id", "private_key")):
+        return None, "в файле ключа нет id/service_account_id/private_key"
+    try:
+        assertion = _ya_jwt(key, now)
+    except ImportError:
+        return None, "нет модуля PyJWT"
+    except Exception as exc:  # noqa: BLE001 - текст может нести кусок ключа
+        return None, "JWT не собран (%s)" % type(exc).__name__
+    code, payload = http_post(YANDEX_IAM_URL, {"jwt": assertion}, {}, PROXY)
+    del assertion
+    if code == 0:
+        return None, "обмен на IAM-токен: нет ответа (таймаут или сеть)"
+    if code != 200:
+        return None, "обмен на IAM-токен: HTTP %d" % code
+    token = get_in(payload, "iamToken")
+    expires = _ya_parse_expiry(get_in(payload, "expiresAt"))
+    if not isinstance(token, str) or not token or expires is None:
+        return None, "обмен на IAM-токен: неожиданный ответ API"
+    _ya_iam_store(token, expires)
+    return token, None
+
+
+def _ya_fetch_balance(token):
+    """(остаток в рублях, None) или (None, причина)."""
+    code, payload = http_get(YANDEX_BILLING_URL + YANDEX_BILLING_ACCOUNT,
+                             {"Authorization": "Bearer " + token}, PROXY)
+    if code == 0:
+        return None, "нет ответа (таймаут или сеть)"
+    if code == 401:
+        # Токен отозван или протух раньше срока: сбрасываем кэш, иначе до
+        # истечения срока каждый опрос шел бы с тем же мертвым токеном.
+        _ya_iam_drop()
+        return None, "HTTP 401 - токен не принят"
+    if code == 403:
+        return None, "HTTP 403 - нет доступа к платежному аккаунту"
+    if code == 429:
+        return None, "HTTP 429 - лимит запросов"
+    if code != 200:
+        return None, "HTTP %d" % code
+    raw = get_in(payload, "balance")
+    if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+        return None, "неожиданный ответ API"
+    try:
+        balance = float(raw)
+    except ValueError:
+        return None, "неожиданный ответ API"
+    if not math.isfinite(balance):
+        return None, "неожиданный ответ API"
+    return balance, None
+
+
+def _ya_measure(state, now, key):
+    token, reason = _ya_iam_token(key, now)
+    if reason is not None:
+        return None, None, reason
+    balance, reason = _ya_fetch_balance(token)
+    del token
+    if reason is not None:
+        return None, None, reason
+    acc = state.get("acc")
+    if isinstance(acc, dict) and all(
+            isinstance(acc.get(k), (int, float)) and not isinstance(acc.get(k), bool)
+            for k in ("credits", "usage", "balance")):
+        delta = balance - acc["balance"]
+        credits = acc["credits"] + max(0.0, delta)
+        usage = acc["usage"] + max(0.0, -delta)
+    else:
+        # Первый замер задает старт: пополнено = остаток, израсходовано = 0.
+        credits, usage = balance, 0.0
+    credits, usage = round(credits, 6), round(usage, 6)
+    # Счетчики обновляются только на успешном замере: отказ не должен
+    # записать ни пополнения, ни расхода.
+    state["acc"] = {"credits": credits, "usage": usage, "balance": balance}
+    return credits, usage, None
+
+
+def build_yandex(now=None):
+    """Опрос биллинга Yandex Cloud и пересчет в общем ядре. None - файла
+    ключа нет (блока в панели нет вовсе)."""
+    now = now or datetime.now(timezone.utc)
+    key = _ya_read_key()
+    if key is None:
+        return None
+
+    def measure(state, now):
+        if not key:
+            return None, None, "файл ключа пуст или не читается"
+        try:
+            return _ya_measure(state, now, key)
+        except Exception as exc:  # noqa: BLE001
+            # Только тип: текст исключения из подписи или разбора может
+            # нести кусок ключа. Отказ - "нет данных" с последним остатком,
+            # а не "сбой пробника" без него.
+            return None, None, "сбой замера (%s)" % type(exc).__name__
+
+    return _prepaid_build(YANDEX, now, measure)
+
+
+# ------------------------------------------------------------------ Kimi Code
+# INV-LIM-16/17. Current TypeScript CLI storage and managed usage protocol.
+KIMI_HOME = os.environ.get('LIMITS_KIMI_HOME', os.environ.get(
+    'KIMI_CODE_HOME', os.path.expanduser('~/.kimi-code')))
+KIMI_WINDOWS = (
+    ('limit_5h', 'five_hour', '5ч', 'time'),
+    ('limit_7d', 'seven_day', 'нед', 'week'),
+    ('limit_month_total', 'month_total', 'месяц', 'month'),
+    ('limit_month_code', 'month_code', 'код/м', 'month'),
+)
+KIMI_UA = 'ai-control/1.0'
+
+
+def kimi_refresh_request(host, refresh_token):
+    """OAuth form POST; neither request nor response body is logged."""
+    from urllib.parse import urlencode
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler(
+        {'http': PROXY, 'https': PROXY} if PROXY else {}))
+    req = urllib.request.Request(host + '/api/oauth/token', data=urlencode({
+        'client_id': '17e5f671-d194-4dfb-9706-5516cb48c098',
+        'grant_type': 'refresh_token', 'refresh_token': refresh_token,
+    }).encode(), headers={'Content-Type': 'application/x-www-form-urlencoded',
+                         'User-Agent': KIMI_UA, 'Accept': 'application/json'})
+    try:
+        with opener.open(req, timeout=TIMEOUT) as response:
+            return response.status, json.load(response)
+    except urllib.error.HTTPError as exc:
+        return exc.code, None
+    except Exception as exc:
+        log('Kimi refresh failed: ' + type(exc).__name__)
+        return 0, None
+
+
+def _kimi_token(path, name, host, rejected=None):
+    """Refresh under the CLI's proper-lockfile directory, with heartbeat.
+
+    Never break a peer's lock. The CLI can recover stale locks itself;
+    this reader reports lock contention rather than risking token rotation.
+    """
+    import tempfile
+    import threading
+    token = read_json(path)
+
+    def usable(value):
+        return (isinstance(value, dict)
+                and isinstance(value.get('access_token'), str)
+                and bool(value['access_token'])
+                and value['access_token'] != rejected
+                and isinstance(value.get('expires_at'), (int, float))
+                and value['expires_at'] > time.time() + 60)
+
+    if usable(token):
+        return token['access_token'], None
+    if not isinstance(token, dict) or not token.get('refresh_token'):
+        return None, {'status': 'stale'}
+    lock = os.path.join(KIMI_HOME, 'oauth', name + '.lock')
+    os.makedirs(os.path.dirname(lock), exist_ok=True)
+    try:
+        os.mkdir(lock)
+    except FileExistsError:
+        # It may have refreshed just before we saw the lock.
+        token = read_json(path)
+        if usable(token):
+            return token['access_token'], None
+        return None, {'status': 'error', 'detail': 'oauth_busy'}
+    stop = threading.Event()
+    lost = threading.Event()
+    identity = os.stat(lock).st_ino
+
+    def owns_lock():
+        try:
+            return os.stat(lock).st_ino == identity
+        except OSError:
+            return False
+
+    def heartbeat():
+        while not stop.wait(1):
+            try:
+                if not owns_lock():
+                    lost.set()
+                    return
+                os.utime(lock, None)
+            except OSError:
+                lost.set()
+                return
+
+    thread = threading.Thread(target=heartbeat, daemon=True)
+    thread.start()
+    try:
+        token = read_json(path)
+        if usable(token):
+            return token['access_token'], None
+        if not isinstance(token, dict) or not token.get('refresh_token'):
+            return None, {'status': 'stale'}
+        code, body = kimi_refresh_request(host, token['refresh_token'])
+        if code != 200:
+            return None, {'status': 'stale' if code in (400, 401, 403) else 'error',
+                          'detail': 'refresh_http_%s' % code}
+        ttl = body.get('expires_in') if isinstance(body, dict) else None
+        try:
+            ttl = float(ttl)
+        except (ValueError, TypeError):
+            ttl = 0
+        if (not isinstance(body, dict)
+                or not isinstance(body.get('access_token'), str)
+                or not body['access_token']
+                or not isinstance(body.get('refresh_token'), str)
+                or not body['refresh_token'] or not math.isfinite(ttl) or ttl <= 0):
+            return None, {'status': 'error', 'detail': 'refresh_bad_response'}
+        # Login/logout and old CLI versions may not share the lock: don't
+        # overwrite credentials if another writer changed them meanwhile.
+        if lost.is_set() or not owns_lock() or read_json(path) != token:
+            return None, {'status': 'error', 'detail': 'oauth_changed'}
+        saved = {key: body[key] for key in ('access_token', 'refresh_token')}
+        saved.update(expires_at=time.time() + ttl, expires_in=ttl,
+                     token_type='Bearer', scope=body.get('scope', ''))
+        fd, tmp = tempfile.mkstemp(prefix='.kimi-token-', dir=os.path.dirname(path))
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+                json.dump(saved, fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        return saved['access_token'], None
+    finally:
+        stop.set()
+        thread.join(timeout=2)
+        if owns_lock():
+            os.rmdir(lock)
+
+
+def _kimi_authoritative_limits(body):
+    """FR-KIMI-LIMITS-01..03: current quota counters beat legacy ratios."""
+    if not isinstance(body, dict):
+        raise ValueError('bad_response')
+    limits = body.get('limits', [])
+    if not isinstance(limits, list):
+        raise ValueError('bad_limits')
+    factors = {'TIME_UNIT_SECOND': 1, 'TIME_UNIT_MINUTE': 60,
+               'TIME_UNIT_HOUR': 3600, 'TIME_UNIT_DAY': 86400}
+    keys = {18000: 'five_hour', 604800: 'seven_day'}
+    result = {}
+    counters = {}
+    for entry in limits:
+        if not isinstance(entry, dict) or not isinstance(entry.get('window'), dict):
+            raise ValueError('bad_limits')
+        window = entry['window']
+        duration = window.get('duration')
+        factor = factors.get(window.get('timeUnit'))
+        if factor is None:
+            continue
+        if isinstance(duration, bool):
+            raise ValueError('bad_duration')
+        try:
+            duration = float(duration)
+        except (TypeError, ValueError):
+            raise ValueError('bad_duration') from None
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError('bad_duration')
+        key = keys.get(duration * factor)
+        if key is None:
+            continue
+        detail = entry.get('detail')
+        if not isinstance(detail, dict):
+            raise ValueError('bad_detail')
+        # FR-KIMI-REMAINING: API can emit used or remaining independently.
+        values = {}
+        for field in ('limit', 'used', 'remaining'):
+            if field != 'limit' and field not in detail:
+                continue
+            raw = detail.get(field)
+            if isinstance(raw, bool):
+                raise ValueError('bad_counter')
+            try:
+                number = float(raw)
+            except (TypeError, ValueError):
+                raise ValueError('bad_counter') from None
+            if not math.isfinite(number) or number < 0:
+                raise ValueError('bad_counter')
+            values[field] = number
+        limit = values['limit']
+        if limit <= 0 or not ('used' in values or 'remaining' in values):
+            raise ValueError('bad_counter')
+        if 'remaining' in values:
+            remaining = values['remaining']
+            if remaining > limit:
+                raise ValueError('bad_counter')
+            if 'used' in values and not math.isclose(
+                    values['used'] + remaining, limit, rel_tol=1e-12, abs_tol=0):
+                raise ValueError('conflicting_counters')
+        used = values['used'] if 'used' in values else limit - values['remaining']
+        normalized = {'remaining': 100 - min(100, used / limit * 100)}
+        reset = detail.get('resetTime')
+        if isinstance(reset, str) and parse_iso(reset):
+            normalized['resets_at'] = reset
+        signature = (limit, used, reset if isinstance(reset, str) else None)
+        previous = counters.get(key)
+        if previous is not None and (previous[2] != signature[2]
+                or not math.isclose(previous[0], limit, rel_tol=1e-12, abs_tol=0)
+                or not math.isclose(previous[1], used, rel_tol=1e-12, abs_tol=limit * 1e-12)):
+            raise ValueError('conflicting_limits')
+        counters[key] = signature
+        result[key] = normalized
+    return result
+
+
+def build_kimi():
+    config = os.path.join(KIMI_HOME, 'config.toml')
+    if not os.path.exists(config):
+        return None
+    try:
+        import tomllib  # Kimi integration requires Python 3.11+ only when configured.
+        with open(config, 'rb') as fh:
+            provider = tomllib.load(fh).get('providers', {}).get('managed:kimi-code')
+        if provider is None:
+            return None
+        base = provider.get('base_url', '').rstrip('/')
+        hosts = {'https://api.kimi.ai/coding/v1': 'https://auth.kimi.ai',
+                 'https://api.kimi.com/coding/v1': 'https://auth.kimi.com'}
+        oauth = provider.get('oauth') or {}
+        host = oauth.get('oauth_host', hosts.get(base))
+        name = oauth.get('key', '').removeprefix('oauth/')
+        if (base not in hosts or host != hosts[base]
+                or oauth.get('storage', 'file') != 'file'
+                or not re.fullmatch(r'[A-Za-z0-9_-]+', name)):
+            return {'status': 'error', 'detail': 'kimi_config'}
+        path = os.path.join(KIMI_HOME, 'credentials', name + '.json')
+        token, error = _kimi_token(path, name, host)
+        if error:
+            return error
+        headers = {'Authorization': 'Bearer ' + token,
+                   'Accept': 'application/json', 'User-Agent': KIMI_UA}
+        code, body = http_get(base + '/usages', headers, PROXY)
+        if code == 401:
+            token, error = _kimi_token(path, name, host, rejected=token)
+            if error:
+                return error
+            headers['Authorization'] = 'Bearer ' + token
+            code, body = http_get(base + '/usages', headers, PROXY)
+        if code != 200:
+            return {'status': 'stale' if code == 401 else 'error',
+                    'detail': 'http_%s' % code}
+        try:
+            authoritative = _kimi_authoritative_limits(body)
+        except ValueError as error:
+            return {'status': 'error', 'detail': str(error)}
+        usages = get_in(body, 'usages')
+        if usages is None and authoritative:
+            usages = {}
+        if not isinstance(usages, dict):
+            return {'status': 'error', 'detail': 'bad_response'}
+        result = dict(authoritative, status='ok')
+        for remote, key, _, _ in KIMI_WINDOWS:
+            if key in authoritative or remote not in usages:
+                continue
+            entry = usages[remote]
+            ratio = entry.get('used_ratio') if isinstance(entry, dict) else None
+            if isinstance(ratio, bool) or ratio is None or ratio == '':
+                return {'status': 'error', 'detail': 'bad_ratio'}
+            try:
+                ratio = float(ratio)
+            except (ValueError, TypeError):
+                return {'status': 'error', 'detail': 'bad_ratio'}
+            if not math.isfinite(ratio) or ratio < 0:
+                return {'status': 'error', 'detail': 'bad_ratio'}
+            window = {'remaining': 100 - min(100, ratio * 100)}
+            reset = entry.get('reset_time')
+            if isinstance(reset, str) and parse_iso(reset):
+                window['resets_at'] = reset
+            result[key] = window
+        return result if len(result) > 1 else {'status': 'error', 'detail': 'no_windows'}
+    except Exception as exc:
+        # Never echo a config or credential parsing exception (may contain secrets).
+        return {'status': 'error', 'detail': type(exc).__name__}
+
+
+def _kimi_used(window):
+    used = max(0, min(100, 100 - float(window['remaining'])))
+    return php_round(used * 10) / 10
+
+
+def _kimi_section(data, tz, now):
+    if not isinstance(data, dict):
+        return None
+    if data.get('status') != 'ok':
+        reason = ('нужен вход: kimi login' if data.get('status') == 'stale'
+                  else 'лимиты недоступны')
+        return 'Kimi Code\n ' + reason
+    lines = ['Kimi Code']
+    for _, key, label, kind in KIMI_WINDOWS:
+        window = data.get(key)
+        if not isinstance(window, dict) or not isinstance(window.get('remaining'), (int, float)):
+            continue
+        used = _kimi_used(window)
+        elapsed = _elapsed_percent(window.get('resets_at'), kind, now)
+        line = ' ' + label.ljust(5) + ' ' + _bar(used, elapsed) + '  %.1f%%' % used
+        reset = parse_iso(window.get('resets_at'))
+        if reset:
+            fmt = '%H:%M' if kind == 'time' else '%d.%m %H:%M'
+            line += ' / ' + reset.astimezone(tz).strftime(fmt)
+            line += ' (%s)' % _fmt_countdown(window['resets_at'], now)
+        lines.append(line + _pace_mark(used, elapsed))
+    return '\n'.join(lines)
+
+
+def safe(fn):
+    try:
+        return fn()
+    except Exception as exc:
+        return {"status": "error", "detail": type(exc).__name__}
+
+
+# -------------------------------------------------------------- formatter
+# Порт прежнего PHP-форматтера (Laravel), рендер 1:1.
+
+BAR_WIDTH = 10
+# Разрыв "расход минус часы" в процентных пунктах, с которого зажигается 🔺.
+# 20 выбраны под пятичасовое окно: работа рваная, плотный час легко дает
+# +10пп к часам и сам себя выправляет, когда отходишь - меньший порог
+# заставил бы метку гореть почти всегда и читаться перестала бы.
+PACE_ALERT_PP = 20
+PACE_MARK = "🔺"
+# Длина окна по типу сброса. В данных провайдера ее нет (приходит только
+# момент сброса), поэтому константы. Окна фиксированные, НЕ скользящие -
+# проверено 2026-07-30 двумя снимками подряд: resets_at пятичасового окна
+# за 8 минут не сдвинулся (17:20:00.410 -> 17:20:00.811, разница только в
+# микросекундах, которые Anthropic считает на своей стороне).
+WINDOW_SECONDS = {"time": 5 * 3600, "week": 7 * 86400}
+WEEKDAYS = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"]  # индекс = Carbon dayOfWeek
+STATUS_TEXT = {
+    "stale": "токен протух, авторефреш не помог - нужен relogin",
+    "locked": "том /data заперт, codex недоступен",
+    "error": "ошибка снятия лимитов",
+}
+
+
+def php_round(x):
+    # PHP round() - half away from zero; питоний round() - half to even.
+    return int(math.floor(x + 0.5)) if x >= 0 else -int(math.floor(-x + 0.5))
+
+
+def parse_iso(iso):
+    if not isinstance(iso, str) or not iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def display_tz():
+    name = os.environ.get("AI_AGENT_LIMITS_TZ", "Europe/Moscow")
+    if ZoneInfo is not None:
+        try:
+            return ZoneInfo(name)
+        except Exception:
+            log("неизвестная TZ %r, использую UTC" % name)
+    return timezone.utc
+
+
+def _bar(percent, elapsed=None):
+    """Градусник расхода с меткой часов.
+
+    percent - израсходовано квоты (заливка), elapsed - пройдено времени окна
+    (положение метки). elapsed=None - метки нет, вид прежний.
+
+    Клетка выбирается так:
+      [0, min(fill, clock))  ▓  - расход в графике;
+      [clock, fill)          █  - перебор, расход обогнал часы;
+      clock, если clock>=fill ┃ - метка часов (есть запас);
+      остальное              ░.
+
+    Метка НЕ ставится, когда заливка ее перевалила: она занимает клетку, а
+    не границу между клетками, и в случае перебора стерла бы ровно тот
+    хвост, ради которого затевалась (заливка 3 клетки, часы на 2-й читались
+    бы как "2 и 2, идем в ногу"). Поэтому перебор показывает █, а не метку.
+    Ровно "в ногу" (fill == clock) отдельного правила не требует - метка
+    сама встает вплотную к краю заливки.
+    """
+    fill = php_round(max(0, min(100, percent)) / (100 / BAR_WIDTH))
+    if elapsed is None:
+        return "▓" * fill + "░" * (BAR_WIDTH - fill)
+    # int() вниз: метка показывает НАЧАЛО текущей десятины окна, поэтому
+    # часы на 100% должны попасть в последнюю клетку, а не за градусник.
+    clock = min(int(max(0, min(100, elapsed)) // (100 / BAR_WIDTH)),
+                BAR_WIDTH - 1)
+    cells = []
+    for i in range(BAR_WIDTH):
+        if i < min(fill, clock):
+            cells.append("▓")
+        elif i < fill:
+            cells.append("█")
+        elif i == clock:
+            cells.append("┃")
+        else:
+            cells.append("░")
+    return "".join(cells)
+
+
+def _elapsed_percent(iso, kind, now):
+    """Процент ПРОШЕДШЕГО времени окна: (длина - остаток) / длина.
+
+    Именно пройденного, а не оставшегося: заливка градусника меряет
+    израсходованное, и обе величины обязаны идти в одну сторону - тогда
+    "идем в ногу" читается как "заливка дошла до метки". На остатке правило
+    стало бы "сумма равна 100%", а это глазом не берется.
+
+    None - когда момент сброса неизвестен или тип окна незнаком; вызывающий
+    трактует это как "метки нет", а не как ноль.
+    """
+    total = WINDOW_SECONDS.get(kind)
+    dt = parse_iso(iso)
+    if total is None or dt is None:
+        return None
+    left = (dt - now).total_seconds()
+    return max(0, min(100, (total - left) / total * 100))
+
+
+def _pace_mark(used, elapsed):
+    """Хвост строки: 🔺, если расход обогнал часы на PACE_ALERT_PP и больше.
+    В норме молчит - метка, которая горит всегда, не читается."""
+    if elapsed is None:
+        return ""
+    return " " + PACE_MARK if used - elapsed >= PACE_ALERT_PP else ""
+
+
+def _format_reset(iso, kind, tz):
+    dt = parse_iso(iso)
+    if dt is None:
+        return None
+    dt = dt.astimezone(tz)
+    if kind == "week":
+        return WEEKDAYS[(dt.weekday() + 1) % 7]  # Carbon: 0=Вс..6=Сб
+    return dt.strftime("%H:%M")
+
+
+def _fmt_countdown(iso, now):
+    """Остаток до сброса компактно: <1ч -> Nm, <1сут -> Nh, иначе Nd. Один
+    десятичный знак, .0 отбрасываем (30m, 1.5h, 2.6d)."""
+    dt = parse_iso(iso)
+    if dt is None:
+        return None
+    secs = max(0, int((dt - now).total_seconds()))
+    if secs < 3600:
+        val, unit = secs / 60, "m"
+    elif secs < 86400:
+        val, unit = secs / 3600, "h"
+    else:
+        val, unit = secs / 86400, "d"
+    return ("%.1f" % val).rstrip("0").rstrip(".") + unit
+
+
+def _window_line(label, window, reset_kind, tz, now):
+    if not isinstance(window, dict) or not isinstance(
+            window.get("remaining"), (int, float)):
+        return None
+    # Показываем ИСПОЛЬЗОВАНО, а не остаток (счетчик растет по мере расхода).
+    remaining = php_round(float(window["remaining"]))
+    used = max(0, min(100, 100 - remaining))
+    elapsed = _elapsed_percent(window.get("resets_at"), reset_kind, now)
+    line = " " + label.ljust(5) + " " + _bar(used, elapsed) + "  %d%%" % used
+    reset = _format_reset(window.get("resets_at"), reset_kind, tz)
+    if reset:
+        line += " / " + reset
+        left = _fmt_countdown(window.get("resets_at"), now)
+        if left:
+            line += " (%s)" % left
+    return line + _pace_mark(used, elapsed)
+
+
+def _section(name, data, tz, now):
+    if not isinstance(data, dict):
+        return None
+    plan = data.get("plan")
+    header = name + (" · %s" % plan if isinstance(plan, str) and plan else "")
+    status = data.get("status", "ok")
+    body = []
+    if status != "ok":
+        body.append(" " + STATUS_TEXT.get(status, "нет данных секции"))
+    elif name == "Claude":
+        body.append(_window_line("5ч", data.get("five_hour"), "time", tz, now))
+        body.append(_window_line("нед", data.get("seven_day"), "week", tz, now))
+        body.append(_window_line("opus", data.get("seven_day_opus"), "week", tz, now))
+        body.append(_window_line("sonnet", data.get("seven_day_sonnet"), "week", tz, now))
+        for w in data.get("scoped") or []:
+            label = w.get("label") if isinstance(w, dict) else None
+            if not label or "seven_day_%s" % label in data:
+                continue  # уже показано legacy-полем
+            body.append(_window_line(label, w, "week", tz, now))
+    else:
+        body.append(_window_line("5ч", data.get("five_hour"), "time", tz, now))
+        body.append(_window_line("нед", data.get("seven_day"), "week", tz, now))
+        credits = data.get("credits")
+        if isinstance(credits, (int, float)):
+            body.append(" " + "кред".ljust(5) + "%s" % credits)
+    body = [line for line in body if line is not None]
+    if not body:
+        body = [" нет данных"]
+    return header + "\n" + "\n".join(body)
+
+
+def _host_section(data):
+    """Секция здоровья llm. В норме три строки; предупреждения появляются
+    только по порогам - иначе секцию перестанут читать."""
+    if not isinstance(data, dict):
+        return None
+    if data.get("status") != "ok":
+        return "Хост llm\n не снят"
+
+    body = []
+    avail = data["available_mb"]
+    total = data.get("total_mb")
+    notes = []
+    delta = data.get("avail_delta_mb")
+    if isinstance(total, (int, float)) and total > 0:
+        # Тем же градусником, что и лимиты: заливка - ЗАНЯТОЕ. Память такая же
+        # исчерпаемая величина, и цифрами она читалась хуже соседних строк.
+        used = max(0, total - avail)
+        pct = 100.0 * used / total
+        mem = " память %s  %d%%" % (_bar(pct), php_round(pct))
+        notes.append("%d из %d МБ" % (used, total))
+        if isinstance(delta, int):
+            # Разворачиваем по смыслу: свободное падает - значит занятое растет.
+            notes.append("%+d/ч" % -delta)
+    else:
+        mem = " память %d МБ" % avail
+        if isinstance(delta, int):
+            notes.append("%+d/ч" % delta)
+    predict = data.get("predict_h")
+    if isinstance(predict, (int, float)) and predict <= HOST_PREDICT_H:
+        notes.append("кончится через ~%.1f ч" % predict)
+    if notes:
+        mem += " (%s)" % ", ".join(notes)
+    body.append(mem)
+
+    claude = data.get("claude")
+    if isinstance(claude, dict):
+        line = " claude %d проц · %d МБ" % (claude["n"], claude["rss_mb"])
+        if claude.get("oldest_h"):
+            line += " · старейшая %.1f ч" % claude["oldest_h"]
+        body.append(line)
+
+    growth = data.get("growth")
+    if isinstance(growth, dict):
+        body.append(" растет %s +%d МБ/ч" % (growth["group"], growth["mb"]))
+
+    # Тревога - когда available И PSI одновременно за порогом: по отдельности
+    # каждый дает ложные срабатывания (разбор в llm-oom-runbook). Если PSI
+    # снять не удалось - тревожим по одной памяти: молчать в этот момент хуже,
+    # чем показать лишнее.
+    psi = data.get("psi_pct")
+    if data["available_mb"] < HOST_LOW_MB:
+        if psi is None:
+            body.append(" ⚠️ тесно: %d МБ свободно (PSI не снят)"
+                        % data["available_mb"])
+        elif isinstance(psi, (int, float)) and psi > HOST_PSI_PCT:
+            body.append(" ⚠️ тесно: %d МБ свободно, PSI %.1f%%"
+                        % (data["available_mb"], psi))
+    # zram ругаем только когда свопом реально пользуются. При почти пустом свопе
+    # mem_used_total - это накладные расходы zsmalloc, а не сжатые данные, и
+    # коэффициент выходит меньше единицы сам по себе: треугольник горел вечно на
+    # машине, где свободно больше половины памяти.
+    ratio = data.get("zram_ratio")
+    swap_used = data.get("swap_used_mb")
+    if (isinstance(ratio, (int, float)) and ratio < 2.5
+            and isinstance(swap_used, (int, float))
+            and swap_used >= HOST_SWAP_BUSY_MB):
+        body.append(" ⚠️ zram жмет ×%.1f - своп почти не спасает" % ratio)
+    steal = data.get("steal_pct")
+    if isinstance(steal, (int, float)) and steal > HOST_STEAL_PCT:
+        body.append(" ⚠️ steal %.1f%% - тормозит гипервизор, не мы" % steal)
+    for path, free in sorted((data.get("disk_free_pct") or {}).items()):
+        if free < HOST_DISK_LOW_PCT:
+            body.append(" ⚠️ %s: свободно %.1f%%" % (path, free))
+    if data.get("metrics") == "down":
+        body.append(" ⚠️ метрики не собираются - проверить metrics-tunnel")
+    elif data.get("metrics") == "unreachable":
+        body.append(" ⚠️ хост метрик недоступен, тренды не сняты")
+    return "Хост llm\n" + "\n".join(body)
+
+
+def _usd(x):
+    return "$%.2f" % x
+
+
+def _rub(x):
+    """Рубли без копеек, с пробелом между разрядами: 4 983 ₽, -150 ₽."""
+    n = php_round(x)
+    return "%s%s ₽" % ("-" if n < 0 else "", "{:,}".format(abs(n)).replace(",", " "))
+
+
+def _pp_debt(acct, data):
+    b = data.get("balance")
+    return (acct.debt_is_low and isinstance(b, (int, float))
+            and not isinstance(b, bool) and b < 0)
+
+
+def _pp_low(acct, data):
+    f = data.get("forecast_days")
+    return (isinstance(f, (int, float)) and f < OR_LOW_DAYS) or _pp_debt(acct, data)
+
+
+def _or_when(iso, tz, fmt="%H:%M %d.%m"):
+    dt = parse_iso(iso)
+    return dt.astimezone(tz).strftime(fmt) if dt else None
+
+
+def _prepaid_section(acct, data, tz):
+    """Блок предоплатного счета. Нет данных - не ноль: показываем причину и
+    последний известный остаток со временем замера, иначе отказ API читался
+    бы как пустой счет."""
+    if not isinstance(data, dict):
+        return None
+    money = acct.money
+    if data.get("status") != "ok":
+        reason = data.get("reason") or "сбой пробника (%s)" % (
+            data.get("detail") or "?")
+        body = [" причина %s" % reason]
+        last = data.get("last_balance")
+        when = _or_when(data.get("last_at"), tz)
+        if isinstance(last, (int, float)) and when:
+            body.append(" последний остаток %s на %s" % (money(last), when))
+        else:
+            body.append(" последний остаток неизвестен")
+        return "%s · нет данных\n" % acct.name + "\n".join(body)
+
+    low = _pp_low(acct, data)
+    balance, scale = data["balance"], data.get("scale")
+    # Шкала - ПОТРАЧЕННОЕ с последнего пополнения, а не остаток: все соседние
+    # шкалы панели показывают израсходованное и растут слева направо к
+    # пределу, и одинаковый вид в одной панели не должен значить
+    # противоположное (решение dwl 24.09.2026). Остаток живет в секции и в
+    # отдельных сообщениях, дата пополнения - в состоянии. Долг (остаток ниже
+    # нуля) упирается в 100%.
+    spent = 100.0 * (scale - balance) / scale \
+        if isinstance(scale, (int, float)) and scale > 0 else 0.0
+    spent = max(0.0, min(100.0, spent))
+    if _pp_debt(acct, data):
+        spent = 100.0  # долг - шкала полная, даже если шкала сама не выше нуля
+    body = [" %s  %d%% / %s"
+            % (_bar(spent), php_round(spent), money(scale or 0))]
+    if data.get("spend_day") is None:
+        body.append(" расход  копим историю")
+        body.append(" хватит  копим историю")
+    else:
+        body.append(" расход  сутки %s · неделя %s"
+                    % (money(data["spend_day"]), money(data["spend_week"])))
+        forecast = data.get("forecast_days")
+        if isinstance(forecast, (int, float)):
+            line = " хватит  ~%d дн" % php_round(forecast)
+            if low:
+                line += " · пора пополнить"
+            body.append(line)
+        else:
+            body.append(" хватит  расход не идет")
+    if _pp_debt(acct, data):
+        # В долгу прогноз теряет смысл (его ядро считает от max(0, остаток)),
+        # а "пора пополнить" должно быть видно и без суточной истории.
+        body[-1] = " хватит  остаток ниже нуля · пора пополнить"
+    header = "%s · предоплата" % acct.name + (" ⚠" if low else "")
+    return header + "\n" + "\n".join(body)
+
+
+def _openrouter_section(data, tz):
+    return _prepaid_section(OPENROUTER, data, tz)
+
+
+def _yandex_section(data, tz):
+    return _prepaid_section(YANDEX, data, tz)
+
+
+def _stale_line(received_at, now=None):
+    received = parse_iso(received_at)
+    if received is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    age_min = max(0, int((now - received).total_seconds())) // 60
+    threshold = int(os.environ.get("AI_AGENT_LIMITS_STALE_MIN", "45"))
+    return "⚠️ данные устарели: %d мин назад" % age_min \
+        if age_min > threshold else None
+
+
+def _cards_count_path():
+    # env читается на каждый вызов (не module-level константа) - тот же
+    # прием, что _sent_map_path/_cards_count_path в ai-agent-tgbot,
+    # писателе этого файла; заодно дает тестам изолироваться без реального
+    # ~/.ai-control на машине.
+    return os.environ.get(
+        "AI_AGENT_TG_CARDS_COUNT",
+        os.path.expanduser("~/.ai-control/tgbot.cards.json"))
+
+
+def _cards_today_line(now=None):
+    """Р11 (план §12): сколько карточек-решений реально ушло dwl сегодня -
+    ориентир 5-10/день. Файла нет (tgbot ни разу не слал карточку, свежая
+    установка) - строки нет вовсе, тот же принцип, что у секции хоста при
+    отсутствии данных. Файл есть, но день не совпал (счетчик еще не
+    перевалил на сегодня, или лежит вчерашний хвост) - показываем 0."""
+    now = now if now is not None else time.time()
+    day = time.strftime("%Y-%m-%d", time.gmtime(now))
+    try:
+        with open(_cards_count_path()) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    count = d.get("count", 0) if d.get("day") == day else 0
+    return "Карточек сегодня: %d" % count
+
+
+_SIG_WINDOWS = ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet")
+
+
+def digits_signature(snapshot):
+    """Сигнатура ЦИФР для дедупа отправки: статусы + отображаемые проценты
+    (used, то же php_round что в панели) + кредиты. НЕ включает время сброса
+    (resets_at) и captured_at - меняются каждую минуту, но это не "новые цифры".
+    Одинаковая сигнатура двух проходов -> не шлем (dwl: слать при изменении
+    процентов, не времени)."""
+    if not isinstance(snapshot, dict):
+        return ""
+    parts = []
+    for name in ("claude", "codex"):
+        d = snapshot.get(name)
+        if not isinstance(d, dict):
+            parts.append(name + ":none")
+            continue
+        status = d.get("status", "ok")
+        seg = [name, status, str(d.get("plan") or "")]
+        if status == "ok":
+            for key in _SIG_WINDOWS:
+                w = d.get(key)
+                if isinstance(w, dict) and isinstance(w.get("remaining"), (int, float)):
+                    used = max(0, min(100, 100 - php_round(float(w["remaining"]))))
+                    seg.append("%s=%d" % (key, used))
+            for w in d.get("scoped") or []:
+                if isinstance(w, dict) and isinstance(
+                        w.get("remaining"), (int, float)):
+                    used = max(0, min(100, 100 - php_round(float(w["remaining"]))))
+                    seg.append("%s=%d" % (w.get("label") or "?", used))
+            cr = d.get("credits")
+            if isinstance(cr, (int, float)):
+                seg.append("credits=%d" % int(cr))
+        parts.append("|".join(seg))
+    kimi = snapshot.get("kimi")
+    if isinstance(kimi, dict):
+        seg = ["kimi", kimi.get("status", "ok"), ""]
+        if kimi.get("status") == "ok":
+            for _, key, _, _ in KIMI_WINDOWS:
+                window = kimi.get(key)
+                if isinstance(window, dict) and isinstance(window.get("remaining"), (int, float)):
+                    seg.append("%s=%.1f" % (key, _kimi_used(window)))
+        parts.append("|".join(seg))
+    return ";".join(parts)
+
+
+def sig_diff(old, new):
+    """Человеческая разница двух сигнатур: "claude.seven_day 80->81". Порядок
+    полей в сигнатуре стабильный, поэтому разбираем ее же, а не снапшот."""
+    def flat(sig):
+        out = {}
+        for seg in (sig or "").split(";"):
+            bits = seg.split("|")
+            if len(bits) < 2:
+                continue
+            for b in bits[3:]:
+                k, _, v = b.partition("=")
+                out["%s.%s" % (bits[0], k)] = v
+            out["%s.status" % bits[0]] = bits[1]
+        return out
+
+    a, b = flat(old), flat(new)
+    parts = []
+    for k in sorted(set(a) | set(b)):
+        if a.get(k) != b.get(k):
+            parts.append("%s %s->%s" % (k, a.get(k, "-"), b.get(k, "-")))
+    return ", ".join(parts)
+
+
+def render(envelope, now=None):
+    tz = display_tz()
+    if not isinstance(envelope, dict) or not isinstance(
+            envelope.get("snapshot"), dict):
+        return "🤖 Лимиты LLM\n\nНет данных - пробник еще не присылал снапшот."
+
+    now_eff = now or datetime.now(timezone.utc)
+    snapshot = envelope["snapshot"]
+    header_dt = parse_iso(snapshot.get("captured_at")
+                          or envelope.get("received_at"))
+    header_time = (header_dt or now_eff).astimezone(tz).strftime("%H:%M")
+
+    lines = ["🤖 Лимиты LLM · %s" % header_time]
+    stale = _stale_line(envelope.get("received_at"), now=now_eff)
+    if stale:
+        lines.append(stale)
+    for name in ("Claude", "Codex"):
+        section = _section(name, snapshot.get(name.lower()), tz, now_eff)
+        if section:
+            lines.append("")
+            lines.append(section)
+    kimi = _kimi_section(snapshot.get("kimi"), tz, now_eff)
+    if kimi:
+        lines.extend(["", kimi])
+    # OpenRouter - после Kimi, перед хостом; прицепом, вне digits_signature.
+    openrouter = _openrouter_section(snapshot.get("openrouter"), tz)
+    if openrouter:
+        lines.append("")
+        lines.append(openrouter)
+    # Yandex Cloud - после OpenRouter, перед хостом; тоже вне digits_signature.
+    yandex = _yandex_section(snapshot.get("yandex"), tz)
+    if yandex:
+        lines.append("")
+        lines.append(yandex)
+    host = _host_section(snapshot.get("host"))
+    if host:
+        lines.append("")
+        lines.append(host)
+    cards = _cards_today_line(now_eff.timestamp())
+    if cards:
+        lines.append("")
+        lines.append(cards)
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------------ cache
+
+def cache_write(envelope):
+    try:
+        os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
+        tmp = CACHE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(envelope, fh, ensure_ascii=False)
+        os.replace(tmp, CACHE_FILE)
+    except OSError as exc:
+        log("кэш не записан: %s" % exc)  # не фатально - панель уже собрана
+
+
+# ------------------------------------------------------------------ clamp
+# used_percent окон OpenAI приходит с рассинхронизированных реплик и прыгает
+# вниз при неизменном reset_at. Реальный расход монотонен до сброса - держим
+# min remaining (= max usage) с последнего reset_at, занижения игнорируем.
+
+def _clamp_windows(snapshot):
+    """(key, window) для каждого клэмпуемого окна снапшота (только status ok)."""
+    for prov in ("claude", "codex"):
+        sec = snapshot.get(prov)
+        if not isinstance(sec, dict) or sec.get("status", "ok") != "ok":
+            continue
+        for wkey in ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"):
+            w = sec.get(wkey)
+            if isinstance(w, dict) and isinstance(w.get("remaining"), (int, float)):
+                yield "%s:%s" % (prov, wkey), w
+        for w in sec.get("scoped") or []:
+            if isinstance(w, dict) and isinstance(w.get("remaining"), (int, float)):
+                yield "%s:scoped:%s" % (prov, w.get("label") or "?"), w
+
+
+WINDOW_MATCH_S = 300  # ближе - то же окно, дальше - сброс
+
+
+def same_window(a, b):
+    """Одно ли это окно. Строки сравнивать нельзя: провайдер считает resets_at
+    как "сейчас + остаток", и момент дрейфует на секунду-другую на каждом
+    опросе - равенство не наступало никогда, а клэмп из-за этого не держал
+    ничего. Сравниваем моменты с допуском: настоящий сброс уносит окно на часы,
+    дрейф - на секунды. Неразобранное время сравниваем как строки: хуже, чем
+    было, не станет."""
+    if a == b:
+        return True
+    da, db = parse_iso(a), parse_iso(b)
+    if da is None or db is None:
+        return False
+    return abs((da - db).total_seconds()) <= WINDOW_MATCH_S
+
+
+def clamp_snapshot(snapshot, state):
+    """Держим max usage (min remaining) каждого окна с последнего reset_at.
+    Мутирует snapshot (гасит спурьезные занижения) и state (бегущий минимум) на
+    месте. Окно без resets_at не клэмпим - сброс не детектируется."""
+    if not isinstance(snapshot, dict) or not isinstance(state, dict):
+        return
+    for key, w in _clamp_windows(snapshot):
+        reset = w.get("resets_at")
+        if not reset:
+            continue
+        cur = w["remaining"]
+        prev = state.get(key)
+        if (isinstance(prev, dict) and same_window(prev.get("resets_at"), reset)
+                and isinstance(prev.get("remaining"), (int, float))):
+            cur = min(prev["remaining"], cur)  # min remaining = max usage
+            w["remaining"] = cur
+        state[key] = {"resets_at": reset, "remaining": cur}
+
+
+def apply_clamp(snapshot):
+    """IO-обертка над clamp_snapshot: загрузить стейт, применить, сохранить.
+    Проблемы стейта не роняют проход - в худшем случае показываем сырое."""
+    state = read_json(CLAMP_FILE)
+    if not isinstance(state, dict):
+        state = {}
+    try:
+        clamp_snapshot(snapshot, state)
+    except Exception as exc:  # noqa: BLE001
+        log("клэмп пропущен: %s" % type(exc).__name__)
+        return
+    try:
+        os.makedirs(os.path.dirname(CLAMP_FILE), exist_ok=True)
+        tmp = CLAMP_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, ensure_ascii=False)
+        os.replace(tmp, CLAMP_FILE)
+    except OSError as exc:
+        log("стейт клэмпа не записан: %s" % exc)
+
+
+# ------------------------------------------------------------------ modes
+
+def _read_sent_sig():
+    try:
+        with open(SENT_SIG_FILE, "r", encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
+def _write_sent_sig(sig):
+    try:
+        os.makedirs(os.path.dirname(SENT_SIG_FILE), exist_ok=True)
+        tmp = SENT_SIG_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(sig)
+        os.replace(tmp, SENT_SIG_FILE)
+    except OSError as exc:
+        log("сигнатура отправки не записана: %s" % exc)
+
+
+def _prepaid_alerts(acct, section, now=None):
+    """Отдельные сообщения счета - по одному на событие, а не на каждом
+    опросе: прогноз впервые ниже порога (или долг), OR_FAIL_STREAK отказов
+    подряд, возврат в норму после любого из них. Отмечает отправленное в
+    стейте сама, поэтому повторный вызов при том же условии дает []."""
+    if not isinstance(section, dict):
+        return []
+    tz = display_tz()
+    money, name = acct.money, acct.name
+    state = _pp_state_read(acct)
+    sent = state.get("alerts") if isinstance(state.get("alerts"), dict) else {}
+    low_sent, fail_sent = bool(sent.get("low")), bool(sent.get("fail"))
+    msgs = []
+    if section.get("status") == "ok":
+        low = _pp_low(acct, section)
+        if low and not low_sent:
+            if _pp_debt(acct, section):
+                msgs.append("⚠ %s: остаток %s - ниже нуля, пора пополнить"
+                            % (name, money(section["balance"])))
+            else:
+                msgs.append("⚠ %s: остатка %s хватит на ~%d дн - пора "
+                            "пополнить" % (name, money(section["balance"]),
+                                           php_round(section["forecast_days"])))
+            low_sent = True
+        if not low and (low_sent or fail_sent):
+            forecast = section.get("forecast_days")
+            tail = ("хватит ~%d дн" % php_round(forecast)
+                    if isinstance(forecast, (int, float)) else "прогноза нет")
+            msgs.append("✅ %s снова в норме: остаток %s, %s"
+                        % (name, money(section["balance"]), tail))
+            low_sent = fail_sent = False
+        elif low and fail_sent:
+            # API вернулся, но прогноз все еще ниже порога: "норма" не
+            # наступила, и о состоянии уже говорит сообщение о пороге.
+            # Признак отказа гасим молча, чтобы следующая серия отказов снова
+            # дошла сообщением.
+            fail_sent = False
+    elif int(section.get("fail_streak") or 0) >= OR_FAIL_STREAK and not fail_sent:
+        last = section.get("last_balance")
+        when = _or_when(section.get("last_at"), tz)
+        known = ("последний остаток %s на %s" % (money(last), when)
+                 if isinstance(last, (int, float)) and when
+                 else "последний остаток неизвестен")
+        msgs.append("⚠ %s не отвечает %d опроса подряд (%s); %s"
+                    % (name, OR_FAIL_STREAK, section.get("reason") or "?", known))
+        fail_sent = True
+    if (low_sent, fail_sent) != (bool(sent.get("low")), bool(sent.get("fail"))):
+        state["alerts"] = {"low": low_sent, "fail": fail_sent}
+        _pp_state_write(acct, state)
+    return msgs
+
+
+def _prepaid_send_alerts(acct, section, alerts):
+    """Отдельные сообщения тем же каналом, что панель, но без кнопки
+    обновления: это событие, а не снимок. False - хоть одно не ушло.
+    alerts - публичная *_alerts счета: через нее, а не напрямую через ядро,
+    чтобы подмена в тестах и отправка шли одним путем."""
+    # Признаки "уже отправлено" *_alerts ставит сама, ДО отправки - таков
+    # контракт функции. Значит сбой notify должен их откатить, иначе
+    # предупреждение "деньги кончаются" теряется навсегда: следующий опрос
+    # увидит флаг и промолчит. Та же логика, что у панели ниже - сигнатура
+    # фиксируется ТОЛЬКО после успешной отправки (сбой -> повтор). Цена
+    # отката при частичном успехе - одно повторное сообщение на следующем
+    # опросе; дубль дешевле потерянного предупреждения.
+    before = _pp_state_read(acct).get("alerts")
+    ok = True
+    for text in alerts(section):
+        try:
+            r = subprocess.run(
+                [os.path.join(BIN_DIR, "ai-agent-tgbot"), "notify", "-"],
+                input=text, text=True, capture_output=True, timeout=120)
+        except Exception as exc:  # noqa: BLE001
+            log("notify %s не запустился: %s" % (acct.name, type(exc).__name__))
+            ok = False
+            continue
+        if r.returncode != 0:
+            log("notify %s exit %s: %s"
+                % (acct.name, r.returncode, (r.stderr or "").strip()[:200]))
+            ok = False
+    if not ok:
+        state = _pp_state_read(acct)
+        state["alerts"] = before if isinstance(before, dict) else {}
+        _pp_state_write(acct, state)
+        log("%s: сообщение не ушло - признаки событий откачены, "
+            "повтор на следующем опросе" % acct.name)
+    return ok
+
+
+def openrouter_alerts(section, now=None):
+    return _prepaid_alerts(OPENROUTER, section, now)
+
+
+def _send_openrouter_alerts(section):
+    return _prepaid_send_alerts(OPENROUTER, section, openrouter_alerts)
+
+
+def yandex_alerts(section, now=None):
+    return _prepaid_alerts(YANDEX, section, now)
+
+
+def _send_yandex_alerts(section):
+    return _prepaid_send_alerts(YANDEX, section, yandex_alerts)
+
+
+def mode_once(argv):
+    dry_run = "--dry-run" in argv
+    force = "--force" in argv  # слать даже без изменений (ручной прогон)
+    snapshot = {
+        "captured_at": iso_now(),
+        "claude": safe(build_claude),
+        "codex": safe(build_codex),
+        "host": safe(build_host),  # прицепом, вне digits_signature
+    }
+    kimi = safe(build_kimi)
+    if kimi is not None:
+        snapshot["kimi"] = kimi
+    # OpenRouter - тоже прицепом, вне digits_signature. Нет файла ключа -
+    # секции нет вовсе (функция не настроена, а не сбой).
+    openrouter = safe(build_openrouter)
+    if openrouter is not None:
+        snapshot["openrouter"] = openrouter
+    yandex = safe(build_yandex)
+    if yandex is not None:
+        snapshot["yandex"] = yandex
+    apply_clamp(snapshot)  # гасим спурьезные занижения реплик OpenAI (min remaining)
+    envelope = {"received_at": iso_now(), "snapshot": snapshot}
+    cache_write(envelope)  # всегда - /limits показывает текущее
+    panel = render(envelope)
+    if dry_run:
+        print(panel)
+        return 0
+    if os.environ.get("AI_AGENT_LIMITS_ENABLED", "1").lower() \
+            in ("0", "false", "no"):
+        log("отправка выключена (AI_AGENT_LIMITS_ENABLED)")
+        return 0
+    # События предоплатных счетов шлем до дедупа панели: их цифр в
+    # сигнатуре нет, и "цифры не изменились" не должно глушить сообщение о
+    # пороге. Оба счета - без короткого замыкания: сбой одного не глушит другой.
+    or_ok = _send_openrouter_alerts(snapshot.get("openrouter"))
+    ya_ok = _send_yandex_alerts(snapshot.get("yandex"))
+    alerts_ok = or_ok and ya_ok
+    # дедуп: слать только при изменении ЦИФР относительно прошлой ОТПРАВКИ
+    sig = digits_signature(envelope["snapshot"])
+    prev = _read_sent_sig()
+    if not force and sig == prev:
+        log("цифры не изменились - не шлем")
+        return 0 if alerts_ok else 1
+    # Что именно сдвинулось. Без этой строки на вопрос "почему опять прилетело,
+    # там же ничего не изменилось" по журналу ответить нечем.
+    log("шлем: %s" % (sig_diff(prev, sig) or "первая отправка"))
+    try:
+        r = subprocess.run(
+            [os.path.join(BIN_DIR, "ai-agent-tgbot"), "notify", "--pre",
+             "--button", "\U0001f504 Обновить", "m:limits:fresh", "-"],
+            input=panel, text=True, capture_output=True, timeout=120)
+    except Exception as exc:  # noqa: BLE001
+        log("notify не запустился: %s" % type(exc).__name__)
+        return 1
+    if r.returncode != 0:
+        log("notify exit %s: %s" % (r.returncode, (r.stderr or "").strip()[:200]))
+        return 1
+    # фиксируем сигнатуру ТОЛЬКО после успешной отправки (сбой -> повтор)
+    _write_sent_sig(sig)
+    return 0 if alerts_ok else 1
+
+
+def mode_render():
+    print(render(read_json(CACHE_FILE)))
+    return 0
+
+
+def mode_selftest():
+    os.environ["AI_AGENT_LIMITS_TZ"] = "Europe/Moscow"
+    os.environ.pop("AI_AGENT_LIMITS_STALE_MIN", None)
+    failed = []
+
+    def t(name, cond):
+        print("  %s: %s" % ("ok" if cond else "FAIL", name))
+        if not cond:
+            failed.append(name)
+
+    # Золотая панель из handoff §1.2 (2026-07-19 - Вс; +3ч MSK -> Пн 00:00).
+    snapshot = {
+        "captured_at": "2026-07-17T06:00:00Z",
+        "claude": {
+            "status": "ok", "plan": "Max",
+            "five_hour": {"remaining": 82, "resets_at": "2026-07-17T07:30:00Z"},
+            "seven_day": {"remaining": 60, "resets_at": "2026-07-19T21:00:00Z"},
+            "seven_day_opus": {"remaining": 55,
+                               "resets_at": "2026-07-19T21:00:00Z"},
+            "seven_day_sonnet": {"remaining": 70,
+                                 "resets_at": "2026-07-19T21:00:00Z"},
+            "scoped": [{"label": "fable", "remaining": 65,
+                        "resets_at": "2026-07-19T21:00:00Z"}],
+        },
+        "codex": {
+            "status": "ok", "plan": "Plus",
+            "five_hour": {"remaining": 100, "resets_at": "2026-07-17T09:30:00Z"},
+            "seven_day": {"remaining": 58, "resets_at": "2026-07-22T21:00:00Z"},
+            "credits": 12,
+        },
+    }
+    golden = "\n".join([
+        "🤖 Лимиты LLM · 09:00",
+        "",
+        "Claude · Max",
+        " 5ч    ▓▓░░░░░┃░░  18% / 10:30 (1.5h)",
+        " нед   ▓▓▓▓░░┃░░░  40% / Пн (2.6d)",
+        " opus  ▓▓▓▓▓░┃░░░  45% / Пн (2.6d)",
+        " sonnet ▓▓▓░░░┃░░░  30% / Пн (2.6d)",
+        " fable ▓▓▓▓░░┃░░░  35% / Пн (2.6d)",
+        "",
+        "Codex · Plus",
+        " 5ч    ░░░┃░░░░░░  0% / 12:30 (3.5h)",
+        # Единственное окно фикстуры, где расход обогнал часы (42% квоты при
+        # ~20% недели) - держит 🔺 под сквозной проверкой, а не только юнитом.
+        " нед   ▓███░░░░░░  42% / Чт (5.6d) 🔺",
+        " кред 12",
+    ])
+    os.environ["AI_AGENT_TG_CARDS_COUNT"] = "/nonexistent/tgbot.cards.json"
+    fresh = parse_iso("2026-07-17T06:00:00Z")
+    got = render({"received_at": "2026-07-17T06:00:00Z", "snapshot": snapshot},
+                 now=fresh)
+    t("golden panel", got == golden)
+    if got != golden:
+        for a, b in zip(got.split("\n"), golden.split("\n")):
+            if a != b:
+                print("    got:    %r\n    golden: %r" % (a, b))
+
+    # PHP-округление: used=45 -> 5 клеток (питоний round дал бы 4).
+    t("bar half-up", _bar(45) == "▓▓▓▓▓░░░░░")
+    t("bar 0/100", _bar(0) == "░" * 10 and _bar(100) == "▓" * 10)
+
+    # Метка часов в градуснике. Без elapsed поведение прежнее (окно без
+    # известного момента сброса) - это же страхует старые вызовы.
+    t("bar no clock", _bar(45, None) == "▓▓▓▓▓░░░░░")
+    # Запас: заливка не дошла до метки - метка стоит отдельной клеткой.
+    t("bar clock ahead", _bar(21, 83) == "▓▓░░░░░░┃░")
+    # В ногу: метка ровно на границе заливки, отдельного правила не нужно.
+    t("bar clock level", _bar(42, 44) == "▓▓▓▓┃░░░░░")
+    # Перебор: хвост за меткой красится █, метки при этом НЕТ - иначе она
+    # съела бы клетку перебора и градусник соврал бы именно там, где важно.
+    t("bar clock behind", _bar(30, 21) == "▓▓█░░░░░░░")
+    t("bar clock behind full", _bar(100, 50) == "▓▓▓▓▓█████")
+    # Края: часы в нуле - метка в первой клетке; часы в 100% - в последней
+    # (индекс 10 не существует, зажимаем в 9).
+    t("bar clock at zero", _bar(0, 0) == "┃░░░░░░░░░")
+    t("bar clock at end", _bar(0, 100) == "░░░░░░░░░┃")
+
+    # Процент ПРОШЕДШЕГО времени окна. Длины окон - константы (в данных
+    # провайдера их нет), тип берется из reset_kind.
+    n5 = parse_iso("2026-07-17T06:00:00Z")
+    t("elapsed 5h", _elapsed_percent("2026-07-17T10:30:00Z", "time", n5) == 10.0)
+    t("elapsed week", _elapsed_percent("2026-07-19T21:00:00Z", "week", n5) == 62.5)
+    # Сброс уже прошел / срок абсурдно далеко - зажимаем в 100 и 0, а не
+    # выпускаем метку за пределы градусника.
+    t("elapsed past clamps", _elapsed_percent("2026-07-17T05:00:00Z", "time", n5) == 100)
+    t("elapsed future clamps", _elapsed_percent("2026-07-18T06:00:00Z", "time", n5) == 0)
+    t("elapsed no reset", _elapsed_percent(None, "time", n5) is None)
+
+    # Порог 🔺: зажигается от PACE_ALERT_PP пунктов разрыва, ниже молчит.
+    t("pace threshold", PACE_ALERT_PP == 20)
+    t("pace mark on", _pace_mark(50, 25) == " 🔺")
+    t("pace mark off at threshold-1", _pace_mark(44, 25) == "")
+    t("pace mark on at threshold", _pace_mark(45, 25) == " 🔺")
+    t("pace mark none without clock", _pace_mark(90, None) == "")
+
+    # Статусы секций.
+    tz = display_tz()
+    t("stale text", _section("Claude", {"status": "stale"}, tz, fresh)
+      == "Claude\n токен протух, авторефреш не помог - нужен relogin")
+    t("locked text", _section("Codex", {"status": "locked", "plan": "Plus"}, tz, fresh)
+      == "Codex · Plus\n том /data заперт, codex недоступен")
+    t("error text", _section("Codex", {"status": "error"}, tz, fresh)
+      == "Codex\n ошибка снятия лимитов")
+    t("ok no windows", _section("Claude", {"status": "ok"}, tz, fresh)
+      == "Claude\n нет данных")
+
+    # Countdown: единицы m/h/d, .0 отбрасывается, past -> 0m; нет resets_at -> нет скобок.
+    n = parse_iso("2026-07-17T00:00:00Z")
+    t("countdown minutes", _fmt_countdown("2026-07-17T00:30:00Z", n) == "30m")
+    t("countdown hours", _fmt_countdown("2026-07-17T02:30:00Z", n) == "2.5h")
+    t("countdown days", _fmt_countdown("2026-07-20T12:00:00Z", n) == "3.5d")
+    t("countdown past clamps", _fmt_countdown("2026-07-16T23:00:00Z", n) == "0m")
+    t("no resets no parens",
+      _window_line("5ч", {"remaining": 50}, "time", tz, fresh) == " 5ч    ▓▓▓▓▓░░░░░  50%")
+
+    # Кредиты: скрыты без поля, видны с полем.
+    codex_no_credits = _section(
+        "Codex", {"status": "ok",
+                  "five_hour": {"remaining": 90}}, tz, fresh)
+    t("credits hidden", "кред" not in codex_no_credits)
+
+    # Пустой конверт.
+    t("empty envelope", render(None)
+      == "🤖 Лимиты LLM\n\nНет данных - пробник еще не присылал снапшот.")
+
+    # Дедуп-сигнатура: время сброса НЕ меняет сигнатуру, проценты/кредиты/статус - меняют.
+    base_sig = digits_signature(snapshot)
+    reset_moved = json.loads(json.dumps(snapshot))
+    reset_moved["claude"]["five_hour"]["resets_at"] = "2099-01-01T00:00:00Z"
+    reset_moved["captured_at"] = "2099-01-01T00:00:00Z"
+    t("sig ignores reset/time", digits_signature(reset_moved) == base_sig)
+    pct_moved = json.loads(json.dumps(snapshot))
+    pct_moved["claude"]["five_hour"]["remaining"] = 40  # было 82
+    t("sig changes on percent", digits_signature(pct_moved) != base_sig)
+    cred_moved = json.loads(json.dumps(snapshot))
+    cred_moved["codex"]["credits"] = 5  # было 12
+    t("sig changes on credits", digits_signature(cred_moved) != base_sig)
+    stale_moved = json.loads(json.dumps(snapshot))
+    stale_moved["claude"] = {"status": "stale"}
+    t("sig changes on status", digits_signature(stale_moved) != base_sig)
+    scoped_moved = json.loads(json.dumps(snapshot))
+    scoped_moved["claude"]["scoped"][0]["remaining"] = 20  # было 65
+    t("sig changes on scoped percent", digits_signature(scoped_moved) != base_sig)
+
+    # --- здоровье хоста ---
+    # Разбор локальных источников.
+    t("meminfo parse", _mem_available_mb(
+        "MemTotal:        8131624 kB\nMemAvailable:    3532112 kB\n") == 3449)
+    t("meminfo missing", _mem_available_mb("MemTotal: 1 kB") is None)
+    t("psi parse", _psi_pct(
+        "some avg10=0.00 avg60=1.50 avg300=0.00 total=1\n"
+        "full avg10=0.00 avg60=3.12 avg300=0.00 total=2\n") == 3.12)
+    # Третье поле mm_stat (mem_used_total), не пятое (mem_used_max): пик не
+    # убывает и предупреждение горело бы вечно после одного всплеска.
+    t("zram ratio current not peak", _zram_ratio(
+        "1488269312 374069378 532680704 0 828588032 6185 6282 742 3351") == 2.8)
+    t("zram empty", _zram_ratio("") is None)
+    t("zram garbage", _zram_ratio("x y z") is None)
+
+    # Разметка ответов VM по ключу: пустой ответ одного запроса не должен
+    # сдвигать остальные.
+    ok_json = '{"data":{"result":[{"metric":{},"value":[1,"42"]}]}}'
+    grow_json = ('{"data":{"result":[{"metric":{"groupname":"chrome-mcp"},'
+                 '"value":[1,"1073741824"]}]}}')
+    parsed = _vm_parse("healthy\t\nsteal_pct\t%s\ngrowth\t%s\n"
+                       % (ok_json, grow_json))
+    t("vm parse skips empty", "healthy" not in parsed)
+    t("vm parse keeps aligned", parsed.get("steal_pct") == 42.0)
+    t("vm parse growth label", parsed.get("growth") == ("chrome-mcp", 1073741824.0))
+    t("vm parse drops nan", _vm_parse(
+        'steal_pct\t{"data":{"result":[{"metric":{},"value":[1,"NaN"]}]}}') == {})
+    t("vm parse survives junk", _vm_parse("steal_pct\tnot-json\n") == {})
+
+    # Запросы обязаны быть сужены на llm - иначе подмешаются чужие хосты.
+    t("vm exprs scoped", all('host="llm"' in e for k, e in _VM_EXPRS.items()
+                             if k != "healthy"))
+    # Сторож смотрит окно, иначе одиночный промах скрейпа = ложная тревога.
+    t("watchdog uses window", "max_over_time" in _VM_EXPRS["healthy"]
+      and "== 1" in _VM_EXPRS["healthy"])
+
+    # Секция едет прицепом: наличие host НЕ меняет сигнатуру дедупа.
+    with_host = json.loads(json.dumps(snapshot))
+    with_host["host"] = {"status": "ok", "available_mb": 640, "psi_pct": 9.9}
+    t("sig ignores host", digits_signature(with_host) == base_sig)
+
+    # Рендер: в норме без предупреждений.
+    calm = {"status": "ok", "available_mb": 3400, "psi_pct": 0.0,
+            "zram_ratio": 3.4, "avail_delta_mb": -120, "metrics": "ok",
+            "claude": {"n": 4, "rss_mb": 1360, "oldest_h": 9.2},
+            "disk_free_pct": {"/": 42.0, "/data": 55.0}}
+    t("host calm", _host_section(calm) == "\n".join([
+        "Хост llm",
+        " память 3400 МБ (-120/ч)",
+        " claude 4 проц · 1360 МБ · старейшая 9.2 ч",
+    ]))
+
+    # Прогноз показывается только когда до нуля ближе порога.
+    far = dict(calm, predict_h=12.0)
+    t("host predict far hidden", "кончится" not in _host_section(far))
+    near = dict(calm, predict_h=1.9)
+    t("host predict near shown", "кончится через ~1.9 ч" in _host_section(near))
+
+    # Тревога "тесно" - только когда available И PSI одновременно за порогом.
+    low_only = dict(calm, available_mb=500, psi_pct=0.2)
+    t("host low mem alone quiet", "тесно" not in _host_section(low_only))
+    psi_only = dict(calm, psi_pct=5.0)
+    t("host psi alone quiet", "тесно" not in _host_section(psi_only))
+    tight = dict(calm, available_mb=500, psi_pct=5.0)
+    t("host tight warns", "⚠️ тесно: 500 МБ свободно, PSI 5.0%"
+      in _host_section(tight))
+
+    # Пороговые предупреждения.
+    t("host steal warns", "steal 7.2%" in _host_section(dict(calm, steal_pct=7.2)))
+    t("host steal quiet", "steal" not in _host_section(dict(calm, steal_pct=1.0)))
+    t("host disk warns", "/data: свободно 4.0%"
+      in _host_section(dict(calm, disk_free_pct={"/": 42.0, "/data": 4.0})))
+    # zram: коэффициент сжатия имеет смысл, только если свопом реально пользуются.
+    # При почти пустом свопе mem_used_total - это накладные расходы аллокатора, а
+    # не сжатые данные, и ×0.7 горит вечно на машине, где половина памяти свободна.
+    t("host zram warns when swap loaded", "zram жмет ×1.8"
+      in _host_section(dict(calm, zram_ratio=1.8, swap_used_mb=900)))
+    t("host zram quiet on idle swap", "zram" not in
+      _host_section(dict(calm, zram_ratio=0.7, swap_used_mb=74)))
+    t("host zram quiet without swap data", "zram" not in
+      _host_section(dict(calm, zram_ratio=0.7)))
+
+    # Память - тем же градусником, что и лимиты: заливка показывает ЗАНЯТОЕ.
+    # Строка цифрами читалась хуже соседних строк с графиками, хотя мерит ровно
+    # такую же исчерпаемую величину.
+    _mem = _host_section(dict(calm, total_mb=11960, available_mb=8490,
+                              avail_delta_mb=-658))
+    t("host память градусником", "▓" in _mem and "░" in _mem)
+    t("host градусник показывает занятое", "29%" in _mem)
+    t("host в строке есть абсолютные мегабайты",
+      "3470" in _mem and "11960" in _mem)
+    # Тренд разворачиваем по смыслу: available падает - значит занятое растет.
+    t("host тренд по занятому со знаком плюс", "+658" in _mem)
+    t("host без объема - прежний вид без градусника",
+      "▓" not in _host_section(dict(calm, avail_delta_mb=-120)))
+
+    # Без объема машины процент не посчитать - остается прежняя строка цифрами.
+    t("host mem percent optional", "память 3400 МБ (-120/ч)" in _host_section(calm))
+    t("host growth", "растет chrome-mcp +1400 МБ/ч"
+      in _host_section(dict(calm, growth={"group": "chrome-mcp", "mb": 1400})))
+
+    t("host metrics ok quiet", "метрики" not in _host_section(
+        {"status": "ok", "available_mb": 3400, "metrics": "ok"}))
+
+    # Сторож мониторинга и мягкая деградация без хоста метрик.
+    t("host metrics down", "метрики не собираются"
+      in _host_section(dict(calm, metrics="down")))
+    t("host metrics unreachable", "хост метрик недоступен"
+      in _host_section(dict(calm, metrics="unreachable")))
+    t("host absent", _host_section(None) is None)
+    t("host error", _host_section({"status": "error"}) == "Хост llm\n не снят")
+
+    # Панель без host остается прежней (golden выше это и проверяет).
+    t("panel keeps host", "Хост llm" in render(
+        {"received_at": "2026-07-17T06:00:00Z",
+         "snapshot": dict(snapshot, host=calm)}, now=fresh))
+    # Scoped-окно с тем же именем, что legacy seven_day_* - не дублируется.
+    t("scoped dup hidden", _section("Claude", {
+        "status": "ok",
+        "seven_day_opus": {"remaining": 50},
+        "scoped": [{"label": "opus", "remaining": 10}]}, tz, fresh).count("opus") == 1)
+    t("sig stable across dup", digits_signature(json.loads(json.dumps(snapshot))) == base_sig)
+
+    # Устаревание: 60 мин > порога 45 -> строка присутствует; 10 мин -> нет.
+    old_env = {"received_at": "2026-07-17T05:00:00Z", "snapshot": snapshot}
+    got_stale = render(old_env, now=parse_iso("2026-07-17T06:00:00Z"))
+    t("stale line shown", "⚠️ данные устарели: 60 мин назад" in got_stale)
+    t("stale line hidden", "устарели" not in got)
+
+    # Счетчик карточек (Р11, план §12) - писатель bin/ai-agent-tgbot
+    # (cards_count_bump), здесь только чтение. Изолированный временный файл -
+    # тест не зависит от реального ~/.ai-control на машине.
+    import tempfile
+    cards_tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+    cards_tmp.close()
+    os.environ["AI_AGENT_TG_CARDS_COUNT"] = cards_tmp.name
+    os.unlink(cards_tmp.name)  # старт с отсутствующего файла (свежая установка)
+    t("cards line absent when file missing",
+      _cards_today_line(now=1753000000) is None)
+    with open(cards_tmp.name, "w") as f:
+        json.dump({"day": "2026-07-20", "count": 4}, f)
+    today_ts = parse_iso("2026-07-20T12:00:00Z").timestamp()
+    tomorrow_ts = parse_iso("2026-07-21T12:00:00Z").timestamp()
+    t("cards line shown for today",
+      _cards_today_line(now=today_ts) == "Карточек сегодня: 4")
+    t("cards line resets on stale day",
+      _cards_today_line(now=tomorrow_ts) == "Карточек сегодня: 0")
+    t("panel shows cards line", "Карточек сегодня: 4" in render(
+        {"received_at": "2026-07-20T12:00:00Z", "snapshot": snapshot},
+        now=parse_iso("2026-07-20T12:00:00Z")))
+    os.unlink(cards_tmp.name)
+    os.environ.pop("AI_AGENT_TG_CARDS_COUNT", None)
+    t("golden panel unaffected by absent cards file",
+      "Карточек" not in got)
+
+    # Недельный reset без TZ-сдвига дня: 2026-07-22T10:00Z = Ср и в MSK.
+    t("weekday wed", _format_reset("2026-07-22T10:00:00Z", "week", tz) == "Ср")
+    t("time in msk", _format_reset("2026-07-17T06:00:00Z", "time", tz) == "09:00")
+
+    # Graceful-пробник без сети: нет creds -> stale, нет маунта -> locked.
+    global CLAUDE_CREDS, DATA_MOUNT, http_get, refresh_claude_cli
+    CLAUDE_CREDS, saved_creds = "/nonexistent/creds.json", CLAUDE_CREDS
+    t("probe claude no creds",
+      safe(build_claude) == {"status": "stale", "detail": "no credentials"})
+    CLAUDE_CREDS = saved_creds
+    DATA_MOUNT, saved_mount = "/nonexistent-mount-point", DATA_MOUNT
+    t("probe codex locked", safe(build_codex)["status"] == "locked")
+    DATA_MOUNT = saved_mount
+
+    # Авторефреш: 401 -> CLI-рефреш -> один повтор; на 200 рефреш не зовется.
+    import tempfile
+    os.environ["LIMITS_PROBE_CLAUDE_UA"] = "claude-code/test"
+    tmp_creds = tempfile.NamedTemporaryFile(
+        "w", suffix=".json", delete=False)
+    json.dump({"claudeAiOauth": {"accessToken": "tok"}}, tmp_creds)
+    tmp_creds.close()
+    CLAUDE_CREDS, saved_creds = tmp_creds.name, CLAUDE_CREDS
+    saved_get, saved_refresh = http_get, refresh_claude_cli
+    calls = {"get": 0, "refresh": 0}
+    ok_body = {"five_hour": {"utilization": 20}}
+
+    def fake_refresh(result):
+        def inner():
+            calls["refresh"] += 1
+            return result
+        return inner
+
+    def fake_get_401_then_200(url, headers, proxy):
+        calls["get"] += 1
+        return (401, None) if calls["get"] == 1 else (200, ok_body)
+
+    http_get, refresh_claude_cli = fake_get_401_then_200, fake_refresh(True)
+    t("401 refresh retry ok",
+      safe(build_claude).get("status") == "ok"
+      and calls == {"get": 2, "refresh": 1})
+
+    calls.update(get=0, refresh=0)
+    http_get = lambda url, headers, proxy: (
+        calls.__setitem__("get", calls["get"] + 1) or (401, None))
+    refresh_claude_cli = fake_refresh(False)
+    t("401 refresh fail stale",
+      safe(build_claude) == {"status": "stale", "detail": "token expired"}
+      and calls == {"get": 1, "refresh": 1})
+
+    calls.update(get=0, refresh=0)
+    http_get = lambda url, headers, proxy: (200, dict(ok_body))
+    refresh_claude_cli = fake_refresh(True)
+    t("200 no refresh",
+      safe(build_claude).get("status") == "ok" and calls["refresh"] == 0)
+
+    # Пер-модельные окна из limits[] (weekly_scoped + scope.model).
+    scoped_body = {
+        "five_hour": {"utilization": 20},
+        "seven_day_opus": None,
+        "limits": [
+            {"kind": "session", "percent": 20},
+            {"kind": "weekly_scoped", "percent": 35,
+             "resets_at": "2026-07-19T21:00:00Z",
+             "scope": {"model": {"display_name": "Fable"}}},
+            {"kind": "weekly_scoped", "percent": 10,
+             "scope": {"surface": "cowork"}},  # без model - пропускаем
+        ],
+    }
+    http_get = lambda url, headers, proxy: (200, scoped_body)
+    t("probe scoped fable",
+      safe(build_claude).get("scoped")
+      == [{"label": "fable", "remaining": 65,
+           "resets_at": "2026-07-19T21:00:00Z"}])
+
+    http_get, refresh_claude_cli = saved_get, saved_refresh
+    CLAUDE_CREDS = saved_creds
+    os.unlink(tmp_creds.name)
+
+    # --- Клэмп окон: держим min remaining (max usage) с последнего reset_at ---
+    def _cx(rem, reset="2026-07-28T21:00:00Z"):
+        return {"codex": {"status": "ok",
+                          "seven_day": {"remaining": rem, "resets_at": reset}}}
+    st = {}
+    s = _cx(84); clamp_snapshot(s, st)
+    t("clamp first passthrough", s["codex"]["seven_day"]["remaining"] == 84)
+    s = _cx(94); clamp_snapshot(s, st)  # недосчет реплики (used 6 вместо 16) - гасим
+    t("clamp holds min on spurious rise", s["codex"]["seven_day"]["remaining"] == 84)
+    s = _cx(80); clamp_snapshot(s, st)  # реальный рост расхода - обновляем минимум
+    t("clamp tracks real usage", s["codex"]["seven_day"]["remaining"] == 80)
+    s = _cx(94); clamp_snapshot(s, st)
+    t("clamp holds new min", s["codex"]["seven_day"]["remaining"] == 80)
+    s = _cx(98, "2026-08-04T21:00:00Z"); clamp_snapshot(s, st)  # новое окно - сброс
+    t("clamp resets on new window", s["codex"]["seven_day"]["remaining"] == 98)
+
+    # Разница сигнатур - строка в журнал "почему прилетело".
+    _s1 = "claude|ok|Max|five_hour=3|seven_day=80;codex|ok|Plus|seven_day=21"
+    _s2 = "claude|ok|Max|five_hour=4|seven_day=80;codex|ok|Plus|seven_day=21"
+    t("sig_diff называет сдвинувшееся окно",
+      sig_diff(_s1, _s2) == "claude.five_hour 3->4")
+    t("sig_diff молчит при равенстве", sig_diff(_s1, _s1) == "")
+    t("sig_diff ловит смену статуса",
+      "codex.status ok->error" in sig_diff(_s1, "claude|ok|Max|five_hour=3|"
+                                          "seven_day=80;codex|error|Plus"))
+
+    # Провайдер отдает resets_at как "сейчас + остаток", поэтому на каждом опросе
+    # момент дрейфует на секунду-другую вокруг истинного. Сравнение строк не
+    # совпадало НИКОГДА - клэмп считал каждый опрос новым окном и не держал
+    # ничего. Окно узнаем по близости момента, а не по равенству строки.
+    stj = {}
+    s = _cx(84, "2026-07-28T21:00:00.234785+00:00"); clamp_snapshot(s, stj)
+    s = _cx(94, "2026-07-28T21:00:01.950777+00:00"); clamp_snapshot(s, stj)
+    t("clamp survives resets_at jitter",
+      s["codex"]["seven_day"]["remaining"] == 84)
+    s = _cx(94, "2026-07-28T21:02:30Z"); clamp_snapshot(s, stj)
+    t("clamp tolerates minutes of drift",
+      s["codex"]["seven_day"]["remaining"] == 84)
+    s = _cx(98, "2026-08-04T21:00:00Z"); clamp_snapshot(s, stj)
+    t("clamp still sees a real reset",
+      s["codex"]["seven_day"]["remaining"] == 98)
+    s = _cx(90, "не дата"); clamp_snapshot(s, stj)  # мусор от провайдера
+    t("clamp survives unparsable reset",
+      s["codex"]["seven_day"]["remaining"] == 90)
+
+    st2 = {}
+    n = {"claude": {"status": "ok", "five_hour": {"remaining": 50}}}
+    clamp_snapshot(n, st2)
+    n = {"claude": {"status": "ok", "five_hour": {"remaining": 90}}}
+    clamp_snapshot(n, st2)
+    t("clamp skips window without reset", n["claude"]["five_hour"]["remaining"] == 90)
+
+    st3 = {"codex:seven_day": {"resets_at": "2026-07-28T21:00:00Z", "remaining": 70}}
+    clamp_snapshot({"codex": {"status": "error"}}, st3)  # error не трогает стейт
+    t("clamp ignores error section", st3["codex:seven_day"]["remaining"] == 70)
+    s = _cx(88); clamp_snapshot(s, st3)  # после восстановления держим накопленный min
+    t("clamp survives error", s["codex"]["seven_day"]["remaining"] == 70)
+
+    st4 = {}
+    sc = {"claude": {"status": "ok", "scoped": [
+        {"label": "fable", "remaining": 57, "resets_at": "2026-07-28T21:00:00Z"}]}}
+    clamp_snapshot(sc, st4)
+    sc = {"claude": {"status": "ok", "scoped": [
+        {"label": "fable", "remaining": 70, "resets_at": "2026-07-28T21:00:00Z"}]}}
+    clamp_snapshot(sc, st4)
+    t("clamp scoped by label", sc["claude"]["scoped"][0]["remaining"] == 57)
+
+    print("%d failed" % len(failed) if failed else "all ok")
+    return 1 if failed else 0
+
+
+def main():
+    mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    if mode == "once":
+        return mode_once(sys.argv[2:])
+    if mode == "render":
+        return mode_render()
+    if mode == "selftest":
+        return mode_selftest()
+    sys.stderr.write(__doc__.strip() + "\n")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
