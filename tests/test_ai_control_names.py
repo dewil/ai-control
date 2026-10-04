@@ -368,6 +368,33 @@ class StoppedMetadataMigrationContract(unittest.TestCase):
                                          state_root=str(new_root / 'codex-task-state'))
                 self.assertIs(reopened.snapshot(deadline=time.monotonic() + 10)['reconciliation_required'], False)
 
+    def test_stopped_executable_in_product_share_root_relocates(self):
+        fixture, operation, _ = self.make_operation()
+        executable = self.home / '.local/share/claude-control/codex-venv/bin/python'
+        executable.parent.mkdir(parents=True, mode=0o700)
+        executable.write_bytes(b'synthetic interpreter placeholder\n')
+        executable.chmod(0o600)
+        host = Path(fixture.read_index()['operations'][operation]['host_state_dir'])
+        journal_path = host / 'journal.json'
+        journal = json.loads(journal_path.read_text())
+        journal['executable'] = str(executable)
+        journal_path.write_text(json.dumps(journal))
+        self.assertIs(fixture.store.snapshot(deadline=fixture.deadline)['reconciliation_required'], False,
+                      'share executable fixture must validate before migration')
+        before = executable.read_bytes(), stat.S_IMODE(executable.stat().st_mode)
+        result = self.run_migration()
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+        new_root = self.home / '.ai-control'
+        new_host = new_root / host.relative_to(self.home / '.claude-control')
+        new_executable = self.home / '.local/share/ai-control/codex-venv/bin/python'
+        actual = json.loads((new_host / 'journal.json').read_text())
+        self.assertEqual(actual, dict(journal, cwd=str(new_root / 'agents/taskone/work'),
+                                    socket=str(new_host / 'server.sock'), executable=str(new_executable)))
+        self.assertEqual((new_executable.read_bytes(), stat.S_IMODE(new_executable.stat().st_mode)), before)
+        reopened = fixture.Store(str(new_root / 'agents/taskone'),
+                                 state_root=str(new_root / 'codex-task-state'))
+        self.assertIs(reopened.snapshot(deadline=time.monotonic() + 10)['reconciliation_required'], False)
+
     def test_unknown_schema_refuses_before_any_root_move(self):
         fixture, _, _ = self.make_operation()
         record = fixture.read_index()
