@@ -408,7 +408,9 @@ AGR5=$(mk_event evtr5)
 QID5=$(ask_direct "$AGR5" "r5-key" "R5 вопрос?" "")
 QF5="$AGR5/questions/$QID5.json"
 force_due "$QF5"
-patch_question "$QF5" 'answered_at="2020-01-01T00:00:00Z"'
+# 2026-10-04 bot-answer-recovery spec: saved unpublished answers recover;
+# this retained case covers a completed answer (skip/no alert/no ladder move).
+patch_question "$QF5" 'answered_at="2020-01-01T00:00:00Z"' 'answer="done"' 'answered_by="operator"' 'event_published_at="2020-01-01T00:00:00Z"'
 ALERT_LOG5="$TMP/r5-alert.log"
 mk_alert_ok "$ALERT_LOG5" "$TMP/alert-ok-r5.sh"
 OUT5=$(CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-r5.sh" "$RUN" question-reminders "$AGR5" 2>"$TMP/r5.err")

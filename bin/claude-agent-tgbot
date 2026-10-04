@@ -1892,7 +1892,12 @@ def _call_answer(agent_dir, qid, mode, value, by):
     else:
         args += ["--reject"]
     args += ["--by", by]
-    r = subprocess.run(args, capture_output=True, text=True, timeout=30)
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise TransientSpoolError(str(e)) from e
+    if r.returncode not in (0, 2):
+        raise TransientSpoolError("exit %s: %s" % (r.returncode, r.stderr.strip()[:200]))
     return r.returncode, r.stderr.strip()
 
 
@@ -2313,6 +2318,8 @@ def mode_poll():
                                 token, proxy, chat_id,
                                 cqmsg.get("message_id"), kind_cb, qid_cb,
                                 arg_cb, (cq.get("from") or {}).get("id", 0))
+                        except TransientSpoolError:
+                            raise
                         except Exception as e:  # noqa: BLE001
                             log("question callback error: %s" % e)
                     elif kind_cb == "snooze" and chat_id is not None:

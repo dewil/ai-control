@@ -6,7 +6,7 @@ payload.approve; V2.5 §7.2, аудит blocker - обе фазы ниже по�
 удержанием questions/.lock).
 
 usage: claude-agent-answer <agent-dir> --qid <qid>
-                            (--text "..." | --approve | --reject) [--by NAME]
+                            (--text "..." | --approve | --reject | --recover) [--by NAME]
 
 Единственный легитимный источник текста ответа/решения. Под ОДНИМ
 удержанием questions/.lock (аудит V2.5 blocker - разрыв лока между фазами
@@ -89,28 +89,35 @@ def qid_safe_path(agent_dir, qid):
 def main():
     if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
         fail("usage: claude-agent-answer <agent-dir> --qid Q "
-             "(--text T | --approve | --reject) [--by NAME]")
+             "(--text T | --approve | --reject | --recover) [--by NAME]")
     agent_dir = sys.argv[1]
     args = sys.argv[2:]
     qid, text, by, mode = None, None, "operator", None
+    modes = 0
     while args:
         a = args.pop(0)
         if a == "--qid" and args:
             qid = args.pop(0)
         elif a == "--text" and args:
             text, mode = args.pop(0), "text"
+            modes += 1
         elif a == "--approve":
             mode = "approve"
+            modes += 1
         elif a == "--reject":
             mode = "reject"
+            modes += 1
+        elif a == "--recover":
+            mode = "recover"
+            modes += 1
         elif a == "--by" and args:
             by = args.pop(0)
         else:
             fail("unknown/incomplete arg %r" % a)
     if not qid:
         fail("--qid is required")
-    if mode is None:
-        fail("нужен ровно один из --text/--approve/--reject")
+    if modes != 1:
+        fail("нужен ровно один из --text/--approve/--reject/--recover")
 
     if not os.path.isdir(agent_dir):
         fail("agent dir не существует: %s" % agent_dir)
@@ -127,8 +134,10 @@ def main():
         fcntl.flock(lk, fcntl.LOCK_EX)
         try:
             d = json.load(open(path))
-        except (OSError, ValueError):
+        except (FileNotFoundError, ValueError):
             fail("вопрос не найден или поврежден: %s" % qid)
+        if isinstance(d, dict) and d.get("status") == "closed" and mode == "recover":
+            return
         if not isinstance(d, dict) or d.get("status") != "open":
             fail("вопрос уже закрыт или не существует: %s" % qid)
         qkind = d.get("kind")
@@ -138,30 +147,46 @@ def main():
         if mode == "text" and qkind == "permission":
             fail("--text не допустим для permission-вопроса - только "
                  "--approve/--reject")
+        saved = d.get("answered_at") is not None
+        if saved:
+            if not isinstance(d.get("answered_at"), str) or not d["answered_at"] \
+                    or not isinstance(d.get("answered_by"), str) or not d["answered_by"]:
+                fail("поврежден сохраненный ответ")
+            if qkind == "info":
+                if not isinstance(d.get("answer"), str):
+                    fail("поврежден сохраненный текст ответа")
+            elif qkind != "permission" or d.get("decision") not in ("approve", "reject"):
+                fail("поврежден сохраненный ответ/решение")
+        elif mode == "recover":
+            fail("нет сохраненного ответа")
         callback = d.get('native_callback')
         if callback is not None:
             allowed = callback.get('allowed_decisions') if type(callback) is dict else None
-            if d.get('engine') != 'codex' or qkind != 'permission' or callback.get('status') != 'pending' \
-                    or allowed not in (['reject'], ['approve','reject']) or mode not in allowed:
+            if type(callback) is not dict or d.get('engine') != 'codex' \
+                    or qkind != 'permission' \
+                    or (callback.get('status') != 'pending' \
+                        and not (mode == 'recover' and saved \
+                                 and d.get('event_published_at') is not None)) \
+                    or allowed not in (['reject'], ['approve','reject']) \
+                    or (mode != 'recover' and mode not in allowed) \
+                    or (saved and d.get('decision') not in allowed):
                 fail('решение запрещено фиксированным профилем Codex')
-        if d.get("answered_at") is not None \
-                and d.get("event_published_at") is not None:
-            # §7.2: status может оставаться open до закрытия прогоном, но
-            # ответ на этот вопрос уже дан И доведен до spool - повторный
-            # тап/redelivery не должен переписать decision/answer (в т.ч.
-            # reject -> approve).
-            # Ответ БЕЗ опубликованного события - незавершенная запись
-            # (spool-put упал/процесс убит между двумя фазами): такой
-            # повтор разрешаем, иначе вопрос навсегда остался бы открытым
-            # с ответом, о котором прогон никогда не узнает.
+        if saved and d.get("event_published_at") is not None:
+            if mode == "recover":
+                return
             fail("на вопрос уже отвечено: %s" % qid)
-        if mode == "text":
-            d["answer"] = text
-        else:
-            d["decision"] = mode  # "approve" | "reject"
-        d["answered_at"] = now_iso()
-        d["answered_by"] = by
-        durable_json(path, d)
+        # INV-TASK-24: a retry finishes publication of the first durable
+        # response; a later tap cannot replace its decision or author.
+        if not saved:
+            if qkind not in ("info", "permission"):
+                fail("неизвестный вид вопроса")
+            if mode == "text":
+                d["answer"] = text
+            else:
+                d["decision"] = mode
+            d["answered_at"] = now_iso()
+            d["answered_by"] = by
+            durable_json(path, d)
 
         # адресующее событие И отметка о публикации - ПОД ТЕМ ЖЕ локом
         # (аудит V2.5 blocker): разрыв лока между фазами давал второму
@@ -173,10 +198,10 @@ def main():
             [os.path.join(bin_dir, "claude-agent-run"), "spool-put", name,
              "--json", json.dumps({"kind": "answer", "question_id": qid}),
              "--id", "ans:%s" % qid],
-            capture_output=True, text=True)
+            capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
             fail("ответ записан, но адресующее событие не опубликовано: %s"
-                 % (r.stderr.strip() or r.returncode))
+                 % (r.stderr.strip() or r.returncode), code=7)
         d["event_published_at"] = now_iso()
         durable_json(path, d)
     finally:
@@ -186,4 +211,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        fail("временный отказ записи/публикации: %s" % e, code=7)
