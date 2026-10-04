@@ -55,7 +55,7 @@ Obsidian/не-git папка: довезти на VM (syncthing, на VM receive
 
 1. Клоны репо:
    ```sh
-   git clone git@github.com:dewil/claude-control.git ~/Work/ai-control
+   git clone git@github.com:dewil/ai-control.git ~/Work/ai-control
    git clone <SSH-алиас-канона>:dewil/claude-toolkit.git ~/Work/claude-toolkit
    ```
 2. Креды:
