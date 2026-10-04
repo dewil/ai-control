@@ -155,6 +155,31 @@ print(json.dumps(value) if isinstance(value,(dict,list)) else str(value).lower()
             self.assertEqual(evidence(agent), original[agent.name])
             self.assertEqual((agent.joinpath('work').stat().st_dev, agent.joinpath('work').stat().st_ino), identities[agent.name])
 
+    def test_private_root_preserves_legacy_spec_modes_0664_and_0644(self):
+        (self.orphans[0] / 'spec.yaml').chmod(0o664)
+        (self.orphans[1] / 'spec.yaml').chmod(0o644)
+        self.test_classifies_five_and_opaque_orphans_survive_forward_and_rollback()
+        self.assertEqual(stat.S_IMODE((self.orphans[0] / 'spec.yaml').stat().st_mode), 0o664)
+        self.assertEqual(stat.S_IMODE((self.orphans[1] / 'spec.yaml').stat().st_mode), 0o644)
+
+    def test_unknown_spec_mode_refuses_before_mutation(self):
+        (self.orphans[-1] / 'spec.yaml').chmod(0o666)
+        before = evidence(self.home)
+        self.assertNotEqual(self.generate().returncode, 0)
+        self.assertEqual(evidence(self.home), before)
+
+    def test_nonprivate_state_root_refuses_before_mutation(self):
+        self.old.chmod(0o775)
+        before = evidence(self.home)
+        self.assertNotEqual(self.generate().returncode, 0)
+        self.assertEqual(evidence(self.home), before)
+
+    def test_nonprivate_control_evidence_refuses_before_mutation(self):
+        (self.orphans[-1] / 'control.json').chmod(0o644)
+        before = evidence(self.home)
+        self.assertNotEqual(self.generate().returncode, 0)
+        self.assertEqual(evidence(self.home), before)
+
     def test_ineligible_history_refuses_before_plan_or_staging_mutation(self):
         agent = self.orphans[-1]
         control = json.loads((agent / 'control.json').read_text())
