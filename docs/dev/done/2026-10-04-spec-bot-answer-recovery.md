@@ -31,3 +31,11 @@ Periodic CLI claude-agent-run question-reminders <agent-dir>: привычный
 ## Границы и размены
 
 Только answer publication subroot BOT4; /new transient classification, session creation и voice toggle update idempotency остаются в бэклоге. BOT5 outbound chunks/sent_map delivery не входит. Не обещать exactly-once Telegram sendMessage; важна durable address event. Без нового универсального journal/retry framework, зависимостей, изменения моделей/настроек/полномочий. Собственные private/var/tmp fixtures umask077, локальные mock Telegram/systemd без сети и live задач. Только Control; Toolkit не менять.
+
+## Уточнения после сверки, 04.10.2026
+
+Valid question перед --recover no-op/publication имеет qid ровно как CLI, kind info|permission, status open|closed, непустые строковые envelope_key/asked_at/question. При saved answered_at проверяются исходные response/author поля даже на closed; valid closed без ответа допускает no-op. Частичная запись status=closed без схемы — corrupt exit2, не успех.
+
+Codex permission требует native_callback, включая operation_id (UUID), task_incarnation (32hex), generation (положительный plain int), непустые attempt_id/thread_id/turn_id/item_id, request_id (plain int либо непустая строка), method item/fileChange/requestApproval, payload_fingerprint/changes_digest (64hex), allowed_decisions канонического вида и status. Для actionable open unpublished status pending; closed/completed recovery не публикует и может иметь answered. Проверка статической схемы не выдаёт approval и не заменяет live runtime ownership/receipt barriers. Callback отсутствующий/частичный/неправильного типа на Codex permission — exit2 без события. Обычный Codex info-вопрос не требует native_callback.
+
+Тест true poll должен сохранять файл offset между повторными вызовами и доказывать начальный getUpdates offset из диска; сценарий не может незаметно обнулить файл до redelivery.
