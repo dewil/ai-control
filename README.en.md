@@ -5,7 +5,7 @@
 [![shellcheck](https://github.com/dewil/ai-control/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/dewil/ai-control/actions/workflows/shellcheck.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-Autonomous infrastructure on top of [Claude Code](https://claude.com/claude-code): an always-on control plane that (1) dispatches remote Claude sessions to any of your projects from your phone, and (2) runs a fleet of background agents — with an event spool, budgets, cross-machine handoff, independent-context acceptance.
+`ai-control` manages Claude Code and Codex sessions and background tasks. Telegram helps you launch and resume sessions, answer agents, and accept or reject results; the web panel shows task questions and results for replies and acceptance. The web panel does not launch sessions; user accounts and per-project access are not currently supported.
 
 > The related [**claude-toolkit**](https://github.com/dewil/claude-toolkit) contains rules, roles and skills. Updates use manual SHA-pinned AI sync; harvest retains upstream brief delivery.
 
@@ -48,7 +48,7 @@ flowchart TB
 - **Layer 1 — sessions from the bot** (Linux; the CLI works on macOS, but transient units do not). `/sessions` in Telegram: projects -> that project's sessions under their own names -> bring up, put down, start a new one. A raised session lives in a transient `systemd` unit and shows up in the Claude Code app. Access to any repo and to any past session, with no SSH and no manual `cd`.
 - **Layer 2 — autonomous agent layer** (Linux/systemd on a VM). Background agents supervised by a reconciler: an event spool, a `/new`-from-phone task loop (worktree, cards, accept by tap), per-run budgets, a circuit breaker, cross-machine takeover, independent role-based acceptance, an operator-feedback harvester.
 
-Both layers are **stdlib Python + shell, zero external dependencies**, user-level units only (no `sudo`, no system services), idempotent install/uninstall.
+The CLI and user-agent layer use Python stdlib and shell, run in user-level units, and do not require `sudo`. The optional web panel is installed separately: it needs pinned Python dependencies, administrative setup, and system services running under a separate UID.
 
 ---
 
@@ -119,7 +119,8 @@ The **acceptor** ([stage 7](./docs/design-2026-07-12-stage7-acceptor-role.md)) i
 ### limits-digest — LLM limits digest
 Every 15 minutes it reads the remaining Claude/Codex subscription limits (quota metadata, not inference — it does not spend the quota) and pushes a panel to Telegram **only when the numbers change** (dedup by a signature of percentages/statuses; reset times do not count as a change). [Runbook](./docs/runbook-limits-digest.md).
 
-> Stage 6 (a web control panel for the fleet) is still a [design](./docs/design-2026-07-14-stage6-web-panel.md), not an implementation.
+### Web task panel
+The web panel shows task questions and completed results. It supports text replies, permitted approve/reject decisions, and accepting or rejecting results. It does not launch sessions; user accounts and per-project access are not currently supported. Sign-in uses a password and TOTP, and the web process runs under a separate UID through a narrow owner broker. [Installation](./docs/web-install.md) requires pinned Python dependencies, a separate service account, HTTPS, and local enrollment.
 
 ---
 
@@ -142,7 +143,7 @@ What makes this more than scripts:
 - **Autonomy with brakes.** Per-run budgets, a circuit breaker with a durable latch, a kill switch. An autonomous agent cannot run away silently.
 - **Adversarial verification.** Each major layer goes through several rounds of adversarial review by a **second model** (a different class of bugs than the primary agent finds); every finding is closed with a fix **plus a regression test**. The stack of stages has accumulated dozens of closed blockers.
 - **An explicit threat model.** Trusted VM, our durable state, canon from our git mirror; the boundaries (TOCTOU under flock, symlink parents, secret handling) are worked out and documented, residual risks accepted in writing.
-- **Zero dependencies, user-level.** Only stdlib Python + shell, only user launchd/systemd units, idempotent install/uninstall.
+- **CLI and user agents.** Python stdlib + shell, user-level launchd/systemd units, no `sudo`. The optional web panel has separate pinned Python dependencies and system services under a separate UID; installation requires administrative setup.
 
 Per-stage design docs live in [`docs/`](./docs/); the architecture of both layers (including a diagram of the V2 task loop) is in [`docs/architecture.md`](./docs/architecture.md).
 
