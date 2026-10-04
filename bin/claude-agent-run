@@ -2389,6 +2389,19 @@ def _question_reminders_locked(agent_dir, qdir, name):
             d = load_json(os.path.join(qdir, fn))
             if not isinstance(d, dict):
                 raise ValueError("question doc is not an object")
+            if d.get("status") == "open" and d.get("answered_at") is not None \
+                    and d.get("event_published_at") is None:
+                try:
+                    r = subprocess.run(
+                        [os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      "claude-agent-answer"), agent_dir,
+                         "--qid", qid, "--recover"],
+                        capture_output=True, text=True, timeout=35)
+                    outcome = "recovered" if r.returncode == 0 else "fail"
+                except (OSError, subprocess.TimeoutExpired):
+                    outcome = "fail"
+                print("%s %s" % (qid, outcome))
+                continue
             if d.get("status") != "open" or d.get("answered_at"):
                 print("%s skip" % qid)
                 continue
