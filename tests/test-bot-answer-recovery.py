@@ -47,19 +47,19 @@ class Recovery(unittest.TestCase):
         self.env = {k:os.environ[k] for k in ('PATH','LANG','TZ') if k in os.environ}
         self.env.update(HOME=str(self.root/'home'), XDG_CONFIG_HOME=str(self.root/'home/config'),
             CODEX_HOME=str(self.root/'codex'), CLAUDE_CONFIG_DIR=str(self.root/'claude'),
-            CLAUDE_AGENTS_DIR=str(self.agent.parent), CLAUDE_AGENT_SPOOL_BASE=str(self.root/'spool'),
-            CLAUDE_AGENT_TG_SENT_MAP=str(self.root/'sent.json'),
-            CLAUDE_AGENT_TG_TOKEN='OFFLINE_FIXTURE', CLAUDE_AGENT_TG_WHITELIST='1001',
-            CLAUDE_AGENT_PROBE_CMD='/usr/bin/true', TEST_EFFECTS=str(self.effects),
+            AI_AGENTS_DIR=str(self.agent.parent), AI_AGENT_SPOOL_BASE=str(self.root/'spool'),
+            AI_AGENT_TG_SENT_MAP=str(self.root/'sent.json'),
+            AI_AGENT_TG_TOKEN='OFFLINE_FIXTURE', AI_AGENT_TG_WHITELIST='1001',
+            AI_AGENT_PROBE_CMD='/usr/bin/true', TEST_EFFECTS=str(self.effects),
             PATH=str(self.root/'mockbin')+os.pathsep+os.environ['PATH'])
         self.spool_calls = self.root/'spool-calls.jsonl'
         self.fault = self.root/'fault'
         self.fault.write_text('off')
         # Keep every non-spool operation real. Crash is after real spool commit,
         # before the trusted writer can receive its child result / mark the file.
-        real_run = self.bin/'claude-agent-run.real'
-        shutil.copy2(self.bin/'claude-agent-run', real_run)
-        wrapper = self.bin/'claude-agent-run'
+        real_run = self.bin/'ai-agent-run.real'
+        shutil.copy2(self.bin/'ai-agent-run', real_run)
+        wrapper = self.bin/'ai-agent-run'
         wrapper.write_text('#!/usr/bin/env python3\nimport os,signal,subprocess,sys\n'
             f'mode=open({str(self.fault)!r}).read().strip()\n'
             'if len(sys.argv)>1 and sys.argv[1]=="spool-put":\n'
@@ -75,7 +75,7 @@ class Recovery(unittest.TestCase):
             limits=dict(runs_per_day=100,run_timeout_s=20), source=dict(kind='spool',replay_window_h=72)))
         self.envpatch=patch.dict(os.environ,self.env,clear=True)
         self.envpatch.start(); self.addCleanup(self.envpatch.stop)
-        loader=SourceFileLoader('bot_fixture_'+uuid.uuid4().hex,str(self.bin/'claude-agent-tgbot'))
+        loader=SourceFileLoader('bot_fixture_'+uuid.uuid4().hex,str(self.bin/'ai-agent-tgbot'))
         spec=importlib.util.spec_from_loader(loader.name,loader)
         self.bot=importlib.util.module_from_spec(spec); loader.exec_module(self.bot)
         self.bot.OFFSET_FILE=str(self.root/'offset')
@@ -106,7 +106,7 @@ class Recovery(unittest.TestCase):
         q=self.read(qid);return {k:q.get(k) for k in ('answer','decision','answered_at','answered_by')}
     def cli(self,name,*args):
         return subprocess.run([str(self.bin/name),*map(str,args)],env=self.env,text=True,capture_output=True,timeout=15)
-    def answer(self,qid,*args):return self.cli('claude-agent-answer',self.agent,'--qid',qid,*args)
+    def answer(self,qid,*args):return self.cli('ai-agent-answer',self.agent,'--qid',qid,*args)
     def events(self):return [json.loads(p.read_text()) for p in (self.root/'spool'/self.agent.name).glob('*.json')]
     def one_address(self,qid):
         events=self.events();self.assertEqual(len(events),1,events)
@@ -172,7 +172,7 @@ class Recovery(unittest.TestCase):
     def test_concurrent_recovery_and_new_tap_keep_one_original_answer_event(self):
         q=self.question(saved=True);original=self.fields(q)
         cmds=[['--recover'],['--text','replacement','--by','intruder']]*3
-        ps=[subprocess.Popen([str(self.bin/'claude-agent-answer'),str(self.agent),'--qid',q,*a],
+        ps=[subprocess.Popen([str(self.bin/'ai-agent-answer'),str(self.agent),'--qid',q,*a],
             env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for a in cmds]
         results=[(p.communicate(timeout=20),p.returncode) for p in ps]
         for args,(_,rc) in zip(cmds,results):
@@ -181,18 +181,18 @@ class Recovery(unittest.TestCase):
 
     def test_periodic_recovery_without_alert_due_or_user_retry(self):
         q=self.question(saved=True);original=self.fields(q);reminder=self.read(q)['reminder']
-        self.env.pop('CLAUDE_AGENT_ALERT_CMD',None)
-        r=self.cli('claude-agent-run','question-reminders',self.agent)
+        self.env.pop('AI_AGENT_ALERT_CMD',None)
+        r=self.cli('ai-agent-run','question-reminders',self.agent)
         self.assertEqual(r.returncode,0,r.stderr);self.assertIn(f'{q} recovered',r.stdout.splitlines())
         self.one_address(q);self.assertEqual(self.fields(q),original);self.assertEqual(self.read(q)['reminder'],reminder)
 
     def test_periodic_failure_continues_other_questions_and_next_tick_recovers(self):
         q=self.question(saved=True);other=self.question(saved=True);self.fault.write_text('fail:'+q)
-        r=self.cli('claude-agent-run','question-reminders',self.agent)
+        r=self.cli('ai-agent-run','question-reminders',self.agent)
         self.assertIn(f'{q} fail',r.stdout.splitlines())
         self.assertIn(f'{other} recovered',r.stdout.splitlines())
         self.assertEqual(len(self.events()),1);self.fault.write_text('off')
-        r=self.cli('claude-agent-run','question-reminders',self.agent)
+        r=self.cli('ai-agent-run','question-reminders',self.agent)
         self.assertIn(f'{q} recovered',r.stdout.splitlines())
         self.assertEqual(len(self.events()),2)
 
@@ -315,7 +315,7 @@ class Recovery(unittest.TestCase):
             return dict(ok=True,result=dict(message_id=500))
         real_run=subprocess.run
         def run(args,**kw):
-            if Path(str(args[0])).name=='claude-agent-answer' and writer_fault:
+            if Path(str(args[0])).name=='ai-agent-answer' and writer_fault:
                 if writer_fault=='timeout':raise subprocess.TimeoutExpired(args,1)
                 if writer_fault=='oserror':raise OSError('offline injected I/O failure')
                 if writer_fault=='validation':return subprocess.CompletedProcess(args,2,'','offline terminal validation')

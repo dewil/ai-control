@@ -5,7 +5,7 @@ docs/dev/2026-09-19-spec-session-titles.md, раздел A).
 Приложение хранит переименование мостовой сессии только у себя - в транскрипт
 оно не попадает (сервер не ретранслирует rename_session в процесс). Здесь -
 единственный источник этого имени: список сессий из API, положенный в локальный
-кэш, который потом читает `_rc_meta.py` (режим titles) и, через него, `claude-rc`.
+кэш, который потом читает `_rc_meta.py` (режим titles) и, через него, `ai-rc`.
 
   _rc_titles.py refresh [--max-age-days N] [--timeout S] [--max-pages P]
   _rc_titles.py lookup <bridge_id>
@@ -16,7 +16,7 @@ docs/dev/2026-09-19-spec-session-titles.md, раздел A).
 и TTL по возрасту не нужны, обновление просто идет раз в несколько минут и перед
 показом карточки.
 
-Только stdlib (urllib/json/os): вызывается субпроцессом из бота и из claude-rc,
+Только stdlib (urllib/json/os): вызывается субпроцессом из бота и из ai-rc,
 тащить сторонние пакеты в них незачем.
 """
 
@@ -39,8 +39,8 @@ DEFAULT_MAX_PAGES = 5
 
 
 def _cache_path():
-    state_dir = os.environ.get("CLAUDE_RC_STATE_DIR") or \
-        os.path.expanduser("~/.claude-control/state")
+    state_dir = os.environ.get("AI_RC_STATE_DIR") or \
+        os.path.expanduser("~/.ai-control/state")
     return os.path.join(state_dir, "session-titles.json")
 
 
@@ -192,7 +192,7 @@ def cmd_refresh(argv):
         sys.stderr.write(err + "\n")
         return 3
 
-    base = os.environ.get("CLAUDE_RC_TITLES_API", "https://api.anthropic.com")
+    base = os.environ.get("AI_RC_TITLES_API", "https://api.anthropic.com")
     cutoff = datetime.datetime.now(datetime.timezone.utc) - \
         datetime.timedelta(days=max_age_days)
 

@@ -6,13 +6,13 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RECON="$HERE/../bin/claude-agent-reconciler"
-RUN="$HERE/../bin/claude-agent-run"
+RECON="$HERE/../bin/ai-agent-reconciler"
+RUN="$HERE/../bin/ai-agent-run"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-export CLAUDE_AGENTS_DIR="$TMP/agents"
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
-export CLAUDE_RECONCILER_DIR="$TMP/rc"
+export AI_AGENTS_DIR="$TMP/agents"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_RECONCILER_DIR="$TMP/rc"
 mkdir -p "$TMP/rc"
 
 PASS=0; FAIL=0
@@ -73,7 +73,7 @@ idle_pane() { printf '/rc active\n❯ \n' > "$FAKE_PANE"; }
 reset_log() { : > "$TMUX_LOG"; }
 
 # --- fixture: mission-агент + очередь ---
-AG="$CLAUDE_AGENTS_DIR/mis"; MI="$AG/mission-inbox"
+AG="$AI_AGENTS_DIR/mis"; MI="$AG/mission-inbox"
 mkdir -p "$AG"
 printf '%%0 claude\n' > "$FAKE_PANES"
 
@@ -126,7 +126,7 @@ grep -q -- '-l' "$TMUX_LOG" && fail "S5: повторный -l не нужен" 
   && ok || fail "S5: streak сброшен"
 
 # ------------------------------------------------- S6: split - выбор claude-pane
-AG2="$CLAUDE_AGENTS_DIR/mis2"; MI2="$AG2/mission-inbox"; mkdir -p "$AG2"
+AG2="$AI_AGENTS_DIR/mis2"; MI2="$AG2/mission-inbox"; mkdir -p "$AG2"
 "$RUN" mission-put mis2 --text "в сплит" >/dev/null
 printf '%%0 bash\n%%1 claude\n' > "$FAKE_PANES"
 idle_pane; reset_log

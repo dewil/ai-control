@@ -15,10 +15,10 @@ TMP = Path(tempfile.mkdtemp(prefix='control-integration-fence-', dir='/var/tmp')
 REAL_GIT = shutil.which('git')
 ENV = os.environ.copy()
 ENV.update(HOME=str(TMP/'home'), CLAUDE_CONFIG_DIR=str(TMP/'cfg'),
-           CLAUDE_AGENTS_DIR=str(TMP/'agents'), CLAUDE_AGENT_SPOOL_BASE=str(TMP/'spool'),
-           CLAUDE_RECONCILER_DIR=str(TMP/'reconciler'), CLAUDE_AGENT_PROBE_CMD='/usr/bin/true',
-           CLAUDE_AGENT_GENERATION='1', CLAUDE_AGENT_ATTEMPT='fixture',
-           CLAUDE_RC_PROJECTS_FILE=str(TMP/'projects.yaml'), GIT_CONFIG_NOSYSTEM='1',
+           AI_AGENTS_DIR=str(TMP/'agents'), AI_AGENT_SPOOL_BASE=str(TMP/'spool'),
+           AI_RECONCILER_DIR=str(TMP/'reconciler'), AI_AGENT_PROBE_CMD='/usr/bin/true',
+           AI_AGENT_GENERATION='1', AI_AGENT_ATTEMPT='fixture',
+           AI_RC_PROJECTS_FILE=str(TMP/'projects.yaml'), GIT_CONFIG_NOSYSTEM='1',
            GIT_AUTHOR_NAME='fixture', GIT_AUTHOR_EMAIL='fixture@example.invalid',
            GIT_COMMITTER_NAME='fixture', GIT_COMMITTER_EMAIL='fixture@example.invalid')
 for name in ('home', 'cfg', 'agents', 'spool', 'reconciler', 'mockbin'):
@@ -70,7 +70,7 @@ limits: {{ runs_per_day: 100, run_timeout_s: 20 }}
 source: {{ kind: spool, replay_window_h: 72 }}
 workspace: worktree
 ''')
-    cmd(ROOT/'bin/claude-rc','agent','create',name,'--spec',spec)
+    cmd(ROOT/'bin/ai-rc','agent','create',name,'--spec',spec)
     agent=TMP/'agents'/name; work=agent/'work'
     (work/'task.txt').write_text('accepted\n'); git(work,'add','.'); git(work,'commit','-qm','task')
     if 'divergent' in kind:
@@ -79,8 +79,8 @@ workspace: worktree
         git(repo,'checkout','-qb','parking')
     inflight=agent/'inbox/inflight'; inflight.mkdir(parents=True,exist_ok=True)
     (inflight/'done.json').write_text(json.dumps({'schema':1,'key':'done','source_ns':'test','native_id':'0','received_at':'2026-01-01T00:00:00Z','meta':{'attempts':0,'recoveries':0,'quarantined':False,'next_attempt_at':None,'history':[]},'payload':{'text':'done'}}))
-    denv=ENV.copy(); denv.update(CLAUDE_AGENT_DIR=str(agent),CLAUDE_AGENT_EVENT_KEY='done')
-    cmd(ROOT/'bin/claude-agent-done','--summary','fixture',env=denv)
+    denv=ENV.copy(); denv.update(AI_AGENT_DIR=str(agent),AI_AGENT_EVENT_KEY='done')
+    cmd(ROOT/'bin/ai-agent-done','--summary','fixture',env=denv)
     done=data(agent/'done.json'); done.update(state='accepted',verdict_at='2026-01-01T00:00:00Z',verdict_by='tg:1001',verdict_comment=None,integrate_mode=None,integrate_ref=None,phase_attempts=0,phase_error=None)
     (agent/'done.json').write_text(json.dumps(done))
     remote=base/'remote.git'; cmd(REAL_GIT,'init','--bare','-q',remote); git(repo,'remote','add','origin',str(remote))
@@ -131,11 +131,11 @@ sys.stdout.buffer.write(p.stdout); sys.stderr.buffer.write(p.stderr); sys.exit(p
 def advance(f, action=None, trigger='ancestry'):
     e=ENV.copy()
     if action:
-        cfg=dict(f,git=REAL_GIT,action=action,trigger=trigger,registry=ENV['CLAUDE_RC_PROJECTS_FILE'],marker=str(f['base']/'triggered'),log=str(f['base']/'git.log'),duplicate=str(f['base']/'duplicate'))
+        cfg=dict(f,git=REAL_GIT,action=action,trigger=trigger,registry=ENV['AI_RC_PROJECTS_FILE'],marker=str(f['base']/'triggered'),log=str(f['base']/'git.log'),duplicate=str(f['base']/'duplicate'))
         cfg={k:str(v) for k,v in cfg.items()}; config=f['base']/'barrier.json'; config.write_text(json.dumps(cfg))
         wrapper=f['base']/'mock'; wrapper.mkdir(exist_ok=True); (wrapper/'git').write_text(WRAPPER); (wrapper/'git').chmod(0o700)
         e['FENCE_CONFIG']=str(config); e['PATH']=str(wrapper)+':'+e['PATH']
-    p=cmd(ROOT/'bin/claude-agent-run','done-advance',f['agent'],check=False,env=e)
+    p=cmd(ROOT/'bin/ai-agent-run','done-advance',f['agent'],check=False,env=e)
     (f['base']/'result.log').write_text(f'exit={p.returncode}\nstdout={p.stdout}\nstderr={p.stderr}\ndone={json.dumps(data(f["agent"]/"done.json"))}\n')
     return p
 
@@ -287,7 +287,7 @@ if sys.argv[1:3]==['pr','list']:
  print(Path({str(response)!r}).read_text())
  if {action!r} and not Path({str(f['base']/'triggered')!r}).exists():
   Path({str(f['base']/'triggered')!r}).write_text('triggered')
-  if {action!r}=='registry': Path({ENV['CLAUDE_RC_PROJECTS_FILE']!r}).write_text('{{}}\\n')
+  if {action!r}=='registry': Path({ENV['AI_RC_PROJECTS_FILE']!r}).write_text('{{}}\\n')
   else:
    import subprocess
    subprocess.run([{REAL_GIT!r},'-C',{str(f['repo'])!r},'update-ref',{'refs/heads/'+f['branch']!r},{f['target']!r}],check=True)

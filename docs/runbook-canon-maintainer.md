@@ -6,7 +6,7 @@
 [design-2026-07-14-stage8-canon-sync.md](design-2026-07-14-stage8-canon-sync.md)
 (читать первым при незнакомстве с системой).
 
-`claude-agent-canon-maintainer` раскатывает ревизии канона (репо
+`ai-agent-canon-maintainer` раскатывает ревизии канона (репо
 claude-toolkit, теги `canon-vN`) по парку git-проектов через PR: строит
 candidate-ветку `canon/<vN>` в клоне проекта, применяет канон детерминированной
 дельтой (toolkit `canon-delta.py`), пушит и открывает PR; `applied` фиксируется
@@ -36,7 +36,7 @@ git tag -a canon-vN -m "canon-vN" && git push --follow-tags
 
 Maintainer подхватит тег следующим проходом и начнет раскатку по кольцам.
 
-**3. Подключать проекты** - одна запись в `~/.claude-control/canon/fleet.yaml`
+**3. Подключать проекты** - одна запись в `~/.ai-control/canon/fleet.yaml`
 на VM (формат - [examples/fleet.yaml.example](../examples/fleet.yaml.example)).
 Для приватного git-репо предварительно расширить доступ PAT: GitHub ->
 Settings -> Developer settings -> Personal access tokens -> Fine-grained
@@ -49,13 +49,13 @@ Obsidian/не-git папка: довезти на VM (syncthing, на VM receive
 **4. Реагировать на алерты бота.** Молчание = все хорошо (нейтральные
 вердикты не шлются). Пришел алерт - открыть digest по пути из сообщения,
 найти проект, дальше по таблице "Разбор held-причин" ниже. Быстрый статус:
-`claude-agent-canon-maintainer status` (armed/защелки/фазы проектов).
+`ai-agent-canon-maintainer status` (armed/защелки/фазы проектов).
 
 ## Установка на VM с нуля
 
 1. Клоны репо:
    ```sh
-   git clone git@github.com:dewil/claude-control.git ~/Work/claude-control
+   git clone git@github.com:dewil/claude-control.git ~/Work/ai-control
    git clone <SSH-алиас-канона>:dewil/claude-toolkit.git ~/Work/claude-toolkit
    ```
 2. Креды:
@@ -64,11 +64,11 @@ Obsidian/не-git папка: довезти на VM (syncthing, на VM receive
    - `gh` CLI в `~/.local/bin` + fine-grained PAT с правами PR на fleet-репо -
      токен кладется ТОЛЬКО в env-файл (ниже), не в чат/заметки;
    - git identity: `git config --global user.name/user.email`.
-3. Env-файл `~/.config/claude-control/env` (переменные, значения не документируем):
+3. Env-файл `~/.config/ai-control/env` (переменные, значения не документируем):
    - `CLAUDE_CANON_REPO_URL` - URL канон-репо (источник зеркала);
    - `CLAUDE_CANON_DELTA` - путь к `~/Work/claude-toolkit/scripts/canon-delta.py`;
    - `GH_TOKEN` - PAT для gh;
-   - `CLAUDE_AGENT_ALERT_CMD` - хук уведомлений (обычно `claude-agent-tgbot send`);
+   - `AI_AGENT_ALERT_CMD` - хук уведомлений (обычно `ai-agent-tgbot send`);
    - опционально `CLAUDE_CANON_SMOKE_CMD` - глобальная smoke-проверка кандидата
      (например `claude -p ok --max-turns 1`: грузит `.claude`; помни - это
      LLM-вызов на каждый новый кандидат каждого проекта, решение о стоимости
@@ -78,18 +78,18 @@ Obsidian/не-git папка: довезти на VM (syncthing, на VM receive
      без XDG взяла бы другой путь и не исключала бы таймерный проход);
      `CLAUDE_CANON_LOCK_WAIT` - таймаут ожидания лока админ-командами
      (arm/disarm/ack; дефолт 60с, по истечении exit 5).
-4. `cd ~/Work/claude-control && ./install.sh` - идемпотентен; рендерит юниты,
-   кладет бинари, включает `claude-agent-canon-maintainer.timer` (12 ч +
+4. `cd ~/Work/ai-control && ./install.sh` - идемпотентен; рендерит юниты,
+   кладет бинари, включает `ai-agent-canon-maintainer.timer` (12 ч +
    jitter, Persistent=false).
-5. Инвентарь `~/.claude-control/canon/fleet.yaml` - по
+5. Инвентарь `~/.ai-control/canon/fleet.yaml` - по
    [examples/fleet.yaml.example](../examples/fleet.yaml.example):
    `{имя: {repo_url|path, policy, ring?, smoke_cmd?, target_cmd?}}`.
    `path` и `repo_url` взаимоисключающие; не-git path - только observe.
 6. Проверка: `systemctl --user list-timers | grep canon` и ручной проход
    (обязательно с env-файлом - без него maintainer увидит дефолтные URL/пути):
    ```sh
-   set -a; . ~/.config/claude-control/env; set +a
-   claude-agent-canon-maintainer once
+   set -a; . ~/.config/ai-control/env; set +a
+   ai-agent-canon-maintainer once
    ```
 
 ## Observe-first и arm
@@ -98,14 +98,14 @@ Obsidian/не-git папка: довезти на VM (syncthing, на VM receive
 мутаций. Включение боевого режима:
 
 ```sh
-claude-agent-canon-maintainer arm      # первые 3 прохода observe-first, потом armed
-claude-agent-canon-maintainer disarm   # kill switch: мгновенно обратно в observe
-claude-agent-canon-maintainer status   # armed/mode, latches, per-project phase
+ai-agent-canon-maintainer arm      # первые 3 прохода observe-first, потом armed
+ai-agent-canon-maintainer disarm   # kill switch: мгновенно обратно в observe
+ai-agent-canon-maintainer status   # armed/mode, latches, per-project phase
 ```
 
 ## Повседневность
 
-- **Digest** - источник истины прохода: `~/.claude-control/canon/digest/<pass>.md`.
+- **Digest** - источник истины прохода: `~/.ai-control/canon/digest/<pass>.md`.
   Шапка `projects/ok/held/escalations`, per-project вердикты; для конфликтов -
   готовые resolve-команды. Алерт в TG шлется только при не-нейтральных вердиктах
   и только при смене картины (повторные проходы не флудят).
@@ -119,13 +119,13 @@ claude-agent-canon-maintainer status   # armed/mode, latches, per-project phase
   systemctl). При упаковке правила в PR к канон-репо зарегистрировать путь
   И эталонные байты (в чекауте упаковщика):
   ```sh
-  claude-agent-canon-maintainer cid-map <cid16> rules/<путь>.md \
+  ai-agent-canon-maintainer cid-map <cid16> rules/<путь>.md \
     "$(git hash-object rules/<путь>.md)"
   ```
   После мерджа в канон скан (каждый проход once) замкнет pending, когда
   regular-файл по пути в HEAD совпадет с эталоном байт-в-байт. Правка правила
   до мерджа = перерегистрация (удалить запись из canon/cid-map.json руками);
-  несовпадение/лишний тип объекта - только ручной `claude-agent-harvest
+  несовпадение/лишний тип объекта - только ручной `ai-agent-harvest
   mark-applied`.
 
 ## Разбор held-причин
@@ -151,29 +151,29 @@ claude-agent-canon-maintainer status   # armed/mode, latches, per-project phase
 ## Break-glass
 
 ```sh
-claude-agent-canon-maintainer rollback <project>   # откат на rollout_record[-2] PR-ом; ставит latch
-claude-agent-canon-maintainer ack <release> <ring> # снять breaker-защелку
-claude-agent-canon-maintainer disarm               # полный стоп мутаций
-systemctl --user stop claude-agent-canon-maintainer.timer   # остановить и таймер
+ai-agent-canon-maintainer rollback <project>   # откат на rollout_record[-2] PR-ом; ставит latch
+ai-agent-canon-maintainer ack <release> <ring> # снять breaker-защелку
+ai-agent-canon-maintainer disarm               # полный стоп мутаций
+systemctl --user stop ai-agent-canon-maintainer.timer   # остановить и таймер
 ```
 
 Принятые остаточные риски (codex-циклы T14/T31):
 
 - (r2-Д2) гард чужой работы в worktree не атомарен с его сносом - не работать
-  руками в `~/.claude-control/canon/worktrees/`; легальный ввод человека там -
+  руками в `~/.ai-control/canon/worktrees/`; легальный ввод человека там -
   только `canon-delta resolve` по командам digest (в candidate- И
   rollback-worktree; свежий worktree переживает следующий проход).
 - (r6) `rolled_back_from` в cursor снимает mismatch-гейт merged-истории для
   уже-откатанного релиза: повторная подмена дерева при мердже после отката
   деградирует в НОВЫЙ human-gated PR, а не в held (мутаций мимо PR нет).
 - Зависший проход: `disarm` ждет лок `CLAUDE_CANON_LOCK_WAIT` (60с) и умирает
-  exit 5 - тогда `systemctl --user stop claude-agent-canon-maintainer.service`
+  exit 5 - тогда `systemctl --user stop ai-agent-canon-maintainer.service`
   и ПОВТОРИТЬ `disarm` (stop не пишет armed.json).
 - Смена default-ветки канон-репо не двигает HEAD зеркала - при таком переезде
-  пересоздать зеркало (`rm -rf ~/.claude-control/canon/mirror`, следующий
+  пересоздать зеркало (`rm -rf ~/.ai-control/canon/mirror`, следующий
   проход клонирует заново).
 
 ## Логи
 
-`journalctl --user -u claude-agent-canon-maintainer.service -n 100` -
+`journalctl --user -u ai-agent-canon-maintainer.service -n 100` -
 JSON-строки: pass-start/release/project-verdict/pass-end, latch-set, cursor-cas-fail.

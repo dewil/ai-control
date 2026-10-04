@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Tests for bin/claude-agent-run: mission-очередь операторских комментариев
+# Tests for bin/ai-agent-run: mission-очередь операторских комментариев
 # (этап 9). Контракт: design-2026-07-19-stage9-mission-operator-io.md
 # (очередь-как-spool, framing, кап+backpressure, delivered-ledger, stalled).
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RUN="$HERE/../bin/claude-agent-run"
+RUN="$HERE/../bin/ai-agent-run"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-export CLAUDE_AGENTS_DIR="$TMP/agents"
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_AGENTS_DIR="$TMP/agents"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
 
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); }
@@ -27,7 +27,7 @@ print(eval(sys.argv[2], {"d": d}))' "$1" "$2"
 }
 
 # --- fixture: mission-агент вручную (юнит-скоуп, без CLI) ---
-AG="$CLAUDE_AGENTS_DIR/mis"
+AG="$AI_AGENTS_DIR/mis"
 MI="$AG/mission-inbox"
 mkdir -p "$AG"
 
@@ -108,19 +108,19 @@ assert "mark ok сбрасывает"  0 "$RUN" mission-mark mis 2 --ok
 assert "mark ok повтор"      0 "$RUN" mission-mark mis 2 --ok
 
 # ------------------------------------------------------------ кап + backpressure
-( export CLAUDE_AGENT_MISSION_MAX_MSGS=4
+( export AI_AGENT_MISSION_MAX_MSGS=4
   # в очереди: 3,4,11; четвертый лезет в кап, пятый - отказ
   "$RUN" mission-put mis --text "под кап" >/dev/null 2>&1 || exit 1
   "$RUN" mission-put mis --text "сверх капа" >/dev/null 2>&1 && exit 1
   exit 0 )
 [[ $? == 0 ]] && ok || fail "кап: 4-й прошел, 5-й отбит"
-( export CLAUDE_AGENT_MISSION_MAX_MSGS=4
+( export AI_AGENT_MISSION_MAX_MSGS=4
   "$RUN" mission-put mis --text "сверх капа" >/dev/null 2>"$TMP/err"
   [[ $? == 6 ]] )
 [[ $? == 0 ]] && ok || fail "кап: отказ = exit 6 (backpressure)"
 
 # ------------------------------------------------------------ delivered prune
-( export CLAUDE_AGENT_MISSION_DELIVERED_KEEP=2
+( export AI_AGENT_MISSION_DELIVERED_KEEP=2
   "$RUN" mission-mark mis 3 --ok >/dev/null 2>&1
   n=$(ls "$MI/delivered"/msg-*.json | wc -l | tr -d ' ')
   [[ "$n" == "2" ]] )
@@ -143,20 +143,20 @@ assert "mission-status stalled" 0 "$RUN" mission-status mis
   && ok || fail "status: fail_streak прокинут"
 
 # пустая очередь: next молчит, status depth 0
-AG2="$CLAUDE_AGENTS_DIR/mis2"; mkdir -p "$AG2"
+AG2="$AI_AGENTS_DIR/mis2"; mkdir -p "$AG2"
 assert "next пустой"          0 "$RUN" mission-next mis2
 [[ ! -s "$TMP/out" ]] && ok || fail "next на пустой очереди молчит"
 assert "status пустой"        0 "$RUN" mission-status mis2
 [[ "$(jq_file "$TMP/out" 'd["depth"]')" == "0" ]] && ok || fail "status: depth 0"
 
 # event-агент отбит: живой сессии нет, комментарию некуда доставляться
-AG4="$CLAUDE_AGENTS_DIR/evt4"; mkdir -p "$AG4"
+AG4="$AI_AGENTS_DIR/evt4"; mkdir -p "$AG4"
 printf 'schema: 1\nname: evt4\ntype: event\n' > "$AG4/spec.yaml"
 assert "event-агент отбит"    2 "$RUN" mission-put evt4 --text x
 grep -q "event" "$TMP/err" && ok || fail "отказ называет причину (event)"
 
 # безопасность: symlink вместо mission-inbox - отказ
-AG3="$CLAUDE_AGENTS_DIR/mis3"; mkdir -p "$AG3" "$TMP/elsewhere"
+AG3="$AI_AGENTS_DIR/mis3"; mkdir -p "$AG3" "$TMP/elsewhere"
 ln -s "$TMP/elsewhere" "$AG3/mission-inbox"
 assert "symlink отбит"        7 "$RUN" mission-put mis3 --text x
 

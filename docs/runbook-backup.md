@@ -1,4 +1,4 @@
-# runbook: claude-control-backup
+# runbook: ai-control-backup
 
 Опциональный модуль: клиентски-шифрованный дедуплицированный бэкап произвольных путей в **два независимых S3-репозитория** через [restic](https://restic.net). Ставится флагом `--with-backup` (Linux).
 
@@ -10,13 +10,13 @@
 
 ## Компоненты
 
-- `bin/claude-control-backup` - ежедневный бэкап (оба репо + `forget --prune`).
-- `bin/claude-control-backup-init` - первичная инициализация репо (идемпотентно).
-- `bin/claude-control-backup-restore-test` - DR-drill (restore + проверка непустоты).
-- `systemd/claude-control-backup.{service,timer}.tmpl` - таймер (ежедневно ~04:30).
+- `bin/ai-control-backup` - ежедневный бэкап (оба репо + `forget --prune`).
+- `bin/ai-control-backup-init` - первичная инициализация репо (идемпотентно).
+- `bin/ai-control-backup-restore-test` - DR-drill (restore + проверка непустоты).
+- `systemd/ai-control-backup.{service,timer}.tmpl` - таймер (ежедневно ~04:30).
 - `examples/backup-env.example` - конфиг с плейсхолдерами.
 
-Конфиг - `~/.config/claude-control/backup-env` (или `$CLAUDE_BACKUP_ENV`), `chmod 600`, **вне git**. Bash-файл (source'ится): пути (`BACKUP_PATHS` - массив), URL репо, креды. Ничего машино-специфичного в самих скриптах нет.
+Конфиг - `~/.config/ai-control/backup-env` (или `$AI_BACKUP_ENV`), `chmod 600`, **вне git**. Bash-файл (source'ится): пути (`BACKUP_PATHS` - массив), URL репо, креды. Ничего машино-специфичного в самих скриптах нет.
 
 ## Установка и настройка
 
@@ -28,19 +28,19 @@
 
 1. Заведи по bucket'у у **двух разных** S3-провайдеров + пары ключей доступа. Годятся любые S3-совместимые: Yandex Object Storage (`storage.yandexcloud.net`), Timeweb Cloud (`s3.twcstorage.ru`), Backblaze B2, Cloudflare R2, Wasabi, AWS S3.
 2. Сгенерь пароль репозитория: `openssl rand -base64 32`, положи в менеджер паролей.
-3. Заполни `~/.config/claude-control/backup-env` (см. таблицу подстановки).
-4. `claude-control-backup-init` - создаст оба репо и проверит доступ.
-5. `claude-control-backup` - первый прогон (полный; дальше инкременты).
-6. `systemctl --user enable --now claude-control-backup.timer`.
-7. `claude-control-backup-restore-test` - убедись, что восстановление работает.
+3. Заполни `~/.config/ai-control/backup-env` (см. таблицу подстановки).
+4. `ai-control-backup-init` - создаст оба репо и проверит доступ.
+5. `ai-control-backup` - первый прогон (полный; дальше инкременты).
+6. `systemctl --user enable --now ai-control-backup.timer`.
+7. `ai-control-backup-restore-test` - убедись, что восстановление работает.
 
 ## Эксплуатация
 
-- Логи прогонов: `journalctl --user -u claude-control-backup.service`.
-- Ручной бэкап: `claude-control-backup`.
+- Логи прогонов: `journalctl --user -u ai-control-backup.service`.
+- Ручной бэкап: `ai-control-backup`.
 - Список снапшотов репо A:
   ```
-  source ~/.config/claude-control/backup-env
+  source ~/.config/ai-control/backup-env
   RESTIC_REPOSITORY=$RESTIC_REPO_A AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID_A \
     AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY_A restic snapshots
   ```

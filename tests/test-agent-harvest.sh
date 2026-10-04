@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Детерминированные тесты bin/claude-agent-harvest (этап 7b). Без сети:
+# Детерминированные тесты bin/ai-agent-harvest (этап 7b). Без сети:
 # propose гоняется через мок tests/mock-harvest-claude (CLAUDE_BIN).
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-HARV="$HERE/../bin/claude-agent-harvest"
+HARV="$HERE/../bin/ai-agent-harvest"
 MOCK="$HERE/mock-harvest-claude"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-export CLAUDE_AGENTS_DIR="$TMP/agents"
-export CLAUDE_HARVEST_DIR="$TMP/harvest"
+export AI_AGENTS_DIR="$TMP/agents"
+export AI_HARVEST_DIR="$TMP/harvest"
 export CLAUDE_BIN="$MOCK"
-AGENTS="$CLAUDE_AGENTS_DIR"
-HARVEST="$CLAUDE_HARVEST_DIR"
+AGENTS="$AI_AGENTS_DIR"
+HARVEST="$AI_HARVEST_DIR"
 mkdir -p "$AGENTS"
 
 PASS=0; FAIL=0

@@ -5,7 +5,7 @@
 # правкой теста.
 #
 # Сеть не трогаем: http_get подменяется в каждом python-блоке заглушкой.
-# Модуль bin/claude-agent-limits-digest (без расширения) импортируется через
+# Модуль bin/ai-agent-limits-digest (без расширения) импортируется через
 # importlib.machinery.SourceFileLoader, как в tests/test-agent-tgbot.sh -
 # spec_from_file_location без явного loader'а файл без .py не опознает.
 #
@@ -15,7 +15,7 @@
 # набор путей через отдельный env для подпроцесса, а не общий CONTROL_DIR.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-BIN="$HERE/../bin/claude-agent-limits-digest"
+BIN="$HERE/../bin/ai-agent-limits-digest"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -30,7 +30,7 @@ run_block() {
   local out="$TMP/$(basename "$pyfile").out" err="$TMP/$(basename "$pyfile").err"
   mkdir -p "$control_dir"
   BIN_PATH="$BIN" OR_CONTROL_DIR="$control_dir" OR_KEY_FILE="$key_file" \
-    CLAUDE_CONTROL_DIR="$control_dir" LIMITS_OPENROUTER_KEY_FILE="$key_file" \
+    AI_CONTROL_DIR="$control_dir" LIMITS_OPENROUTER_KEY_FILE="$key_file" \
     python3 "$pyfile" >"$out" 2>"$err"
   local rc=$?
   if [[ "$rc" != 0 ]]; then
@@ -746,10 +746,10 @@ run_block "$ORHISTORY" "$TMP/control-history" "$KEY_HISTORY"
 # ===========================================================================
 export HOME="$TMP/home-selftest"
 mkdir -p "$HOME"
-if CLAUDE_CONTROL_DIR="$TMP/control-selftest" "$BIN" selftest >"$TMP/selftest.out" 2>"$TMP/selftest.err"; then
+if AI_CONTROL_DIR="$TMP/control-selftest" "$BIN" selftest >"$TMP/selftest.out" 2>"$TMP/selftest.err"; then
   ok
 else
-  fail "критерий 15: bin/claude-agent-limits-digest selftest сломан (см. stderr ниже)"
+  fail "критерий 15: bin/ai-agent-limits-digest selftest сломан (см. stderr ниже)"
   cat "$TMP/selftest.err" >&2
 fi
 
@@ -793,10 +793,10 @@ print(("PASS " if len(calls) == 2 else "FAIL ")
 RPY
 RB_DIR="$TMP/rb-control"; mkdir -p "$RB_DIR/limits"
 RB_OUT="$TMP/or_rollback.out"
-# CLAUDE_CONTROL_DIR, а не CONTROL_DIR: модуль читает именно эту переменную,
-# и с неверным именем проверка писала в боевой ~/.claude-control (случилось
+# AI_CONTROL_DIR, а не CONTROL_DIR: модуль читает именно эту переменную,
+# и с неверным именем проверка писала в боевой ~/.ai-control (случилось
 # 24.09.2026 на первой редакции этого блока).
-CLAUDE_CONTROL_DIR="$RB_DIR" LIMITS_OPENROUTER_KEY_FILE="$TMP/no-such-key" DIGEST_PATH="$BIN" \
+AI_CONTROL_DIR="$RB_DIR" LIMITS_OPENROUTER_KEY_FILE="$TMP/no-such-key" DIGEST_PATH="$BIN" \
   python3 "$ORROLLBACK" >"$RB_OUT" 2>"$TMP/or_rollback.err"; RB_RC=$?
 # Падение скрипта на середине оставляет часть строк PASS - без проверки кода
 # возврата оно засчитывалось как успех (тот же случай, 24.09.2026).

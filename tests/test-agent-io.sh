@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Unit tests for bin/claude-agent-io (state machine design §1.1-§1.2, §2-§3).
+# Unit tests for bin/ai-agent-io (state machine design §1.1-§1.2, §2-§3).
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-IO="$HERE/../bin/claude-agent-io"
+IO="$HERE/../bin/ai-agent-io"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 

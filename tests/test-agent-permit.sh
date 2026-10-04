@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Tests for V2.4 permission gate (claude-agent-permit --hook + settings-генерация).
+# Tests for V2.4 permission gate (ai-agent-permit --hook + settings-генерация).
 # Контракт: docs/design-2026-07-26-v2.4-permission-gate.md §6 (кейсы P1-P10).
 # Написано с чистого листа по спеке (SDD, RED-фаза) - реализация не читана
 # (bin/* сознательно не открывался при написании этого файла, кроме проверки
-# самого факта отсутствия claude-agent-permit).
+# самого факта отсутствия ai-agent-permit).
 #
 # Ambiguity-заметки (см. итоговый отчет):
 # 1. Синтаксис матчинга "Bash(git push:*)" контракт описывает лишь ссылкой
@@ -32,15 +32,15 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RUN="$HERE/../bin/claude-agent-run"
-PERMIT="$HERE/../bin/claude-agent-permit"
-ANSWER="$HERE/../bin/claude-agent-answer"
+RUN="$HERE/../bin/ai-agent-run"
+PERMIT="$HERE/../bin/ai-agent-permit"
+ANSWER="$HERE/../bin/ai-agent-answer"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-export CLAUDE_AGENTS_DIR="$TMP/agents"
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
-export CLAUDE_AGENT_PROBE_CMD=/usr/bin/true
-export CLAUDE_AGENT_GENERATION=1 CLAUDE_AGENT_ATTEMPT=test-attempt
+export AI_AGENTS_DIR="$TMP/agents"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_AGENT_PROBE_CMD=/usr/bin/true
+export AI_AGENT_GENERATION=1 AI_AGENT_ATTEMPT=test-attempt
 
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); }
@@ -125,7 +125,7 @@ _hook_pipe() { # <tool_name> <tool_input-json> <agent-dir> <event-key> -> stdout
   python3 -c '
 import json,sys
 print(json.dumps({"tool_name": sys.argv[1], "tool_input": json.loads(sys.argv[2])}))
-' "$tool" "$input" | CLAUDE_AGENT_DIR="$dir" CLAUDE_AGENT_EVENT_KEY="$key" timeout 10 "$PERMIT" --hook
+' "$tool" "$input" | AI_AGENT_DIR="$dir" AI_AGENT_EVENT_KEY="$key" timeout 10 "$PERMIT" --hook
 }
 call_hook() { # <agent-dir> <event-key> <tool_name> <tool_input-json> -> stdout хука, $? = exit code хука
   local dir="$1" key="$2" tool="$3" input="$4"
@@ -153,9 +153,9 @@ print(eval(sys.argv[2], {"d": d}))' "$1" "$2"
 
 mk_event() { # <name> <extra-yaml-lines> -> печатает путь к agent-dir (settings/prompt-регресс, P1/P10)
   local name="$1" extra="$2"
-  local ag="$CLAUDE_AGENTS_DIR/$name"
-  mkdir -p "$ag" "$CLAUDE_AGENT_SPOOL_BASE/$name"
-  chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/$name"
+  local ag="$AI_AGENTS_DIR/$name"
+  mkdir -p "$ag" "$AI_AGENT_SPOOL_BASE/$name"
+  chmod 0700 "$AI_AGENT_SPOOL_BASE/$name"
   cat > "$ag/spec.yaml" <<EOF
 schema: 1
 name: $name
@@ -172,9 +172,9 @@ EOF
 }
 mk_permit_agent() { # <name> -> печатает путь к agent-dir; ask-пояс = "Bash(git push:*)"
   local name="$1"
-  local ag="$CLAUDE_AGENTS_DIR/$name"
-  mkdir -p "$ag" "$CLAUDE_AGENT_SPOOL_BASE/$name"
-  chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/$name"
+  local ag="$AI_AGENTS_DIR/$name"
+  mkdir -p "$ag" "$AI_AGENT_SPOOL_BASE/$name"
+  chmod 0700 "$AI_AGENT_SPOOL_BASE/$name"
   cat > "$ag/spec.yaml" <<EOF
 schema: 1
 name: $name
@@ -193,9 +193,9 @@ EOF
 }
 mk_ask_agent() { # <name> <ask-yaml-flow-list> -> agent dir; ask-пояс произвольный (P13/P14/P17)
   local name="$1" ask_yaml="$2"
-  local ag="$CLAUDE_AGENTS_DIR/$name"
-  mkdir -p "$ag" "$CLAUDE_AGENT_SPOOL_BASE/$name"
-  chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/$name"
+  local ag="$AI_AGENTS_DIR/$name"
+  mkdir -p "$ag" "$AI_AGENT_SPOOL_BASE/$name"
+  chmod 0700 "$AI_AGENT_SPOOL_BASE/$name"
   cat > "$ag/spec.yaml" <<EOF
 schema: 1
 name: $name
@@ -232,7 +232,7 @@ export CLAUDE_INVOKED_MARKER="$TMP/claude-invoked-marker"
 # =============================================================== P1
 echo "=== P1: ask в спеке -> hooks.PreToolUse в agent-settings.json; пустой/отсутствующий ask -> секции нет ==="
 AGP1=$(mk_event evtaskperm 'permissions:
-  allow: ["Bash(claude-agent-ask:*)"]
+  allow: ["Bash(ai-agent-ask:*)"]
   ask: ["Bash(git push:*)", "WebFetch"]
 permission_mode: acceptEdits')
 "$RUN" spool-put evtaskperm --text "p1" >/dev/null
@@ -246,7 +246,7 @@ MATCHER1=$(jq_file "$SETP1" 'd["hooks"]["PreToolUse"][0]["matcher"]' 2>/dev/null
 [[ "$MATCHER1" == *Bash* ]] && ok || fail "P1: матчер ссылается на Bash (из ask)"
 [[ "$MATCHER1" == *WebFetch* ]] && ok || fail "P1: матчер ссылается на WebFetch (из ask)"
 CMD1=$(jq_file "$SETP1" 'd["hooks"]["PreToolUse"][0]["hooks"][0]["command"]' 2>/dev/null)
-[[ "$CMD1" == *claude-agent-permit* ]] && ok || fail "P1: команда хука - claude-agent-permit"
+[[ "$CMD1" == *ai-agent-permit* ]] && ok || fail "P1: команда хука - ai-agent-permit"
 [[ "$CMD1" == *--hook* ]] && ok || fail "P1: команда хука содержит --hook"
 [[ "$(jq_file "$SETP1" '"Bash(git push:*)" not in d["permissions"].get("allow",[])' 2>/dev/null)" == "True" ]] \
   && ok || fail "P1: ask-паттерн не попал в permissions.allow"
@@ -278,7 +278,7 @@ QFILES2=("$AGP2"/questions/*.json)
 [[ -f "${QFILES2[0]}" ]] && ok || fail "P2: файл вопроса создан"
 QF2="${QFILES2[0]}"
 [[ "$(jq_file "$QF2" 'd.get("kind")')" == "permission" ]] && ok || fail "P2: kind=permission"
-[[ "$(jq_file "$QF2" 'd.get("envelope_key")')" == "p2-envelope-key" ]] && ok || fail "P2: envelope_key = CLAUDE_AGENT_EVENT_KEY"
+[[ "$(jq_file "$QF2" 'd.get("envelope_key")')" == "p2-envelope-key" ]] && ok || fail "P2: envelope_key = AI_AGENT_EVENT_KEY"
 [[ "$(jq_file "$QF2" 'd.get("status")')" == "open" ]] && ok || fail "P2: status=open"
 SHA2_EXPECT=$(action_sha Bash "{\"command\":\"$CMDP2\"}")
 [[ "$(jq_file "$QF2" 'd.get("tool_request",{}).get("action_sha256")')" == "$SHA2_EXPECT" ]] \
@@ -379,7 +379,7 @@ print(n)
   && ok || fail "P6: токен после гонки помечен spent=true"
 
 # =============================================================== P7
-echo "=== P7: claude-agent-answer --approve -> токен создан ровно один; дубль адресующего события безопасен ==="
+echo "=== P7: ai-agent-answer --approve -> токен создан ровно один; дубль адресующего события безопасен ==="
 AGP7=$(mk_permit_agent evtp7)
 CMDP7='git push origin p7-branch'
 OUT7SETUP=$(call_hook "$AGP7" "p7-envelope-key" Bash "{\"command\":\"$CMDP7\"}")
@@ -391,7 +391,7 @@ SHA7=$(jq_file "${QFILES7[0]}" 'd.get("tool_request",{}).get("action_sha256")')
 [[ -n "$QID7" && -n "$SHA7" ]] && ok || fail "P7 setup: qid и action_sha256 присутствуют"
 
 # v2.4 §3 (контракт исправлен после аудита): решение кладет ТОЛЬКО доверенный
-# писатель claude-agent-answer - под questions/.lock decision="approve" в
+# писатель ai-agent-answer - под questions/.lock decision="approve" в
 # файл, и только потом адресующее событие (payload несет только question_id)
 "$ANSWER" "$AGP7" --qid "$QID7" --approve >/dev/null 2>"$TMP/p7ans_err"
 [[ "$(jq_file "${QFILES7[0]}" 'd.get("decision")')" == "approve" ]] \
@@ -423,7 +423,7 @@ COUNT7B=$(ls "$AGP7/approvals" 2>/dev/null | wc -l | tr -d ' ')
 [[ "$(jq_file "$TOKFILE7" 'd.get("spent")')" == "True" ]] && ok || fail "P7b: spent не сброшен дублем события"
 
 # =============================================================== P8
-echo "=== P8: claude-agent-answer --reject -> токен не создан, note об отказе в треде, вопрос закрыт ==="
+echo "=== P8: ai-agent-answer --reject -> токен не создан, note об отказе в треде, вопрос закрыт ==="
 AGP8=$(mk_permit_agent evtp8)
 CMDP8='git push origin p8-branch'
 OUT8SETUP=$(call_hook "$AGP8" "p8-envelope-key" Bash "{\"command\":\"$CMDP8\"}")
@@ -451,7 +451,7 @@ OUT11SETUP=$(call_hook "$AGP11" "p11-envelope-key" Bash "{\"command\":\"$CMDP11\
 QFILES11=("$AGP11"/questions/*.json)
 QID11=$(jq_file "${QFILES11[0]}" 'd.get("qid")')
 SHA11=$(jq_file "${QFILES11[0]}" 'd.get("tool_request",{}).get("action_sha256")')
-# claude-agent-answer НЕ вызывается - decision в файле отсутствует; продюсер
+# ai-agent-answer НЕ вызывается - decision в файле отсутствует; продюсер
 # подделывает payload.approve=true напрямую в адресующем событии
 MARK_BEFORE11=$(wc -l < "$CLAUDE_INVOKED_MARKER" | tr -d ' ')
 "$RUN" spool-put evtp11 --json "{\"kind\":\"answer\",\"question_id\":\"$QID11\",\"approve\":true}" >/dev/null
@@ -596,7 +596,7 @@ OUT13D=$(call_hook "$AGP13" "p13d-key" mcp__srv__tool '{"a":1}')
 
 # =============================================================== P14 (blocker 2, валидация, фикс-пак)
 echo "=== P14 (blocker 2, валидация): create с ask вне подмножества -> exit 2; хук на такой паттерн - deny, не тихое несовпадение ==="
-RCAGENT="$HERE/../bin/claude-rc-agent"
+RCAGENT="$HERE/../bin/ai-rc-agent"
 SPEC14="$TMP/spec-p14.yaml"
 cat > "$SPEC14" <<EOF
 schema: 1
@@ -614,7 +614,7 @@ permissions:
 EOF
 "$RCAGENT" create evtp14 --spec "$SPEC14" >"$TMP/p14out" 2>"$TMP/p14err"; RC14=$?
 [[ "$RC14" == 2 ]] && ok || fail "P14: create с невалидным ask-паттерном -> exit 2 (got $RC14: $(cat "$TMP/p14err"))"
-[[ ! -e "$CLAUDE_AGENTS_DIR/evtp14" ]] && ok || fail "P14: задача НЕ создана"
+[[ ! -e "$AI_AGENTS_DIR/evtp14" ]] && ok || fail "P14: задача НЕ создана"
 grep -qi "поддерж" "$TMP/p14err" && ok || fail "P14: сообщение перечисляет поддерживаемые формы"
 
 echo "--- P14b: тот же паттерн - спека отредактирована руками мимо валидации create, хук видит его напрямую ---"
@@ -626,7 +626,7 @@ OUT14B=$(call_hook "$AGP14B" "p14b-key" Bash '{"command":"git checkout main"}')
   && ok || fail "P14b: вопрос не создан (сбой конфигурации - не легитимный запрос подтверждения)"
 
 # =============================================================== P15 (major 4, фикс-пак)
-echo "=== P15 (major 4, fail-closed): битая/недоступная spec.yaml -> deny; CLAUDE_AGENT_DIR отсутствует -> deny ==="
+echo "=== P15 (major 4, fail-closed): битая/недоступная spec.yaml -> deny; AI_AGENT_DIR отсутствует -> deny ==="
 AGP15=$(mk_permit_agent evtp15)
 echo "not: [valid, yaml" > "$AGP15/spec.yaml"   # умышленно битый YAML
 OUT15A=$(call_hook "$AGP15" "p15a-key" Bash '{"command":"git push origin main"}')
@@ -637,10 +637,10 @@ OUT15A=$(call_hook "$AGP15" "p15a-key" Bash '{"command":"git push origin main"}'
 
 OUT15B=$(_hook_pipe Bash '{"command":"git push origin main"}' "$TMP/no-such-agent-dir" "p15b-key")
 [[ "$(hf "$OUT15B" 'd.get("permissionDecision")')" == "deny" ]] \
-  && ok || fail "P15: CLAUDE_AGENT_DIR отсутствует -> deny"
+  && ok || fail "P15: AI_AGENT_DIR отсутствует -> deny"
 
 # =============================================================== P16 (major 6, фикс-пак)
-echo "=== P16 (major 6, регресс V2.3): CLAUDE_AGENT_EVENT_KEY не в inflight -> deny, вопрос не создан; claude-agent-ask ведет себя так же ==="
+echo "=== P16 (major 6, регресс V2.3): AI_AGENT_EVENT_KEY не в inflight -> deny, вопрос не создан; ai-agent-ask ведет себя так же ==="
 AGP16=$(mk_permit_agent evtp16)
 OUT16=$(_hook_pipe Bash '{"command":"git push origin p16-branch"}' "$AGP16" "orphan-key-not-in-inflight")
 [[ "$(hf "$OUT16" 'd.get("permissionDecision")')" == "deny" ]] \
@@ -648,12 +648,12 @@ OUT16=$(_hook_pipe Bash '{"command":"git push origin p16-branch"}' "$AGP16" "orp
 [[ ! -d "$AGP16/questions" || -z "$(ls -A "$AGP16/questions" 2>/dev/null)" ]] \
   && ok || fail "P16: вопрос НЕ создан (осиротевший вопрос не морозит очередь)"
 
-echo "--- P16b: claude-agent-ask в том же сценарии - тот же регресс V2.3, не сломан ---"
-ASK="$HERE/../bin/claude-agent-ask"
-CLAUDE_AGENT_DIR="$AGP16" CLAUDE_AGENT_EVENT_KEY="orphan-key-not-in-inflight" \
+echo "--- P16b: ai-agent-ask в том же сценарии - тот же регресс V2.3, не сломан ---"
+ASK="$HERE/../bin/ai-agent-ask"
+AI_AGENT_DIR="$AGP16" AI_AGENT_EVENT_KEY="orphan-key-not-in-inflight" \
   "$ASK" --question "q?" >/dev/null 2>"$TMP/p16b_err"
 RC16B=$?
-[[ "$RC16B" == 2 ]] && ok || fail "P16b: claude-agent-ask exit 2 (got $RC16B)"
+[[ "$RC16B" == 2 ]] && ok || fail "P16b: ai-agent-ask exit 2 (got $RC16B)"
 grep -qi "inflight" "$TMP/p16b_err" && ok || fail "P16b: сообщение об ошибке ссылается на inflight"
 [[ ! -d "$AGP16/questions" || -z "$(ls -A "$AGP16/questions" 2>/dev/null)" ]] \
   && ok || fail "P16b: вопрос по-прежнему не создан"

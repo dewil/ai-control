@@ -64,7 +64,7 @@ def hex32(value):
 
 
 _loader = importlib.machinery.SourceFileLoader('_store_control_io',
-    os.path.join(os.path.dirname(__file__), 'claude-agent-io'))
+    os.path.join(os.path.dirname(__file__), 'ai-agent-io'))
 _spec = importlib.util.spec_from_loader(_loader.name, _loader)
 _control_io = importlib.util.module_from_spec(_spec)
 _loader.exec_module(_control_io)

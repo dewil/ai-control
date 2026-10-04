@@ -37,7 +37,7 @@ PREVIEW_MAX = 120
 EMPTY_PREVIEW = "(без реплик)"
 
 # Компактный JSON от CLI ("type":"custom-title") плюс пробелы после двоеточия -
-# ровно та же терпимость, что была у grep в claude-rc.
+# ровно та же терпимость, что была у grep в ai-rc.
 _TITLE_RE = re.compile(rb'"type":\s*"custom-title"')
 _CWD_RE = re.compile(rb'"cwd":"([^"]*)"')
 _USER_RE = re.compile(rb'"type":\s*"user"')
@@ -226,12 +226,12 @@ def cmd_rows(argv):
 
 
 def _load_server_titles():
-    """Кэш имен с сервера ($CLAUDE_RC_STATE_DIR/session-titles.json) - раз на
+    """Кэш имен с сервера ($AI_RC_STATE_DIR/session-titles.json) - раз на
     вызов cmd_titles, не на файл. Нет кэша - ({}, None), молча custom-title.
     Кэш битый (не JSON, не та схема) - ({}, сообщение), чтобы вызывающий
     написал ровно одну строку в stderr на весь прогон."""
-    state_dir = os.environ.get("CLAUDE_RC_STATE_DIR") or \
-        os.path.expanduser("~/.claude-control/state")
+    state_dir = os.environ.get("AI_RC_STATE_DIR") or \
+        os.path.expanduser("~/.ai-control/state")
     path = os.path.join(state_dir, "session-titles.json")
     if not os.path.isfile(path):
         return {}, None

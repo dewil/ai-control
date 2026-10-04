@@ -73,7 +73,7 @@ class RecoveryOwnership(unittest.TestCase):
         # Existing verified-venv launcher path, actual offline Python venv. The
         # versioned dependency is only a discovery fixture; no transport runs.
         f.env.pop('CODEX_RC_PYTHON', None)
-        venv_root = f.home / '.local/share/claude-control/codex-venv'
+        venv_root = f.home / '.local/share/ai-control/codex-venv'
         venv.EnvBuilder(with_pip=False, symlinks=True).create(venv_root)
         site = next((venv_root / 'lib').glob('python*/site-packages'))
         package = site / 'websockets'
@@ -123,7 +123,7 @@ class RecoveryOwnership(unittest.TestCase):
         # INV-CXRUN-07: shared recovery cannot race completion continuation.
         with self.lock.open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            result = self.command('claude-agent-run', 'drain', self.fixture.agent)
+            result = self.command('ai-agent-run', 'drain', self.fixture.agent)
         self.assertEqual(result.returncode, 5, result.stderr)
         self.unchanged()
 

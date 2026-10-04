@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Tests for V2.7a: рождение задачи (`claude-rc agent new-task`) и заявка о
-# готовности (bin/claude-agent-done).
+# Tests for V2.7a: рождение задачи (`ai-rc agent new-task`) и заявка о
+# готовности (bin/ai-agent-done).
 # Контракт: docs/design-2026-07-26-v2.7a-task-birth-and-done.md §6 (кейсы N1-N15).
 #
 # Написано с чистого листа по спеке (SDD, RED-фаза): реализация V2.7a НЕ
-# читана - bin/claude-rc-agent, bin/claude-agent-run, bin/claude-agent-reconciler,
-# bin/claude-agent-tgbot, bin/claude-agent-done ни разу не открывались через
+# читана - bin/ai-rc-agent, bin/ai-agent-run, bin/ai-agent-reconciler,
+# bin/ai-agent-tgbot, bin/ai-agent-done ни разу не открывались через
 # Read. Публичный контракт прочитан из самой спеки V2.7a, из
 # design-2026-07-25-v2.1-workspace-permissions.md (worktree/direct/none,
 # снапшот-манифест) и design-2026-07-26-v2.4-permission-gate.md
@@ -13,31 +13,31 @@
 # tests/test-agent-question.sh, tests/test-agent-tg-cards.sh,
 # tests/test-agent-reminders.sh и tests/test-agent-workspace.sh (тесты, не
 # реализация - используются только их публично наблюдаемые CLI-вызовы:
-# `claude-rc agent create <name> --spec <file>` создает workorktree в
+# `ai-rc agent create <name> --spec <file>` создает workorktree в
 # agents/<name>/work, ветка task/<name>-<inc8>, HEAD worktree == HEAD project
 # на момент create).
 #
 # Обновление после ревью координатора (спека дополнена §3/§4/§6, ambiguity-
 # заметки предыдущей версии закрыты явными правками контракта):
 # - CLI-точка входа для карточки "готово" зафиксирована явно: подкоманда
-#   `claude-agent-run done-notify <agent-dir>` (реконсилер зовет ее на тике
+#   `ai-agent-run done-notify <agent-dir>` (реконсилер зовет ее на тике
 #   для каждого агента, как question-reminders в V2.6) - вместо
-#   черноящичного предположения про глобальный `claude-agent-reconciler
+#   черноящичного предположения про глобальный `ai-agent-reconciler
 #   --once` из предыдущей версии. Изоляция фикстур (отдельный base-каталог
 #   на кейс) сохранена по требованию координатора, хотя теперь и не
 #   обязательна технически (done-notify берет явный agent-dir, не подметает
-#   CLAUDE_AGENTS_DIR целиком).
+#   AI_AGENTS_DIR целиком).
 # - Схема аргументов alert-вызова зафиксирована (§4): `<agent> "задача
 #   готова" <человекочитаемая сводка> <json-detail>`, detail = {kind:"done",
 #   agent, project, summary, commit_sha, branch, changes, empty}. N12-N14
 #   теперь проверяют позиции и содержимое detail, не только факт вызова.
-# - workspace:direct (§3): claude-agent-done сам не считает changes (снимок
+# - workspace:direct (§3): ai-agent-done сам не считает changes (снимок
 #   "до" живет только в памяти раннера) - ставит changes:null; раннер в
 #   ok-ветке дописывает changes/empty в уже существующий done.json под
-#   done.lock. N9 проверяет ОБА среза: сразу после вызова claude-agent-done
+#   done.lock. N9 проверяет ОБА среза: сразу после вызова ai-agent-done
 #   (changes:null - не дефект) и после возврата "$RUN" step (changes уже
 #   дописан).
-# - Код возврата отказа claude-agent-done зафиксирован явно как exit 2
+# - Код возврата отказа ai-agent-done зафиксирован явно как exit 2
 #   (§3) - N7/N10/N11 проверяют его без оговорки "предположительно".
 # - N15 (по разбору координатора): существующая тревога планировщика по
 #   самодельной фикстуре без валидного control.json (`control_invalid` и
@@ -48,10 +48,10 @@ set -u
 shopt -s nullglob
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RC="$HERE/../bin/claude-rc"
-RUN="$HERE/../bin/claude-agent-run"
-DONE="$HERE/../bin/claude-agent-done"
-RECON="$HERE/../bin/claude-agent-reconciler"
+RC="$HERE/../bin/ai-rc"
+RUN="$HERE/../bin/ai-agent-run"
+DONE="$HERE/../bin/ai-agent-done"
+RECON="$HERE/../bin/ai-agent-reconciler"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -79,12 +79,12 @@ PYMOCK
 chmod +x "$TMP/systembin/systemctl"
 export PATH="$TMP/systembin:$PATH"
 
-# HOME переопределен: bin/claude-agent-run без CLAUDE_AGENT_LESSONS_JOURNAL_DIR
-# резолвит ~/.claude-control/lessons от реального $HOME.
+# HOME переопределен: bin/ai-agent-run без AI_AGENT_LESSONS_JOURNAL_DIR
+# резолвит ~/.ai-control/lessons от реального $HOME.
 export HOME="$TMP/home"
 mkdir -p "$HOME"
 # CLAUDE_CONFIG_DIR - ОТДЕЛЬНО от HOME (по образцу test-agent-run.sh/
-# test-agent-workspace.sh): у claude-agent-run фолбэк ~/.claude только БЕЗ
+# test-agent-workspace.sh): у ai-agent-run фолбэк ~/.claude только БЕЗ
 # явного CLAUDE_CONFIG_DIR, а он в среде этой машины уже выставлен на боевой
 # ~/.claude - HOME-фолбэк его не перебивает. Проверено черным ящиком: без
 # этой строки preseed_trust (infra_probe/transcripts_cleanup туда же) для
@@ -93,27 +93,27 @@ mkdir -p "$HOME"
 # уже нес ~1000 таких мусорных tmp-путей от прошлых прогонов этого же теста.
 export CLAUDE_CONFIG_DIR="$TMP/cfg"
 mkdir -p "$CLAUDE_CONFIG_DIR"
-# _integrate_merge_worktree (bin/claude-agent-run) реально мержит фикстуры
+# _integrate_merge_worktree (bin/ai-agent-run) реально мержит фикстуры
 # (`git merge --no-edit`) без явных GIT_AUTHOR_*/GIT_COMMITTER_* - при
 # non-ff-мерже это commit, которому нужна identity; с боевым $HOME она
 # бралась молча из ~/.gitconfig, изолированному нужна своя.
 git config --global user.name "test" >/dev/null
 git config --global user.email "test@test.invalid" >/dev/null
 
-export CLAUDE_AGENTS_DIR="$TMP/agents"
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
-export CLAUDE_AGENT_PROBE_CMD=/usr/bin/true
-export CLAUDE_AGENT_GENERATION=1 CLAUDE_AGENT_ATTEMPT=test-attempt
-# claude-agent-reconciler (и, судя по всему, разделяемое с ним состояние)
+export AI_AGENTS_DIR="$TMP/agents"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_AGENT_PROBE_CMD=/usr/bin/true
+export AI_AGENT_GENERATION=1 AI_AGENT_ATTEMPT=test-attempt
+# ai-agent-reconciler (и, судя по всему, разделяемое с ним состояние)
 # держит блокировку/кэш "single instance" по умолчанию в реальном (не
 # тестовом) месте - обнаружено черным ящиком ("another reconciler is
 # running" на раннем прогоне этой суиты на этой машине, где может крутиться
-# боевой инстанс). CLAUDE_RECONCILER_DIR - тот же тестовый шов, что и в
+# боевой инстанс). AI_RECONCILER_DIR - тот же тестовый шов, что и в
 # tests/test-mission-drain.sh - уводит его в одноразовый каталог; держим на
 # всякий случай и для done-notify (§4: это подкоманда, которую боевой
 # reconciler зовет на своем тике, состояние может быть общим).
-export CLAUDE_RECONCILER_DIR="$TMP/reconciler"
-mkdir -p "$CLAUDE_RECONCILER_DIR"
+export AI_RECONCILER_DIR="$TMP/reconciler"
+mkdir -p "$AI_RECONCILER_DIR"
 
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); }
@@ -152,16 +152,16 @@ print(sys.argv[2] in d)' "$1" "$2" 2>/dev/null
 
 mk_inflight() { # <agent-dir> <key> - синтетический конверт в inbox/inflight
   # (тот же прием, что ask_direct в test-agent-question.sh/test-agent-tg-cards.sh):
-  # claude-agent-done обязан требовать реальный envelope_key в inflight
+  # ai-agent-done обязан требовать реальный envelope_key в inflight
   # (V2.7a §3, общая функция envelope_in_inflight, V2.4 major 6).
   local dir="$1" key="$2"
   mkdir -p "$dir/inbox/inflight"
   printf '{"schema":1,"key":"%s","source_ns":"test","native_id":"0","received_at":"2026-01-01T00:00:00Z","meta":{"attempts":0,"recoveries":0,"quarantined":false,"next_attempt_at":null,"history":[]},"payload":{"text":"stub-for-done"}}\n' \
     "$key" > "$dir/inbox/inflight/$key.json"
 }
-call_done() { # <agent-dir> <event-key> [опции claude-agent-done...]
+call_done() { # <agent-dir> <event-key> [опции ai-agent-done...]
   local dir="$1" key="$2"; shift 2
-  CLAUDE_AGENT_DIR="$dir" CLAUDE_AGENT_EVENT_KEY="$key" "$DONE" "$@"
+  AI_AGENT_DIR="$dir" AI_AGENT_EVENT_KEY="$key" "$DONE" "$@"
 }
 mk_worktree_agent() { # <name> <project-path> -> печатает agent-dir; создает через
   # реальный "$RC agent create" (публичный контракт V2.1 §2) - никаких
@@ -184,13 +184,13 @@ EOF
   "$RC" agent create "$name" --spec "$specfile" >/dev/null 2>"$TMP/create-$name.err"
   local rc=$?
   [[ "$rc" == 0 ]] && ok || fail "fixture: create $name (workspace:worktree) ($(cat "$TMP/create-$name.err"))"
-  echo "$CLAUDE_AGENTS_DIR/$name"
+  echo "$AI_AGENTS_DIR/$name"
 }
 mk_none_agent() { # <name> [extra-yaml] -> печатает agent-dir (spec.yaml от руки, без create)
   local name="$1" extra="${2:-}"
-  local ag="$CLAUDE_AGENTS_DIR/$name"
-  mkdir -p "$ag" "$CLAUDE_AGENT_SPOOL_BASE/$name"
-  chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/$name"
+  local ag="$AI_AGENTS_DIR/$name"
+  mkdir -p "$ag" "$AI_AGENT_SPOOL_BASE/$name"
+  chmod 0700 "$AI_AGENT_SPOOL_BASE/$name"
   cat > "$ag/spec.yaml" <<EOF
 schema: 1
 name: $name
@@ -206,7 +206,7 @@ EOF
   echo "$ag"
 }
 mk_isolated_agent() { # <base-dir> <name> -> печатает agent-dir; spec.yaml (workspace:none) под base_dir/name
-  # (для N12-N14/N15c: реконсилер --once проходит ГЛОБАЛЬНО по CLAUDE_AGENTS_DIR
+  # (для N12-N14/N15c: реконсилер --once проходит ГЛОБАЛЬНО по AI_AGENTS_DIR
   # - каждому такому кейсу нужен свой пустой base_dir с ровно одним агентом,
   # иначе done.json других N-кейсов дают лишние вызовы alert-команды)
   local base="$1" name="$2"
@@ -229,7 +229,7 @@ EOF
 write_done_json() { # <agent-dir> <key> <summary> -> done.json requested/workspace:none/pushed_at:null
   # V2.10 §3c (аудит блокер 2): workspace:none финализирован СРАЗУ (нет
   # терминальной ветки раннера, ждать нечего) - finalized:true с самого
-  # создания, как у реального claude-agent-done.
+  # создания, как у реального ai-agent-done.
   local dir="$1" key="$2" summary="$3"
   python3 -c '
 import json, sys
@@ -247,7 +247,7 @@ write_done_json_direct() { # <agent-dir> <key> <summary> [changes-json|null] ->
   # V2.10 §3c (аудит блокер 2): finalized отражает реальную семантику -
   # true, только если changes уже заполнены (то есть фикстура симулирует
   # состояние ПОСЛЕ терминальной ветки раннера/fill_direct_changes);
-  # changes:null -> finalized:false, как у claude-agent-done мид-run.
+  # changes:null -> finalized:false, как у ai-agent-done мид-run.
   local dir="$1" key="$2" summary="$3" changes="${4:-null}"
   python3 -c '
 import json, sys
@@ -265,7 +265,7 @@ mk_done_envelope() { # <agent-dir> <key> - синтетический конве
   # (аудит V2.7a, major 6): done-notify обязан проверять, что envelope_key
   # реально соответствует завершившемуся прогону - конверту в inbox/done/
   # этого агента, иначе руками написанный done.json обходил бы весь
-  # фенсинг claude-agent-done.
+  # фенсинг ai-agent-done.
   local dir="$1" key="$2"
   mkdir -p "$dir/inbox/done"
   printf '{"schema":1,"key":"%s","source_ns":"test","native_id":"0","received_at":"2026-01-01T00:00:00Z","meta":{"attempts":0,"recoveries":0,"quarantined":false,"next_attempt_at":null,"history":[]},"payload":{"text":"stub-for-done"}}\n' \
@@ -338,16 +338,16 @@ PY
 }
 
 # --- реестр проектов и шаблон спеки (V2.7a §2) ---
-export CLAUDE_RC_PROJECTS_FILE="$TMP/projects.yaml"
-export CLAUDE_RC_TASK_TEMPLATE="$TMP/task-template.yaml"
+export AI_RC_PROJECTS_FILE="$TMP/projects.yaml"
+export AI_RC_TASK_TEMPLATE="$TMP/task-template.yaml"
 PROJ_NONE="$TMP/proj-none"; mkdir -p "$PROJ_NONE"
-cat > "$CLAUDE_RC_PROJECTS_FILE" <<EOF
+cat > "$AI_RC_PROJECTS_FILE" <<EOF
 demoproj: $PROJ_NONE
 EOF
 # goal подставляется УЖЕ экранированным как валидный YAML-скаляр - поэтому в
 # самом шаблоне плейсхолдер {{goal}} стоит БЕЗ ручных кавычек вокруг себя
 # (иначе кавычка в тексте задачи ломала бы шаблон - см. §2/N4).
-cat > "$CLAUDE_RC_TASK_TEMPLATE" <<'EOF'
+cat > "$AI_RC_TASK_TEMPLATE" <<'EOF'
 schema: 1
 name: {{name}}
 type: event
@@ -361,8 +361,8 @@ source: { kind: spool, replay_window_h: 72 }
 EOF
 
 # --- mock claude: режимы ok (штатный успех) и done_direct (создает файл в
-#     cwd=spec.project, затем сам вызывает claude-agent-done унаследованными
-#     CLAUDE_AGENT_DIR/CLAUDE_AGENT_EVENT_KEY - тот же прием, что MOCK_ASK_BIN
+#     cwd=spec.project, затем сам вызывает ai-agent-done унаследованными
+#     AI_AGENT_DIR/AI_AGENT_EVENT_KEY - тот же прием, что MOCK_ASK_BIN
 #     в test-agent-question.sh) ---
 MOCK="$TMP/mock-claude"
 export MOCK_DONE_BIN="$DONE"
@@ -375,29 +375,29 @@ case "$mode" in
   done_direct)
     echo "n9 direct change" > "${MOCK_DIRECT_FILE:-direct-created.txt}"
     "$MOCK_DONE_BIN" --summary "N9 summary" >"${TMP_DONE_OUT:-/dev/null}" 2>"${TMP_DONE_ERR:-/dev/null}"
-    # снимок done.json СРАЗУ после вызова claude-agent-done, ДО того как раннер
+    # снимок done.json СРАЗУ после вызова ai-agent-done, ДО того как раннер
     # (после возврата этого мока) допишет changes/empty под done.lock (§3) -
     # нужен тесту N9, чтобы отличить "changes:null мид-run - это не дефект"
     # от "changes так и не дописан после прогона".
-    if [[ -n "${MOCK_DONE_SNAPSHOT:-}" && -f "$CLAUDE_AGENT_DIR/done.json" ]]; then
-      cp "$CLAUDE_AGENT_DIR/done.json" "$MOCK_DONE_SNAPSHOT"
+    if [[ -n "${MOCK_DONE_SNAPSHOT:-}" && -f "$AI_AGENT_DIR/done.json" ]]; then
+      cp "$AI_AGENT_DIR/done.json" "$MOCK_DONE_SNAPSHOT"
     fi
     echo '{"type":"result","result":"done-called","total_cost_usd":0.01}' ;;
   done_early_worktree_commit)
-    # V2.10 T9 (§3a, аудит блокер 4): агент зовет claude-agent-done СРАЗУ
+    # V2.10 T9 (§3a, аудит блокер 4): агент зовет ai-agent-done СРАЗУ
     # (worktree еще чист, empty:true), затем делает работу и коммитит ЕЕ -
-    # но второй раз claude-agent-done не зовет. cwd этого мока для
+    # но второй раз ai-agent-done не зовет. cwd этого мока для
     # workspace:worktree = <agent_dir>/work (V2.1 контракт).
     "$MOCK_DONE_BIN" --summary "early done" >"${TMP_DONE_OUT:-/dev/null}" 2>"${TMP_DONE_ERR:-/dev/null}"
-    if [[ -n "${MOCK_DONE_SNAPSHOT:-}" && -f "$CLAUDE_AGENT_DIR/done.json" ]]; then
-      cp "$CLAUDE_AGENT_DIR/done.json" "$MOCK_DONE_SNAPSHOT"
+    if [[ -n "${MOCK_DONE_SNAPSHOT:-}" && -f "$AI_AGENT_DIR/done.json" ]]; then
+      cp "$AI_AGENT_DIR/done.json" "$MOCK_DONE_SNAPSHOT"
     fi
     echo "${MOCK_LATE_MARKER:-late-work}" > "${MOCK_LATE_FILE:-late-file.txt}"
     git add "${MOCK_LATE_FILE:-late-file.txt}"
     git -c user.email=t@t -c user.name=t commit -qm "late work after premature done"
     echo '{"type":"result","result":"done-early-committed","total_cost_usd":0.01}' ;;
   done_early_worktree_dirty)
-    # T9, вторая ветка: после преждевременного claude-agent-done worktree
+    # T9, вторая ветка: после преждевременного ai-agent-done worktree
     # остается ГРЯЗНЫМ (незакоммиченное) - заявка обязана инвалидироваться,
     # а не предъявляться человеку как готовая.
     "$MOCK_DONE_BIN" --summary "early done dirty" >"${TMP_DONE_OUT:-/dev/null}" 2>"${TMP_DONE_ERR:-/dev/null}"
@@ -405,15 +405,15 @@ case "$mode" in
     echo '{"type":"result","result":"done-early-dirty","total_cost_usd":0.01}' ;;
   done_early_worktree_gitdir_swap)
     # V2.10 §3d.2 (единый git-хелпер, guard "указатель .git" - аудит r4):
-    # claude-agent-done зовется РАНО на валидном git-состоянии (worktree
+    # ai-agent-done зовется РАНО на валидном git-состоянии (worktree
     # еще чист), затем worktree пачкается обычным незакоммиченным файлом,
     # и уже ПОСЛЕ этого мок подменяет собственный `.git`-указатель на
     # ЧУЖОЙ gitdir (никак не связанный с `<project>/.git/worktrees`) -
     # имитация агента, который приводит git к своему конфигу. cwd мока для
     # workspace:worktree = <agent_dir>/work (V2.1 контракт).
     "$MOCK_DONE_BIN" --summary "early done gitdir swap" >"${TMP_DONE_OUT:-/dev/null}" 2>"${TMP_DONE_ERR:-/dev/null}"
-    if [[ -n "${MOCK_DONE_SNAPSHOT:-}" && -f "$CLAUDE_AGENT_DIR/done.json" ]]; then
-      cp "$CLAUDE_AGENT_DIR/done.json" "$MOCK_DONE_SNAPSHOT"
+    if [[ -n "${MOCK_DONE_SNAPSHOT:-}" && -f "$AI_AGENT_DIR/done.json" ]]; then
+      cp "$AI_AGENT_DIR/done.json" "$MOCK_DONE_SNAPSHOT"
     fi
     echo "${MOCK_SWAP_DIRTY_MARKER:-swap-dirty}" > "${MOCK_SWAP_DIRTY_FILE:-dirty-swap.txt}"
     printf 'gitdir: %s\n' "${MOCK_SWAP_GITDIR:?MOCK_SWAP_GITDIR not set}" > .git
@@ -429,12 +429,12 @@ echo "=== N1: new-task на чистом месте -> агент создан, 
 OUT1=$("$RC" agent new-task --name task-tg1001 --project demoproj --text "N1 text" 2>"$TMP/n1.err"); RC1=$?
 [[ "$RC1" == 0 ]] && ok || fail "N1: exit 0 (got $RC1: $(cat "$TMP/n1.err"))"
 [[ "$OUT1" == "task-tg1001 created started" ]] && ok || fail "N1: строка вывода '<name> created started' (got: $OUT1)"
-AG1="$CLAUDE_AGENTS_DIR/task-tg1001"
+AG1="$AI_AGENTS_DIR/task-tg1001"
 [[ -f "$AG1/spec.yaml" ]] && ok || fail "N1: агент создан (spec.yaml на месте)"
 [[ "$(yaml_get "$AG1/spec.yaml" 'd.get("name")')" == "task-tg1001" ]] && ok || fail "N1: спека валидна (name)"
 [[ "$(yaml_goal_eq "$AG1/spec.yaml" "N1 text")" == "True" ]] && ok || fail "N1: goal сохранен"
 [[ "$(yaml_get "$AG1/spec.yaml" 'd.get("project")')" == "$PROJ_NONE" ]] && ok || fail "N1: project резолвлен из projects.yaml"
-N1_SPOOL_COUNT=$(ls "$CLAUDE_AGENT_SPOOL_BASE/task-tg1001"/*.json 2>/dev/null | grep -c '\.json$')
+N1_SPOOL_COUNT=$(ls "$AI_AGENT_SPOOL_BASE/task-tg1001"/*.json 2>/dev/null | grep -c '\.json$')
 [[ "$N1_SPOOL_COUNT" == "1" ]] && ok || fail "N1: ровно одно событие в spool (got $N1_SPOOL_COUNT)"
 [[ -f "$AG1/control.json" ]] && ok || fail "N1: control.json создан"
 [[ "$(jq_file "$AG1/control.json" 'd["desired"]')" == "running" ]] && ok || fail "N1: desired=running"
@@ -444,7 +444,7 @@ echo "=== N2: повтор той же команды (redelivery) -> второ
 OUT2=$("$RC" agent new-task --name task-tg1001 --project demoproj --text "N1 text" 2>"$TMP/n2.err"); RC2=$?
 [[ "$RC2" == 0 ]] && ok || fail "N2: exit 0 (got $RC2: $(cat "$TMP/n2.err"))"
 [[ "$OUT2" == "task-tg1001 existing running" ]] && ok || fail "N2: строка вывода '<name> existing running' (got: $OUT2)"
-N2_SPOOL_COUNT=$(ls "$CLAUDE_AGENT_SPOOL_BASE/task-tg1001"/*.json 2>/dev/null | grep -c '\.json$')
+N2_SPOOL_COUNT=$(ls "$AI_AGENT_SPOOL_BASE/task-tg1001"/*.json 2>/dev/null | grep -c '\.json$')
 [[ "$N2_SPOOL_COUNT" == "1" ]] && ok || fail "N2: второго события в spool не появилось (got $N2_SPOOL_COUNT)"
 [[ "$(yaml_goal_eq "$AG1/spec.yaml" "N1 text")" == "True" ]] && ok || fail "N2: спека не перезаписана (create реально был no-op)"
 [[ "$(jq_file "$AG1/control.json" 'd["desired"]')" == "running" ]] && ok || fail "N2: desired остается running"
@@ -453,20 +453,20 @@ N2_SPOOL_COUNT=$(ls "$CLAUDE_AGENT_SPOOL_BASE/task-tg1001"/*.json 2>/dev/null | 
 echo "=== N3: имя из update_id укладывается в NAME_RE (граница 10 цифр); несуществующий проект -> отказ, без мусора ==="
 OUT3A=$("$RC" agent new-task --name task-tg9999999999 --project demoproj --text "N3 boundary name" 2>"$TMP/n3a.err"); RC3A=$?
 [[ "$RC3A" == 0 ]] && ok || fail "N3a: имя task-tg<10 цифр> (граница NAME_RE) принято (got $RC3A: $(cat "$TMP/n3a.err"))"
-[[ -f "$CLAUDE_AGENTS_DIR/task-tg9999999999/spec.yaml" ]] && ok || fail "N3a: агент с граничным именем создан"
+[[ -f "$AI_AGENTS_DIR/task-tg9999999999/spec.yaml" ]] && ok || fail "N3a: агент с граничным именем создан"
 
 OUT3B=$("$RC" agent new-task --name task-tg2002 --project nosuchproject --text "N3 bad project" 2>"$TMP/n3b.err"); RC3B=$?
 [[ "$RC3B" != 0 ]] && ok || fail "N3b: несуществующий проект -> отказ (exit != 0, got $RC3B)"
 [[ -s "$TMP/n3b.err" ]] && ok || fail "N3b: сообщение об ошибке непусто и человекочитаемо"
-[[ ! -e "$CLAUDE_AGENTS_DIR/task-tg2002" ]] && ok || fail "N3b: агент не создан (мусора в AGENTS_DIR нет)"
-[[ ! -d "$CLAUDE_AGENT_SPOOL_BASE/task-tg2002" ]] && ok || fail "N3b: spool-каталог для отказанной задачи не создан"
+[[ ! -e "$AI_AGENTS_DIR/task-tg2002" ]] && ok || fail "N3b: агент не создан (мусора в AGENTS_DIR нет)"
+[[ ! -d "$AI_AGENT_SPOOL_BASE/task-tg2002" ]] && ok || fail "N3b: spool-каталог для отказанной задачи не создан"
 
 # =============================================================== N4
 echo "=== N4: goal с переводом строки/двоеточием/кавычкой/# -> сохранен байт-в-байт; попытка инъекции доп.поля через goal не проходит ==="
 TEXT4A=$'Первая строка: важно\nВторая "строка" с кавычкой\n# не комментарий YAML\nхвост текста'
 OUT4A=$("$RC" agent new-task --name task-tg4001 --project demoproj --text "$TEXT4A" 2>"$TMP/n4a.err"); RC4A=$?
 [[ "$RC4A" == 0 ]] && ok || fail "N4a: exit 0 на составном тексте (got $RC4A: $(cat "$TMP/n4a.err"))"
-AG4A="$CLAUDE_AGENTS_DIR/task-tg4001"
+AG4A="$AI_AGENTS_DIR/task-tg4001"
 [[ "$(yaml_goal_eq "$AG4A/spec.yaml" "$TEXT4A")" == "True" ]] \
   && ok || fail "N4a: goal идентичен исходному тексту байт-в-байт (перевод строки/двоеточие/кавычка/#)"
 
@@ -476,7 +476,7 @@ permissions:
 autonomy: act'
 OUT4B=$("$RC" agent new-task --name task-tg4002 --project demoproj --text "$TEXT4B" 2>"$TMP/n4b.err"); RC4B=$?
 [[ "$RC4B" == 0 ]] && ok || fail "N4b: exit 0 - вредоносный текст все равно только ТЕКСТ задачи (got $RC4B: $(cat "$TMP/n4b.err"))"
-AG4B="$CLAUDE_AGENTS_DIR/task-tg4002"
+AG4B="$AI_AGENTS_DIR/task-tg4002"
 [[ "$(yaml_goal_eq "$AG4B/spec.yaml" "$TEXT4B")" == "True" ]] \
   && ok || fail "N4b: весь вредоносный текст остался ВНУТРИ goal как строка"
 [[ "$(yaml_has_key "$AG4B/spec.yaml" permissions)" == "False" ]] \
@@ -486,11 +486,11 @@ AG4B="$CLAUDE_AGENTS_DIR/task-tg4002"
 
 # =============================================================== N5
 echo "=== N5: шаблона нет / шаблон невалиден -> отказ, агент не создан (fail-closed) ==="
-OUT5A=$(CLAUDE_RC_TASK_TEMPLATE="$TMP/no-such-template.yaml" \
+OUT5A=$(AI_RC_TASK_TEMPLATE="$TMP/no-such-template.yaml" \
   "$RC" agent new-task --name task-tg5001 --project demoproj --text "N5a" 2>"$TMP/n5a.err"); RC5A=$?
 [[ "$RC5A" != 0 ]] && ok || fail "N5a: отсутствующий шаблон -> отказ (got $RC5A)"
 [[ -s "$TMP/n5a.err" ]] && ok || fail "N5a: внятное сообщение об ошибке"
-[[ ! -e "$CLAUDE_AGENTS_DIR/task-tg5001" ]] && ok || fail "N5a: агент не создан"
+[[ ! -e "$AI_AGENTS_DIR/task-tg5001" ]] && ok || fail "N5a: агент не создан"
 
 cat > "$TMP/bad-template.yaml" <<'EOF'
 schema: 1
@@ -504,11 +504,11 @@ memory_max_mb: 100
 limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 EOF
-OUT5B=$(CLAUDE_RC_TASK_TEMPLATE="$TMP/bad-template.yaml" \
+OUT5B=$(AI_RC_TASK_TEMPLATE="$TMP/bad-template.yaml" \
   "$RC" agent new-task --name task-tg5002 --project demoproj --text "N5b" 2>"$TMP/n5b.err"); RC5B=$?
 [[ "$RC5B" != 0 ]] && ok || fail "N5b: невалидный (битый YAML) шаблон -> отказ (got $RC5B)"
 [[ -s "$TMP/n5b.err" ]] && ok || fail "N5b: внятное сообщение об ошибке"
-[[ ! -e "$CLAUDE_AGENTS_DIR/task-tg5002" ]] && ok || fail "N5b: агент не создан"
+[[ ! -e "$AI_AGENTS_DIR/task-tg5002" ]] && ok || fail "N5b: агент не создан"
 
 # --- фикстура: git-проект для worktree-кейсов (N6-N8, N10) ---
 PROJ_GIT="$TMP/proj-git"; git init -q "$PROJ_GIT"
@@ -516,7 +516,7 @@ PROJ_GIT="$TMP/proj-git"; git init -q "$PROJ_GIT"
   && git -c user.email=t@t -c user.name=t commit -qm init )
 
 # =============================================================== N6
-echo "=== N6: claude-agent-done в worktree с чистым деревом (1 коммит поверх base) -> requested, commit_sha=HEAD потомок base, empty:false ==="
+echo "=== N6: ai-agent-done в worktree с чистым деревом (1 коммит поверх base) -> requested, commit_sha=HEAD потомок base, empty:false ==="
 AG6=$(mk_worktree_agent wt6 "$PROJ_GIT")
 BASE6=$(git -C "$AG6/work" rev-parse HEAD)
 ( cd "$AG6/work" && echo "n6 change" > n6.txt && git add n6.txt \
@@ -591,7 +591,7 @@ DJ8="$AG8/done.json"
 [[ "$(jq_file "$DJ8" 'd.get("empty")')" == "True" ]] && ok || fail "N8: empty=true"
 
 # =============================================================== N9
-echo "=== N9: workspace:direct -> changes:null сразу после claude-agent-done (не дефект, §3), после возврата 'step' раннер дописал реальные пути ==="
+echo "=== N9: workspace:direct -> changes:null сразу после ai-agent-done (не дефект, §3), после возврата 'step' раннер дописал реальные пути ==="
 PROJ9="$TMP/proj9"; mkdir -p "$PROJ9"
 AG9=$(mk_none_agent evtd9 "workspace: direct
 project: $PROJ9")
@@ -605,10 +605,10 @@ echo ok > "$MOCK_MODE_FILE"
 [[ -f "$PROJ9/direct-created.txt" ]] && ok || fail "N9: fixture - мок реально создал файл в spec.project"
 [[ ! -d "$PROJ9/.git" ]] && ok || fail "N9: git не задействован (проект не git-репозиторий)"
 MIDRUN9="$TMP/n9-done-midrun.json"
-[[ -f "$MIDRUN9" ]] && ok || fail "N9: fixture - снимок done.json мид-run снят (claude-agent-done отработал внутри прогона)"
+[[ -f "$MIDRUN9" ]] && ok || fail "N9: fixture - снимок done.json мид-run снят (ai-agent-done отработал внутри прогона)"
 [[ "$(jq_file "$MIDRUN9" 'd.get("state")')" == "requested" ]] && ok || fail "N9: мид-run state=requested"
 [[ "$(jq_file "$MIDRUN9" 'd.get("changes")')" == "None" ]] \
-  && ok || fail "N9: мид-run changes=null (claude-agent-done сам не считает диф - §3, это не дефект)"
+  && ok || fail "N9: мид-run changes=null (ai-agent-done сам не считает диф - §3, это не дефект)"
 DJ9="$AG9/done.json"
 [[ -f "$DJ9" ]] && ok || fail "N9: done.json на месте после возврата 'step'"
 [[ "$(jq_file "$DJ9" 'd.get("state")')" == "requested" ]] && ok || fail "N9: state=requested"
@@ -618,7 +618,7 @@ DJ9="$AG9/done.json"
 [[ "$(jq_file "$DJ9" 'd.get("empty")')" == "False" ]] && ok || fail "N9: empty=false (файл добавлен)"
 
 # =============================================================== N10
-echo "=== N10: повторный claude-agent-done при requested -> ok, requested_at не переписан; при accepted -> exit 2, файл не изменен ==="
+echo "=== N10: повторный ai-agent-done при requested -> ok, requested_at не переписан; при accepted -> exit 2, файл не изменен ==="
 AG10=$(mk_worktree_agent wt10 "$PROJ_GIT")
 ( cd "$AG10/work" && echo "n10 change" > n10.txt && git add n10.txt \
   && git -c user.email=t@t -c user.name=t commit -qm "n10 commit" )
@@ -649,7 +649,7 @@ call_done "$AG10" "n10-key" --summary "third" >/dev/null 2>"$TMP/n10c.err"; RC10
 [[ "$(jq_file "$DJ10" 'd.get("summary")')" == "$SUMMARY10_BEFORE" ]] && ok || fail "N10: файл не изменен отклоненным вызовом (summary не 'third')"
 
 # =============================================================== N10d
-echo "=== N10d (§4, blocker): повторный claude-agent-done с продвинувшимся commit_sha сбрасывает pushed_at в null (документ пересобран целиком) ==="
+echo "=== N10d (§4, blocker): повторный ai-agent-done с продвинувшимся commit_sha сбрасывает pushed_at в null (документ пересобран целиком) ==="
 AG10D=$(mk_worktree_agent wt10d "$PROJ_GIT")
 ( cd "$AG10D/work" && echo "n10d change 1" > n10d.txt && git add n10d.txt \
   && git -c user.email=t@t -c user.name=t commit -qm "n10d commit 1" )
@@ -698,7 +698,7 @@ write_done_json "$AG12" "n12-key" "N12 summary text"
 mk_done_envelope "$AG12" "n12-key"  # аудит V2.7a major 6: envelope_key обязан быть реальным
 ALERT_LOG12="$TMP/n12-alert.log"
 mk_alert_ok "$ALERT_LOG12" "$TMP/alert-ok-n12.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-n12.sh" "$RUN" done-notify "$AG12" >/dev/null 2>"$TMP/n12a.err"; RC12A=$?
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-n12.sh" "$RUN" done-notify "$AG12" >/dev/null 2>"$TMP/n12a.err"; RC12A=$?
 [[ "$RC12A" == 0 ]] && ok || fail "N12: exit 0 (got $RC12A: $(cat "$TMP/n12a.err"))"
 [[ "$(alert_block_count "$ALERT_LOG12")" == "1" ]] && ok || fail "N12: ровно один вызов alert-команды"
 [[ "$(alert_block_field "$ALERT_LOG12" 1 0)" == "evtd12" ]] && ok || fail "N12: 1-й аргумент - короткое имя агента"
@@ -713,7 +713,7 @@ DETAIL12=$(alert_detail "$ALERT_LOG12" 1)
 [[ "$(jq_str "$DETAIL12" 'd.get("project")')" == "$PROJ_NONE" ]] && ok || fail "N12: detail.project = spec.project"
 [[ "$(jq_str "$DETAIL12" 'd.get("summary")')" == "N12 summary text" ]] && ok || fail "N12: detail.summary = summary из done.json"
 [[ "$(jq_file "$AG12/done.json" 'bool(d.get("pushed_at"))')" == "True" ]] && ok || fail "N12: pushed_at проставлен"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-n12.sh" "$RUN" done-notify "$AG12" >/dev/null 2>"$TMP/n12b.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-n12.sh" "$RUN" done-notify "$AG12" >/dev/null 2>"$TMP/n12b.err"
 [[ "$(alert_block_count "$ALERT_LOG12")" == "1" ]] && ok || fail "N12: повторный проход не пушит второй раз (пуш уже доставлен)"
 
 # =============================================================== N13
@@ -724,12 +724,12 @@ write_done_json "$AG13" "n13-key" "N13 summary"
 mk_done_envelope "$AG13" "n13-key"  # аудит V2.7a major 6: envelope_key обязан быть реальным
 ALERT_LOG13F="$TMP/n13-fail.log"
 mk_alert_fail "$ALERT_LOG13F" "$TMP/alert-fail-n13.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-fail-n13.sh" "$RUN" done-notify "$AG13" >/dev/null 2>"$TMP/n13a.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-fail-n13.sh" "$RUN" done-notify "$AG13" >/dev/null 2>"$TMP/n13a.err"
 [[ "$(alert_block_count "$ALERT_LOG13F")" == "1" ]] && ok || fail "N13: alert-команда реально вызвана несмотря на неуспех"
 [[ "$(jq_file "$AG13/done.json" 'd.get("pushed_at")')" == "None" ]] && ok || fail "N13: pushed_at остается пуст после недоставки"
 ALERT_LOG13OK="$TMP/n13-ok.log"
 mk_alert_ok "$ALERT_LOG13OK" "$TMP/alert-ok-n13.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-n13.sh" "$RUN" done-notify "$AG13" >/dev/null 2>"$TMP/n13b.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-n13.sh" "$RUN" done-notify "$AG13" >/dev/null 2>"$TMP/n13b.err"
 [[ "$(alert_block_count "$ALERT_LOG13OK")" == "1" ]] && ok || fail "N13: следующий проход (рабочая alert-команда) доставляет"
 [[ "$(jq_file "$AG13/done.json" 'bool(d.get("pushed_at"))')" == "True" ]] && ok || fail "N13: pushed_at проставлен после успешной доставки"
 
@@ -742,7 +742,7 @@ write_done_json "$AG14" "n14-key" "$SECRET14"
 mk_done_envelope "$AG14" "n14-key"  # аудит V2.7a major 6: envelope_key обязан быть реальным
 ALERT_LOG14="$TMP/n14-alert.log"
 mk_alert_ok "$ALERT_LOG14" "$TMP/alert-ok-n14.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-n14.sh" "$RUN" done-notify "$AG14" >/dev/null 2>"$TMP/n14.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-n14.sh" "$RUN" done-notify "$AG14" >/dev/null 2>"$TMP/n14.err"
 [[ "$(alert_block_count "$ALERT_LOG14")" == "1" ]] && ok || fail "N14: fixture - карточка реально пушится ($(cat "$TMP/n14.err"))"
 ALERT_CONTENT14=$(cat "$ALERT_LOG14" 2>/dev/null)
 [[ "$ALERT_CONTENT14" != *"hunter2"* ]] && ok || fail "N14: секрет 'hunter2' не должен быть в вызове alert-команды (ни в одном аргументе)"
@@ -750,7 +750,7 @@ ALERT_CONTENT14=$(cat "$ALERT_LOG14" 2>/dev/null)
 
 # =============================================================== N16
 echo "=== N16 (blocker, стык бот -> CLI): /new проходит РЕАЛЬНЫЙ разбор команды бота (parse_command+authorized+handle), не CLI напрямую ==="
-# Импортирует bin/claude-agent-tgbot КАК МОДУЛЬ (importlib, тот же файл, что
+# Импортирует bin/ai-agent-tgbot КАК МОДУЛЬ (importlib, тот же файл, что
 # запускается в проде) и зовет parse_command/authorized/handle - ровно ту
 # стыковку, которую боевой mode_poll() делает построчно: `elif authorized(upd,
 # wl): cmd, arg = parse_command(mtext); ... handle(cmd, arg, update_id=...,
@@ -763,7 +763,7 @@ import importlib.machinery, importlib.util, json, sys
 
 def load_tgbot(path):
     # spec_from_file_location без явного loader'а не находит его для файла
-    # без .py-суффикса (bin/claude-agent-tgbot) - loader задаем явно.
+    # без .py-суффикса (bin/ai-agent-tgbot) - loader задаем явно.
     loader = importlib.machinery.SourceFileLoader("tgbot_under_test", path)
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
@@ -796,28 +796,28 @@ def main():
 
 main()
 PY
-n16_dispatch() { python3 "$N16_HELPER" "$HERE/../bin/claude-agent-tgbot" dispatch "$1" "$2" "$3"; }
+n16_dispatch() { python3 "$N16_HELPER" "$HERE/../bin/ai-agent-tgbot" dispatch "$1" "$2" "$3"; }
 
 DISPATCH16A=$(n16_dispatch 16001 555 "/new demoproj N16 text")
 [[ "$(jq_str "$DISPATCH16A" 'd.get("cmd")')" == "/new" ]] \
   && ok || fail "N16: команда распознана как /new (got: $DISPATCH16A)"
 [[ "$(jq_str "$DISPATCH16A" 'd.get("text")')" == "task-tg16001 created started" ]] \
   && ok || fail "N16: дошло до реального new-task с именем из update_id (got: $DISPATCH16A)"
-AG16="$CLAUDE_AGENTS_DIR/task-tg16001"
+AG16="$AI_AGENTS_DIR/task-tg16001"
 [[ -f "$AG16/spec.yaml" ]] && ok || fail "N16: агент реально создан через диспетч бота"
-N16_SPOOL_COUNT=$(ls "$CLAUDE_AGENT_SPOOL_BASE/task-tg16001"/*.json 2>/dev/null | grep -c '\.json$')
+N16_SPOOL_COUNT=$(ls "$AI_AGENT_SPOOL_BASE/task-tg16001"/*.json 2>/dev/null | grep -c '\.json$')
 [[ "$N16_SPOOL_COUNT" == "1" ]] && ok || fail "N16: ровно одно событие в spool"
 
 DISPATCH16B=$(n16_dispatch 16001 555 "/new demoproj N16 text")
 [[ "$(jq_str "$DISPATCH16B" 'd.get("text")')" == "task-tg16001 existing running" ]] \
   && ok || fail "N16: redelivery того же update_id - вторая задача не создается (got: $DISPATCH16B)"
-N16_SPOOL_COUNT2=$(ls "$CLAUDE_AGENT_SPOOL_BASE/task-tg16001"/*.json 2>/dev/null | grep -c '\.json$')
+N16_SPOOL_COUNT2=$(ls "$AI_AGENT_SPOOL_BASE/task-tg16001"/*.json 2>/dev/null | grep -c '\.json$')
 [[ "$N16_SPOOL_COUNT2" == "1" ]] && ok || fail "N16: второе событие в spool не появилось"
 
 DISPATCH16C=$(n16_dispatch 16002 999 "/new demoproj should-not-create")
 [[ "$(jq_str "$DISPATCH16C" 'd.get("authorized")')" == "False" ]] \
   && ok || fail "N16: неавторизованный from.id -> цепочка не вызвана (got: $DISPATCH16C)"
-[[ ! -e "$CLAUDE_AGENTS_DIR/task-tg16002" ]] \
+[[ ! -e "$AI_AGENTS_DIR/task-tg16002" ]] \
   && ok || fail "N16: агент неавторизованного апдейта не создан"
 
 # =============================================================== N17
@@ -828,7 +828,7 @@ write_done_json_direct "$AG17" "n17-key" "N17 summary" null
 mk_done_envelope "$AG17" "n17-key"
 ALERT_LOG17="$TMP/n17-alert.log"
 mk_alert_ok "$ALERT_LOG17" "$TMP/alert-ok-n17.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-n17.sh" "$RUN" done-notify "$AG17" >/dev/null 2>"$TMP/n17a.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-n17.sh" "$RUN" done-notify "$AG17" >/dev/null 2>"$TMP/n17a.err"
 [[ "$(alert_block_count "$ALERT_LOG17")" == "0" ]] \
   && ok || fail "N17: changes:null у workspace:direct -> skip, без пуша"
 [[ "$(jq_file "$AG17/done.json" 'd.get("pushed_at")')" == "None" ]] \
@@ -845,12 +845,12 @@ d["empty"] = False
 d["finalized"] = True
 json.dump(d, open(p, "w"), ensure_ascii=False)
 ' "$AG17"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-n17.sh" "$RUN" done-notify "$AG17" >/dev/null 2>"$TMP/n17b.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-n17.sh" "$RUN" done-notify "$AG17" >/dev/null 2>"$TMP/n17b.err"
 [[ "$(alert_block_count "$ALERT_LOG17")" == "1" ]] \
   && ok || fail "N17: после дозаписи changes -> ровно один пуш"
 [[ "$(jq_file "$AG17/done.json" 'bool(d.get("pushed_at"))')" == "True" ]] \
   && ok || fail "N17: pushed_at проставлен"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-n17.sh" "$RUN" done-notify "$AG17" >/dev/null 2>"$TMP/n17c.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-n17.sh" "$RUN" done-notify "$AG17" >/dev/null 2>"$TMP/n17c.err"
 [[ "$(alert_block_count "$ALERT_LOG17")" == "1" ]] \
   && ok || fail "N17: повторный проход не пушит второй раз"
 
@@ -869,7 +869,7 @@ json.dump(d, open(p, "w"), ensure_ascii=False)
 mk_done_envelope "$AG17B" "n17b-key"
 ALERT_LOG17B="$TMP/n17b-alert.log"
 mk_alert_ok "$ALERT_LOG17B" "$TMP/alert-ok-n17b.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-n17b.sh" "$RUN" done-notify "$AG17B" >/dev/null 2>"$TMP/n17b-a.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-n17b.sh" "$RUN" done-notify "$AG17B" >/dev/null 2>"$TMP/n17b-a.err"
 [[ "$(alert_block_count "$ALERT_LOG17B")" == "0" ]] \
   && ok || fail "N17b: changes заполнены, но finalized:false -> все равно skip, без пуша"
 [[ "$(jq_file "$AG17B/done.json" 'd.get("pushed_at")')" == "None" ]] \
@@ -881,13 +881,13 @@ d = json.load(open(p))
 d["finalized"] = True
 json.dump(d, open(p, "w"), ensure_ascii=False)
 ' "$AG17B"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-n17b.sh" "$RUN" done-notify "$AG17B" >/dev/null 2>"$TMP/n17b-b.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-n17b.sh" "$RUN" done-notify "$AG17B" >/dev/null 2>"$TMP/n17b-b.err"
 [[ "$(alert_block_count "$ALERT_LOG17B")" == "1" ]] \
   && ok || fail "N17b: finalized:true -> пуш проходит (got err: $(cat "$TMP/n17b-b.err"))"
 
 # =============================================================== N18
 echo "=== N18 (major 1): существующий агент с тем же именем, но другим project/workspace/type -> отказ, событие в его spool НЕ положено ==="
-printf '%s\n' "demoprojgit: $PROJ_GIT" >> "$CLAUDE_RC_PROJECTS_FILE"
+printf '%s\n' "demoprojgit: $PROJ_GIT" >> "$AI_RC_PROJECTS_FILE"
 
 # N18a: другой project
 PROJ18_OTHER="$TMP/proj18-other"; mkdir -p "$PROJ18_OTHER"
@@ -912,7 +912,7 @@ OUT18A=$("$RC" agent new-task --name task-tg18001 --project demoproj --text "N18
 # ослабил проверку до "просто non-zero")
 [[ "$(cat "$TMP/n18a.err")" == *"не та же задача"* ]] \
   && ok || fail "N18a: сообщение отказа - именно про несовпадение type/project/workspace (got: $(cat "$TMP/n18a.err"))"
-N18A_SPOOL_COUNT=$(ls "$CLAUDE_AGENT_SPOOL_BASE/task-tg18001"/*.json 2>/dev/null | grep -c '\.json$')
+N18A_SPOOL_COUNT=$(ls "$AI_AGENT_SPOOL_BASE/task-tg18001"/*.json 2>/dev/null | grep -c '\.json$')
 [[ "$N18A_SPOOL_COUNT" == "0" ]] && ok || fail "N18a: событие в spool НЕ положено (got $N18A_SPOOL_COUNT)"
 
 # N18b: тот же project, но другой workspace (worktree вместо none из шаблона)
@@ -935,7 +935,7 @@ OUT18B=$("$RC" agent new-task --name task-tg18002 --project demoprojgit --text "
 [[ "$RC18B" != 0 ]] && ok || fail "N18b: отказ на конфликте workspace (got $RC18B)"
 [[ "$(cat "$TMP/n18b.err")" == *"не та же задача"* ]] \
   && ok || fail "N18b: сообщение отказа - именно про несовпадение type/project/workspace (got: $(cat "$TMP/n18b.err"))"
-N18B_SPOOL_COUNT=$(ls "$CLAUDE_AGENT_SPOOL_BASE/task-tg18002"/*.json 2>/dev/null | grep -c '\.json$')
+N18B_SPOOL_COUNT=$(ls "$AI_AGENT_SPOOL_BASE/task-tg18002"/*.json 2>/dev/null | grep -c '\.json$')
 [[ "$N18B_SPOOL_COUNT" == "0" ]] && ok || fail "N18b: событие в spool НЕ положено (got $N18B_SPOOL_COUNT)"
 
 # N18c: тот же project, но другой type (mission вместо event из шаблона)
@@ -961,7 +961,7 @@ OUT18C=$("$RC" agent new-task --name task-tg18003 --project demoprojgit --text "
 # mission-агентов
 [[ "$(cat "$TMP/n18c.err")" == *"не та же задача"* ]] \
   && ok || fail "N18c: сообщение отказа - именно про несовпадение type/project/workspace, не побочный эффект (got: $(cat "$TMP/n18c.err"))"
-N18C_SPOOL_COUNT=$(ls "$CLAUDE_AGENT_SPOOL_BASE/task-tg18003"/*.json 2>/dev/null | grep -c '\.json$')
+N18C_SPOOL_COUNT=$(ls "$AI_AGENT_SPOOL_BASE/task-tg18003"/*.json 2>/dev/null | grep -c '\.json$')
 [[ "$N18C_SPOOL_COUNT" == "0" ]] && ok || fail "N18c: событие в spool НЕ положено (got $N18C_SPOOL_COUNT)"
 
 # =============================================================== N19
@@ -984,11 +984,11 @@ EOF
 # - две доставки ОДНОГО апдейта, текст всегда идентичен; разный текст на
 # одном --id упал бы в producer-идемпотентности spool-put, что не имеет
 # отношения к проверяемой здесь гонке cmd_create/mv)
-( CLAUDE_RC_TASK_TEMPLATE="$TEMPLATE19" "$RC" agent new-task \
+( AI_RC_TASK_TEMPLATE="$TEMPLATE19" "$RC" agent new-task \
     --name task-tg19001 --project demoprojgit --text "N19 race" \
     >"$TMP/n19a.out" 2>"$TMP/n19a.err" ) &
 PID19A=$!
-( CLAUDE_RC_TASK_TEMPLATE="$TEMPLATE19" "$RC" agent new-task \
+( AI_RC_TASK_TEMPLATE="$TEMPLATE19" "$RC" agent new-task \
     --name task-tg19001 --project demoprojgit --text "N19 race" \
     >"$TMP/n19b.out" 2>"$TMP/n19b.err" ) &
 PID19B=$!
@@ -996,11 +996,11 @@ wait "$PID19A"; RC19A=$?
 wait "$PID19B"; RC19B=$?
 [[ "$RC19A" == 0 && "$RC19B" == 0 ]] \
   && ok || fail "N19: оба параллельных вызова вернули 0 (got A=$RC19A B=$RC19B; $(cat "$TMP/n19a.err") / $(cat "$TMP/n19b.err"))"
-AG19="$CLAUDE_AGENTS_DIR/task-tg19001"
+AG19="$AI_AGENTS_DIR/task-tg19001"
 [[ -f "$AG19/spec.yaml" ]] && ok || fail "N19: агент создан"
 NEST19=$(find "$AG19" -maxdepth 1 -name '.new-*' 2>/dev/null | wc -l)
 [[ "$NEST19" == "0" ]] && ok || fail "N19: без вложенного .new-* внутри опубликованного каталога"
-STRAY19=$(find "$CLAUDE_AGENTS_DIR" -maxdepth 1 -name '.new-task-tg19001.*' 2>/dev/null | wc -l)
+STRAY19=$(find "$AI_AGENTS_DIR" -maxdepth 1 -name '.new-task-tg19001.*' 2>/dev/null | wc -l)
 [[ "$STRAY19" == "0" ]] && ok || fail "N19: без осиротевшего staging-каталога в реестре"
 BR19_COUNT=$(git -C "$PROJ_GIT" branch --list 'task/task-tg19001-*' | wc -l)
 [[ "$BR19_COUNT" == "1" ]] && ok || fail "N19: ровно одна ветка task/task-tg19001-* (got $BR19_COUNT)"
@@ -1008,7 +1008,7 @@ WT19_COUNT=$(git -C "$PROJ_GIT" worktree list | grep -c "task-tg19001" || true)
 [[ "$WT19_COUNT" == "1" ]] && ok || fail "N19: ровно один worktree для задачи (got $WT19_COUNT)"
 
 # =============================================================== N20
-echo "=== N20 (major 3): битая/подмененная spec.yaml -> claude-agent-done отказывает (fail-closed); неизвестный workspace -> отказ ==="
+echo "=== N20 (major 3): битая/подмененная spec.yaml -> ai-agent-done отказывает (fail-closed); неизвестный workspace -> отказ ==="
 AG20A=$(mk_worktree_agent wt20a "$PROJ_GIT")
 mk_inflight "$AG20A" "n20a-key"
 printf '%s\n' "not: [valid: yaml" >> "$AG20A/spec.yaml"
@@ -1081,7 +1081,7 @@ write_done_json "$AG23" "n23-key-not-real" "N23 summary"
 # намеренно НЕ создаем mk_done_envelope - конверта с этим ключом в inbox/done/ нет
 ALERT_LOG23="$TMP/n23-alert.log"
 mk_alert_ok "$ALERT_LOG23" "$TMP/alert-ok-n23.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-n23.sh" "$RUN" done-notify "$AG23" >/dev/null 2>"$TMP/n23.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-n23.sh" "$RUN" done-notify "$AG23" >/dev/null 2>"$TMP/n23.err"
 [[ "$(alert_block_count "$ALERT_LOG23")" == "0" ]] \
   && ok || fail "N23: без реального конверта в inbox/done - карточка не отправлена"
 [[ "$(jq_file "$AG23/done.json" 'd.get("pushed_at")')" == "None" ]] \
@@ -1106,7 +1106,7 @@ json.dump(d, open(sys.argv[1] + "/done.json", "w"), ensure_ascii=False)
 mk_done_envelope "$AG24" "n24-key"
 ALERT_LOG24="$TMP/n24-alert.log"
 mk_alert_ok "$ALERT_LOG24" "$TMP/alert-ok-n24.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-n24.sh" "$RUN" done-notify "$AG24" >/dev/null 2>"$TMP/n24.err"; RC24=$?
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-n24.sh" "$RUN" done-notify "$AG24" >/dev/null 2>"$TMP/n24.err"; RC24=$?
 [[ "$RC24" == 0 ]] && ok || fail "N24: done-notify не падает на 20000 путях (got $RC24: $(cat "$TMP/n24.err"))"
 [[ "$(alert_block_count "$ALERT_LOG24")" == "1" ]] && ok || fail "N24: доставка проходит (ровно один вызов)"
 DETAIL24=$(alert_detail "$ALERT_LOG24" 1)
@@ -1123,7 +1123,7 @@ echo "=== N25 (minor): текст задачи содержит {{project}} - п
 TEXT25='почини {{project}} и заодно {{name}} и {{goal}} в тексте'
 OUT25=$("$RC" agent new-task --name task-tg25001 --project demoproj --text "$TEXT25" 2>"$TMP/n25.err"); RC25=$?
 [[ "$RC25" == 0 ]] && ok || fail "N25: exit 0 - текст с плейсхолдерами не ломает спеку (got $RC25: $(cat "$TMP/n25.err"))"
-AG25="$CLAUDE_AGENTS_DIR/task-tg25001"
+AG25="$AI_AGENTS_DIR/task-tg25001"
 [[ "$(yaml_goal_eq "$AG25/spec.yaml" "$TEXT25")" == "True" ]] \
   && ok || fail "N25: goal идентичен исходному тексту байт-в-байт, включая {{project}}/{{name}}/{{goal}}"
 [[ "$(yaml_get "$AG25/spec.yaml" 'd.get("project")')" == "$PROJ_NONE" ]] \
@@ -1148,21 +1148,21 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 EOF
 assert "N15: ручной create event-агента (как до этапа)" 0 \
-  env CLAUDE_AGENTS_DIR="$BASE15" CLAUDE_AGENT_SPOOL_BASE="$SPOOL15" \
+  env AI_AGENTS_DIR="$BASE15" AI_AGENT_SPOOL_BASE="$SPOOL15" \
   "$RC" agent create legacy1 --spec "$LEGACY_SPEC"
 AG15="$BASE15/legacy1"
 [[ "$(jq_file "$AG15/control.json" 'd["desired"]')" == "paused" ]] && ok || fail "N15: create дает desired=paused (регресс)"
-CLAUDE_AGENTS_DIR="$BASE15" CLAUDE_AGENT_SPOOL_BASE="$SPOOL15" "$RC" agent start legacy1 >/dev/null 2>&1
-CLAUDE_AGENTS_DIR="$BASE15" CLAUDE_AGENT_SPOOL_BASE="$SPOOL15" "$RUN" spool-put legacy1 --text "n15-regular-event" >/dev/null
-CLAUDE_AGENTS_DIR="$BASE15" CLAUDE_AGENT_SPOOL_BASE="$SPOOL15" "$RUN" intake "$AG15" >/dev/null
+AI_AGENTS_DIR="$BASE15" AI_AGENT_SPOOL_BASE="$SPOOL15" "$RC" agent start legacy1 >/dev/null 2>&1
+AI_AGENTS_DIR="$BASE15" AI_AGENT_SPOOL_BASE="$SPOOL15" "$RUN" spool-put legacy1 --text "n15-regular-event" >/dev/null
+AI_AGENTS_DIR="$BASE15" AI_AGENT_SPOOL_BASE="$SPOOL15" "$RUN" intake "$AG15" >/dev/null
 K15=$(ls "$AG15/inbox/pending" 2>/dev/null | sed 's/\.json//')
-CLAUDE_AGENTS_DIR="$BASE15" CLAUDE_AGENT_SPOOL_BASE="$SPOOL15" "$RUN" step "$AG15" >/dev/null 2>"$TMP/n15.err"
+AI_AGENTS_DIR="$BASE15" AI_AGENT_SPOOL_BASE="$SPOOL15" "$RUN" step "$AG15" >/dev/null 2>"$TMP/n15.err"
 [[ -n "$K15" && -f "$AG15/inbox/done/$K15.json" ]] \
   && ok || fail "N15: событие ('/task'-эквивалент) обработано как раньше ($(cat "$TMP/n15.err"))"
 [[ ! -f "$AG15/done.json" ]] && ok || fail "N15: агент без заявки о готовности - done.json отсутствует"
 ALERT_LOG15="$TMP/n15-alert.log"
 mk_alert_ok "$ALERT_LOG15" "$TMP/alert-ok-n15.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-n15.sh" "$RUN" done-notify "$AG15" >/dev/null 2>"$TMP/n15b.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-n15.sh" "$RUN" done-notify "$AG15" >/dev/null 2>"$TMP/n15b.err"
 [[ "$(alert_log_has_done_kind "$ALERT_LOG15")" == "False" ]] \
   && ok || fail "N15: агент без done.json не порождает пуш с kind:done (посторонние тревоги планировщика типа control_invalid к этапу не относятся)"
 
@@ -1170,9 +1170,9 @@ CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-n15.sh" "$RUN" done-notify "$AG15" >/dev/n
 # V2.7b: приемка, интеграция, уборка, архив (кейсы B1-B38).
 # Контракт: docs/design-2026-07-26-v2.7b-acceptance-integration.md §9-10.
 # Написано с чистого листа по спеке (SDD, RED-фаза): bin/_rc_projects.sh,
-# ветки done-advance/done-verdict в bin/claude-agent-run, ветка kind=="done"
-# и обработка "d:"-callback в bin/claude-agent-tgbot, bin/claude-rc,
-# bin/claude-control-project-watchdog ни разу не читаны через Read за это
+# ветки done-advance/done-verdict в bin/ai-agent-run, ветка kind=="done"
+# и обработка "d:"-callback в bin/ai-agent-tgbot, bin/ai-rc,
+# bin/ai-control-project-watchdog ни разу не читаны через Read за это
 # дополнение - только сама спека V2.7b и уже установленный (в N16/T14 выше,
 # в tests/test-agent-tg-cards.sh) публичный контракт
 # route_callback(data) -> (kind, id, arg) и authorized_cb(update, wl) -> bool.
@@ -1186,20 +1186,20 @@ CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-n15.sh" "$RUN" done-notify "$AG15" >/dev/n
 #   которому свим-требование §9.1 предписывает идти через route_callback.
 # - только B6 (swim-требование §9.1) обязан идти через authorized_cb+
 #   route_callback; B7-B11 (гейт identity, no-op, устаревание, комментарий)
-#   бьют по claude-agent-run done-verdict напрямую - спека называет его
+#   бьют по ai-agent-run done-verdict напрямую - спека называет его
 #   единственным владельцем записи вердикта, и swim-список явно требует
 #   реальный route_callback только для кнопки приемки.
 # - "done-verdict" не имеет заявленного --by в usage-строке §3.3 - verdict_by
 #   не проверяется на конкретное значение, только на непустоту после успеха.
 # - archive/tombstones - "под одним корнем" с agents/ (§6.2); корень принят
-#   как dirname(CLAUDE_AGENTS_DIR) (т.е. $TMP/archive, $TMP/tombstones).
+#   как dirname(AI_AGENTS_DIR) (т.е. $TMP/archive, $TMP/tombstones).
 # - "бот нигде не пишет done.json" (B10) проверено как ПОЛНОЕ отсутствие
-#   строки "done.json" в bin/claude-agent-tgbot - прочитано буквально
+#   строки "done.json" в bin/ai-agent-tgbot - прочитано буквально
 #   ("нигде"), а не как поиск конкретно open(...,"w").
 # - B35 (бульхед) проверен как два независимых последовательных вызова
 #   `done-advance` (агент A битый, агент B здоровый) в одном процессе, а не
-#   через полный `claude-agent-reconciler --once` - глобальный проход по
-#   ВСЕМ агентам общего CLAUDE_AGENTS_DIR рискует зацепить агентов N-серии
+#   через полный `ai-agent-reconciler --once` - глобальный проход по
+#   ВСЕМ агентам общего AI_AGENTS_DIR рискует зацепить агентов N-серии
 #   выше по файлу; спека называет владельцем именно однoagентную
 #   `done-advance <agent_dir>`, реконсилер лишь "зовет ее безусловно на
 #   каждом проходе" - сам глобальный цикл вне контракта, проверяемого тут.
@@ -1215,20 +1215,20 @@ rc_project_lessons_path() { ( . "$RC_PROJECTS_HELPER" 2>/dev/null; project_lesso
 rc_project_lessons_relpath() { ( . "$RC_PROJECTS_HELPER" 2>/dev/null; project_lessons_relpath "$1" 2>/dev/null ); } # <name> -> relpath (или пусто)
 
 register_flat_project() { # <name> <path> -> дописывает форму A (плоский скаляр) в projects.yaml
-  printf '%s: %s\n' "$1" "$2" >> "$CLAUDE_RC_PROJECTS_FILE"
+  printf '%s: %s\n' "$1" "$2" >> "$AI_RC_PROJECTS_FILE"
 }
 register_obj_project() { # <name> <path> [integrate] -> дописывает форму B (объект) в projects.yaml
   local name="$1" path="$2" integ="${3:-}"
   { printf '%s:\n  path: %s\n' "$name" "$path"
     [[ -n "$integ" ]] && printf '  integrate: %s\n' "$integ"
-  } >> "$CLAUDE_RC_PROJECTS_FILE"
+  } >> "$AI_RC_PROJECTS_FILE"
 }
 register_obj_project_lessons() { # <name> <path> <integrate> <lessons-rel> -> форма B с lessons (V2.10 T5, аналог lessons.sh)
   local name="$1" path="$2" integ="$3" lessons="$4"
   { printf '%s:\n  path: %s\n' "$name" "$path"
     [[ -n "$integ" ]] && printf '  integrate: %s\n' "$integ"
     [[ -n "$lessons" ]] && printf '  lessons: %s\n' "$lessons"
-  } >> "$CLAUDE_RC_PROJECTS_FILE"
+  } >> "$AI_RC_PROJECTS_FILE"
 }
 rewrite_project_integrate() { # <name> <new-integrate> -> точечно правит .integrate существующей объектной записи (без дублей ключей)
   python3 -c '
@@ -1237,7 +1237,7 @@ p, name, integ = sys.argv[1], sys.argv[2], sys.argv[3]
 d = yaml.safe_load(open(p)) or {}
 d[name]["integrate"] = integ
 yaml.safe_dump(d, open(p, "w"), allow_unicode=True, sort_keys=False)
-' "$CLAUDE_RC_PROJECTS_FILE" "$1" "$2"
+' "$AI_RC_PROJECTS_FILE" "$1" "$2"
 }
 rewrite_project_path() { # <name> <new-path> -> точечно правит .path существующей объектной записи (V2.10 T10, дрейф реестра)
   python3 -c '
@@ -1246,7 +1246,7 @@ p, name, newpath = sys.argv[1], sys.argv[2], sys.argv[3]
 d = yaml.safe_load(open(p)) or {}
 d[name]["path"] = newpath
 yaml.safe_dump(d, open(p, "w"), allow_unicode=True, sort_keys=False)
-' "$CLAUDE_RC_PROJECTS_FILE" "$1" "$2"
+' "$AI_RC_PROJECTS_FILE" "$1" "$2"
 }
 remove_project() { # <name> -> убирает запись целиком из реестра (V2.10 T10, "имя пропало из реестра")
   python3 -c '
@@ -1255,7 +1255,7 @@ p, name = sys.argv[1], sys.argv[2]
 d = yaml.safe_load(open(p)) or {}
 d.pop(name, None)
 yaml.safe_dump(d, open(p, "w"), allow_unicode=True, sort_keys=False)
-' "$CLAUDE_RC_PROJECTS_FILE" "$1"
+' "$AI_RC_PROJECTS_FILE" "$1"
 }
 mk_git_project() { # <dir> -> git-репозиторий с веткой main и одним коммитом (f.txt)
   local dir="$1"
@@ -1317,7 +1317,7 @@ EOF
   "$RC" agent create "$name" --spec "$specfile" >/dev/null 2>"$TMP/create-created-$name.err"
   local rc=$?
   [[ "$rc" == 0 ]] && ok || fail "fixture: create $name (workspace:$ws, реальный create) ($(cat "$TMP/create-created-$name.err"))"
-  echo "$CLAUDE_AGENTS_DIR/$name"
+  echo "$AI_AGENTS_DIR/$name"
 }
 mk_gh_mock() { # <bindir> <log> [existing-pr-url] -> создает $bindir/gh (реальный внешний бинарь-подмена, git не мокается)
   # INV-TASK-39: URL-only fixture противоречит контракту принятого head.
@@ -1381,14 +1381,14 @@ def main():
 
 main()
 PY
-b6_dispatch() { python3 "$B6_HELPER" "$HERE/../bin/claude-agent-tgbot" "$1" "$2"; } # <from-id> <callback-data>
+b6_dispatch() { python3 "$B6_HELPER" "$HERE/../bin/ai-agent-tgbot" "$1" "$2"; } # <from-id> <callback-data>
 
 # =============================================================== B1
 echo "=== B1: projects.yaml форма A (плоская) резолвится как раньше ==="
 [[ "$(rc_project_path demoproj)" == "$PROJ_NONE" ]] && ok || fail "B1: project_path резолвит форму A (got: $(rc_project_path demoproj))"
 OUTB1=$("$RC" agent new-task --name task-tgb001 --project demoproj --text "B1 regression" 2>"$TMP/b1.err"); RCB1=$?
 [[ "$RCB1" == 0 ]] && ok || fail "B1: agent new-task с формой A все еще работает (got $RCB1: $(cat "$TMP/b1.err"))"
-[[ "$(yaml_get "$CLAUDE_AGENTS_DIR/task-tgb001/spec.yaml" 'd.get("project")')" == "$PROJ_NONE" ]] \
+[[ "$(yaml_get "$AI_AGENTS_DIR/task-tgb001/spec.yaml" 'd.get("project")')" == "$PROJ_NONE" ]] \
   && ok || fail "B1: project в spec.yaml == путь, не мусор"
 
 # =============================================================== B2
@@ -1398,7 +1398,7 @@ register_obj_project projb2 "$PROJ_B2" pr
 [[ "$(rc_project_path projb2)" == "$PROJ_B2" ]] && ok || fail "B2: project_path резолвит форму B (got: $(rc_project_path projb2))"
 OUTB2=$("$RC" agent new-task --name task-tgb002 --project projb2 --text "B2 obj-form" 2>"$TMP/b2.err"); RCB2=$?
 [[ "$RCB2" == 0 ]] && ok || fail "B2: new-task с project-объектом проходит (got $RCB2: $(cat "$TMP/b2.err"))"
-PB2=$(yaml_get "$CLAUDE_AGENTS_DIR/task-tgb002/spec.yaml" 'd.get("project")')
+PB2=$(yaml_get "$AI_AGENTS_DIR/task-tgb002/spec.yaml" 'd.get("project")')
 [[ "$PB2" == "$PROJ_B2" ]] && ok || fail "B2: project в spec.yaml - чистый путь, не сериализованная мапа (got: $PB2)"
 
 # =============================================================== B3
@@ -1450,7 +1450,7 @@ AGB6=$(mk_requested_worktree wtb6 "$PROJ_B6" b6-key "B6 summary")
 COMMITB6=$(jq_file "$AGB6/done.json" 'd.get("commit_sha")')
 BRANCH_B6=$(jq_file "$AGB6/done.json" 'd.get("branch")')
 SHA8_B6="${COMMITB6:0:8}"
-DATA_B6=$(python3 - "$HERE/../bin/claude-agent-tgbot" wtb6 projb6 "B6 summary" \
+DATA_B6=$(python3 - "$HERE/../bin/ai-agent-tgbot" wtb6 projb6 "B6 summary" \
   "$COMMITB6" "$BRANCH_B6" <<'PY'
 import importlib.util, json, sys
 from importlib.machinery import SourceFileLoader
@@ -1474,7 +1474,7 @@ AGENT_B6=$(jq_str "$DISPATCH_B6" 'd["route"][1]')
 SHA_B6=$(jq_str "$DISPATCH_B6" 'd["route"][2]')
 [[ "$AGENT_B6" == "wtb6" ]] && ok || fail "B6: route_callback вернул имя агента (got: $DISPATCH_B6)"
 [[ "$SHA_B6" == "$SHA8_B6" ]] && ok || fail "B6: route_callback вернул sha8 (got: $DISPATCH_B6)"
-CALLS_B6=$(python3 - "$HERE/../bin/claude-agent-tgbot" "$AGENT_B6" "$SHA_B6" <<'PY'
+CALLS_B6=$(python3 - "$HERE/../bin/ai-agent-tgbot" "$AGENT_B6" "$SHA_B6" <<'PY'
 import importlib.util, json, sys
 from importlib.machinery import SourceFileLoader
 path, agent, sha8 = sys.argv[1:4]
@@ -1553,7 +1553,7 @@ COMMITB9B=$(jq_file "$AGB9/done.json" 'd.get("commit_sha")')
 # и ищет "done.json" в исходном тексте именно ЭТОГО вызова, а не соседней
 # строки - многострочный обход больше не проходит незамеченным.
 echo "=== B10 (структурный, AST): бот не открывает done.json ни на чтение, ни на запись ==="
-CNT_B10=$(python3 - "$HERE/../bin/claude-agent-tgbot" 2>"$TMP/b10-hits.err" <<'PY'
+CNT_B10=$(python3 - "$HERE/../bin/ai-agent-tgbot" 2>"$TMP/b10-hits.err" <<'PY'
 import ast, sys
 path = sys.argv[1]
 src = open(path).read()
@@ -1576,7 +1576,7 @@ for ln, seg in hits:
 PY
 )
 CNT_B10="${CNT_B10:-0}"
-[[ "$CNT_B10" == "0" ]] && ok || fail "B10: bin/claude-agent-tgbot обращается к done.json файлово, а не только упоминает его (got $CNT_B10: $(cat "$TMP/b10-hits.err"))"
+[[ "$CNT_B10" == "0" ]] && ok || fail "B10: bin/ai-agent-tgbot обращается к done.json файлово, а не только упоминает его (got $CNT_B10: $(cat "$TMP/b10-hits.err"))"
 
 # =============================================================== B11
 # (аудит "тестовый барьер" дефект 12): reply-маршрут проверяется РЕАЛЬНЫМИ
@@ -1591,7 +1591,7 @@ COMMITB11=$(jq_file "$AGB11/done.json" 'd.get("commit_sha")')
 SHA8_B11="${COMMITB11:0:8}"
 SENT_B11="$TMP/sent-b11.json"
 python3 -c 'import json; json.dump({}, open("'"$SENT_B11"'", "w"))'
-OUT_B11=$(CLAUDE_AGENT_TG_SENT_MAP="$SENT_B11" python3 - "$HERE/../bin/claude-agent-tgbot" wtb11 "$SHA8_B11" <<'PY'
+OUT_B11=$(AI_AGENT_TG_SENT_MAP="$SENT_B11" python3 - "$HERE/../bin/ai-agent-tgbot" wtb11 "$SHA8_B11" <<'PY'
 import importlib.util, json, sys
 from importlib.machinery import SourceFileLoader
 path, agent, sha8 = sys.argv[1:4]
@@ -1983,23 +1983,23 @@ d["integrated_at"] = "2026-02-01T00:01:00Z"; d["cleaned_at"] = "2026-02-01T00:02
 "$RUN" done-advance "$AGB28" >/dev/null 2>"$TMP/b28.err"; RCB28=$?
 [[ "$RCB28" == 0 ]] && ok || fail "B28: архив проходит (got $RCB28: $(cat "$TMP/b28.err"))"
 [[ ! -d "$AGB28" ]] && ok || fail "B28: agents/evtb28 отсутствует"
-ARCHIVE_ROOT_B28="$(dirname "$CLAUDE_AGENTS_DIR")/archive"
+ARCHIVE_ROOT_B28="$(dirname "$AI_AGENTS_DIR")/archive"
 ARCHDIR_B28=$(find "$ARCHIVE_ROOT_B28" -maxdepth 1 -name 'evtb28-*' 2>/dev/null | head -1)
 [[ -n "$ARCHDIR_B28" && -d "$ARCHDIR_B28" ]] && ok || fail "B28: archive/evtb28-<ts> создан (root: $ARCHIVE_ROOT_B28)"
 [[ -f "$ARCHDIR_B28/done.json" ]] && ok || fail "B28: содержимое агента реально перенесено (done.json на месте)"
 [[ "$(jq_file "$ARCHDIR_B28/done.json" 'bool(d.get("archived_at"))')" == "True" ]] && ok || fail "B28: archived_at заполнен"
-TOMBSTONE_B28="$(dirname "$CLAUDE_AGENTS_DIR")/tombstones/evtb28.json"
+TOMBSTONE_B28="$(dirname "$AI_AGENTS_DIR")/tombstones/evtb28.json"
 [[ -f "$TOMBSTONE_B28" ]] && ok || fail "B28: надгробие tombstones/evtb28.json создано (path: $TOMBSTONE_B28)"
 
 # =============================================================== B29
 echo "=== B29: /new с именем из надгробия - не заводит дубль, отвечает что задача уже завершена ==="
-TOMB_ROOT_B29="$(dirname "$CLAUDE_AGENTS_DIR")/tombstones"; mkdir -p "$TOMB_ROOT_B29"
+TOMB_ROOT_B29="$(dirname "$AI_AGENTS_DIR")/tombstones"; mkdir -p "$TOMB_ROOT_B29"
 printf '{"name":"task-tgb029","archived_at":"2026-02-01T00:03:00Z","archive_path":"archive/task-tgb029-2026-02-01T00:03:00Z"}\n' \
   > "$TOMB_ROOT_B29/task-tgb029.json"
 OUTB29=$("$RC" agent new-task --name task-tgb029 --project demoproj --text "B29 attempt" 2>"$TMP/b29.err"); RCB29=$?
 [[ "$RCB29" == 0 ]] && ok || fail "B29: редоставка на надгробие - не ошибка, идемпотентный ответ (got $RCB29: $(cat "$TMP/b29.err"))"
 [[ "$OUTB29" == *"заверш"* ]] && ok || fail "B29: ответ сообщает, что задача уже завершена (got: $OUTB29)"
-[[ ! -e "$CLAUDE_AGENTS_DIR/task-tgb029" ]] && ok || fail "B29: новый агент НЕ создан поверх надгробия"
+[[ ! -e "$AI_AGENTS_DIR/task-tgb029" ]] && ok || fail "B29: новый агент НЕ создан поверх надгробия"
 
 # =============================================================== B30
 echo "=== B30: reject - история дописана, событие-доработка со комментарием в spool, done.json снят ==="
@@ -2031,7 +2031,7 @@ print(found)
 SPOOL_HAS_B30=$(python3 -c '
 import json, glob
 found = False
-for f in glob.glob("'"$CLAUDE_AGENT_SPOOL_BASE"'/evtb30/*.json"):
+for f in glob.glob("'"$AI_AGENT_SPOOL_BASE"'/evtb30/*.json"):
     d = json.load(open(f))
     if "B30 нужно доделать X" in json.dumps(d, ensure_ascii=False): found = True
 print(found)
@@ -2076,7 +2076,7 @@ open("'"$AGB32"'/done.history.jsonl", "w").write(json.dumps(d, ensure_ascii=Fals
 [[ ! -f "$AGB32/done.json" ]] && ok || fail "B32: done.json снят (шаг 3 выполнен)"
 HISTLINES_B32=$(wc -l < "$AGB32/done.history.jsonl" | tr -d ' ')
 [[ "$HISTLINES_B32" == "1" ]] && ok || fail "B32: история НЕ задвоилась (got $HISTLINES_B32 строк)"
-SPOOLCNT_B32=$(ls "$CLAUDE_AGENT_SPOOL_BASE/evtb32"/*.json 2>/dev/null | grep -c '\.json$')
+SPOOLCNT_B32=$(ls "$AI_AGENT_SPOOL_BASE/evtb32"/*.json 2>/dev/null | grep -c '\.json$')
 [[ "$SPOOLCNT_B32" == "1" ]] && ok || fail "B32: событие в spool НЕ задвоилось (got $SPOOLCNT_B32)"
 
 # =============================================================== B33
@@ -2229,7 +2229,7 @@ d["integrate_mode"] = "skipped"; d["integrate_ref"] = None
 d["phase_attempts"] = 0; d["phase_error"] = None
 d["integrated_at"] = "2026-02-01T00:01:00Z"; d["cleaned_at"] = "2026-02-01T00:02:00Z"
 '
-TOMB_B34D="$(dirname "$CLAUDE_AGENTS_DIR")/tombstones/evtb34d.json"
+TOMB_B34D="$(dirname "$AI_AGENTS_DIR")/tombstones/evtb34d.json"
 [[ ! -f "$TOMB_B34D" ]] && ok || fail "B34d: fixture - надгробия еще нет (имитация краха до его записи)"
 "$RUN" done-advance "$AGB34D" >/dev/null 2>"$TMP/b34d.err"; RCB34D=$?
 [[ "$RCB34D" == 0 ]] && ok || fail "B34d: ретрай доигрывает (got $RCB34D: $(cat "$TMP/b34d.err"))"
@@ -2253,15 +2253,15 @@ d["integrate_mode"] = "skipped"; d["integrate_ref"] = None
 d["phase_attempts"] = 0; d["phase_error"] = None
 d["integrated_at"] = "2026-02-01T00:01:00Z"; d["cleaned_at"] = "2026-02-01T00:02:00Z"
 '
-TOMB_ROOT_B34E="$(dirname "$CLAUDE_AGENTS_DIR")/tombstones"; mkdir -p "$TOMB_ROOT_B34E"
-DEST_B34E="$(dirname "$CLAUDE_AGENTS_DIR")/archive/evtb34e-2026-02-06T00:00:00Z"
+TOMB_ROOT_B34E="$(dirname "$AI_AGENTS_DIR")/tombstones"; mkdir -p "$TOMB_ROOT_B34E"
+DEST_B34E="$(dirname "$AI_AGENTS_DIR")/archive/evtb34e-2026-02-06T00:00:00Z"
 printf '{"name":"evtb34e","archived_at":"2026-02-06T00:00:00Z","archived_to":"%s"}\n' \
   "$DEST_B34E" > "$TOMB_ROOT_B34E/evtb34e.json"
 [[ -d "$AGB34E" ]] && ok || fail "B34e: fixture - agents/evtb34e еще на месте (имитация краха до rename)"
 "$RUN" done-advance "$AGB34E" >/dev/null 2>"$TMP/b34e.err"; RCB34E=$?
 [[ "$RCB34E" == 0 ]] && ok || fail "B34e: ретрай доигрывает rename (got $RCB34E: $(cat "$TMP/b34e.err"))"
 [[ ! -d "$AGB34E" ]] && ok || fail "B34e: agents/evtb34e отсутствует (rename выполнен ретраем)"
-CNT_ARCHDIRS_B34E=$(find "$(dirname "$CLAUDE_AGENTS_DIR")/archive" -maxdepth 1 -name 'evtb34e-*' 2>/dev/null | wc -l | tr -d ' ')
+CNT_ARCHDIRS_B34E=$(find "$(dirname "$AI_AGENTS_DIR")/archive" -maxdepth 1 -name 'evtb34e-*' 2>/dev/null | wc -l | tr -d ' ')
 [[ "$CNT_ARCHDIRS_B34E" == "1" ]] && ok || fail "B34e: ровно один archive/-каталог (got $CNT_ARCHDIRS_B34E - надгробие не задвоило rename)"
 
 # --- B34f: revise-шаги - история дописана (шаг 1), события в spool еще нет
@@ -2283,7 +2283,7 @@ import json
 d = json.load(open("'"$AGB34F"'/done.json"))
 open("'"$AGB34F"'/done.history.jsonl", "w").write(json.dumps(d, ensure_ascii=False) + "\n")
 '
-spool_files_b34f_pre=("$CLAUDE_AGENT_SPOOL_BASE/evtb34f"/*.json)
+spool_files_b34f_pre=("$AI_AGENT_SPOOL_BASE/evtb34f"/*.json)
 SPOOLCNT_B34F_PRE=${#spool_files_b34f_pre[@]}
 [[ "${SPOOLCNT_B34F_PRE:-0}" == "0" ]] \
   && ok || fail "B34f: fixture - событие в spool еще не положено (имитация краха до шага 2)"
@@ -2292,13 +2292,13 @@ SPOOLCNT_B34F_PRE=${#spool_files_b34f_pre[@]}
 [[ ! -f "$AGB34F/done.json" ]] && ok || fail "B34f: done.json снят (шаг 3 выполнен)"
 HISTLINES_B34F=$(wc -l < "$AGB34F/done.history.jsonl" | tr -d ' ')
 [[ "$HISTLINES_B34F" == "1" ]] && ok || fail "B34f: история НЕ задвоилась (got $HISTLINES_B34F строк)"
-spool_files_b34f=("$CLAUDE_AGENT_SPOOL_BASE/evtb34f"/*.json)
+spool_files_b34f=("$AI_AGENT_SPOOL_BASE/evtb34f"/*.json)
 SPOOLCNT_B34F=${#spool_files_b34f[@]}
 [[ "$SPOOLCNT_B34F" == "1" ]] && ok || fail "B34f: событие-доработка положено в spool ровно один раз (got $SPOOLCNT_B34F)"
 
 # =============================================================== B35
 # (аудит "тестовый барьер" дефект 11): реконсилер обязан РЕАЛЬНО запускаться
-# (`claude-agent-reconciler --once`), а не имитироваться двумя независимыми
+# (`ai-agent-reconciler --once`), а не имитироваться двумя независимыми
 # CLI-вызовами done-advance - иначе бульхед-свойство самого прохода (`for
 # dir in ...; ... done-advance ... || true`) не проверяется вообще: две
 # отдельные команды и так независимы друг от друга безо всякого || true.
@@ -2309,15 +2309,15 @@ PROJA_B35="$TMP/proj-b35a"; mkdir -p "$PROJA_B35"; mk_git_project "$PROJA_B35"
 PROJB_B35="$TMP/proj-b35b"; mkdir -p "$PROJB_B35"; mk_git_project "$PROJB_B35"
 register_flat_project projb35a "$PROJA_B35"
 register_flat_project projb35b "$PROJB_B35"
-AGA_B35=$(CLAUDE_AGENTS_DIR="$BASE_B35" mk_worktree_agent agenta "$PROJA_B35")
+AGA_B35=$(AI_AGENTS_DIR="$BASE_B35" mk_worktree_agent agenta "$PROJA_B35")
 ( cd "$AGA_B35/work" && echo x > x.txt && git add x.txt && git -c user.email=t@t -c user.name=t commit -qm x )
 echo 'not valid json {{{' > "$AGA_B35/done.json"
-AGB_B35=$(CLAUDE_AGENTS_DIR="$BASE_B35" mk_worktree_agent agentb "$PROJB_B35")
+AGB_B35=$(AI_AGENTS_DIR="$BASE_B35" mk_worktree_agent agentb "$PROJB_B35")
 ( cd "$AGB_B35/work" && echo y > y.txt && git add y.txt && git -c user.email=t@t -c user.name=t commit -qm y )
 mk_inflight "$AGB_B35" "b35b-key"
 call_done "$AGB_B35" "b35b-key" --summary "B35b summary" >/dev/null 2>"$TMP/b35b-done.err"
 accept_agent "$AGB_B35"
-CLAUDE_AGENTS_DIR="$BASE_B35" CLAUDE_RECONCILER_DIR="$RCDIR_B35" \
+AI_AGENTS_DIR="$BASE_B35" AI_RECONCILER_DIR="$RCDIR_B35" \
   "$RECON" --once >/dev/null 2>"$TMP/b35-recon.err"; RCB35=$?
 [[ "$RCB35" == 0 ]] && ok || fail "B35: реальный проход реконсилера завершается штатно несмотря на битого агента A (got $RCB35: $(cat "$TMP/b35-recon.err"))"
 [[ "$(jq_file "$AGA_B35/control.json" 'd.get("attention") is not None')" == "True" ]] && ok || fail "B35: агент A получил attention (отказ его фазы не потерян)"
@@ -2329,9 +2329,9 @@ BASE_B36="$TMP/agents-b36"; mkdir -p "$BASE_B36"
 RCDIR_B36="$TMP/reconciler-b36"; mkdir -p "$RCDIR_B36"
 PROJ_B36="$TMP/proj-b36"; mkdir -p "$PROJ_B36"
 mk_git_project "$PROJ_B36"
-AGB36=$(CLAUDE_AGENTS_DIR="$BASE_B36" mk_worktree_agent wtb36 "$PROJ_B36")
+AGB36=$(AI_AGENTS_DIR="$BASE_B36" mk_worktree_agent wtb36 "$PROJ_B36")
 echo 'not valid json {{{' > "$AGB36/done.json"
-CLAUDE_AGENTS_DIR="$BASE_B36" CLAUDE_RECONCILER_DIR="$RCDIR_B36" \
+AI_AGENTS_DIR="$BASE_B36" AI_RECONCILER_DIR="$RCDIR_B36" \
   "$RECON" --once >/dev/null 2>"$TMP/b36.err"; RCB36=$?
 [[ "$RCB36" == 0 ]] && ok || fail "B36: реальный проход реконсилера завершается штатно на битом done.json (got $RCB36: $(cat "$TMP/b36.err"))"
 [[ "$(jq_file "$AGB36/control.json" 'd.get("attention") is not None')" == "True" ]] && ok || fail "B36: attention выставлен на агенте (проход продолжился, не исключение наружу)"
@@ -2357,8 +2357,8 @@ AGB38=$(mk_requested_worktree wtb38 "$PROJ_B38" b38-key "B38 summary")
 accept_agent "$AGB38"
 ALERT_LOG_B38="$TMP/b38-alert.log"
 mk_alert_ok "$ALERT_LOG_B38" "$TMP/alert-ok-b38.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-b38.sh" "$RUN" done-advance "$AGB38" >/dev/null 2>"$TMP/b38a.err"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-b38.sh" "$RUN" done-advance "$AGB38" >/dev/null 2>"$TMP/b38b.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-b38.sh" "$RUN" done-advance "$AGB38" >/dev/null 2>"$TMP/b38a.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-b38.sh" "$RUN" done-advance "$AGB38" >/dev/null 2>"$TMP/b38b.err"
 [[ "$(alert_block_count "$ALERT_LOG_B38")" == "1" ]] \
   && ok || fail "B38: одинаковая ошибка ('integrate: bogus') не шлет вторую карточку подряд (got $(alert_block_count "$ALERT_LOG_B38"))"
 rewrite_project_integrate projb38 merge
@@ -2369,7 +2369,7 @@ d = json.load(open(p))
 d.pop("mission_base_branch", None)
 json.dump(d, open(p, "w"), ensure_ascii=False)
 ' "$AGB38"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-b38.sh" "$RUN" done-advance "$AGB38" >/dev/null 2>"$TMP/b38c.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-b38.sh" "$RUN" done-advance "$AGB38" >/dev/null 2>"$TMP/b38c.err"
 [[ "$(alert_block_count "$ALERT_LOG_B38")" == "2" ]] \
   && ok || fail "B38: смена подписи ошибки (integrate:bogus -> нет mission_base_branch) шлет карточку заново (got $(alert_block_count "$ALERT_LOG_B38"))"
 
@@ -2425,12 +2425,12 @@ AGB40=$(mk_requested_worktree wtb40 "$PROJ_B40" b40-key "B40 summary")
 accept_agent "$AGB40"
 ALERT_LOG_B40_FAIL="$TMP/b40-alert-fail.log"
 mk_alert_fail "$ALERT_LOG_B40_FAIL" "$TMP/alert-fail-b40.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-fail-b40.sh" "$RUN" done-advance "$AGB40" >/dev/null 2>"$TMP/b40a.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-fail-b40.sh" "$RUN" done-advance "$AGB40" >/dev/null 2>"$TMP/b40a.err"
 [[ "$(alert_block_count "$ALERT_LOG_B40_FAIL")" == "1" ]] \
   && ok || fail "B40: fixture - первая (неудачная) попытка доставки все же была предпринята"
 ALERT_LOG_B40_OK="$TMP/b40-alert-ok.log"
 mk_alert_ok "$ALERT_LOG_B40_OK" "$TMP/alert-ok-b40.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-b40.sh" "$RUN" done-advance "$AGB40" >/dev/null 2>"$TMP/b40b.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-b40.sh" "$RUN" done-advance "$AGB40" >/dev/null 2>"$TMP/b40b.err"
 [[ "$(alert_block_count "$ALERT_LOG_B40_OK")" == "1" ]] \
   && ok || fail "B40: та же ошибка ('integrate: bogus') повторно уведомляет, раз предыдущая доставка не подтверждена (got $(alert_block_count "$ALERT_LOG_B40_OK"))"
 
@@ -2439,12 +2439,12 @@ echo "=== B41: ошибка записи надгробия - отказ фаз�
 # два уровня вложенности обязательны: _phase_archive поднимается от
 # agent_dir на ДВА уровня ("..", "..") к корню archive/tombstones - один
 # уровень (как у "$TMP/agents-b41") дал бы тот же "$TMP", что и глобальный
-# CLAUDE_AGENTS_DIR="$TMP/agents", и rm/файл ниже задел бы tombstones
+# AI_AGENTS_DIR="$TMP/agents", и rm/файл ниже задел бы tombstones
 # остальных кейсов этого файла.
 BASE_B41="$TMP/b41root/agents"; mkdir -p "$BASE_B41"
 PROJ_B41="$TMP/proj-b41"; mkdir -p "$PROJ_B41"
-AGB41=$(CLAUDE_AGENTS_DIR="$BASE_B41" mk_created_none_agent evtb41 "$PROJ_B41" none)
-CLAUDE_AGENTS_DIR="$BASE_B41" "$RC" agent stop evtb41 >/dev/null 2>"$TMP/b41-stop.err"
+AGB41=$(AI_AGENTS_DIR="$BASE_B41" mk_created_none_agent evtb41 "$PROJ_B41" none)
+AI_AGENTS_DIR="$BASE_B41" "$RC" agent stop evtb41 >/dev/null 2>"$TMP/b41-stop.err"
 write_done_json "$AGB41" "b41-key" "B41 summary"
 set_done_field "$AGB41" '
 d["state"] = "cleaned"
@@ -2458,12 +2458,12 @@ d["integrated_at"] = "2026-02-01T00:01:00Z"; d["cleaned_at"] = "2026-02-01T00:02
 # (FileExistsError) и надгробие не записалось, не задев tombstones других кейсов
 TOMB_ROOT_B41="$(dirname "$BASE_B41")/tombstones"
 : > "$TOMB_ROOT_B41"
-CLAUDE_AGENTS_DIR="$BASE_B41" "$RUN" done-advance "$AGB41" >/dev/null 2>"$TMP/b41.err"; RCB41=$?
+AI_AGENTS_DIR="$BASE_B41" "$RUN" done-advance "$AGB41" >/dev/null 2>"$TMP/b41.err"; RCB41=$?
 [[ "$RCB41" == 3 ]] && ok || fail "B41: ошибка записи надгробия -> exit 3, не проглоченное исключение (got $RCB41: $(cat "$TMP/b41.err"))"
 [[ -d "$AGB41" ]] && ok || fail "B41: агент НЕ переименован в архив (rename после надгробия не выполнялся)"
 [[ "$(jq_file "$AGB41/control.json" 'd.get("attention") is not None')" == "True" ]] && ok || fail "B41: attention выставлен"
 rm -f "$TOMB_ROOT_B41"; mkdir -p "$TOMB_ROOT_B41"
-CLAUDE_AGENTS_DIR="$BASE_B41" "$RUN" done-advance "$AGB41" >/dev/null 2>"$TMP/b41b.err"; RCB41B=$?
+AI_AGENTS_DIR="$BASE_B41" "$RUN" done-advance "$AGB41" >/dev/null 2>"$TMP/b41b.err"; RCB41B=$?
 [[ "$RCB41B" == 0 ]] && ok || fail "B41: после починки каталога тик доигрывает (got $RCB41B: $(cat "$TMP/b41b.err"))"
 [[ ! -d "$AGB41" ]] && ok || fail "B41: агент архивирован после починки"
 # (аудит минор 11) успешный ретрай обязан снять И attention, И phase_error,
@@ -2480,10 +2480,10 @@ ARCHDIR_B41=$(find "$ARCHIVE_ROOT_B41" -maxdepth 1 -name 'evtb41-*' 2>/dev/null 
 
 # =============================================================== B42 (структурный, блокер 1 TOCTOU)
 echo "=== B42 (структурный): проверка надгробия в new-task идет ПОСЛЕ взятия пер-именного лока (TOCTOU) ==="
-# shellcheck disable=SC2016  # шаблоны grep - буквальный текст исходника claude-rc-agent, не shell-переменные
-LOCK_LINE_B42=$(grep -n 'flock -x "\$lockfd"' "$HERE/../bin/claude-rc-agent" | head -1 | cut -d: -f1)
+# shellcheck disable=SC2016  # шаблоны grep - буквальный текст исходника ai-rc-agent, не shell-переменные
+LOCK_LINE_B42=$(grep -n 'flock -x "\$lockfd"' "$HERE/../bin/ai-rc-agent" | head -1 | cut -d: -f1)
 # shellcheck disable=SC2016
-TOMB_LINE_B42=$(grep -n 'tomb_root/\$name\.json' "$HERE/../bin/claude-rc-agent" | grep -v 'local tomb_root' | head -1 | cut -d: -f1)
+TOMB_LINE_B42=$(grep -n 'tomb_root/\$name\.json' "$HERE/../bin/ai-rc-agent" | grep -v 'local tomb_root' | head -1 | cut -d: -f1)
 [[ -n "$LOCK_LINE_B42" && -n "$TOMB_LINE_B42" && "$TOMB_LINE_B42" -gt "$LOCK_LINE_B42" ]] \
   && ok || fail "B42: надгробие проверяется ПОСЛЕ flock (lock@$LOCK_LINE_B42, tomb-check@$TOMB_LINE_B42)"
 
@@ -2530,7 +2530,7 @@ BRANCH_B44=$(jq_file "$AGB44/done.json" 'd.get("branch")')
 accept_agent "$AGB44"
 GHBIN_B44="$TMP/ghbin-b44"; GHLOG_B44="$TMP/b44-gh.log"
 mk_gh_mock "$GHBIN_B44" "$GHLOG_B44"
-RESULT_B44=$(PATH="$GHBIN_B44:$PATH" python3 - "$HERE/../bin/claude-agent-run" "$AGB44" "$AGB44/work" <<'PY'
+RESULT_B44=$(PATH="$GHBIN_B44:$PATH" python3 - "$HERE/../bin/ai-agent-run" "$AGB44" "$AGB44/work" <<'PY'
 import importlib.util, json, subprocess, sys
 from importlib.machinery import SourceFileLoader
 path, agent_dir, work_dir = sys.argv[1:4]
@@ -2576,7 +2576,7 @@ accept_agent "$AGB45"
 # projects.yaml без строки projb45, имитируя переименование/удаление проекта
 python3 -c '
 import yaml
-p = "'"$CLAUDE_RC_PROJECTS_FILE"'"
+p = "'"$AI_RC_PROJECTS_FILE"'"
 d = yaml.safe_load(open(p)) or {}
 d.pop("projb45", None)
 yaml.safe_dump(d, open(p, "w"), allow_unicode=True, sort_keys=False)
@@ -2648,7 +2648,7 @@ git -C "$PROJ_B48" checkout -q -b scratch-b48
 accept_agent "$AGB48"
 [[ "$(git -C "$PROJ_B48" worktree list --porcelain | grep -c '^branch refs/heads/main$')" == "0" ]] \
   && ok || fail "B48: fixture - main нигде не вычекаучена"
-CAS_B48=$(python3 - "$HERE/../bin/claude-agent-run" "$AGB48" "$PROJ_B48" wtb48 <<'PY'
+CAS_B48=$(python3 - "$HERE/../bin/ai-agent-run" "$AGB48" "$PROJ_B48" wtb48 <<'PY'
 import importlib.util, json, sys
 from importlib.machinery import SourceFileLoader
 path, agent_dir, project_path, branch = sys.argv[1:5]
@@ -2745,7 +2745,7 @@ AGB51=$(mk_requested_worktree wtb51 "$PROJ_B51" b51-key "B51 summary")
 COMMITB51=$(jq_file "$AGB51/done.json" 'd.get("commit_sha")')
 BRANCH_B51=$(jq_file "$AGB51/done.json" 'd.get("branch")')
 accept_agent "$AGB51"
-RESULT_B51=$(python3 - "$HERE/../bin/claude-agent-run" "$AGB51" "$PROJ_B51" "$BRANCH_B51" <<'PY'
+RESULT_B51=$(python3 - "$HERE/../bin/ai-agent-run" "$AGB51" "$PROJ_B51" "$BRANCH_B51" <<'PY'
 import importlib.util, json, subprocess, sys
 from importlib.machinery import SourceFileLoader
 path, agent_dir, project_path, branch = sys.argv[1:5]
@@ -2854,7 +2854,7 @@ accept_agent "$AGB54"
 # трактовать это как "нет в реестре" (§1 п.3), а не "путь неважен"
 python3 -c '
 import yaml
-p = "'"$CLAUDE_RC_PROJECTS_FILE"'"
+p = "'"$AI_RC_PROJECTS_FILE"'"
 d = yaml.safe_load(open(p)) or {}
 d["projb54"] = {"integrate": "merge"}
 yaml.safe_dump(d, open(p, "w"), allow_unicode=True, sort_keys=False)
@@ -2943,7 +2943,7 @@ MAIN_B57=$(git -C "$PROJ_B57" rev-parse refs/heads/main)
 git -C "$PROJ_B57" checkout -q -b scratch-b57
 accept_agent "$AGB57"
 OTHER_WT_B57="$TMP/proj-b57-race-checkout"
-RESULT_B57=$(python3 - "$HERE/../bin/claude-agent-run" "$AGB57" "$PROJ_B57" "$BRANCH_B57" main "$OTHER_WT_B57" <<'PY'
+RESULT_B57=$(python3 - "$HERE/../bin/ai-agent-run" "$AGB57" "$PROJ_B57" "$BRANCH_B57" main "$OTHER_WT_B57" <<'PY'
 import importlib.util, json, subprocess, sys
 from importlib.machinery import SourceFileLoader
 path, agent_dir, project_path, branch, target, other_wt = sys.argv[1:7]
@@ -2997,7 +2997,7 @@ accept_agent "$AGB58"
 "$RUN" done-advance "$AGB58" >/dev/null 2>"$TMP/b58-integrate.err"
 [[ "$(jq_file "$AGB58/done.json" 'd.get("state")')" == "integrated" ]] \
   && ok || fail "B58: fixture - integrate довел до integrated ($(cat "$TMP/b58-integrate.err"))"
-RESULT_B58=$(python3 - "$HERE/../bin/claude-agent-run" "$AGB58" wtb58 "$BRANCH_B58" <<'PY'
+RESULT_B58=$(python3 - "$HERE/../bin/ai-agent-run" "$AGB58" wtb58 "$BRANCH_B58" <<'PY'
 import importlib.util, json, sys
 from importlib.machinery import SourceFileLoader
 
@@ -3056,7 +3056,7 @@ printf '{"commit_sha": "%s"}' "1111111111111111111111111111111111aaaa" \
 mkdir -p "$ARCH_ROOT_B59/task-a-2026-02-01T00:00:00Z"
 printf '{"commit_sha": "%s"}' "2222222222222222222222222222222222bbbb" \
   > "$ARCH_ROOT_B59/task-a-2026-02-01T00:00:00Z/done.json"
-RESULT_B59=$(python3 - "$HERE/../bin/claude-agent-run" "$TMP/archive-b59-root/agents/task-a" <<'PY'
+RESULT_B59=$(python3 - "$HERE/../bin/ai-agent-run" "$TMP/archive-b59-root/agents/task-a" <<'PY'
 import importlib.util, json, sys
 from importlib.machinery import SourceFileLoader
 path, agent_dir = sys.argv[1:3]
@@ -3088,20 +3088,20 @@ AGB60=$(mk_worktree_agent wtb60 "$PROJ_B60")
 echo 'not valid json {{{' > "$AGB60/done.json"
 ALERT_LOG_B60F="$TMP/b60-fail.log"
 mk_alert_fail "$ALERT_LOG_B60F" "$TMP/alert-fail-b60.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-fail-b60.sh" "$RUN" done-advance "$AGB60" >/dev/null 2>"$TMP/b60a.err"; RCB60A=$?
+AI_AGENT_ALERT_CMD="$TMP/alert-fail-b60.sh" "$RUN" done-advance "$AGB60" >/dev/null 2>"$TMP/b60a.err"; RCB60A=$?
 [[ "$RCB60A" == 3 ]] && ok || fail "B60: битый done.json -> exit 3 (got $RCB60A)"
 [[ "$(alert_block_count "$ALERT_LOG_B60F")" == "1" ]] && ok || fail "B60: доставка реально попытана (мок с ненулевым кодом вызван)"
 [[ ! -f "$AGB60/.done-corrupt-alert" ]] \
   && ok || fail "B60: сентинел НЕ записан после неудачной доставки (иначе уведомление глохнет навсегда)"
 ALERT_LOG_B60O="$TMP/b60-ok.log"
 mk_alert_ok "$ALERT_LOG_B60O" "$TMP/alert-ok-b60.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-b60.sh" "$RUN" done-advance "$AGB60" >/dev/null 2>"$TMP/b60b.err"; RCB60B=$?
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-b60.sh" "$RUN" done-advance "$AGB60" >/dev/null 2>"$TMP/b60b.err"; RCB60B=$?
 [[ "$RCB60B" == 3 ]] && ok || fail "B60: тот же битый done.json на следующем тике снова exit 3 (got $RCB60B)"
 [[ "$(alert_block_count "$ALERT_LOG_B60O")" == "1" ]] \
   && ok || fail "B60: на этот раз доставка успешна и реально отправлена (не проглочена как 'уже слали')"
 [[ -f "$AGB60/.done-corrupt-alert" ]] \
   && ok || fail "B60: сентинел записан ПОСЛЕ подтвержденной доставки"
-CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-b60.sh" "$RUN" done-advance "$AGB60" >/dev/null 2>"$TMP/b60c.err"
+AI_AGENT_ALERT_CMD="$TMP/alert-ok-b60.sh" "$RUN" done-advance "$AGB60" >/dev/null 2>"$TMP/b60c.err"
 [[ "$(alert_block_count "$ALERT_LOG_B60O")" == "1" ]] \
   && ok || fail "B60: третий тик с той же подписью не шлет повторно (дедуп по сентинелу по-прежнему работает)"
 
@@ -3110,7 +3110,7 @@ CLAUDE_AGENT_ALERT_CMD="$TMP/alert-ok-b60.sh" "$RUN" done-advance "$AGB60" >/dev
 # при реальной (не CAS-конфликтной) ошибке фаза обязана отказать и НЕ
 # переименовывать каталог в архив - иначе непогашенный done_phase уедет в
 # архив без единого шанса на retry.
-echo "=== B61: transient-ошибка снятия attention (подмена claude-agent-io) - archive отказывает, rename НЕ происходит ==="
+echo "=== B61: transient-ошибка снятия attention (подмена ai-agent-io) - archive отказывает, rename НЕ происходит ==="
 PROJ_B61="$TMP/proj-b61"; mkdir -p "$PROJ_B61"
 AGB61=$(mk_created_none_agent evtb61 "$PROJ_B61" none)
 "$RC" agent stop evtb61 >/dev/null 2>"$TMP/b61-stop.err"
@@ -3122,7 +3122,7 @@ d["integrate_mode"] = "skipped"; d["integrate_ref"] = None
 d["phase_attempts"] = 0; d["phase_error"] = None
 d["integrated_at"] = "2026-02-01T00:01:00Z"; d["cleaned_at"] = "2026-02-01T00:02:00Z"
 '
-RESULT_B61=$(python3 - "$HERE/../bin/claude-agent-run" "$AGB61" evtb61 <<'PY'
+RESULT_B61=$(python3 - "$HERE/../bin/ai-agent-run" "$AGB61" evtb61 <<'PY'
 import importlib.util, json, sys
 from importlib.machinery import SourceFileLoader
 path, agent_dir, name = sys.argv[1:4]
@@ -3131,7 +3131,7 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 mod = importlib.util.module_from_spec(spec)
 loader.exec_module(mod)
 d = mod.load_json(agent_dir + "/done.json")
-# подмена claude-agent-io (инжектированный отказ, не CAS-конфликт 4 -
+# подмена ai-agent-io (инжектированный отказ, не CAS-конфликт 4 -
 # именно ЭТУ ветку "штатного no-op" _clear_attention обязана отличать от
 # реальной transient-ошибки)
 mod._clear_attention = lambda *a, **k: False
@@ -3168,7 +3168,7 @@ COMMITB62=$(jq_file "$AGB62/done.json" 'd.get("commit_sha")')
 # пошел бы через _integrate_merge_checked_out, не через _branch_worktree_status
 git -C "$PROJ_B62" checkout -q -b scratch-b62
 accept_agent "$AGB62"
-RESULT_B62=$(python3 - "$HERE/../bin/claude-agent-run" "$AGB62" "$PROJ_B62" wtb62 <<'PY'
+RESULT_B62=$(python3 - "$HERE/../bin/ai-agent-run" "$AGB62" "$PROJ_B62" wtb62 <<'PY'
 import importlib.util, json, sys
 from importlib.machinery import SourceFileLoader
 
@@ -3229,7 +3229,7 @@ d["verdict_comment"] = "B63 нужно доделать"
 d["integrate_mode"] = None; d["integrate_ref"] = None
 d["phase_attempts"] = 0; d["phase_error"] = None
 '
-RESULT_B63A=$(python3 - "$HERE/../bin/claude-agent-run" "$AGB63" evtb63 <<'PY'
+RESULT_B63A=$(python3 - "$HERE/../bin/ai-agent-run" "$AGB63" evtb63 <<'PY'
 import importlib.util, json, os, sys
 from importlib.machinery import SourceFileLoader
 path, agent_dir, name = sys.argv[1:4]
@@ -3255,7 +3255,7 @@ DPEXISTS_B63A=$(jq_str "$RESULT_B63A" 'd.get("dp_exists")')
   && ok || fail "B63: done.json НЕ снят - отказ случился ДО терминального шага (got: $RESULT_B63A)"
 HISTLINES_B63A=$(wc -l < "$AGB63/done.history.jsonl" | tr -d ' ')
 [[ "$HISTLINES_B63A" == "1" ]] && ok || fail "B63: история дописана шагом 1 (got $HISTLINES_B63A строк)"
-spool_files_b63_pre=("$CLAUDE_AGENT_SPOOL_BASE/evtb63"/*.json)
+spool_files_b63_pre=("$AI_AGENT_SPOOL_BASE/evtb63"/*.json)
 SPOOLCNT_B63_PRE=${#spool_files_b63_pre[@]}
 [[ "$SPOOLCNT_B63_PRE" == "1" ]] && ok || fail "B63: событие-доработка положено шагом 2 (got $SPOOLCNT_B63_PRE)"
 # ретрай реальным done-advance (без монки-патча) - attention снимается
@@ -3265,7 +3265,7 @@ SPOOLCNT_B63_PRE=${#spool_files_b63_pre[@]}
 [[ ! -f "$AGB63/done.json" ]] && ok || fail "B63: done.json снят ретраем"
 HISTLINES_B63B=$(wc -l < "$AGB63/done.history.jsonl" | tr -d ' ')
 [[ "$HISTLINES_B63B" == "1" ]] && ok || fail "B63: история НЕ задвоилась на ретрае (got $HISTLINES_B63B строк)"
-spool_files_b63=("$CLAUDE_AGENT_SPOOL_BASE/evtb63"/*.json)
+spool_files_b63=("$AI_AGENT_SPOOL_BASE/evtb63"/*.json)
 SPOOLCNT_B63=${#spool_files_b63[@]}
 [[ "$SPOOLCNT_B63" == "1" ]] && ok || fail "B63: событие-доработка НЕ задвоено на ретрае (got $SPOOLCNT_B63)"
 
@@ -3283,7 +3283,7 @@ accept_agent "$AGB64"
 "$RUN" done-advance "$AGB64" >/dev/null 2>"$TMP/b64-integrate.err"
 [[ "$(jq_file "$AGB64/done.json" 'd.get("state")')" == "integrated" ]] \
   && ok || fail "B64: fixture - integrate довел до integrated ($(cat "$TMP/b64-integrate.err"))"
-RESULT_B64=$(python3 - "$HERE/../bin/claude-agent-run" "$AGB64" wtb64 <<'PY'
+RESULT_B64=$(python3 - "$HERE/../bin/ai-agent-run" "$AGB64" wtb64 <<'PY'
 import importlib.util, json, sys
 from importlib.machinery import SourceFileLoader
 path, agent_dir, name = sys.argv[1:4]
@@ -3375,7 +3375,7 @@ PATH="$GHBIN_B65_OK:$PATH" "$RUN" done-advance "$AGB65" >/dev/null 2>"$TMP/b65c.
 
 ####################################################################
 # V2.10 (T5): docs/design-2026-07-28-v2.10-task-actually-works.md §3
-# Написано с чистого листа по спеке (SDD, RED-фаза) - bin/claude-agent-run,
+# Написано с чистого листа по спеке (SDD, RED-фаза) - bin/ai-agent-run,
 # bin/_rc_projects.sh НЕ читаны. Публичный контракт и прием фикстур - из
 # самой спеки V2.10 §3 и из уже установленного контракта B12/B13/B16/B17
 # выше (FF/merge/конфликт/"целевая ветка вычекаучена в другом дереве и
@@ -3531,7 +3531,7 @@ RAW_STATUS_B71=$(git -C "$PROJ_B71" status --porcelain)
 # после аудита): T9 (финализация заявки, §3a), T10 (дрейф реестра, §3b),
 # плюс серьезные находки аудита - симлинк снимает исключение уроков (§3.2)
 # и условный --untracked-files=all (§3.1 п.0). Написано с чистого листа по
-# контракту - bin/claude-agent-run, bin/_rc_projects.sh НЕ читаны для
+# контракту - bin/ai-agent-run, bin/_rc_projects.sh НЕ читаны для
 # вывода ожидаемого поведения (оно целиком зафиксировано в контракте выше).
 #
 # Кейсы B72-B76b (T7, обертка claude-agent-commit §1.2) и B85-B87 (§3c
@@ -3547,7 +3547,7 @@ PROJ_GIT_T9="$TMP/proj-git-t9"; git init -q "$PROJ_GIT_T9"
   && git -c user.email=t@t -c user.name=t commit -qm init )
 
 # =============================================================== B77 (V2.10 T9, §3a - коммит после преждевременного done)
-echo "=== B77: claude-agent-done позван ДО правок (empty:true на базовом коммите), затем сделан коммит В ТОМ ЖЕ прогоне - терминальная ветка runner'а перечитывает HEAD, commit_sha/empty обновлены ==="
+echo "=== B77: ai-agent-done позван ДО правок (empty:true на базовом коммите), затем сделан коммит В ТОМ ЖЕ прогоне - терминальная ветка runner'а перечитывает HEAD, commit_sha/empty обновлены ==="
 AGB77=$(mk_worktree_agent wtb77 "$PROJ_GIT_T9")
 "$RUN" spool-put wtb77 --text "b77-event" >/dev/null
 "$RUN" intake "$AGB77" >/dev/null
@@ -3558,7 +3558,7 @@ MOCK_LATE_FILE="late-b77.txt" MOCK_LATE_MARKER="late-b77-marker" \
 echo ok > "$MOCK_MODE_FILE"
 [[ -f "$TMP/b77-midrun.json" ]] && ok || fail "B77: fixture - снимок done.json мид-run снят"
 [[ "$(jq_file "$TMP/b77-midrun.json" 'd.get("empty")')" == "True" ]] \
-  && ok || fail "B77: fixture - мид-run (сразу после раннего claude-agent-done) empty=true"
+  && ok || fail "B77: fixture - мид-run (сразу после раннего ai-agent-done) empty=true"
 REALHEAD_B77=$(git -C "$AGB77/work" rev-parse HEAD)
 DJ77="$AGB77/done.json"
 [[ "$(jq_file "$DJ77" 'd.get("commit_sha")')" == "$REALHEAD_B77" ]] \
@@ -3573,13 +3573,13 @@ DJ77="$AGB77/done.json"
 # (T9, §3a, ДО §3d.1) незакоммиченный файл на терминальной ветке означал
 # инвалидацию заявки - агент забыл вызвать свою обертку claude-agent-commit.
 # Теперь агент коммитить не может вовсе, поэтому dirty-файл ПОСЛЕ раннего
-# claude-agent-done - штатное состояние (ровно та же фикстура, что B77, но
+# ai-agent-done - штатное состояние (ровно та же фикстура, что B77, но
 # без plain-git коммита изнутри мока): commit_worktree_done коммитит его
 # сам summary'ем заявки ДО finalize_worktree_done, и заявка остается
 # ВАЛИДНОЙ. Инвалидация теперь наступает только когда коммит рантайма
 # fail-closed отказал (guard §3d.2) - такой кейс не входит в это T9-ядро и
 # пишется отдельно вместе с новыми кейсами коммита рантайма.
-echo "=== B78: claude-agent-done позван рано, поздний dirty-файл коммитит РАНТАЙМ на терминальной ветке - заявка остается ВАЛИДНОЙ, commit_sha включает поздний файл ==="
+echo "=== B78: ai-agent-done позван рано, поздний dirty-файл коммитит РАНТАЙМ на терминальной ветке - заявка остается ВАЛИДНОЙ, commit_sha включает поздний файл ==="
 AGB78=$(mk_worktree_agent wtb78 "$PROJ_GIT_T9")
 BASEB78=$(git -C "$AGB78/work" rev-parse HEAD)
 "$RUN" spool-put wtb78 --text "b78-event" >/dev/null
@@ -3792,7 +3792,7 @@ printf 'original\n' > "$PROJ_B88/src/config.py"
 # YAML (без них плоский скаляр пробелы вокруг значения обрежет сам парсер,
 # и сценарий не воспроизведется)
 { printf 'projb88:\n  path: %s\n  integrate: merge\n  lessons: " src/config.py "\n' "$PROJ_B88"
-} >> "$CLAUDE_RC_PROJECTS_FILE"
+} >> "$AI_RC_PROJECTS_FILE"
 BASE_B88=$(git -C "$PROJ_B88" rev-parse HEAD)
 rc_project_lessons_relpath projb88 >/dev/null 2>&1
 [[ "$?" != "0" ]] \
@@ -3860,7 +3860,7 @@ set_done_field "$AGB90" '
 d["pushed_at"] = "2026-01-01T12:00:00Z"
 d["finalized"] = True
 '
-# run B: НОВОЕ событие, реальный прогон через раннер. Мок зовет claude-agent-
+# run B: НОВОЕ событие, реальный прогон через раннер. Мок зовет ai-agent-
 # done СРАЗУ (HEAD еще на BASEB90, тот же commit_sha, что у чужой заявки run
 # A) - это и есть явный вызов done ИЗ НОВОГО конверта, серьезная 5 - затем
 # делает реальную работу и коммитит ее, БЕЗ повторного вызова done.
@@ -4063,7 +4063,7 @@ DJ86="$AGB86/done.json"
   && ok || fail "B86: finalized=True (инвалидная заявка тоже финализирована - решение принято, §3c блокер 2)"
 
 # =============================================================== B87 (аудит r4 - подмененный указатель .git worktree)
-# <worktree>/.git подменен ПОСЛЕ раннего claude-agent-done (валидное
+# <worktree>/.git подменен ПОСЛЕ раннего ai-agent-done (валидное
 # git-состояние на момент вызова) на указатель на ЧУЖОЙ gitdir, никак не
 # связанный с <project>/.git/worktrees - имитация агента, подложившего git
 # свой конфиг. Guard обязан поймать это ДО любого git-действия: если бы не
@@ -4120,8 +4120,8 @@ BASEB93=$(git -C "$AGB93/work" rev-parse HEAD)
 "$RUN" intake "$AGB93" >/dev/null
 K93=$(ls "$AGB93/inbox/pending" | sed 's/.json//')
 mv "$AGB93/inbox/pending/$K93.json" "$AGB93/inbox/inflight/$K93.json"
-CLAUDE_AGENT_DIR="$AGB93" CLAUDE_AGENT_EVENT_KEY="$K93" \
-  "$HERE/../bin/claude-agent-done" --summary "b93 заявка до крэша" \
+AI_AGENT_DIR="$AGB93" AI_AGENT_EVENT_KEY="$K93" \
+  "$HERE/../bin/ai-agent-done" --summary "b93 заявка до крэша" \
   >/dev/null 2>"$TMP/b93-done.err" \
   && ok || fail "B93: fixture - ранняя заявка записана ($(cat "$TMP/b93-done.err"))"
 echo b93 > "$AGB93/work/b93-late.txt"
@@ -4227,8 +4227,8 @@ DJ95="$AGB95/done.json"
 # INV-TASK-54: отмена ненужной задачи (третий вердикт - cancel).
 # Контракт: docs/dev/2026-09-19-spec-task-cancel.md, критерии приемки 1-9.
 # Написано вслепую (SDD, RED-фаза): реализации отмены нет. За это дополнение
-# bin/claude-agent-run и bin/claude-rc-agent открывались ТОЛЬКО грепом имен уже
-# существующих подкоманд (done-verdict/done-advance, глаголы `claude-rc agent
+# bin/ai-agent-run и bin/ai-rc-agent открывались ТОЛЬКО грепом имен уже
+# существующих подкоманд (done-verdict/done-advance, глаголы `ai-rc agent
 # ...`) - их логика не читалась, тесты под нее не подгонялись. Фикстуры и стиль
 # взяты из V2.7b-части этого же файла (mk_requested_worktree, accept_agent,
 # set_done_field, mk_gh_mock, jq_file).
@@ -4239,9 +4239,9 @@ DJ95="$AGB95/done.json"
 #   `task-cancel <имя>` sha не знает, а критерий 4 отменяет задачу, у которой
 #   коммита еще нет вовсе;
 # - гейт грязного дерева проверяется на операторской команде
-#   (`claude-rc agent task-cancel`): спека приписывает предупреждение
+#   (`ai-rc agent task-cancel`): спека приписывает предупреждение
 #   "команде", а на этом слое проверка зеленая при обеих реализациях гейта -
-#   и в claude-rc, и внутри done-verdict;
+#   и в ai-rc, и внутри done-verdict;
 # - отказ на архивированной задаче проверяется как "не ноль + внятное
 #   сообщение": спека требует "внятный код возврата", конкретного числа не
 #   называет;
@@ -4404,7 +4404,7 @@ BRANCH_TC3=$(jq_file "$AGTC3/done.json" 'd.get("branch")')
   && ok || fail "INV-TASK-54 TC3: fixture - отмена записана ($(head -c200 "$TMP/tc3-verdict.err"))"
 TICKS_TC3=$(tc_advance "$AGTC3" 6)
 [[ ! -d "$AGTC3" ]] && ok || fail "INV-TASK-54 TC3: агент уехал в архив (agents/wttc3 отсутствует; состояние: $(jq_file "$AGTC3/done.json" 'd.get("state")' 2>/dev/null))"
-ARCHDIR_TC3=$(find "$(dirname "$CLAUDE_AGENTS_DIR")/archive" -maxdepth 1 -name 'wttc3-*' 2>/dev/null | head -1)
+ARCHDIR_TC3=$(find "$(dirname "$AI_AGENTS_DIR")/archive" -maxdepth 1 -name 'wttc3-*' 2>/dev/null | head -1)
 [[ -n "$ARCHDIR_TC3" && -d "$ARCHDIR_TC3" ]] && ok || fail "INV-TASK-54 TC3: archive/wttc3-<ts> создан"
 [[ -n "$ARCHDIR_TC3" && "$(jq_file "$ARCHDIR_TC3/done.json" 'd.get("state")')" == "archived" ]] \
   && ok || fail "INV-TASK-54 TC3: терминальное состояние archived в архивном done.json"
@@ -4414,7 +4414,7 @@ ARCHDIR_TC3=$(find "$(dirname "$CLAUDE_AGENTS_DIR")/archive" -maxdepth 1 -name '
   && ok || fail "INV-TASK-54 TC3: worktree снят (каталога work нет ни в agents/, ни в архиве)"
 [[ "$(git -C "$PROJ_TC3" branch --list "$BRANCH_TC3" | wc -l | tr -d ' ')" == "0" ]] \
   && ok || fail "INV-TASK-54 TC3: ветка задачи удалена (integrate:merge, но мержа не было)"
-TOMB_TC3="$(dirname "$CLAUDE_AGENTS_DIR")/tombstones/wttc3.json"
+TOMB_TC3="$(dirname "$AI_AGENTS_DIR")/tombstones/wttc3.json"
 [[ -f "$TOMB_TC3" ]] && ok || fail "INV-TASK-54 TC3: надгробие tombstones/wttc3.json создано"
 [[ "$(tomb_reason_is_cancelled "$TOMB_TC3")" == "True" ]] \
   && ok || fail "INV-TASK-54 TC3: надгробие несет причину cancelled (got: $(head -c200 "$TOMB_TC3" 2>/dev/null))"
@@ -4437,7 +4437,7 @@ AGTC4=$(mk_worktree_agent wttc4 "$PROJ_TC4")
   && ok || fail "INV-TASK-54 TC4: состояние cancelled записано"
 TICKS_TC4=$(tc_advance "$AGTC4" 6)
 [[ ! -d "$AGTC4" ]] && ok || fail "INV-TASK-54 TC4: тот же терминал - агент заархивирован"
-TOMB_TC4="$(dirname "$CLAUDE_AGENTS_DIR")/tombstones/wttc4.json"
+TOMB_TC4="$(dirname "$AI_AGENTS_DIR")/tombstones/wttc4.json"
 [[ -f "$TOMB_TC4" && "$(tomb_reason_is_cancelled "$TOMB_TC4")" == "True" ]] \
   && ok || fail "INV-TASK-54 TC4: надгробие с причиной cancelled"
 
@@ -4480,13 +4480,13 @@ VERDICT_AT_TC6=$(jq_file "$AGTC6/done.json" 'd.get("verdict_at")')
 [[ "$(jq_file "$AGTC6/done.json" 'd.get("verdict_at")')" == "$VERDICT_AT_TC6" ]] \
   && ok || fail "INV-TASK-54 TC6: verdict_at не переписан повтором"
 TICKS_TC6=$(tc_advance "$AGTC6" 6)
-CNT_ARCH_TC6=$(find "$(dirname "$CLAUDE_AGENTS_DIR")/archive" -maxdepth 1 -name 'wttc6-*' 2>/dev/null | wc -l | tr -d ' ')
+CNT_ARCH_TC6=$(find "$(dirname "$AI_AGENTS_DIR")/archive" -maxdepth 1 -name 'wttc6-*' 2>/dev/null | wc -l | tr -d ' ')
 [[ "$CNT_ARCH_TC6" == "1" ]] && ok || fail "INV-TASK-54 TC6: ровно один archive-каталог (got $CNT_ARCH_TC6)"
-CNT_TOMB_TC6=$(find "$(dirname "$CLAUDE_AGENTS_DIR")/tombstones" -maxdepth 1 -name 'wttc6*.json' 2>/dev/null | wc -l | tr -d ' ')
+CNT_TOMB_TC6=$(find "$(dirname "$AI_AGENTS_DIR")/tombstones" -maxdepth 1 -name 'wttc6*.json' 2>/dev/null | wc -l | tr -d ' ')
 [[ "$CNT_TOMB_TC6" == "1" ]] && ok || fail "INV-TASK-54 TC6: ровно одно надгробие (got $CNT_TOMB_TC6)"
 
 # =============================================================== TC7 (INV-TASK-54, критерий 7)
-echo "=== TC7 (INV-TASK-54): claude-rc agent task-cancel <имя> зовет вердикт и печатает итог; несуществующее имя - отказ ==="
+echo "=== TC7 (INV-TASK-54): ai-rc agent task-cancel <имя> зовет вердикт и печатает итог; несуществующее имя - отказ ==="
 PROJ_TC7="$TMP/proj-tc7"; mkdir -p "$PROJ_TC7"
 mk_git_project "$PROJ_TC7"
 register_obj_project projtc7 "$PROJ_TC7" merge
@@ -4547,14 +4547,14 @@ echo "tc10 untracked" > "$AGTC10/work/tc10-untracked.txt"
 TICKS_TC10=$(tc_advance "$AGTC10" 6)
 [[ ! -d "$AGTC10" ]] \
   && ok || fail "INV-TASK-54 TC10: агент уехал в архив, грязь уборку не отложила (состояние: $(jq_file "$AGTC10/done.json" 'd.get("state")' 2>/dev/null), phase_error: $(jq_file "$AGTC10/done.json" 'd.get("phase_error")' 2>/dev/null))"
-ARCHDIR_TC10=$(find "$(dirname "$CLAUDE_AGENTS_DIR")/archive" -maxdepth 1 -name 'wttc10-*' 2>/dev/null | head -1)
+ARCHDIR_TC10=$(find "$(dirname "$AI_AGENTS_DIR")/archive" -maxdepth 1 -name 'wttc10-*' 2>/dev/null | head -1)
 [[ -n "$ARCHDIR_TC10" && "$(jq_file "$ARCHDIR_TC10/done.json" 'd.get("state")')" == "archived" ]] \
   && ok || fail "INV-TASK-54 TC10: терминальное состояние archived в архивном done.json"
 [[ ! -d "$AGTC10/work" && ! -d "$ARCHDIR_TC10/work" ]] \
   && ok || fail "INV-TASK-54 TC10: грязный worktree снят вместе с незакоммиченной работой"
 [[ "$(git -C "$PROJ_TC10" branch --list "$BRANCH_TC10" | wc -l | tr -d ' ')" == "0" ]] \
   && ok || fail "INV-TASK-54 TC10: ветка задачи удалена"
-TOMB_TC10="$(dirname "$CLAUDE_AGENTS_DIR")/tombstones/wttc10.json"
+TOMB_TC10="$(dirname "$AI_AGENTS_DIR")/tombstones/wttc10.json"
 [[ -f "$TOMB_TC10" && "$(tomb_reason_is_cancelled "$TOMB_TC10")" == "True" ]] \
   && ok || fail "INV-TASK-54 TC10: надгробие с причиной cancelled"
 

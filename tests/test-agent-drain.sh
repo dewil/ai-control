@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Tests for bin/claude-agent-run: подкоманда `drain` (этап v2, §6 T1-T7).
+# Tests for bin/ai-agent-run: подкоманда `drain` (этап v2, §6 T1-T7).
 # Контракт: docs/design-2026-07-25-v2-runtime-drain.md
 # T8 (регресс step/loop) покрыт tests/test-agent-run.sh - здесь не дублируется.
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RUN="$HERE/../bin/claude-agent-run"
+RUN="$HERE/../bin/ai-agent-run"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-export CLAUDE_AGENTS_DIR="$TMP/agents"
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
-export CLAUDE_AGENT_PROBE_CMD=/usr/bin/true   # infra здорова по умолчанию
+export AI_AGENTS_DIR="$TMP/agents"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_AGENT_PROBE_CMD=/usr/bin/true   # infra здорова по умолчанию
 
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); }
@@ -57,9 +57,9 @@ print(d.get("status_line", d.get("status")))' "$1"
 }
 
 # --- fixture: event-агент вручную (без CLI - юнит-скоуп), как в test-agent-run.sh ---
-AG="$CLAUDE_AGENTS_DIR/evt"
+AG="$AI_AGENTS_DIR/evt"
 IB="$AG/inbox"
-SP="$CLAUDE_AGENT_SPOOL_BASE/evt"
+SP="$AI_AGENT_SPOOL_BASE/evt"
 mkdir -p "$AG" "$SP"
 chmod 0700 "$SP"
 cat > "$AG/spec.yaml" <<EOF
@@ -73,7 +73,7 @@ memory_max_mb: 100
 limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 EOF
-export CLAUDE_AGENT_GENERATION=1 CLAUDE_AGENT_ATTEMPT=test-attempt
+export AI_AGENT_GENERATION=1 AI_AGENT_ATTEMPT=test-attempt
 
 MOCK="$TMP/mock-claude"
 cat > "$MOCK" <<'EOF'
@@ -154,7 +154,7 @@ set_usage 0
 # =============================================================== T4: infra-фейл
 # Наблюдаемый FAIL (мок падает) - только он гейтит infra-probe (§11.2 stage4);
 # первый цикл drain реально прогоняет и получает fail, второй ловит infra_wait.
-export CLAUDE_AGENT_PROBE_CMD=/usr/bin/false
+export AI_AGENT_PROBE_CMD=/usr/bin/false
 echo fail > "$MOCK_MODE_FILE"
 "$RUN" spool-put evt --text "инфра" >/dev/null
 "$RUN" intake "$AG" >/dev/null
@@ -168,7 +168,7 @@ ST="$(last_state)"
 [[ "$(jq_file "$ST" 'd["phase"]')" == "sleeping" ]] && ok || fail "T4: phase=sleeping"
 [[ "$(state_status "$ST")" == "drained:infra_wait" ]] \
   && ok || fail "T4: status=drained:infra_wait ($(state_status "$ST"))"
-export CLAUDE_AGENT_PROBE_CMD=/usr/bin/true
+export AI_AGENT_PROBE_CMD=/usr/bin/true
 echo ok > "$MOCK_MODE_FILE"
 rm -f "$IB/pending/$T4K.json"
 

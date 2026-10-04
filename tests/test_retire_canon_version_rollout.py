@@ -66,9 +66,9 @@ if 'disable' in args and is_old:
     (Path(os.environ['HOME'])/'.config/systemd/user/timers.target.wants'/f'{old}.timer').unlink(missing_ok=True)
 """)
         ctl.chmod(0o755)
-        self.env = dict(os.environ, HOME=str(self.home), PATH=str(stub)+':'+os.environ['PATH'], CLAUDE_CONTROL_OS='Linux', RETIRE_CALLS=str(self.calls), TMPDIR=str(self.p))
+        self.env = dict(os.environ, HOME=str(self.home), PATH=str(stub)+':'+os.environ['PATH'], AI_CONTROL_OS='Linux', RETIRE_CALLS=str(self.calls), TMPDIR=str(self.p))
         self.canaries = {}
-        for rel in ['.config/systemd/user/sibling.service', '.config/other/env', '.claude-control/projects.yaml', 'clients/repo/.git/HEAD', 'clients/worktree/keep', 'clients/archive/keep']:
+        for rel in ['.config/systemd/user/sibling.service', '.config/other/env', '.ai-control/projects.yaml', 'clients/repo/.git/HEAD', 'clients/worktree/keep', 'clients/archive/keep']:
             f = self.home / rel
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_bytes(('canary '+rel+'\n').encode())
@@ -154,9 +154,9 @@ if 'disable' in args and is_old:
             (d/'events.jsonl').write_text(json.dumps({'event':'agent_created','at':'2026-07-13T00:00:00Z','actor':'operator'})+'\n'+json.dumps({'event':'acceptance_revise','at':'2026-07-13T00:00:05Z','seq':5,'actor':'operator','detail':{'note':'write regression tests'}})+'\n')
         wake = self.p/'wake'
         canon = self.p/'canon'
-        env = dict(self.env, CLAUDE_AGENTS_DIR=str(agents), CLAUDE_HARVEST_DIR=str(harvest), CLAUDE_BIN=str(ROOT/'tests/mock-harvest-claude'), MOCK_MODE='one', CLAUDE_CANON_DIR=str(canon), CLAUDE_CANON_KICK_CMD=f'touch {wake}')
+        env = dict(self.env, AI_AGENTS_DIR=str(agents), AI_HARVEST_DIR=str(harvest), CLAUDE_BIN=str(ROOT/'tests/mock-harvest-claude'), MOCK_MODE='one', CLAUDE_CANON_DIR=str(canon), CLAUDE_CANON_KICK_CMD=f'touch {wake}')
         key = hashlib.sha256(str(project.resolve()).encode()).hexdigest()[:16]
-        def h(*args): return self.runcli('bin/claude-agent-harvest', *args, env=env)
+        def h(*args): return self.runcli('bin/ai-agent-harvest', *args, env=env)
         h('collect'); h('propose', key, 'coder')
         emitted = harvest/key/'coder/emitted.jsonl'
         cid = next(json.loads(l)['candidate_id'] for l in emitted.read_text().splitlines() if json.loads(l).get('kind')=='candidate')

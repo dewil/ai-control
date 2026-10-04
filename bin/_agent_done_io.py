@@ -17,8 +17,8 @@ def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-# кап карточки готовности (bin/claude-agent-tgbot _done_card) учитывал
-# только поля кандидатов урока (LESSON_CANDIDATE_MAX_BYTES в claude-agent-
+# кап карточки готовности (bin/ai-agent-tgbot _done_card) учитывал
+# только поля кандидатов урока (LESSON_CANDIDATE_MAX_BYTES в ai-agent-
 # run), summary заявки не был ограничен вовсе (контрольный аудит серьезная
 # 6): summary ~3000 символов + три допустимых кандидата режут карточку
 # готовности на несколько сообщений Telegram (_chunk_for_html, лимит 3800
@@ -27,14 +27,14 @@ def now_iso():
 # карточку без кнопок, а повтор дублирует уже доставленный текст. Обрезка
 # ЗДЕСЬ, на источнике (единственный писатель done.json.summary) - карточка
 # по построению никогда не увидит необрезанное значение; та же обрезка
-# продублирована в claude-agent-tgbot как защита в глубину (значение могло
+# продублирована в ai-agent-tgbot как защита в глубину (значение могло
 # попасть в done.json иначе - старый файл до фикса, ручная правка).
 DONE_SUMMARY_MAX_BYTES = 1500
 
 
 def cap_summary(text):
     """Обрезает summary по HTML-ESCAPED длине (не по сырым символам - см.
-    LESSON_CANDIDATE_MAX_BYTES в claude-agent-run: escape-длина - то, что
+    LESSON_CANDIDATE_MAX_BYTES в ai-agent-run: escape-длина - то, что
     реально уходит в отправку, а не сырая)."""
     s = str(text or "")
     esc_len, kept = 0, []

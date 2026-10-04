@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for claude-agent-waiting-hook - сигнал "сессия ждет твоего ответа".
+# Tests for ai-agent-waiting-hook - сигнал "сессия ждет твоего ответа".
 #
 # Сессия, задавшая уточняющий вопрос, снаружи неотличима от работающей: она
 # просто молчит. Узнать об этом можно было, только открыв ее. Хук ловит событие
@@ -13,7 +13,7 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-HOOK="${HOOK_BIN:-$HERE/../bin/claude-agent-waiting-hook}"
+HOOK="${HOOK_BIN:-$HERE/../bin/ai-agent-waiting-hook}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -22,7 +22,7 @@ ok()   { PASS=$((PASS+1)); }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1" >&2; }
 
 export HOME="$TMP"
-mkdir -p "$TMP/.claude-control/sessions" "$TMP/.cache" "$TMP/bin"
+mkdir -p "$TMP/.ai-control/sessions" "$TMP/.cache" "$TMP/bin"
 # Debug-лог моста: из него берется идентификатор сессии для ссылки в браузере.
 # Побеждает ПОСЛЕДНИЙ cse_ - файл переживает несколько подъемов, и старый мост
 # дал бы ссылку на сессию, которой уже нет.
@@ -32,8 +32,8 @@ mkdir -p "$TMP/.claude-control/sessions" "$TMP/.cache" "$TMP/bin"
 printf '%s\n' \
   '2026-09-10T10:00:00.000Z [DEBUG] [remote-bridge] v2 session URL: https://api.anthropic.com/v1/code/sessions/cse_01OldBridgeAAAAAAAAAAAA' \
   '2026-09-10T11:00:00.000Z [DEBUG] [remote-bridge] v2 session URL: https://api.anthropic.com/v1/code/sessions/cse_01TESTIDvvvvvvvvvvvvv' \
-  > "$TMP/.claude-control/sessions/HR-11111111.debug.log"
-STATE="$TMP/.claude-control/waiting-hook.json"
+  > "$TMP/.ai-control/sessions/HR-11111111.debug.log"
+STATE="$TMP/.ai-control/waiting-hook.json"
 SENT="$TMP/sent"; : > "$SENT"
 
 SID="11111111-1111-4111-8111-111111111111"
@@ -50,14 +50,14 @@ chmod +x "$TMP/bin/systemctl"
 export PATH="$TMP/bin:$PATH"
 
 BOTDIR="$TMP/botbin"; mkdir -p "$BOTDIR"
-cp "$HOOK" "$BOTDIR/claude-agent-waiting-hook"
-cat > "$BOTDIR/claude-agent-tgbot" <<MOCK
+cp "$HOOK" "$BOTDIR/ai-agent-waiting-hook"
+cat > "$BOTDIR/ai-agent-tgbot" <<MOCK
 #!/usr/bin/env python3
 import sys
 open("$SENT", "a").write(repr(sys.argv[1:]) + "\\n")
 MOCK
-chmod +x "$BOTDIR/claude-agent-tgbot"
-HOOK="$BOTDIR/claude-agent-waiting-hook"
+chmod +x "$BOTDIR/ai-agent-tgbot"
+HOOK="$BOTDIR/ai-agent-waiting-hook"
 
 TR="$TMP/transcript.jsonl"
 mk_transcript() {
@@ -98,7 +98,7 @@ echo "=== упоминание cse_ в тексте работы не подде
 # идентификатора попадает в файл наравне с событиями моста. Так и вышло на
 # живых данных: строки из этого теста осели в логе рабочей сессии и подменили
 # ссылку. Признак берем ЯКОРЕННЫЙ - строку события моста, а не подстроку.
-cat >> "$TMP/.claude-control/sessions/HR-11111111.debug.log" <<'POISON'
+cat >> "$TMP/.ai-control/sessions/HR-11111111.debug.log" <<'POISON'
 2026-09-10T12:00:00.000Z [DEBUG] [auto-mode] обсуждаем cse_01PoisonXXXXXXXXXXXXXX в тексте
 POISON
 rm -f "$STATE"; : > "$SENT"

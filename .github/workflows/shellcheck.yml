@@ -29,11 +29,11 @@ jobs:
       - name: Run shellcheck
         run: |
           shellcheck -x \
-            bin/claude-rc \
+            bin/ai-rc \
             bin/_proxy_env.sh \
-            bin/claude-control-logrotate \
-            bin/claude-control-session \
-            bin/claude-control-watchdog \
-            bin/claude-control-project-watchdog \
+            bin/ai-control-logrotate \
+            bin/ai-control-session \
+            bin/ai-control-watchdog \
+            bin/ai-control-project-watchdog \
             install.sh \
             uninstall.sh

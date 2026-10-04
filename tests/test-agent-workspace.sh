@@ -6,15 +6,15 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RC="$HERE/../bin/claude-rc"
-RUN="$HERE/../bin/claude-agent-run"
-REVIEW="$HERE/../bin/claude-agent-review"
+RC="$HERE/../bin/ai-rc"
+RUN="$HERE/../bin/ai-agent-run"
+REVIEW="$HERE/../bin/ai-agent-review"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-export CLAUDE_AGENTS_DIR="$TMP/agents"
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
-export CLAUDE_AGENT_PROBE_CMD=/usr/bin/true
-export CLAUDE_AGENT_GENERATION=1 CLAUDE_AGENT_ATTEMPT=test-attempt
+export AI_AGENTS_DIR="$TMP/agents"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_AGENT_PROBE_CMD=/usr/bin/true
+export AI_AGENT_GENERATION=1 AI_AGENT_ATTEMPT=test-attempt
 
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); }
@@ -33,7 +33,7 @@ print(eval(sys.argv[2], {"d": d}))' "$1" "$2"
 cget() { # <agent-name> <py-expr over control dict d>
   python3 -c 'import json,sys
 d=json.load(open(sys.argv[1]))
-print(eval(sys.argv[2], {"d": d}))' "$CLAUDE_AGENTS_DIR/$1/control.json" "$2"
+print(eval(sys.argv[2], {"d": d}))' "$AI_AGENTS_DIR/$1/control.json" "$2"
 }
 trust_ok() { # <config-dir>/.claude.json <realpath> -> True/False
   python3 -c 'import json,sys
@@ -57,7 +57,7 @@ mask_prompt_v210() { # <file> <key-hex> -> вычищает волатильны
     "$f"
 }
 ask_direct_v210() { # <agent-dir> <stub-key> <question-text> -> stdout=qid (Q13-style: временный
-  # stub-конверт в inflight, снимается сразу после ask - claude-agent-ask
+  # stub-конверт в inflight, снимается сразу после ask - ai-agent-ask
   # требует envelope_key реально в inflight, V2.3 §2/аудит major 6)
   local dir="$1" key="$2" q="$3"
   local stubbed=0
@@ -67,7 +67,7 @@ ask_direct_v210() { # <agent-dir> <stub-key> <question-text> -> stdout=qid (Q13-
       "$key" > "$dir/inbox/inflight/$key.json"
     stubbed=1
   fi
-  CLAUDE_AGENT_DIR="$dir" CLAUDE_AGENT_EVENT_KEY="$key" "$HERE/../bin/claude-agent-ask" --question "$q"
+  AI_AGENT_DIR="$dir" AI_AGENT_EVENT_KEY="$key" "$HERE/../bin/ai-agent-ask" --question "$q"
   local rc=$?
   [[ "$stubbed" == 1 ]] && rm -f "$dir/inbox/inflight/$key.json"
   return $rc
@@ -95,9 +95,9 @@ print(sys.argv[2] in d.get("permissions", {}).get("allow", []))
 
 mk_event() { # <name> <extra-yaml-lines> -> печатает путь к agent-dir
   local name="$1" extra="$2"
-  local ag="$CLAUDE_AGENTS_DIR/$name"
-  mkdir -p "$ag" "$CLAUDE_AGENT_SPOOL_BASE/$name"
-  chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/$name"
+  local ag="$AI_AGENTS_DIR/$name"
+  mkdir -p "$ag" "$AI_AGENT_SPOOL_BASE/$name"
+  chmod 0700 "$AI_AGENT_SPOOL_BASE/$name"
   cat > "$ag/spec.yaml" <<EOF
 schema: 1
 name: $name
@@ -246,18 +246,18 @@ source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
 EOF
 assert "U5 create event+worktree" 0 "$RC" agent create wtree1 --spec "$TMP/spec5.yaml"
-[[ -d "$CLAUDE_AGENTS_DIR/wtree1/work" ]] && ok || fail "U5: work/ каталог создан"
+[[ -d "$AI_AGENTS_DIR/wtree1/work" ]] && ok || fail "U5: work/ каталог создан"
 INC5=$(cget wtree1 'd.get("incarnation","")' 2>/dev/null)
 BR5="task/wtree1-${INC5:0:8}"
 git -C "$PROJ5" show-ref --verify -q "refs/heads/$BR5" \
   && ok || fail "U5: ветка $BR5 не найдена (task/<name>-<inc8>)"
-[[ "$(git -C "$CLAUDE_AGENTS_DIR/wtree1/work" rev-parse HEAD 2>/dev/null)" \
+[[ "$(git -C "$AI_AGENTS_DIR/wtree1/work" rev-parse HEAD 2>/dev/null)" \
    == "$(git -C "$PROJ5" rev-parse HEAD)" ]] \
   && ok || fail "U5: worktree HEAD != project HEAD"
-git -C "$CLAUDE_AGENTS_DIR/wtree1/work" status --short >/dev/null 2>&1 \
+git -C "$AI_AGENTS_DIR/wtree1/work" status --short >/dev/null 2>&1 \
   && ok || fail "U5: worktree не функционален (gitdir не починен?)"
 # негативный кейс: существующая одноименная ветка -> fail-closed (§2, тестовый
-# шов CLAUDE_AGENT_TEST_INCARNATION подменяет случайную incarnation)
+# шов AI_AGENT_TEST_INCARNATION подменяет случайную incarnation)
 cat > "$TMP/spec5b.yaml" <<EOF
 schema: 1
 name: wtreecol
@@ -273,8 +273,8 @@ workspace: worktree
 EOF
 git -C "$PROJ5" branch task/wtreecol-deadbeef HEAD
 assert "U5 коллизия ветки -> fail-closed" 2 \
-  env CLAUDE_AGENT_TEST_INCARNATION=deadbeef01 "$RC" agent create wtreecol --spec "$TMP/spec5b.yaml"
-[[ ! -e "$CLAUDE_AGENTS_DIR/wtreecol" ]] && ok || fail "U5 коллизия: полуагент не остался (staging откатился)"
+  env AI_AGENT_TEST_INCARNATION=deadbeef01 "$RC" agent create wtreecol --spec "$TMP/spec5b.yaml"
+[[ ! -e "$AI_AGENTS_DIR/wtreecol" ]] && ok || fail "U5 коллизия: полуагент не остался (staging откатился)"
 [[ "$(git -C "$PROJ5" rev-parse task/wtreecol-deadbeef 2>/dev/null)" == "$(git -C "$PROJ5" rev-parse HEAD)" ]] \
   && ok || fail "U5 коллизия: существующая ветка не тронута"
 
@@ -293,7 +293,7 @@ source: { kind: spool }
 workspace: worktree
 EOF
 assert "U6 workspace:worktree на не-git отбит" 2 "$RC" agent create wtreebad --spec "$TMP/spec6a.yaml"
-[[ ! -e "$CLAUDE_AGENTS_DIR/wtreebad" ]] && ok || fail "U6: полуагент wtreebad не остался"
+[[ ! -e "$AI_AGENTS_DIR/wtreebad" ]] && ok || fail "U6: полуагент wtreebad не остался"
 
 cat > "$TMP/spec6b.yaml" <<EOF
 schema: 1
@@ -307,7 +307,7 @@ source: { kind: spool }
 workspace: direct
 EOF
 assert "U6 workspace:direct на несуществующую папку отбит" 2 "$RC" agent create directbad --spec "$TMP/spec6b.yaml"
-[[ ! -e "$CLAUDE_AGENTS_DIR/directbad" ]] && ok || fail "U6: полуагент directbad не остался"
+[[ ! -e "$AI_AGENTS_DIR/directbad" ]] && ok || fail "U6: полуагент directbad не остался"
 
 cat > "$TMP/spec6c.yaml" <<EOF
 schema: 1
@@ -321,7 +321,7 @@ source: { kind: spool }
 workspace: bogus
 EOF
 assert "U6 workspace мусор отбит" 2 "$RC" agent create garbagews --spec "$TMP/spec6c.yaml"
-[[ ! -e "$CLAUDE_AGENTS_DIR/garbagews" ]] && ok || fail "U6: полуагент garbagews не остался"
+[[ ! -e "$AI_AGENTS_DIR/garbagews" ]] && ok || fail "U6: полуагент garbagews не остался"
 
 # =============================================================== U7
 echo "=== U7: direct снапшот-манифест (changes/<key>.json) ==="
@@ -426,7 +426,7 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 EOF
 assert "U10 event без permissions + act отбит" 2 "$RC" agent create evtact2 --spec "$TMP/spec10b.yaml"
-[[ ! -e "$CLAUDE_AGENTS_DIR/evtact2" ]] && ok || fail "U10: полуагент evtact2 не остался"
+[[ ! -e "$AI_AGENTS_DIR/evtact2" ]] && ok || fail "U10: полуагент evtact2 не остался"
 
 # =============================================================== U11 (аудит V2.1, blocker 1)
 echo "=== U11: permission_mode вне белого списка ==="
@@ -443,7 +443,7 @@ source: { kind: spool, replay_window_h: 72 }
 permission_mode: bypassPermissions
 EOF
 assert "U11 permission_mode=bypassPermissions -> create exit 2" 2 "$RC" agent create evtbypass --spec "$TMP/spec11.yaml"
-[[ ! -e "$CLAUDE_AGENTS_DIR/evtbypass" ]] && ok || fail "U11: полуагент evtbypass не остался"
+[[ ! -e "$AI_AGENTS_DIR/evtbypass" ]] && ok || fail "U11: полуагент evtbypass не остался"
 
 AG11=$(mk_event evtbypass2 'permissions:
   allow: ["Bash(git commit:*)"]
@@ -472,7 +472,7 @@ source: { kind: spool, replay_window_h: 72 }
 permissions: []
 EOF
 assert "U12 permissions:[] -> create exit 2" 2 "$RC" agent create evtbadperm1 --spec "$TMP/spec12a.yaml"
-[[ ! -e "$CLAUDE_AGENTS_DIR/evtbadperm1" ]] && ok || fail "U12: полуагент evtbadperm1 не остался"
+[[ ! -e "$AI_AGENTS_DIR/evtbadperm1" ]] && ok || fail "U12: полуагент evtbadperm1 не остался"
 
 cat > "$TMP/spec12b.yaml" <<EOF
 schema: 1
@@ -488,7 +488,7 @@ permissions:
   allow: 1
 EOF
 assert "U12 permissions.allow не список -> create exit 2" 2 "$RC" agent create evtbadperm2 --spec "$TMP/spec12b.yaml"
-[[ ! -e "$CLAUDE_AGENTS_DIR/evtbadperm2" ]] && ok || fail "U12: полуагент evtbadperm2 не остался"
+[[ ! -e "$AI_AGENTS_DIR/evtbadperm2" ]] && ok || fail "U12: полуагент evtbadperm2 не остался"
 
 AG12=$(mk_event evtbadperm3 'permissions:
   allow: ["Bash(git commit:*)"]')
@@ -576,7 +576,7 @@ python3 "$HERE/../bin/_agent_trust_preseed.py" "$CFG15B/.claude.json" "/tmp/proj
 echo "=== U16: ретеншн по realpath(cwd) при симлинкованном AGENTS_DIR ==="
 REAL_BASE="$TMP/real-agents-base"; mkdir -p "$REAL_BASE"
 LINK_AGENTS="$TMP/agents-symlink"; ln -s "$REAL_BASE" "$LINK_AGENTS"
-export CLAUDE_AGENTS_DIR="$LINK_AGENTS"
+export AI_AGENTS_DIR="$LINK_AGENTS"
 export CLAUDE_CONFIG_DIR="$TMP/cfg16"
 AG16=$(mk_event evtsymlink '')
 SLUG16=$(slugify "$(readlink -f "$AG16/run")")
@@ -586,12 +586,12 @@ touch -t 202001010000 "$CLAUDE_CONFIG_DIR/projects/$SLUG16/old.jsonl"
 [[ ! -f "$CLAUDE_CONFIG_DIR/projects/$SLUG16/old.jsonl" ]] \
   && ok || fail "U16: ретеншн сработал по realpath (не по симлинк-пути AGENTS_DIR)"
 unset CLAUDE_CONFIG_DIR
-export CLAUDE_AGENTS_DIR="$TMP/agents"
+export AI_AGENTS_DIR="$TMP/agents"
 
 ####################################################################
 # V2.10 (T1-T4): docs/design-2026-07-28-v2.10-task-actually-works.md
-# Написано с чистого листа по спеке (SDD, RED-фаза) - bin/claude-agent-run,
-# bin/claude-agent-done, bin/claude-agent-ask, bin/claude-agent-reconciler,
+# Написано с чистого листа по спеке (SDD, RED-фаза) - bin/ai-agent-run,
+# bin/ai-agent-done, bin/ai-agent-ask, bin/ai-agent-reconciler,
 # bin/_rc_projects.sh НЕ читаны. Публичный контракт - из самой спеки V2.10 и
 # из уже установленного контракта соседних этапов (U1-U16 выше, tests/
 # test-agent-question.sh Q13 - прием mask_prompt/golden, tests/
@@ -658,23 +658,23 @@ mkdir -p "$CLAUDE_CONFIG_DIR"
 # гонкой, которую нельзя выиграть). Коммитит рантайм; агент только
 # объявляет заявку - ОДИН раз, пока дерево еще чисто (у него нет способа
 # закоммитить, поэтому call_done() позже на грязном дереве отобьет).
-FRAME_WORKTREE_TEXT_V210='Протокол контура. У тебя нет git - эту команду можно позвать только ОДИН раз и СРАЗУ, пока рабочее дерево еще чистое: claude-agent-done --summary "<что собираешься сделать, одной фразой>". Дальше просто работай - рантайм закоммитит твои изменения сам, когда прогон завершится. Без этого вызова работу не увидит никто - карточка приемки строится только из твоей заявки.'
-FRAME_DIRECT_TEXT_V210='Протокол контура. Когда работа готова к показу человеку - объяви об этом сам: claude-agent-done --summary "<что сделано, одной фразой>". Предъявляется список измененных файлов, контур считает его сам. Без этого вызова работу не увидит никто - карточка приемки строится только из твоей заявки.'
-FRAME_ASK_TEXT_V210='Нужно решение человека - спроси, а не гадай и не отчитывайся "сделайте руками": claude-agent-ask --question "<вопрос>" (можно добавить --options "а|б|в" и --context "..."). Прогон на этом закончится, вопрос уйдет человеку карточкой, его ответ придет тебе следующим событием.'
+FRAME_WORKTREE_TEXT_V210='Протокол контура. У тебя нет git - эту команду можно позвать только ОДИН раз и СРАЗУ, пока рабочее дерево еще чистое: ai-agent-done --summary "<что собираешься сделать, одной фразой>". Дальше просто работай - рантайм закоммитит твои изменения сам, когда прогон завершится. Без этого вызова работу не увидит никто - карточка приемки строится только из твоей заявки.'
+FRAME_DIRECT_TEXT_V210='Протокол контура. Когда работа готова к показу человеку - объяви об этом сам: ai-agent-done --summary "<что сделано, одной фразой>". Предъявляется список измененных файлов, контур считает его сам. Без этого вызова работу не увидит никто - карточка приемки строится только из твоей заявки.'
+FRAME_ASK_TEXT_V210='Нужно решение человека - спроси, а не гадай и не отчитывайся "сделайте руками": ai-agent-ask --question "<вопрос>" (можно добавить --options "а|б|в" и --context "..."). Прогон на этом закончится, вопрос уйдет человеку карточкой, его ответ придет тебе следующим событием.'
 
 # =============================================================== U17 (V2.10 T2)
 echo "=== U17: штатный шаблон examples/task-template.yaml.example доезжает поясом до раннера (не legacy-blacklist) ==="
-CLAUDE_RC_PROJECTS_FILE_U17="$TMP/projects-u17.yaml"
+AI_RC_PROJECTS_FILE_U17="$TMP/projects-u17.yaml"
 PROJ_U17="$TMP/proj-u17"; mkdir -p "$PROJ_U17"
 git -C "$PROJ_U17" init -q
 ( cd "$PROJ_U17" && echo hi > f.txt && git add f.txt && git -c user.email=t@t -c user.name=t commit -qm init )
-printf 'demoprojtpl: %s\n' "$PROJ_U17" > "$CLAUDE_RC_PROJECTS_FILE_U17"
-OUT_U17=$(CLAUDE_RC_PROJECTS_FILE="$CLAUDE_RC_PROJECTS_FILE_U17" \
-  CLAUDE_RC_TASK_TEMPLATE="$HERE/../examples/task-template.yaml.example" \
+printf 'demoprojtpl: %s\n' "$PROJ_U17" > "$AI_RC_PROJECTS_FILE_U17"
+OUT_U17=$(AI_RC_PROJECTS_FILE="$AI_RC_PROJECTS_FILE_U17" \
+  AI_RC_TASK_TEMPLATE="$HERE/../examples/task-template.yaml.example" \
   "$RC" agent new-task --name evtu17tpl --project demoprojtpl --text "u17 template smoke" \
   2>"$TMP/u17.err"); RC_U17=$?
 [[ "$RC_U17" == 0 ]] && ok || fail "U17: new-task со штатным шаблоном проходит (got $RC_U17: $(cat "$TMP/u17.err"))"
-AG_U17="$CLAUDE_AGENTS_DIR/evtu17tpl"
+AG_U17="$AI_AGENTS_DIR/evtu17tpl"
 [[ -f "$AG_U17/spec.yaml" ]] && ok || fail "U17: агент реально создан из штатного шаблона"
 "$RUN" intake "$AG_U17" >/dev/null
 ARGV_U17="$TMP/argv-u17.txt"
@@ -692,7 +692,7 @@ SLJ_U17="$AG_U17/agent-settings.json"
 # "Write"/"Edit", а также отдельный путевой "Write(...)" в этом файле больше
 # НЕ бывает.
 CWD_U17=$(cd "$AG_U17/work" && pwd -P)
-for perm in "Edit(//$CWD_U17/**)" "Bash(claude-agent-done:*)" "Bash(claude-agent-ask:*)"; do
+for perm in "Edit(//$CWD_U17/**)" "Bash(ai-agent-done:*)" "Bash(ai-agent-ask:*)"; do
   [[ "$(perm_allow_has_v210 "$SLJ_U17" "$perm")" == "True" ]] \
     && ok || fail "U17: permissions.allow содержит $perm"
 done
@@ -700,7 +700,7 @@ done
   && ok || fail "U17: permissions.deny непуст (примешан эшелон доверенных каналов, хотя спека несет deny:[])"
 
 # =============================================================== U18 (V2.10 T3, ws=worktree)
-echo "=== U18: ws=worktree + валидный пояс - рамка зовет claude-agent-done, с последствием невызова, ВЫШЕ блока события ==="
+echo "=== U18: ws=worktree + валидный пояс - рамка зовет ai-agent-done, с последствием невызова, ВЫШЕ блока события ==="
 PROJ_U18="$TMP/proj-u18"; mkdir -p "$PROJ_U18"
 git -C "$PROJ_U18" init -q
 ( cd "$PROJ_U18" && echo hi > f.txt && git add f.txt && git -c user.email=t@t -c user.name=t commit -qm init )
@@ -717,13 +717,13 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
 # §3d.1: у агента нет git вообще (обертка claude-agent-commit упразднена) -
-# рамка worktree зовет ОДНУ команду, claude-agent-done, - только она и
+# рамка worktree зовет ОДНУ команду, ai-agent-done, - только она и
 # обязана быть объявлена поясом, иначе рамки нет вовсе (см. U25).
 permissions:
-  allow: ["Write", "Edit", "Bash(claude-agent-done:*)"]
+  allow: ["Write", "Edit", "Bash(ai-agent-done:*)"]
 EOF
 assert "U18 create" 0 "$RC" agent create evtu18done --spec "$TMP/spec-u18.yaml"
-AG_U18="$CLAUDE_AGENTS_DIR/evtu18done"
+AG_U18="$AI_AGENTS_DIR/evtu18done"
 "$RUN" spool-put evtu18done --text "u18-event-marker" >/dev/null
 "$RUN" intake "$AG_U18" >/dev/null
 PROMPT_U18="$TMP/prompt-u18.txt"
@@ -731,18 +731,18 @@ PROMPT_DUMP_FILE="$PROMPT_U18" "$RUN" step "$AG_U18" >/dev/null 2>"$TMP/u18-step
 [[ -s "$PROMPT_U18" ]] && ok || fail "U18: промпт сдампен"
 grep -qF "$FRAME_WORKTREE_TEXT_V210" "$PROMPT_U18" \
   && ok || fail "U18: рамка протокола worktree - точный текст §2.1 (голден)"
-IDX_FRAME_U18=$(python3 -c "print(open('$PROMPT_U18').read().find('claude-agent-done --summary'))")
+IDX_FRAME_U18=$(python3 -c "print(open('$PROMPT_U18').read().find('ai-agent-done --summary'))")
 IDX_EVENT_U18=$(python3 -c "print(open('$PROMPT_U18').read().find('u18-event-marker'))")
 [[ "$IDX_FRAME_U18" != "-1" && "$IDX_EVENT_U18" != "-1" && "$IDX_FRAME_U18" -lt "$IDX_EVENT_U18" ]] \
   && ok || fail "U18: рамка протокола идет ВЫШЕ блока события (frame@$IDX_FRAME_U18 event@$IDX_EVENT_U18)"
 
 # =============================================================== U19 (V2.10 T3, ws=direct)
-echo "=== U19: ws=direct + валидный пояс - та же команда claude-agent-done, БЕЗ требования коммита ==="
+echo "=== U19: ws=direct + валидный пояс - та же команда ai-agent-done, БЕЗ требования коммита ==="
 PROJ_U19="$TMP/proj-u19"; mkdir -p "$PROJ_U19"
 AG_U19=$(mk_event evtu19done 'workspace: direct
 project: '"$PROJ_U19"'
 permissions:
-  allow: ["Write", "Edit", "Bash(claude-agent-done:*)"]')
+  allow: ["Write", "Edit", "Bash(ai-agent-done:*)"]')
 "$RUN" spool-put evtu19done --text "u19-event" >/dev/null
 "$RUN" intake "$AG_U19" >/dev/null
 PROMPT_U19="$TMP/prompt-u19.txt"
@@ -765,12 +765,12 @@ grep -qF "Зови ПОСЛЕ коммита" "$PROMPT_U19" \
 # рамка есть и промпт отличается от baseline (иначе рамка не появилась вовсе).
 # Правка ревизии 5 (§2.0 п.2, сужение по P10): валидного permissions
 # недостаточно самого по себе - пояс обязан ОБЪЯВЛЯТЬ команду
-# (Bash(claude-agent-ask... или голый Bash). "permissions с одним Read" из
+# (Bash(ai-agent-ask... или голый Bash). "permissions с одним Read" из
 # предыдущих ревизий этого кейса под новым правилом больше не триггерит
-# рамку - allow ниже дописан объявлением claude-agent-ask, чтобы кейс
+# рамку - allow ниже дописан объявлением ai-agent-ask, чтобы кейс
 # по-прежнему проверял то, что заявлен: "workspace не влияет", а не
 # случайно упал на другом, более узком условии.
-echo "=== U20: ws=none без questions/ - валидный permissions С объявлением claude-agent-ask ДОБАВЛЯЕТ рамку вопроса (не байт-в-байт: §2.2 не завязан на workspace) ==="
+echo "=== U20: ws=none без questions/ - валидный permissions С объявлением ai-agent-ask ДОБАВЛЯЕТ рамку вопроса (не байт-в-байт: §2.2 не завязан на workspace) ==="
 AG_U20BASE=$(mk_event evtu20base '')
 "$RUN" spool-put evtu20base --text "u20-shared-marker" >/dev/null
 "$RUN" intake "$AG_U20BASE" >/dev/null
@@ -783,7 +783,7 @@ grep -qF "$FRAME_ASK_TEXT_V210" "$PROMPT_U20BASE" \
   && fail "U20: baseline БЕЗ permissions не должен нести рамку вопроса (gate §2.0 не пройден)" || ok
 
 AG_U20PERM=$(mk_event evtu20perm 'permissions:
-  allow: ["Read", "Bash(claude-agent-ask:*)"]')
+  allow: ["Read", "Bash(ai-agent-ask:*)"]')
 "$RUN" spool-put evtu20perm --text "u20-shared-marker" >/dev/null
 "$RUN" intake "$AG_U20PERM" >/dev/null
 PROMPT_U20PERM="$TMP/prompt-u20perm.txt"
@@ -811,12 +811,12 @@ grep -qF "$FRAME_ASK_TEXT_V210" "$PROMPT_U20PERM" \
 # (run_event), само попадание туда и есть событийный путь. U21a/U21b
 # проверяют РЕШАЮЩУЮ пару по каталогу (обязаны дать ОДИНАКОВЫЙ результат),
 # U20 выше проверяет то же по workspace (ws=none тоже получает рамку).
-# Ревизия 5: allow дописан объявлением claude-agent-ask - без него (просто
+# Ревизия 5: allow дописан объявлением ai-agent-ask - без него (просто
 # "Read") пояс не объявляет команду, и по новому §2.0 п.2 рамки не будет
 # вовсе (см. U26), что смешало бы этот кейс с другим условием.
 echo "=== U21a: type=event БЕЗ каталога questions/ - рамка ask есть (решающий кейс: старый гейт по каталогу отвергнут) ==="
 AG_U21A=$(mk_event evtu21a 'permissions:
-  allow: ["Read", "Bash(claude-agent-ask:*)"]')
+  allow: ["Read", "Bash(ai-agent-ask:*)"]')
 "$RUN" spool-put evtu21a --text "u21a-event" >/dev/null
 "$RUN" intake "$AG_U21A" >/dev/null
 [[ ! -d "$AG_U21A/questions" ]] && ok || fail "U21a: fixture - questions/ реально отсутствует у свежего event-агента"
@@ -828,7 +828,7 @@ grep -qF "$FRAME_ASK_TEXT_V210" "$PROMPT_U21A" \
 
 echo "=== U21b: type=event С каталогом questions/ (закрытый вопрос) - рамка ask ТА ЖЕ, каталог не влияет ==="
 AG_U21B=$(mk_event evtu21b 'permissions:
-  allow: ["Read", "Bash(claude-agent-ask:*)"]')
+  allow: ["Read", "Bash(ai-agent-ask:*)"]')
 "$RUN" spool-put evtu21b --text "u21b-event" >/dev/null
 "$RUN" intake "$AG_U21B" >/dev/null
 QID_U21B=$(ask_direct_v210 "$AG_U21B" "u21b-stub-key" "u21b stub question")
@@ -864,7 +864,7 @@ source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
 EOF
 assert "U22 create (без permissions)" 0 "$RC" agent create evtu22noperm --spec "$TMP/spec-u22.yaml"
-AG_U22="$CLAUDE_AGENTS_DIR/evtu22noperm"
+AG_U22="$AI_AGENTS_DIR/evtu22noperm"
 "$RUN" spool-put evtu22noperm --text "u22-event" >/dev/null
 "$RUN" intake "$AG_U22" >/dev/null
 QID_U22=$(ask_direct_v210 "$AG_U22" "u22-stub-key" "u22 stub question")
@@ -875,10 +875,10 @@ PROMPT_DUMP_FILE="$PROMPT_U22" "$RUN" step "$AG_U22" >/dev/null 2>"$TMP/u22-step
 [[ -s "$PROMPT_U22" ]] && ok || fail "U22: промпт сдампен"
 [[ ! -f "$AG_U22/agent-settings.json" ]] \
   && ok || fail "U22: fixture - агент реально без пояса (agent-settings.json не создан, legacy-blacklist)"
-grep -qF "claude-agent-done" "$PROMPT_U22" \
-  && fail "U22: без permissions рамка НЕ должна упоминать claude-agent-done, даже при ws=worktree" || ok
-grep -qF "claude-agent-ask" "$PROMPT_U22" \
-  && fail "U22: без permissions рамка НЕ должна упоминать claude-agent-ask, даже при questions/" || ok
+grep -qF "ai-agent-done" "$PROMPT_U22" \
+  && fail "U22: без permissions рамка НЕ должна упоминать ai-agent-done, даже при ws=worktree" || ok
+grep -qF "ai-agent-ask" "$PROMPT_U22" \
+  && fail "U22: без permissions рамка НЕ должна упоминать ai-agent-ask, даже при questions/" || ok
 
 unset CLAUDE_CONFIG_DIR
 
@@ -901,13 +901,13 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
 permissions:
-  allow: ["Read","Write","Edit","$PRESCOPED_U23","Bash(claude-agent-done:*)"]
+  allow: ["Read","Write","Edit","$PRESCOPED_U23","Bash(ai-agent-done:*)"]
   deny: []
   ask: []
 EOF
 export CLAUDE_CONFIG_DIR="$TMP/cfg-v210b"; mkdir -p "$CLAUDE_CONFIG_DIR"
 assert "U23 create" 0 "$RC" agent create evtu23wr --spec "$TMP/spec-u23.yaml"
-AG_U23="$CLAUDE_AGENTS_DIR/evtu23wr"
+AG_U23="$AI_AGENTS_DIR/evtu23wr"
 "$RUN" spool-put evtu23wr --text "u23-event" >/dev/null
 "$RUN" intake "$AG_U23" >/dev/null
 "$RUN" step "$AG_U23" >/dev/null 2>"$TMP/u23-step.err"
@@ -955,7 +955,7 @@ DEAD_WRITE_U24="Write(//$CWD_U24/**)"
 # V2.10 (ревизия 5, последнее сужение §2.0): рамка про КОНКРЕТНУЮ команду
 # контура появляется только если пояс эту команду реально ОБЪЯВЛЯЕТ -
 # запись в permissions.allow либо в точности "Bash", либо начинается с
-# "Bash(claude-agent-done" / "Bash(claude-agent-ask" для соответствующей
+# "Bash(ai-agent-done" / "Bash(ai-agent-ask" для соответствующей
 # рамки. Повод: существующий голден V2.4 P10 (tests/test-agent-permit.sh,
 # пояс ["Bash(git commit:*)"]) покраснел на прежней (более широкой) версии
 # правила "валидный permissions -> обе рамки" - он не дает ни одной команды
@@ -966,7 +966,7 @@ DEAD_WRITE_U24="Write(//$CWD_U24/**)"
 export CLAUDE_CONFIG_DIR="$TMP/cfg-v210c"; mkdir -p "$CLAUDE_CONFIG_DIR"
 
 # =============================================================== U25 (V2.10 T3, ревизия 5)
-echo "=== U25: валидный permissions, workspace:worktree, НЕТ claude-agent-done И НЕТ голого Bash - рамки готовности НЕТ, промпт байт-в-байт с baseline ==="
+echo "=== U25: валидный permissions, workspace:worktree, НЕТ ai-agent-done И НЕТ голого Bash - рамки готовности НЕТ, промпт байт-в-байт с baseline ==="
 PROJ_U25="$TMP/proj-u25"; mkdir -p "$PROJ_U25"
 git -C "$PROJ_U25" init -q
 ( cd "$PROJ_U25" && echo hi > f.txt && git add f.txt && git -c user.email=t@t -c user.name=t commit -qm init )
@@ -984,7 +984,7 @@ source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
 EOF
 assert "U25 create baseline (без permissions)" 0 "$RC" agent create evtu25base --spec "$TMP/spec-u25base.yaml"
-AG_U25BASE="$CLAUDE_AGENTS_DIR/evtu25base"
+AG_U25BASE="$AI_AGENTS_DIR/evtu25base"
 "$RUN" spool-put evtu25base --text "u25-shared-marker" >/dev/null
 "$RUN" intake "$AG_U25BASE" >/dev/null
 PROMPT_U25BASE="$TMP/prompt-u25base.txt"
@@ -1009,21 +1009,21 @@ permissions:
   allow: ["Read", "Write", "Bash(git commit:*)"]
 EOF
 assert "U25 create (permissions есть, done/bare-Bash не объявлены)" 0 "$RC" agent create evtu25perm --spec "$TMP/spec-u25perm.yaml"
-AG_U25PERM="$CLAUDE_AGENTS_DIR/evtu25perm"
+AG_U25PERM="$AI_AGENTS_DIR/evtu25perm"
 "$RUN" spool-put evtu25perm --text "u25-shared-marker" >/dev/null
 "$RUN" intake "$AG_U25PERM" >/dev/null
 PROMPT_U25PERM="$TMP/prompt-u25perm.txt"
 MOCK_RESULT_TEXT="u25-golden-result" PROMPT_DUMP_FILE="$PROMPT_U25PERM" "$RUN" step "$AG_U25PERM" >/dev/null 2>"$TMP/u25perm.err"
-[[ -s "$PROMPT_U25PERM" ]] && ok || fail "U25: промпт (permissions без claude-agent-done/bare Bash) сдампен"
-grep -qF "claude-agent-done" "$PROMPT_U25PERM" \
-  && fail "U25: рамка готовности НЕ должна появиться - пояс не объявляет ни Bash(claude-agent-done..., ни голый Bash" || ok
+[[ -s "$PROMPT_U25PERM" ]] && ok || fail "U25: промпт (permissions без ai-agent-done/bare Bash) сдампен"
+grep -qF "ai-agent-done" "$PROMPT_U25PERM" \
+  && fail "U25: рамка готовности НЕ должна появиться - пояс не объявляет ни Bash(ai-agent-done..., ни голый Bash" || ok
 KU25PERM=$(ls "$AG_U25PERM/inbox/done" 2>/dev/null | sed 's/.json//' | head -1)
 MASKED_U25PERM=$(mask_prompt_v210 "$PROMPT_U25PERM" "$KU25PERM")
 [[ "$MASKED_U25PERM" == "$GOLDEN_U25" ]] \
   && ok || fail "U25: промпт байт-в-байт с baseline - permissions есть, но команда не объявлена, для рамки готовности это как ее отсутствие"
 
 # =============================================================== U26 (V2.10 T3, ревизия 5)
-echo "=== U26: валидный permissions, НЕТ claude-agent-ask И НЕТ голого Bash - рамки вопроса НЕТ, промпт байт-в-байт с baseline (та же проверка, для ask) ==="
+echo "=== U26: валидный permissions, НЕТ ai-agent-ask И НЕТ голого Bash - рамки вопроса НЕТ, промпт байт-в-байт с baseline (та же проверка, для ask) ==="
 AG_U26BASE=$(mk_event evtu26base '')
 "$RUN" spool-put evtu26base --text "u26-shared-marker" >/dev/null
 "$RUN" intake "$AG_U26BASE" >/dev/null
@@ -1039,9 +1039,9 @@ AG_U26PERM=$(mk_event evtu26perm 'permissions:
 "$RUN" intake "$AG_U26PERM" >/dev/null
 PROMPT_U26PERM="$TMP/prompt-u26perm.txt"
 MOCK_RESULT_TEXT="u26-golden-result" PROMPT_DUMP_FILE="$PROMPT_U26PERM" "$RUN" step "$AG_U26PERM" >/dev/null 2>"$TMP/u26perm.err"
-[[ -s "$PROMPT_U26PERM" ]] && ok || fail "U26: промпт (permissions без claude-agent-ask/bare Bash) сдампен"
-grep -qF "claude-agent-ask" "$PROMPT_U26PERM" \
-  && fail "U26: рамка вопроса НЕ должна появиться - пояс не объявляет ни Bash(claude-agent-ask..., ни голый Bash" || ok
+[[ -s "$PROMPT_U26PERM" ]] && ok || fail "U26: промпт (permissions без ai-agent-ask/bare Bash) сдампен"
+grep -qF "ai-agent-ask" "$PROMPT_U26PERM" \
+  && fail "U26: рамка вопроса НЕ должна появиться - пояс не объявляет ни Bash(ai-agent-ask..., ни голый Bash" || ok
 KU26PERM=$(ls "$AG_U26PERM/inbox/done" 2>/dev/null | sed 's/.json//' | head -1)
 MASKED_U26PERM=$(mask_prompt_v210 "$PROMPT_U26PERM" "$KU26PERM")
 [[ "$MASKED_U26PERM" == "$GOLDEN_U26" ]] \
@@ -1049,10 +1049,10 @@ MASKED_U26PERM=$(mask_prompt_v210 "$PROMPT_U26PERM" "$KU26PERM")
 
 # =============================================================== U27 (V2.10 T3, ревизия 5: рамки независимы;
 # обновлено §3d.1 - у агента нет git вообще, рамка worktree теперь зовет
-# ОДНУ команду контура (claude-agent-done). U27a проверяет, что ее одной
-# достаточно - рамка готовности есть, а рамка вопроса (claude-agent-ask не
+# ОДНУ команду контура (ai-agent-done). U27a проверяет, что ее одной
+# достаточно - рамка готовности есть, а рамка вопроса (ai-agent-ask не
 # объявлен) по-прежнему отсутствует - независимость рамок).
-echo "=== U27a: пояс объявляет ТОЛЬКО claude-agent-done (ws=worktree) - рамка готовности ЕСТЬ (§3d.1: одной команды достаточно), рамка вопроса отсутствует ==="
+echo "=== U27a: пояс объявляет ТОЛЬКО ai-agent-done (ws=worktree) - рамка готовности ЕСТЬ (§3d.1: одной команды достаточно), рамка вопроса отсутствует ==="
 PROJ_U27="$TMP/proj-u27"; mkdir -p "$PROJ_U27"
 git -C "$PROJ_U27" init -q
 ( cd "$PROJ_U27" && echo hi > f.txt && git add f.txt && git -c user.email=t@t -c user.name=t commit -qm init )
@@ -1069,21 +1069,21 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
 permissions:
-  allow: ["Read", "Bash(claude-agent-done:*)"]
+  allow: ["Read", "Bash(ai-agent-done:*)"]
 EOF
-assert "U27a create (только claude-agent-done)" 0 "$RC" agent create evtu27a --spec "$TMP/spec-u27a.yaml"
-AG_U27A="$CLAUDE_AGENTS_DIR/evtu27a"
+assert "U27a create (только ai-agent-done)" 0 "$RC" agent create evtu27a --spec "$TMP/spec-u27a.yaml"
+AG_U27A="$AI_AGENTS_DIR/evtu27a"
 "$RUN" spool-put evtu27a --text "u27a-event" >/dev/null
 "$RUN" intake "$AG_U27A" >/dev/null
 PROMPT_U27A="$TMP/prompt-u27a.txt"
 PROMPT_DUMP_FILE="$PROMPT_U27A" "$RUN" step "$AG_U27A" >/dev/null 2>"$TMP/u27a.err"
 [[ -s "$PROMPT_U27A" ]] && ok || fail "U27a: промпт сдампен"
 grep -qF "$FRAME_WORKTREE_TEXT_V210" "$PROMPT_U27A" \
-  && ok || fail "U27a: рамка готовности ЕСТЬ - claude-agent-done один достаточен для worktree (§3d.1)"
-grep -qF "claude-agent-ask" "$PROMPT_U27A" \
-  && fail "U27a: рамка вопроса НЕ должна появиться - claude-agent-ask не объявлен (реализация не должна путать объявление одной команды с другой)" || ok
+  && ok || fail "U27a: рамка готовности ЕСТЬ - ai-agent-done один достаточен для worktree (§3d.1)"
+grep -qF "ai-agent-ask" "$PROMPT_U27A" \
+  && fail "U27a: рамка вопроса НЕ должна появиться - ai-agent-ask не объявлен (реализация не должна путать объявление одной команды с другой)" || ok
 
-echo "=== U27b: пояс объявляет ТОЛЬКО claude-agent-ask - рамка вопроса есть, рамка готовности ОТСУТСТВУЕТ ==="
+echo "=== U27b: пояс объявляет ТОЛЬКО ai-agent-ask - рамка вопроса есть, рамка готовности ОТСУТСТВУЕТ ==="
 cat > "$TMP/spec-u27b.yaml" <<EOF
 schema: 1
 name: evtu27b
@@ -1097,19 +1097,19 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
 permissions:
-  allow: ["Read", "Bash(claude-agent-ask:*)"]
+  allow: ["Read", "Bash(ai-agent-ask:*)"]
 EOF
-assert "U27b create (только claude-agent-ask)" 0 "$RC" agent create evtu27b --spec "$TMP/spec-u27b.yaml"
-AG_U27B="$CLAUDE_AGENTS_DIR/evtu27b"
+assert "U27b create (только ai-agent-ask)" 0 "$RC" agent create evtu27b --spec "$TMP/spec-u27b.yaml"
+AG_U27B="$AI_AGENTS_DIR/evtu27b"
 "$RUN" spool-put evtu27b --text "u27b-event" >/dev/null
 "$RUN" intake "$AG_U27B" >/dev/null
 PROMPT_U27B="$TMP/prompt-u27b.txt"
 PROMPT_DUMP_FILE="$PROMPT_U27B" "$RUN" step "$AG_U27B" >/dev/null 2>"$TMP/u27b.err"
 [[ -s "$PROMPT_U27B" ]] && ok || fail "U27b: промпт сдампен"
 grep -qF "$FRAME_ASK_TEXT_V210" "$PROMPT_U27B" \
-  && ok || fail "U27b: рамка вопроса есть (claude-agent-ask объявлен)"
-grep -qF "claude-agent-done" "$PROMPT_U27B" \
-  && fail "U27b: рамка готовности НЕ должна появиться - claude-agent-done не объявлен (реализация не должна путать объявление одной команды с другой)" || ok
+  && ok || fail "U27b: рамка вопроса есть (ai-agent-ask объявлен)"
+grep -qF "ai-agent-done" "$PROMPT_U27B" \
+  && fail "U27b: рамка готовности НЕ должна появиться - ai-agent-done не объявлен (реализация не должна путать объявление одной команды с другой)" || ok
 
 # =============================================================== U28 (V2.10 T3, ревизия 5)
 echo "=== U28: голый Bash в allow - обе рамки есть (готовности и вопроса) ==="
@@ -1132,16 +1132,16 @@ permissions:
   allow: ["Read", "Bash"]
 EOF
 assert "U28 create (голый Bash)" 0 "$RC" agent create evtu28 --spec "$TMP/spec-u28.yaml"
-AG_U28="$CLAUDE_AGENTS_DIR/evtu28"
+AG_U28="$AI_AGENTS_DIR/evtu28"
 "$RUN" spool-put evtu28 --text "u28-event" >/dev/null
 "$RUN" intake "$AG_U28" >/dev/null
 PROMPT_U28="$TMP/prompt-u28.txt"
 PROMPT_DUMP_FILE="$PROMPT_U28" "$RUN" step "$AG_U28" >/dev/null 2>"$TMP/u28.err"
 [[ -s "$PROMPT_U28" ]] && ok || fail "U28: промпт сдампен"
 grep -qF "$FRAME_WORKTREE_TEXT_V210" "$PROMPT_U28" \
-  && ok || fail "U28: рамка готовности есть (голый Bash покрывает claude-agent-done)"
+  && ok || fail "U28: рамка готовности есть (голый Bash покрывает ai-agent-done)"
 grep -qF "$FRAME_ASK_TEXT_V210" "$PROMPT_U28" \
-  && ok || fail "U28: рамка вопроса есть (голый Bash покрывает claude-agent-ask)"
+  && ok || fail "U28: рамка вопроса есть (голый Bash покрывает ai-agent-ask)"
 
 # =============================================================== U29 (V2.10 T3+T4, ревизия 5: взаимодействие с §1.1)
 echo "=== U29: путевое переписывание Write/Edit в единый Edit(...) (§1.1) не влияет на сверку объявления команд контура - обе рамки есть, Write/Edit все равно схлопнуты в settings.json ==="
@@ -1160,12 +1160,12 @@ memory_max_mb: 100
 limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
-# §3d.1: рамка worktree требует ОДНУ команду - claude-agent-done (см. U27a).
+# §3d.1: рамка worktree требует ОДНУ команду - ai-agent-done (см. U27a).
 permissions:
-  allow: ["Write", "Edit", "Bash(claude-agent-done:*)", "Bash(claude-agent-ask:*)"]
+  allow: ["Write", "Edit", "Bash(ai-agent-done:*)", "Bash(ai-agent-ask:*)"]
 EOF
 assert "U29 create" 0 "$RC" agent create evtu29 --spec "$TMP/spec-u29.yaml"
-AG_U29="$CLAUDE_AGENTS_DIR/evtu29"
+AG_U29="$AI_AGENTS_DIR/evtu29"
 "$RUN" spool-put evtu29 --text "u29-event" >/dev/null
 "$RUN" intake "$AG_U29" >/dev/null
 PROMPT_U29="$TMP/prompt-u29.txt"
@@ -1182,19 +1182,19 @@ CWD_U29=$(cd "$AG_U29/work" && pwd -P)
   && ok || fail "U29: путевого Write(...) отдельно быть не должно - голый Write схлопывается в Edit(...), сверка объявления команд не мешает этому (§1.1)"
 [[ "$(perm_allow_has_v210 "$SLJ_U29" "Edit(//$CWD_U29/**)")" == "True" ]] \
   && ok || fail "U29: Edit(...) присутствует (Write и Edit схлопнуты в него) - сверка объявления команд не мешает §1.1"
-[[ "$(perm_allow_has_v210 "$SLJ_U29" "Bash(claude-agent-done:*)")" == "True" ]] \
-  && ok || fail "U29: Bash(claude-agent-done:*) остается нетронутым (не подвергается путевому переписыванию)"
-[[ "$(perm_allow_has_v210 "$SLJ_U29" "Bash(claude-agent-ask:*)")" == "True" ]] \
-  && ok || fail "U29: Bash(claude-agent-ask:*) остается нетронутым (не подвергается путевому переписыванию)"
+[[ "$(perm_allow_has_v210 "$SLJ_U29" "Bash(ai-agent-done:*)")" == "True" ]] \
+  && ok || fail "U29: Bash(ai-agent-done:*) остается нетронутым (не подвергается путевому переписыванию)"
+[[ "$(perm_allow_has_v210 "$SLJ_U29" "Bash(ai-agent-ask:*)")" == "True" ]] \
+  && ok || fail "U29: Bash(ai-agent-ask:*) остается нетронутым (не подвергается путевому переписыванию)"
 
 # =============================================================== U30 (V2.10 T3, §2.0 п.2, аудит серьезная 7)
 # Граница имени команды: голого сравнения по префиксу строки недостаточно -
-# "Bash(claude-agent-done-disabled:*)" начинается с "Bash(claude-agent-done",
+# "Bash(ai-agent-done-disabled:*)" начинается с "Bash(ai-agent-done",
 # но объявляет ДРУГУЮ, несуществующую команду. Сверка обязана отличать это
-# от настоящего объявления claude-agent-done - и в ТОЧНОЙ форме без ":*"
+# от настоящего объявления ai-agent-done - и в ТОЧНОЙ форме без ":*"
 # тоже (§2.0 п.2 перечисляет "Bash(<команда>)" как валидную форму наравне с
 # "Bash(<команда>:*)").
-echo "=== U30a: Bash(claude-agent-done-disabled:*) НЕ считается объявлением claude-agent-done - рамки готовности НЕТ (граница имени, аудит серьезная 7) ==="
+echo "=== U30a: Bash(ai-agent-done-disabled:*) НЕ считается объявлением ai-agent-done - рамки готовности НЕТ (граница имени, аудит серьезная 7) ==="
 PROJ_U30="$TMP/proj-u30"; mkdir -p "$PROJ_U30"
 git -C "$PROJ_U30" init -q
 ( cd "$PROJ_U30" && echo hi > f.txt && git add f.txt && git -c user.email=t@t -c user.name=t commit -qm init )
@@ -1210,29 +1210,29 @@ memory_max_mb: 100
 limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
-# §3d.1: рамка worktree требует ОДНУ команду - claude-agent-done. Здесь
-# объявлена ТОЛЬКО claude-agent-done-disabled - отсутствие рамки готовности
+# §3d.1: рамка worktree требует ОДНУ команду - ai-agent-done. Здесь
+# объявлена ТОЛЬКО ai-agent-done-disabled - отсутствие рамки готовности
 # обязано объясняться границей имени (аудит V2.10 r2, минорная 11), а не
 # чем-то еще.
 permissions:
-  allow: ["Read", "Bash(claude-agent-done-disabled:*)"]
+  allow: ["Read", "Bash(ai-agent-done-disabled:*)"]
 EOF
 assert "U30a create" 0 "$RC" agent create evtu30a --spec "$TMP/spec-u30a.yaml"
-AG_U30A="$CLAUDE_AGENTS_DIR/evtu30a"
+AG_U30A="$AI_AGENTS_DIR/evtu30a"
 "$RUN" spool-put evtu30a --text "u30a-event" >/dev/null
 "$RUN" intake "$AG_U30A" >/dev/null
 PROMPT_U30A="$TMP/prompt-u30a.txt"
 PROMPT_DUMP_FILE="$PROMPT_U30A" "$RUN" step "$AG_U30A" >/dev/null 2>"$TMP/u30a.err"
 [[ -s "$PROMPT_U30A" ]] && ok || fail "U30a: промпт сдампен"
-grep -qF "claude-agent-done --summary" "$PROMPT_U30A" \
-  && fail "U30a: рамка готовности НЕ должна появиться - claude-agent-done-disabled это другая команда, не claude-agent-done" || ok
+grep -qF "ai-agent-done --summary" "$PROMPT_U30A" \
+  && fail "U30a: рамка готовности НЕ должна появиться - ai-agent-done-disabled это другая команда, не ai-agent-done" || ok
 
 # §3c (аудит V2.10 r2, серьезная 9): точная форма без ':*' разрешает в
 # Claude Code только ГОЛЫЙ вызов без единого аргумента - обертке нужен
 # обязательный --summary/--message, такой вызов CLI гарантированно отобьет.
 # Признавать такую запись "объявлением" значило бы звать агента к заведомо
 # отказывающей команде - поэтому теперь она НЕ считается объявлением.
-echo "=== U30b: Bash(claude-agent-done) - ТОЧНАЯ форма без :* НЕ покрывает обязательный --summary/--message - рамки готовности НЕТ (аудит V2.10 r2, серьезная 9) ==="
+echo "=== U30b: Bash(ai-agent-done) - ТОЧНАЯ форма без :* НЕ покрывает обязательный --summary/--message - рамки готовности НЕТ (аудит V2.10 r2, серьезная 9) ==="
 cat > "$TMP/spec-u30b.yaml" <<EOF
 schema: 1
 name: evtu30b
@@ -1246,19 +1246,19 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
 permissions:
-  allow: ["Read", "Bash(claude-agent-done)"]
+  allow: ["Read", "Bash(ai-agent-done)"]
 EOF
 assert "U30b create" 0 "$RC" agent create evtu30b --spec "$TMP/spec-u30b.yaml"
-AG_U30B="$CLAUDE_AGENTS_DIR/evtu30b"
+AG_U30B="$AI_AGENTS_DIR/evtu30b"
 "$RUN" spool-put evtu30b --text "u30b-event" >/dev/null
 "$RUN" intake "$AG_U30B" >/dev/null
 PROMPT_U30B="$TMP/prompt-u30b.txt"
 PROMPT_DUMP_FILE="$PROMPT_U30B" "$RUN" step "$AG_U30B" >/dev/null 2>"$TMP/u30b.err"
 [[ -s "$PROMPT_U30B" ]] && ok || fail "U30b: промпт сдампен"
 grep -qF "$FRAME_WORKTREE_TEXT_V210" "$PROMPT_U30B" \
-  && fail "U30b: рамка готовности НЕ должна появиться - точная форма Bash(claude-agent-done) без :* разрешает только вызов БЕЗ аргументов (аудит серьезная 9)" || ok
+  && fail "U30b: рамка готовности НЕ должна появиться - точная форма Bash(ai-agent-done) без :* разрешает только вызов БЕЗ аргументов (аудит серьезная 9)" || ok
 
-echo "=== U30c: Bash(claude-agent-done:*) - реальная wildcard-форма - рамка готовности ЕСТЬ (регресс-пин: фикс серьезной 9 не сузил валидную форму) ==="
+echo "=== U30c: Bash(ai-agent-done:*) - реальная wildcard-форма - рамка готовности ЕСТЬ (регресс-пин: фикс серьезной 9 не сузил валидную форму) ==="
 cat > "$TMP/spec-u30c.yaml" <<EOF
 schema: 1
 name: evtu30c
@@ -1272,10 +1272,10 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
 permissions:
-  allow: ["Read", "Bash(claude-agent-done:*)"]
+  allow: ["Read", "Bash(ai-agent-done:*)"]
 EOF
 assert "U30c create" 0 "$RC" agent create evtu30c --spec "$TMP/spec-u30c.yaml"
-AG_U30C="$CLAUDE_AGENTS_DIR/evtu30c"
+AG_U30C="$AI_AGENTS_DIR/evtu30c"
 "$RUN" spool-put evtu30c --text "u30c-event" >/dev/null
 "$RUN" intake "$AG_U30C" >/dev/null
 PROMPT_U30C="$TMP/prompt-u30c.txt"
@@ -1308,12 +1308,12 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
 permissions:
-  allow: ["Read", "Write", "Bash(claude-agent-done:*)"]
+  allow: ["Read", "Write", "Bash(ai-agent-done:*)"]
   deny: []
   ask: []
 EOF
 assert "U31 create" 0 "$RC" agent create evtu31onlywrite --spec "$TMP/spec-u31.yaml"
-AG_U31="$CLAUDE_AGENTS_DIR/evtu31onlywrite"
+AG_U31="$AI_AGENTS_DIR/evtu31onlywrite"
 "$RUN" spool-put evtu31onlywrite --text "u31-event" >/dev/null
 "$RUN" intake "$AG_U31" >/dev/null
 "$RUN" step "$AG_U31" >/dev/null 2>"$TMP/u31-step.err"
@@ -1337,7 +1337,7 @@ PROJ_U32="$TMP/proj-u32-a[b]c*d?e"; mkdir -p "$PROJ_U32"
 AG_U32=$(mk_event evtu32glob 'workspace: direct
 project: '"$PROJ_U32"'
 permissions:
-  allow: ["Write", "Edit", "Bash(claude-agent-done:*)"]
+  allow: ["Write", "Edit", "Bash(ai-agent-done:*)"]
   deny: []
   ask: []')
 "$RUN" spool-put evtu32glob --text "u32-event" >/dev/null
@@ -1363,7 +1363,7 @@ ESCAPED_U32=$(python3 -c 'import re,sys; print(re.sub(r"([\\\*\?\[\]])", r"\\\1"
 # ровно этот один вызов и ничего больше (--help != --summary); ":*" после
 # произвольного суффикса и одиночный "*" после пробела - обе формы реально
 # несут wildcard-символ и покрывают вызов с --summary.
-echo "=== U33a: Bash(claude-agent-done --help) НЕ считается объявлением - точная форма без wildcard разрешает ровно вызов с --help, а рамка зовет с --summary (§2.0 п.2) ==="
+echo "=== U33a: Bash(ai-agent-done --help) НЕ считается объявлением - точная форма без wildcard разрешает ровно вызов с --help, а рамка зовет с --summary (§2.0 п.2) ==="
 cat > "$TMP/spec-u33a.yaml" <<EOF
 schema: 1
 name: evtu33a
@@ -1377,10 +1377,10 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
 permissions:
-  allow: ["Read", "Bash(claude-agent-done --help)"]
+  allow: ["Read", "Bash(ai-agent-done --help)"]
 EOF
 assert "U33a create" 0 "$RC" agent create evtu33a --spec "$TMP/spec-u33a.yaml"
-AG_U33A="$CLAUDE_AGENTS_DIR/evtu33a"
+AG_U33A="$AI_AGENTS_DIR/evtu33a"
 "$RUN" spool-put evtu33a --text "u33a-event" >/dev/null
 "$RUN" intake "$AG_U33A" >/dev/null
 PROMPT_U33A="$TMP/prompt-u33a.txt"
@@ -1389,7 +1389,7 @@ PROMPT_DUMP_FILE="$PROMPT_U33A" "$RUN" step "$AG_U33A" >/dev/null 2>"$TMP/u33a.e
 grep -qF "$FRAME_WORKTREE_TEXT_V210" "$PROMPT_U33A" \
   && fail "U33a: рамка готовности НЕ должна появиться - объявлен только вызов с --help (без wildcard), а не с --summary (§2.0 п.2)" || ok
 
-echo "=== U33b: Bash(claude-agent-done --summary:*) считается объявлением - wildcard-суффикс после --summary покрывает реальный вызов ==="
+echo "=== U33b: Bash(ai-agent-done --summary:*) считается объявлением - wildcard-суффикс после --summary покрывает реальный вызов ==="
 cat > "$TMP/spec-u33b.yaml" <<EOF
 schema: 1
 name: evtu33b
@@ -1403,19 +1403,19 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
 permissions:
-  allow: ["Read", "Bash(claude-agent-done --summary:*)"]
+  allow: ["Read", "Bash(ai-agent-done --summary:*)"]
 EOF
 assert "U33b create" 0 "$RC" agent create evtu33b --spec "$TMP/spec-u33b.yaml"
-AG_U33B="$CLAUDE_AGENTS_DIR/evtu33b"
+AG_U33B="$AI_AGENTS_DIR/evtu33b"
 "$RUN" spool-put evtu33b --text "u33b-event" >/dev/null
 "$RUN" intake "$AG_U33B" >/dev/null
 PROMPT_U33B="$TMP/prompt-u33b.txt"
 PROMPT_DUMP_FILE="$PROMPT_U33B" "$RUN" step "$AG_U33B" >/dev/null 2>"$TMP/u33b.err"
 [[ -s "$PROMPT_U33B" ]] && ok || fail "U33b: промпт сдампен"
 grep -qF "$FRAME_WORKTREE_TEXT_V210" "$PROMPT_U33B" \
-  && ok || fail "U33b: рамка готовности есть - Bash(claude-agent-done --summary:*) покрывает реальный вызов с --summary"
+  && ok || fail "U33b: рамка готовности есть - Bash(ai-agent-done --summary:*) покрывает реальный вызов с --summary"
 
-echo "=== U33c: Bash(claude-agent-done --summary *) считается объявлением - wildcard через пробел покрывает реальный вызов ==="
+echo "=== U33c: Bash(ai-agent-done --summary *) считается объявлением - wildcard через пробел покрывает реальный вызов ==="
 cat > "$TMP/spec-u33c.yaml" <<EOF
 schema: 1
 name: evtu33c
@@ -1429,17 +1429,17 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
 permissions:
-  allow: ["Read", "Bash(claude-agent-done --summary *)"]
+  allow: ["Read", "Bash(ai-agent-done --summary *)"]
 EOF
 assert "U33c create" 0 "$RC" agent create evtu33c --spec "$TMP/spec-u33c.yaml"
-AG_U33C="$CLAUDE_AGENTS_DIR/evtu33c"
+AG_U33C="$AI_AGENTS_DIR/evtu33c"
 "$RUN" spool-put evtu33c --text "u33c-event" >/dev/null
 "$RUN" intake "$AG_U33C" >/dev/null
 PROMPT_U33C="$TMP/prompt-u33c.txt"
 PROMPT_DUMP_FILE="$PROMPT_U33C" "$RUN" step "$AG_U33C" >/dev/null 2>"$TMP/u33c.err"
 [[ -s "$PROMPT_U33C" ]] && ok || fail "U33c: промпт сдампен"
 grep -qF "$FRAME_WORKTREE_TEXT_V210" "$PROMPT_U33C" \
-  && ok || fail "U33c: рамка готовности есть - Bash(claude-agent-done --summary *) покрывает реальный вызов с --summary"
+  && ok || fail "U33c: рамка готовности есть - Bash(ai-agent-done --summary *) покрывает реальный вызов с --summary"
 
 unset CLAUDE_CONFIG_DIR
 
@@ -1448,7 +1448,7 @@ unset CLAUDE_CONFIG_DIR
 # в поясе обязан переписываться в путевую форму Read(//<cwd>/**) при
 # генерации agent-settings.json - симметрично записи (Write/Edit, см.
 # U23/U24/U29/U31/U32 выше). Написано с чистого листа по самой спеке -
-# bin/claude-agent-run НЕ читан (кроме уже известного из U1-U33 факта: и
+# bin/ai-agent-run НЕ читан (кроме уже известного из U1-U33 факта: и
 # запись, и чтение переписываются в ОДНОМ и том же вызове "$RUN" step,
 # результат - agent-settings.json).
 #
@@ -1502,12 +1502,12 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 workspace: worktree
 permissions:
-  allow: ["Read", "Bash(claude-agent-done:*)"]
+  allow: ["Read", "Bash(ai-agent-done:*)"]
   deny: []
   ask: []
 EOF
 assert "INV-TASK-53a create" 0 "$RC" agent create evtinv53a --spec "$TMP/spec-inv53a.yaml"
-AG_RS_A="$CLAUDE_AGENTS_DIR/evtinv53a"
+AG_RS_A="$AI_AGENTS_DIR/evtinv53a"
 "$RUN" spool-put evtinv53a --text "inv53a-event" >/dev/null
 "$RUN" intake "$AG_RS_A" >/dev/null
 "$RUN" step "$AG_RS_A" >/dev/null 2>"$TMP/inv53a-step.err"
@@ -1525,7 +1525,7 @@ PROJ_RS_B="$TMP/proj-inv53b-a[b]c*d?e f"; mkdir -p "$PROJ_RS_B"
 AG_RS_B=$(mk_event evtinv53b 'workspace: direct
 project: '"$PROJ_RS_B"'
 permissions:
-  allow: ["Read", "Bash(claude-agent-done:*)"]
+  allow: ["Read", "Bash(ai-agent-done:*)"]
   deny: []
   ask: []')
 "$RUN" spool-put evtinv53b --text "inv53b-event" >/dev/null
@@ -1548,7 +1548,7 @@ ESCAPED_RS_B=$(python3 -c 'import re,sys; print(re.sub(r"([\\\*\?\[\]])", r"\\\1
 echo "=== INV-TASK-53c: явно написанная путевая форма Read(//...) остается дословно (контур ее не трогает) ==="
 PRESCOPED_RS_C="Read(//$TMP/pre-scoped-inv53c/**)"
 AG_RS_C=$(mk_event evtinv53c "permissions:
-  allow: [\"$PRESCOPED_RS_C\", \"Bash(claude-agent-done:*)\"]
+  allow: [\"$PRESCOPED_RS_C\", \"Bash(ai-agent-done:*)\"]
   deny: []
   ask: []")
 "$RUN" spool-put evtinv53c --text "inv53c-event" >/dev/null
@@ -1562,7 +1562,7 @@ SLJ_RS_C="$AG_RS_C/agent-settings.json"
 # =============================================================== INV-TASK-53d
 echo "=== INV-TASK-53d: отсутствие Read в поясе ничего не добавляет ==="
 AG_RS_D=$(mk_event evtinv53d 'permissions:
-  allow: ["Write", "Edit", "Bash(claude-agent-done:*)"]
+  allow: ["Write", "Edit", "Bash(ai-agent-done:*)"]
   deny: []
   ask: []')
 "$RUN" spool-put evtinv53d --text "inv53d-event" >/dev/null
@@ -1575,17 +1575,17 @@ SLJ_RS_D="$AG_RS_D/agent-settings.json"
 
 # =============================================================== INV-TASK-53e
 echo "=== INV-TASK-53e: штатный шаблон examples/task-template.yaml.example - Read переписан путем; файл внутри каталога прогона разрешен правилом, снаружи - нет (критерий 6, на уровне сгенерированных настроек) ==="
-CLAUDE_RC_PROJECTS_FILE_RS_E="$TMP/projects-inv53e.yaml"
+AI_RC_PROJECTS_FILE_RS_E="$TMP/projects-inv53e.yaml"
 PROJ_RS_E="$TMP/proj-inv53e"; mkdir -p "$PROJ_RS_E"
 git -C "$PROJ_RS_E" init -q
 ( cd "$PROJ_RS_E" && echo hi > f.txt && git add f.txt && git -c user.email=t@t -c user.name=t commit -qm init )
-printf 'demoprojtplrs: %s\n' "$PROJ_RS_E" > "$CLAUDE_RC_PROJECTS_FILE_RS_E"
-OUT_RS_E=$(CLAUDE_RC_PROJECTS_FILE="$CLAUDE_RC_PROJECTS_FILE_RS_E" \
-  CLAUDE_RC_TASK_TEMPLATE="$HERE/../examples/task-template.yaml.example" \
+printf 'demoprojtplrs: %s\n' "$PROJ_RS_E" > "$AI_RC_PROJECTS_FILE_RS_E"
+OUT_RS_E=$(AI_RC_PROJECTS_FILE="$AI_RC_PROJECTS_FILE_RS_E" \
+  AI_RC_TASK_TEMPLATE="$HERE/../examples/task-template.yaml.example" \
   "$RC" agent new-task --name evtinv53e --project demoprojtplrs --text "inv53e template smoke" \
   2>"$TMP/inv53e.err"); RC_RS_E=$?
 [[ "$RC_RS_E" == 0 ]] && ok || fail "INV-TASK-53e: new-task со штатным шаблоном проходит (got $RC_RS_E: $(cat "$TMP/inv53e.err"))"
-AG_RS_E="$CLAUDE_AGENTS_DIR/evtinv53e"
+AG_RS_E="$AI_AGENTS_DIR/evtinv53e"
 [[ -f "$AG_RS_E/spec.yaml" ]] && ok || fail "INV-TASK-53e: агент реально создан из штатного шаблона"
 "$RUN" intake "$AG_RS_E" >/dev/null
 "$RUN" step "$AG_RS_E" >/dev/null 2>"$TMP/inv53e-step.err"
