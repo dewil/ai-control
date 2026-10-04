@@ -34,8 +34,18 @@ import re
 import subprocess
 import sys
 from datetime import datetime, timezone
+from uuid import UUID
 
 QID_RE = re.compile(r"^[0-9a-f-]{36}$")
+
+
+def canonical_uuid(value):
+    if type(value) is not str:
+        return False
+    try:
+        return str(UUID(value)) == value
+    except ValueError:
+        return False
 
 
 def now_iso():
@@ -136,17 +146,13 @@ def main():
             d = json.load(open(path))
         except (FileNotFoundError, ValueError):
             fail("вопрос не найден или поврежден: %s" % qid)
-        if isinstance(d, dict) and d.get("status") == "closed" and mode == "recover":
-            return
-        if not isinstance(d, dict) or d.get("status") != "open":
-            fail("вопрос уже закрыт или не существует: %s" % qid)
-        qkind = d.get("kind")
-        if mode in ("approve", "reject") and qkind != "permission":
-            fail("--approve/--reject допустимы только для permission-вопроса "
-                 "(этот - %s)" % qkind)
-        if mode == "text" and qkind == "permission":
-            fail("--text не допустим для permission-вопроса - только "
-                 "--approve/--reject")
+        if not isinstance(d, dict) or d.get("qid") != qid \
+                or d.get("kind") not in ("info", "permission") \
+                or d.get("status") not in ("open", "closed") \
+                or any(type(d.get(key)) is not str or not d[key]
+                       for key in ("envelope_key", "asked_at", "question")):
+            fail("вопрос поврежден: %s" % qid)
+        qkind = d["kind"]
         saved = d.get("answered_at") is not None
         if saved:
             if not isinstance(d.get("answered_at"), str) or not d["answered_at"] \
@@ -155,14 +161,38 @@ def main():
             if qkind == "info":
                 if not isinstance(d.get("answer"), str):
                     fail("поврежден сохраненный текст ответа")
-            elif qkind != "permission" or d.get("decision") not in ("approve", "reject"):
-                fail("поврежден сохраненный ответ/решение")
-        elif mode == "recover":
+            elif d.get("decision") not in ("approve", "reject"):
+                fail("поврежден сохраненное решение")
+        if d["status"] == "closed":
+            if mode == "recover":
+                return
+            fail("вопрос уже закрыт: %s" % qid)
+        if mode in ("approve", "reject") and qkind != "permission":
+            fail("--approve/--reject допустимы только для permission-вопроса")
+        if mode == "text" and qkind == "permission":
+            fail("--text не допустим для permission-вопроса")
+        if not saved and mode == "recover":
             fail("нет сохраненного ответа")
         callback = d.get('native_callback')
-        if callback is not None:
-            allowed = callback.get('allowed_decisions') if type(callback) is dict else None
-            if type(callback) is not dict or d.get('engine') != 'codex' \
+        if callback is not None or (d.get('engine') == 'codex' and qkind == 'permission'):
+            # Static binding only; live operation authorization remains in runtime.
+            if type(callback) is not dict \
+                    or any(type(callback.get(key)) is not str or not callback[key]
+                           for key in ('attempt_id', 'thread_id', 'turn_id', 'item_id')) \
+                    or not canonical_uuid(callback.get('operation_id')) \
+                    or type(callback.get('task_incarnation')) is not str \
+                    or not re.fullmatch(r'[0-9a-f]{32}', callback['task_incarnation']) \
+                    or type(callback.get('generation')) is not int or callback['generation'] < 1 \
+                    or not (type(callback.get('request_id')) is int
+                            or (type(callback.get('request_id')) is str and callback['request_id'])) \
+                    or callback.get('method') != 'item/fileChange/requestApproval' \
+                    or callback.get('status') not in ('pending', 'answered') \
+                    or any(type(callback.get(key)) is not str
+                           or not re.fullmatch(r'[0-9a-f]{64}', callback[key])
+                           for key in ('payload_fingerprint', 'changes_digest')):
+                fail('поврежден native callback Codex')
+            allowed = callback.get('allowed_decisions')
+            if d.get('engine') != 'codex' \
                     or qkind != 'permission' \
                     or (callback.get('status') != 'pending' \
                         and not (mode == 'recover' and saved \
@@ -178,8 +208,6 @@ def main():
         # INV-TASK-24: a retry finishes publication of the first durable
         # response; a later tap cannot replace its decision or author.
         if not saved:
-            if qkind not in ("info", "permission"):
-                fail("неизвестный вид вопроса")
             if mode == "text":
                 d["answer"] = text
             else:
