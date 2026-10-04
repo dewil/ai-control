@@ -201,6 +201,42 @@ if 'list-units' in sys.argv:
         self.assertNotEqual(self.run_migration().returncode, 0)
         self.assertEqual(snapshot(self.home), before)
 
+    def saved_mission_settings(self):
+        agent = self.home / '.claude-control/agents/taskone'
+        agent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        settings = {'permissions': {
+            'allow': ['Read(' + str(agent) + '/**)', 'Bash(claude-agent-ask:*)',
+                      'Bash(claude-agent-done:*)', 'Read(/external/provider/**)',
+                      'Bash(claude --model provider-model:*)'],
+            'deny': ['Bash(custom-denied:*)']},
+            'custom': {'opaque': 'claude-agent-ask and .claude-control remain user text'}}
+        path = agent / 'agent-settings.json'
+        path.write_text(json.dumps(settings))
+        path.chmod(0o600)
+        return path, settings
+
+    def test_saved_mission_permissions_relocate_exact_scope_and_commands(self):
+        _, settings = self.saved_mission_settings()
+        result = self.run_migration()
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+        new_agent = self.home / '.ai-control/agents/taskone'
+        expected = json.loads(json.dumps(settings))
+        expected['permissions']['allow'][:3] = ['Read(' + str(new_agent) + '/**)',
+                                               'Bash(ai-agent-ask:*)', 'Bash(ai-agent-done:*)']
+        actual_path = new_agent / 'agent-settings.json'
+        self.assertEqual(json.loads(actual_path.read_text()), expected)
+        self.assertEqual(stat.S_IMODE(actual_path.stat().st_mode), 0o600)
+
+    def test_malformed_known_mission_settings_refuse_before_any_move(self):
+        path, _ = self.saved_mission_settings()
+        for malformed in ('{', '[]', '{"permissions":{"allow":"Read(*)","deny":[]}}',
+                          '{"permissions":{"allow":[true],"deny":[]}}'):
+            with self.subTest(malformed=malformed):
+                path.write_text(malformed)
+                before = snapshot(self.home)
+                self.assertNotEqual(self.run_migration().returncode, 0)
+                self.assertEqual(snapshot(self.home), before)
+
     def test_dry_run_is_completely_inert(self):
         before = snapshot(self.home)
         self.assertEqual(self.run_migration(dry_run=True).returncode, 0)
@@ -252,6 +288,7 @@ class StoppedMetadataMigrationContract(unittest.TestCase):
     """Use established public operation-store fixture methods, never inspect bin."""
     setUp = OfflineMigrationContract.setUp
     run_migration = OfflineMigrationContract.run_migration
+    saved_mission_settings = OfflineMigrationContract.saved_mission_settings
 
     def make_operation(self):
         previous_umask = os.umask(0o077)
@@ -437,8 +474,9 @@ runpy.run_path(helper, run_name='__main__')
 
     def test_interruption_retains_private_checkpoint_originals_and_blocks_repeat(self):
         fixture, _, _ = self.make_operation()
+        self.saved_mission_settings()
         originals = [path.read_bytes() for path in (self.home / '.claude-control').rglob('*.json')
-                     if path.name in ('index.json', 'directory-identity.json', 'journal.json', 'event-1.json')]
+                     if path.name in ('index.json', 'directory-identity.json', 'journal.json', 'event-1.json', 'agent-settings.json')]
         self.assertTrue(originals)
         result = self.injected_migration('interrupt')
         self.assertEqual(result.returncode, 73, result.stderr.decode(errors='replace'))
@@ -465,6 +503,7 @@ runpy.run_path(helper, run_name='__main__')
 
     def test_injected_metadata_failure_restores_verified_original_state(self):
         fixture, _, _ = self.make_operation()
+        self.saved_mission_settings()
         before = snapshot(self.home)
         result = self.injected_migration('write-failure')
         self.assertTrue((self.home.parent / 'metadata-failure-injected').is_file(),
