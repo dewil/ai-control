@@ -1,16 +1,18 @@
 # Control в браузере: установка и проверка
 
-Первый выпуск управляет вопросами и принятием результатов TASK. Код проверен локальными контрактами; публичная установка остаётся отдельной незавершённой проверкой. Запуск, отмена, сессии и diff не входят в него. Принятый результат проходит существующий Control workflow; нажатие не означает немедленный merge или deploy.
+Панель управляет вопросами и принятием результатов TASK; следующий срез добавляет текстовую историю и отправку в существующие Codex threads. Код проверяется локальными контрактами; публичная установка и phone acceptance остаются отдельной проверкой. Запуск, отмена, создание сессий и diff не входят в этот срез. Принятый результат проходит существующий Control workflow; нажатие не означает немедленный merge или deploy.
 
 Это отдельная установка для Linux/systemd, не автоматическое открытие порта. `install.sh` устанавливает CLI и модули из `scripts.manifest`, но не создаёт web-пользователя, не включает сервисы и не меняет firewall. Для production необходимы административные права: нельзя запускать frontend владельцем Control вместо отсутствующего `ai-panel`.
 
 ## Разделение прав
 
 - `ai-panel` запускает frontend, читает только его приватный auth-файл и пишет TOTP replay state. OAuth, owner home, `/data` и registry ему недоступны.
-- Owner broker запускается владельцем существующего Control. Он читает registry и вызывает только `ai-agent-answer` и `ai-agent-run done-verdict`; peer UID frontend проверяется ядром через `SO_PEERCRED`.
+- Owner broker запускается владельцем существующего Control. Он читает registry, вызывает `ai-agent-answer` и `ai-agent-run done-verdict`, а для чата использует фиксированные session операции на существующем shared App Server socket. Peer UID frontend проверяется ядром через `SO_PEERCRED`. Broker не запускает второй App Server.
 - Root устанавливает неизменяемый пакет в `/opt/ai-control-web`, unit-файлы и узкую общую группу для socket. Owner binary helpers остаются существующей установленной версией Control.
 
-Broker использует Python stdlib и существующий Control `yq` для полной проверки YAML spec через ограниченный stdin; JSON spec разбирается stdlib. Frontend использует отдельный venv с `requirements-web.lock`, один uvicorn worker. Frontend ограничен `MemoryMax=256M`; broker не получает этот cap, чтобы не менять бюджеты trusted/native writers. Сессии хранятся в памяти: рестарт требует входа. Использованные TOTP шаги перечитываются под stable private file lock и атомарно записываются и fsync-ятся в отдельный приватный файл до login/reject; рестарт не разрешает повтор кода. В login/reject действует общий лимит10 попыток в минуту. Reject требует нового кода после уже использованного при входе. Rate-limit после рестарта сбрасывается; frontend не должен перезапускаться как способ разблокировки входа.
+Broker использует stdlib, pinned WebSockets15.0.1 и существующий Control `yq` для YAML и project resolver. Frontend и broker запускаются root-owned `/opt/ai-control-web/venv/bin/python` с `requirements-web.lock`; frontend использует один uvicorn worker. Frontend ограничен `MemoryMax=256M`; broker не получает этот cap, чтобы не менять бюджеты trusted/native writers. Web authentication sessions хранятся в памяти: рестарт требует входа. Использованные TOTP шаги перечитываются под stable private file lock и атомарно записываются и fsync-ятся в отдельный приватный файл до login/reject; рестарт не разрешает повтор кода. В login/reject действует общий лимит10 попыток в минуту. Reject требует нового кода после уже использованного при входе. Rate-limit после рестарта сбрасывается; frontend не должен перезапускаться как способ разблокировки входа.
+
+Broker допускает максимум4 одновременных запроса; перегрузка возвращает unavailable без запуска операции. Session RPC имеет общий deadline55s; accepted означает принятие сообщения, а delivery_unknown требует ручной проверки status, не повторной отправки. Native callbacks веб не подтверждает. Доступность ответа из существующего Codex client нужно отдельно доказать на установленной версии до заявления полной интерактивной готовности.
 
 ## Конкретный host runbook: dwl / UID1000
 
@@ -40,6 +42,7 @@ sudo test ! -L /opt/ai-control-web || exit 1
 sudo install -d -o root -g root -m 0755 /opt/ai-control-web
 git -C "$CONTROL_WEB_REPO" archive "$CONTROL_WEB_SHA" \
   bin/ai-control-web bin/_control_web.py bin/_control_web_broker.py \
+  bin/_control_web_sessions.py bin/_codex_rc.py bin/_rc_projects.sh \
   bin/_control_web.html bin/_control_web.css bin/_control_web.js \
   requirements-web.lock systemd/ai-control-web.service.tmpl \
   systemd/ai-control-web-broker.service.tmpl | sudo tar -x -C /opt/ai-control-web
@@ -50,6 +53,14 @@ sudo /opt/ai-control-web/venv/bin/python -m pip install -r /opt/ai-control-web/r
 ```
 
 При повторной установке сначала остановите frontend/broker и сохраните private auth/state, не перезаписывая их пакетом. Пакет и venv root-owned, web UID не может их менять.
+
+Owner receipt root по умолчанию `/home/dwl/.local/state/ai-control-web/session-receipts`, вне git и `/data`. Подготовьте owner-only parent локально до broker start; receipt leaf и namespaces создаются лениво700, records600. Существующие directories не перезаписывать и не менять modes молча: symlink, другой owner или небезопасные modes блокируют использование. Не удаляйте receipts для ремонта UI: они сохраняют защиту от дубля, включая неизвестную доставку и рестарты.
+
+```bash
+sudo -u dwl install -d -m 0700 /home/dwl/.local/state/ai-control-web
+```
+
+`--session-receipts` задаёт другой private owner-local root; `--codex-socket` — существующий shared socket. Без flag путь сокета определяется штатным `_codex_rc.socket_path()` по owner environment. Приложение не копирует owner OAuth/config/history и не запускает daemon для отсутствующего socket: session операции дают unavailable, TASK работает дальше. Trusted `_codex_rc.py` и `_rc_projects.sh` входят в immutable package, resolver вызывает owner-installed `yq` через фиксированный helper.
 
 ### Отдельная учётная запись
 
@@ -182,6 +193,7 @@ Production готов только после проверки публично�
 4. Перезапуск frontend не разрешает повтор уже использованного TOTP. Logout/expiry закрывают доступ.
 5. От имени web UID чтение owner OAuth и registry запрещено. Другой UID через socket не вызывает writer. Owner native runtime и drain остаются рабочими.
 6. Остановленный broker или недоступный registry дают видимую недоступность, а не пустой парк или успех. Проверка до unlock проводится отдельным reboot acceptance.
+7. На явно выбранном существующем authorized thread проверьте project/full UUID proof, историю и older page, явную отправку и status после reload. Receipt не содержит текста; повтор UUID не вызывает второй turn/start, alias того же canonical root использует ту же dedup защиту. Controlled synthetic shared-client callback proof выполняется отдельно с пользователем; при его отсутствии chat rollout остаётся незавершённым. Не запускайте чужие задания для проверки.
 
 ## Локальная разработка и QA
 

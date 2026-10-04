@@ -8,7 +8,34 @@ import os
 from pathlib import Path
 import secrets
 import stat
+import subprocess
 import sys
+import time
+
+
+class ProjectPaths:
+    def __call__(self, alias):
+        return self.deadline_call(time.monotonic() + 10, alias)
+
+    def deadline_call(self, deadline, alias):
+        from _codex_rc import resolve_project
+        return resolve_project(alias, deadline=deadline)
+
+
+class ProjectNames:
+    def __call__(self):
+        return self.deadline_call(time.monotonic() + 10)
+
+    def deadline_call(self, deadline):
+        remaining = min(10, deadline - time.monotonic())
+        if remaining <= 0:
+            raise RuntimeError('Project registry unavailable')
+        helper = str(Path(__file__).resolve().with_name('_rc_projects.sh'))
+        result = subprocess.run(['bash', '-c', '. "$1"; project_names', '_', helper],
+                                capture_output=True, text=True, timeout=remaining, shell=False)
+        if result.returncode or len(result.stdout.encode('utf-8')) > 65536:
+            raise RuntimeError('Project registry unavailable')
+        return result.stdout.splitlines()
 
 
 def private_path(value):
@@ -57,6 +84,8 @@ def main():
     broker.add_argument('--bin-dir', default=str(Path(__file__).resolve().parent))
     broker.add_argument('--socket', required=True)
     broker.add_argument('--allowed-uid', type=int, required=True)
+    broker.add_argument('--codex-socket', help='Existing shared App Server Unix socket')
+    broker.add_argument('--session-receipts', default=str(Path.home() / '.local/state/ai-control-web/session-receipts'))
     args = parser.parse_args()
     os.umask(0o077)
     if args.command == 'init-auth':
@@ -96,7 +125,16 @@ def main():
         uvicorn.run(app, host=args.host, port=args.port, workers=1, proxy_headers=False, access_log=False, log_level='warning')
     else:
         from _control_web_broker import RegistryBackend, serve_broker
-        serve_broker(args.socket, RegistryBackend(args.registry, args.bin_dir), args.allowed_uid)
+        from _control_web_sessions import InteractiveRPC, SessionChat
+        from _codex_rc import socket_path
+        rpc = InteractiveRPC(args.codex_socket if args.codex_socket is not None else socket_path())
+        # Provision the private owner-local parent before start; the receipt leaf
+        # is lazy. Owner credentials/history never enter the frontend account.
+        sessions = SessionChat(rpc, ProjectPaths(), ProjectNames(), args.session_receipts)
+        try:
+            serve_broker(args.socket, RegistryBackend(args.registry, args.bin_dir, sessions=sessions), args.allowed_uid)
+        finally:
+            rpc.close()
 
 
 if __name__ == '__main__':
