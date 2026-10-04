@@ -6,7 +6,7 @@
 # _rc_titles.py lookup <bridge_id>
 #
 # Сервер API поднимается локально (python3 http.server), базовый URL уходит
-# через CLAUDE_RC_TITLES_API. Реализации еще нет - все проверки КРАСНЫЕ.
+# через AI_RC_TITLES_API. Реализации еще нет - все проверки КРАСНЫЕ.
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -30,13 +30,13 @@ export NO_PROXY="127.0.0.1,localhost,${NO_PROXY:-}"
 export no_proxy="$NO_PROXY"
 
 export CLAUDE_CONFIG_DIR="$TMP/claude"
-export CLAUDE_RC_STATE_DIR="$TMP/state"
-mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_RC_STATE_DIR"
+export AI_RC_STATE_DIR="$TMP/state"
+mkdir -p "$CLAUDE_CONFIG_DIR" "$AI_RC_STATE_DIR"
 
 TOKEN="tok-SECRET-123"
 printf '{"claudeAiOauth":{"accessToken":"%s"}}\n' "$TOKEN" > "$CLAUDE_CONFIG_DIR/.credentials.json"
 
-CACHE="$CLAUDE_RC_STATE_DIR/session-titles.json"
+CACHE="$AI_RC_STATE_DIR/session-titles.json"
 
 refresh() { python3 "$TITLES" refresh "$@" >"$TMP/out" 2>"$TMP/err"; echo $?; }
 lookup()  { python3 "$TITLES" lookup "$@" >"$TMP/out" 2>"$TMP/err"; echo $?; }
@@ -165,7 +165,7 @@ start_server() { # <scenario>
   SCENARIO="$1" FIXTURE_TOKEN="$TOKEN" python3 "$SERVER_PY" "$PORT" &
   SERVER_PID=$!
   wait_ready "$PORT" || fail "фикстура-сервер ($1) не поднялась на порту $PORT"
-  export CLAUDE_RC_TITLES_API="http://127.0.0.1:$PORT"
+  export AI_RC_TITLES_API="http://127.0.0.1:$PORT"
 }
 
 stop_server() {

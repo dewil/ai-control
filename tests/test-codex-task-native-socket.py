@@ -69,7 +69,7 @@ class NativeSocketContract(unittest.TestCase):
         else:
             self.python = None
         if self.python is None:
-            self.python = Path.home() / '.local/share/claude-control/codex-venv/bin/python'
+            self.python = Path.home() / '.local/share/ai-control/codex-venv/bin/python'
         self.assertTrue(self.python.is_file(), 'existing websockets15.0.1 interpreter is required; tests do not install')
         probe = subprocess.run([str(self.python), '-c', 'import websockets;print(websockets.__version__)'],
                                env=self.env, text=True, capture_output=True, timeout=5)

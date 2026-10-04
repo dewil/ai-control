@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for V2.5 TG-карточки вопросов (question_card/route_callback/
-# answer_action/reply_target + роутинг ответа на claude-agent-answer, без
+# answer_action/reply_target + роутинг ответа на ai-agent-answer, без
 # сети/Telegram).
 # Контракт: docs/design-2026-07-26-v2.5-tg-cards.md §9-11 (кейсы T1-T23).
 # Фикс-пак после adversarial-аудита (2026-07-26): T17-T23 добавлены по
@@ -8,10 +8,10 @@
 # minor формы sent_map); T9/T11 обновлены под новую 5-аргументную сигнатуру
 # answer_action(qkind, status, answered_at, published_at, source) - §9.
 # Написано с чистого листа по спеке (SDD, RED-фаза): реализация V2.5 НЕ
-# читана (bin/claude-agent-tgbot, bin/claude-agent-run, bin/claude-agent-permit
-# сознательно не открывались - ни разу не открыты через Read). bin/claude-agent-answer
+# читана (bin/ai-agent-tgbot, bin/ai-agent-run, bin/ai-agent-permit
+# сознательно не открывались - ни разу не открыты через Read). bin/ai-agent-answer
 # прочитан только как публичный контракт (usage-строка §7 usage:
-# claude-agent-answer <agent-dir> --qid <qid> (--text T|--approve|--reject)
+# ai-agent-answer <agent-dir> --qid <qid> (--text T|--approve|--reject)
 # [--by NAME]); внутренняя логика (durable_write, RMW под локом и т.п.) не
 # использовалась при написании тестов - только наблюдаемое поведение файла
 # вопроса/spool. Четыре функции §9 (authorized_cb/authorized/sent_map_register/
@@ -20,7 +20,7 @@
 # список int, схема sent_map-записи {agent,gen,at}) установлены черным ящиком
 # через inspect.signature() и пробные вызовы модуля (importlib), БЕЗ чтения
 # исходного текста функций через Read - тот же принцип "публичный контракт",
-# что и usage-строка claude-agent-answer.
+# что и usage-строка ai-agent-answer.
 #
 # Ambiguity-заметки (см. итоговый отчет для полного списка):
 # 1. §9 явно называет 4 существующие функции для прямого вызова (authorized_cb/
@@ -37,29 +37,29 @@ shopt -s nullglob  # непойманный glob (напр. inbox/pending/*.json
                    # должен давать пустой массив, а не буквальный паттерн из 1 элемента
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RUN="$HERE/../bin/claude-agent-run"
-ASK="$HERE/../bin/claude-agent-ask"
-ANSWER="$HERE/../bin/claude-agent-answer"
-TGBOT="$HERE/../bin/claude-agent-tgbot"
+RUN="$HERE/../bin/ai-agent-run"
+ASK="$HERE/../bin/ai-agent-ask"
+ANSWER="$HERE/../bin/ai-agent-answer"
+TGBOT="$HERE/../bin/ai-agent-tgbot"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# HOME переопределен: любой путь вида "~/.claude-control/..." (sent_map и
+# HOME переопределен: любой путь вида "~/.ai-control/..." (sent_map и
 # т.п., см. §5) резолвится в одноразовый каталог, а не в реальный $HOME.
 export HOME="$TMP/home"
 mkdir -p "$HOME"
 
-export CLAUDE_AGENTS_DIR="$TMP/agents"
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
-export CLAUDE_AGENT_PROBE_CMD=/usr/bin/true
-export CLAUDE_AGENT_GENERATION=1 CLAUDE_AGENT_ATTEMPT=test-attempt
+export AI_AGENTS_DIR="$TMP/agents"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_AGENT_PROBE_CMD=/usr/bin/true
+export AI_AGENT_GENERATION=1 AI_AGENT_ATTEMPT=test-attempt
 
 # whitelist для authorized/authorized_cb (форма установлена черным ящиком -
 # список int; см. шапку файла) и путь sent_map (T12/T13, §5/§9: переопределяется
-# CLAUDE_AGENT_TG_SENT_MAP, поэтому реальный ~/.claude-control/tgbot.sent.json
+# AI_AGENT_TG_SENT_MAP, поэтому реальный ~/.ai-control/tgbot.sent.json
 # не трогается ни при каких обстоятельствах).
 TEST_WHITELIST_JSON='[1001]'
-export CLAUDE_AGENT_TG_SENT_MAP="$TMP/tgbot.sent.json"
+export AI_AGENT_TG_SENT_MAP="$TMP/tgbot.sent.json"
 
 PASS=0; FAIL=0; SKIP=0
 ok()   { PASS=$((PASS+1)); }
@@ -137,9 +137,9 @@ print(json.dumps(d, ensure_ascii=False))
 
 mk_event() { # <name> -> печатает путь к agent-dir
   local name="$1"
-  local ag="$CLAUDE_AGENTS_DIR/$name"
-  mkdir -p "$ag" "$CLAUDE_AGENT_SPOOL_BASE/$name"
-  chmod 0700 "$CLAUDE_AGENT_SPOOL_BASE/$name"
+  local ag="$AI_AGENTS_DIR/$name"
+  mkdir -p "$ag" "$AI_AGENT_SPOOL_BASE/$name"
+  chmod 0700 "$AI_AGENT_SPOOL_BASE/$name"
   cat > "$ag/spec.yaml" <<EOF
 schema: 1
 name: $name
@@ -155,7 +155,7 @@ EOF
 }
 
 ask_direct() { # <agent-dir> <event-key> <question> [options|-separated by |] -> stdout=qid
-  # V2.3 §2: claude-agent-ask требует envelope_key реально в inflight -
+  # V2.3 §2: ai-agent-ask требует envelope_key реально в inflight -
   # синтетические ключи получают временный stub-конверт (как в
   # test-agent-question.sh), удаляемый сразу после вызова.
   local dir="$1" key="$2" q="$3" opts="${4:-}"
@@ -168,7 +168,7 @@ ask_direct() { # <agent-dir> <event-key> <question> [options|-separated by |] ->
   fi
   local args=(--question "$q")
   [[ -n "$opts" ]] && args+=(--options "$opts")
-  CLAUDE_AGENT_DIR="$dir" CLAUDE_AGENT_EVENT_KEY="$key" "$ASK" "${args[@]}"
+  AI_AGENT_DIR="$dir" AI_AGENT_EVENT_KEY="$key" "$ASK" "${args[@]}"
   local rc=$?
   [[ "$stubbed" == 1 ]] && rm -f "$dir/inbox/inflight/$key.json"
   return $rc
@@ -193,7 +193,7 @@ json.dump(d, open(sys.argv[4], "w"), ensure_ascii=False)
 
 # Обрабатывает один тап по кнопке "тонкой оберткой" теста: authorized_cb
 # (реальный, §1) -> route_callback (реальный) -> answer_action (реальный,
-# source=button, §6.3) -> при apply реальный claude-agent-answer.
+# source=button, §6.3) -> при apply реальный ai-agent-answer.
 sim_callback() { # <agent-dir> <from-id> <callback-data> -> печатает исход в stdout
   local dir="$1" from="$2" data="$3"
   tg_call authorized_cb "$(cb_update "$from" "$data")" "$TEST_WHITELIST_JSON" \
@@ -295,7 +295,7 @@ GOLDEN_DETAIL='лог: A&B'
 GOLDEN_TEXT='агент agentG1: упал &lt;script&gt; - лог: A&amp;B'
 
 mode_send_calls() { # <argv-json> -> stdout = {"rc":N,"calls":[...]} (calls = позиционные аргументы api())
-  CLAUDE_AGENT_TG_TOKEN="TESTTOKEN" CLAUDE_AGENT_TG_WHITELIST="7001" \
+  AI_AGENT_TG_TOKEN="TESTTOKEN" AI_AGENT_TG_WHITELIST="7001" \
   python3 - "$TGBOT" "$1" <<'PY'
 import importlib.util, sys, json
 from importlib.machinery import SourceFileLoader
@@ -424,7 +424,7 @@ else
 fi
 
 # =============================================================== T6
-echo "=== T6: callback q:<qid>:1 от авторизованного -> claude-agent-answer с --text <второй вариант>; ровно один конверт в spool без текста в payload ==="
+echo "=== T6: callback q:<qid>:1 от авторизованного -> ai-agent-answer с --text <второй вариант>; ровно один конверт в spool без текста в payload ==="
 AGT6=$(mk_event evtt6)
 QID6=$(ask_direct "$AGT6" "t6-key" "Т6 какой вариант?" "opt-A|opt-B|opt-C")
 [[ -n "$QID6" ]] && ok || fail "T6: setup - вопрос создан"
@@ -446,7 +446,7 @@ PEND6=("$AGT6"/inbox/pending/*.json)
   && ok || fail "T6: payload без текста ответа"
 
 # =============================================================== T7
-echo "=== T7: тот же callback от НЕавторизованного from.id -> claude-agent-answer не вызван, файл не изменен ==="
+echo "=== T7: тот же callback от НЕавторизованного from.id -> ai-agent-answer не вызван, файл не изменен ==="
 # Сначала - реальная authorized_cb напрямую (позитив и негатив), а не только
 # косвенно через sim_callback: whitelisted+private -> True; чужой from.id,
 # групповой чат -> False (§1 буквально).
@@ -458,7 +458,7 @@ GROUP_UPDATE=$(python3 -c 'import json; print(json.dumps({"callback_query": {"id
 expect_tg "T7: authorized_cb(whitelisted, групповой чат) -> False" authorized_cb 'd is False' "$GROUP_UPDATE" "$TEST_WHITELIST_JSON"
 
 # Теперь интеграционный сценарий: тап от неавторизованного from.id не должен
-# дойти до claude-agent-answer, файл вопроса не меняется.
+# дойти до ai-agent-answer, файл вопроса не меняется.
 AGT7=$(mk_event evtt7)
 QID7=$(ask_direct "$AGT7" "t7-key" "Т7 вопрос?" "yes|no")
 RES7=$(sim_callback "$AGT7" 9999 "q:$QID7:0")
@@ -487,7 +487,7 @@ RES8B=$(sim_callback "$AGT8" 1001 "p:$QID8B:r")
 
 # =============================================================== T9
 echo "=== T9: двойной тап по одной кнопке -> второй 'устарело', answered_at не переписан, второго конверта нет ==="
-# Состояние доводится до осмысленного НАПРЯМУЮ через реальный claude-agent-answer
+# Состояние доводится до осмысленного НАПРЯМУЮ через реальный ai-agent-answer
 # (не через route_callback, которого еще нет) - чтобы answered_at к моменту
 # проверки gate был реальным значением, а не совпадением двух провалов.
 AGT9=$(mk_event evtt9)
@@ -505,7 +505,7 @@ PEND9=("$AGT9"/inbox/pending/*.json)
 # уже отвеченном состоянии обязана сказать "stale" - это содержательная
 # проверка (может покраснеть по существу, если implementation не распознает
 # already-answered), а не совпадение двух ошибок. Реальный ответ выше прошел
-# через полный claude-agent-answer (обе фазы), поэтому event_published_at
+# через полный ai-agent-answer (обе фазы), поэтому event_published_at
 # тоже реально проставлен - завершенная пара (§9: stale только когда ОБЕ
 # метки непусты).
 PUB9_1=$(jq_file "$QF9" 'd.get("event_published_at")')
@@ -513,7 +513,7 @@ PUB9_1=$(jq_file "$QF9" 'd.get("event_published_at")')
 expect_tg "T9: answer_action(info, open, <реальный answered_at>, <реальный published_at>, button) -> stale" \
   answer_action 'd=="stale"' '"info"' '"open"' "$(json_str "$AT9_1")" "$(json_str "$PUB9_1")" '"button"'
 
-# Рубеж 2 (§7.2, настоящий backstop claude-agent-answer): прямой повторный
+# Рубеж 2 (§7.2, настоящий backstop ai-agent-answer): прямой повторный
 # вызов (в обход любого gate бота) должен получить exit 2 и НЕ переписать answer.
 # sleep 1 - answered_at в файле вопроса имеет секундную точность (видно по
 # формату уже записанных значений), без паузы "не переписан" мог бы совпасть
@@ -574,26 +574,26 @@ PEND16=("$AGT16"/inbox/pending/*.json)
   && ok || fail "T16: после завершенной пары перезапись снова заперта (got $RC16B)"
 
 # =============================================================== T17
-echo "=== T17 (§7.2, blocker): два параллельных claude-agent-answer на один вопрос -> решение победителя, второй exit 2, конверт один ==="
-# Копия claude-agent-answer в отдельный bin-каталог рядом с оберткой над
-# claude-agent-run, которая искусственно тормозит именно spool-put (0.5с):
-# claude-agent-answer вычисляет bin_dir = dirname(__file__), поэтому найдет
-# ИМЕННО эту обертку, а не настоящий claude-agent-run. Это дает щедрое окно,
+echo "=== T17 (§7.2, blocker): два параллельных ai-agent-answer на один вопрос -> решение победителя, второй exit 2, конверт один ==="
+# Копия ai-agent-answer в отдельный bin-каталог рядом с оберткой над
+# ai-agent-run, которая искусственно тормозит именно spool-put (0.5с):
+# ai-agent-answer вычисляет bin_dir = dirname(__file__), поэтому найдет
+# ИМЕННО эту обертку, а не настоящий ai-agent-run. Это дает щедрое окно,
 # достаточное, чтобы гонка гарантированно проявилась в обе стороны: под
 # багом (лок отпускается между фазами) оба вызова успевают дойти до конца
 # СВОЕЙ фазы 1 и оба вернут exit 0 с разными decision; под фиксом (лок
 # держится на обе фазы) второй вызов блокируется на locked() до тех пор,
 # пока первый не завершит publish, и получает честный exit 2.
 mkdir -p "$TMP/slowbin"
-cp "$ANSWER" "$TMP/slowbin/claude-agent-answer"
-chmod +x "$TMP/slowbin/claude-agent-answer"
-cat > "$TMP/slowbin/claude-agent-run" <<EOF
+cp "$ANSWER" "$TMP/slowbin/ai-agent-answer"
+chmod +x "$TMP/slowbin/ai-agent-answer"
+cat > "$TMP/slowbin/ai-agent-run" <<EOF
 #!/usr/bin/env bash
 if [[ "\$1" == "spool-put" ]]; then sleep 0.5; fi
 exec "$RUN" "\$@"
 EOF
-chmod +x "$TMP/slowbin/claude-agent-run"
-SLOW_ANSWER="$TMP/slowbin/claude-agent-answer"
+chmod +x "$TMP/slowbin/ai-agent-run"
+SLOW_ANSWER="$TMP/slowbin/ai-agent-answer"
 
 AGT17=$(mk_event evtt17)
 QID17=$(new_uuid)
@@ -653,7 +653,7 @@ QID19=$(ask_direct "$AGT19" "t19-key" "Т19 какой вариант?" "x|y")
 QID19_OTHER=$(new_uuid)
 SENT19="$TMP/sent19.json"
 python3 -c 'import json; json.dump({}, open("'"$SENT19"'", "w"))'
-CLAUDE_AGENT_TG_SENT_MAP="$SENT19" python3 -c '
+AI_AGENT_TG_SENT_MAP="$SENT19" python3 -c '
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
 loader = SourceFileLoader("m19a", sys.argv[1])
@@ -662,7 +662,7 @@ mod = importlib.util.module_from_spec(spec)
 loader.exec_module(mod)
 mod.sent_map_register(1900, [190], "evtt19", None, kind="question", qid=sys.argv[2])
 ' "$TGBOT" "$QID19_OTHER"
-CALLS19=$(CLAUDE_AGENT_TG_SENT_MAP="$SENT19" CLAUDE_AGENTS_DIR="$CLAUDE_AGENTS_DIR" python3 -c '
+CALLS19=$(AI_AGENT_TG_SENT_MAP="$SENT19" AI_AGENTS_DIR="$AI_AGENTS_DIR" python3 -c '
 import importlib.util, sys, json
 from importlib.machinery import SourceFileLoader
 loader = SourceFileLoader("m19b", sys.argv[1])
@@ -747,7 +747,7 @@ fi
 echo "--- T21b: длинный текст вопроса уходит entity-safe отправителем (send_message), карточка не теряется молча ---"
 LONGQ=$(python3 -c 'print("длинный вопрос текст " * 300)')
 DETAIL21B=$(qcard_detail "agent21b" "$(new_uuid)" "info" "$LONGQ" "")
-CALLS21B=$(CLAUDE_AGENT_TG_TOKEN="TESTTOKEN" CLAUDE_AGENT_TG_WHITELIST="7001" \
+CALLS21B=$(AI_AGENT_TG_TOKEN="TESTTOKEN" AI_AGENT_TG_WHITELIST="7001" \
   python3 - "$TGBOT" "$DETAIL21B" <<'PY'
 import importlib.util, sys, json
 from importlib.machinery import SourceFileLoader
@@ -813,7 +813,7 @@ echo "=== T23 (§5, minor): sent_map [] / null / dict со скалярными 
 SENT23="$TMP/sent23.json"
 for bad in '[]' 'null' '"scalar"' '{"1:1": "не-объект", "1:2": 42}'; do
   printf '%s' "$bad" > "$SENT23"
-  RES23=$(CLAUDE_AGENT_TG_SENT_MAP="$SENT23" python3 -c '
+  RES23=$(AI_AGENT_TG_SENT_MAP="$SENT23" python3 -c '
 import importlib.util, sys, json
 from importlib.machinery import SourceFileLoader
 loader = SourceFileLoader("m23", sys.argv[1])
@@ -828,7 +828,7 @@ done
 
 echo "--- T23b: смешанная форма (валидные + скалярные записи) - скалярные игнорируются, валидные читаются, регистрация работает дальше ---"
 printf '%s' '{"1:1": "не-объект", "1:2": {"agent":"good","gen":1,"at":1.0}}' > "$SENT23"
-GOOD23=$(CLAUDE_AGENT_TG_SENT_MAP="$SENT23" python3 -c '
+GOOD23=$(AI_AGENT_TG_SENT_MAP="$SENT23" python3 -c '
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
 loader = SourceFileLoader("m23b", sys.argv[1])
@@ -840,7 +840,7 @@ print(e.get("agent") if e else None)
 ' "$TGBOT" 2>"$TMP/t23b.err")
 [[ "$GOOD23" == "good" ]] \
   && ok || fail "T23b: валидная запись рядом со скалярной читается нормально ($GOOD23: $(cat "$TMP/t23b.err"))"
-BAD23=$(CLAUDE_AGENT_TG_SENT_MAP="$SENT23" python3 -c '
+BAD23=$(AI_AGENT_TG_SENT_MAP="$SENT23" python3 -c '
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
 loader = SourceFileLoader("m23c", sys.argv[1])
@@ -853,7 +853,7 @@ print(mod.sent_map_lookup(1, 1))
   && ok || fail "T23b: скалярная запись игнорируется, не выдается как валидная ($BAD23: $(cat "$TMP/t23c.err"))"
 
 printf '[]' > "$SENT23"
-CLAUDE_AGENT_TG_SENT_MAP="$SENT23" python3 -c '
+AI_AGENT_TG_SENT_MAP="$SENT23" python3 -c '
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
 loader = SourceFileLoader("m23d", sys.argv[1])
@@ -862,7 +862,7 @@ mod = importlib.util.module_from_spec(spec)
 loader.exec_module(mod)
 mod.sent_map_register(2, [3], "agentx23", 1)
 ' "$TGBOT" 2>"$TMP/t23d.err"
-REG23=$(CLAUDE_AGENT_TG_SENT_MAP="$SENT23" python3 -c '
+REG23=$(AI_AGENT_TG_SENT_MAP="$SENT23" python3 -c '
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
 loader = SourceFileLoader("m23e", sys.argv[1])
@@ -876,7 +876,7 @@ print(e.get("agent") if e else None)
   && ok || fail "T23: регистрация поверх ранее битой формы ([]) работает и читается назад ($REG23: $(cat "$TMP/t23d.err") $(cat "$TMP/t23e.err"))"
 
 # =============================================================== T10
-echo "=== T10: тап 'разрешить' после 'отклонить' -> exit 2 у claude-agent-answer, decision остается reject (§7.2) ==="
+echo "=== T10: тап 'разрешить' после 'отклонить' -> exit 2 у ai-agent-answer, decision остается reject (§7.2) ==="
 AGT10=$(mk_event evtt10)
 QID10=$(new_uuid)
 write_permission_question "$AGT10" "$QID10" "t10-key" "Т10 разрешить: rm -rf /tmp/y?"
@@ -889,7 +889,7 @@ write_permission_question "$AGT10" "$QID10" "t10-key" "Т10 разрешить: 
   && ok || fail "T10: decision остается reject после отвергнутой перезаписи"
 
 # =============================================================== T11
-echo "=== T11: reply на карточку вопроса -> claude-agent-answer --text; reply на permission-карточку -> отказ, ответ не записан ==="
+echo "=== T11: reply на карточку вопроса -> ai-agent-answer --text; reply на permission-карточку -> отказ, ответ не записан ==="
 AGT11=$(mk_event evtt11)
 QID11=$(ask_direct "$AGT11" "t11-key" "Т11 свободный вопрос?")
 RES11A=$(sim_reply "$AGT11" 1001 "$QID11" "мой свободный ответ Т11")
@@ -897,7 +897,7 @@ RES11A=$(sim_reply "$AGT11" 1001 "$QID11" "мой свободный ответ 
 [[ "$(jq_file "$AGT11/questions/$QID11.json" 'd.get("answer")')" == "мой свободный ответ Т11" ]] \
   && ok || fail "T11: answer = текст reply"
 
-# V2.5 фикс-пак (major 2, §7.2): claude-agent-answer теперь САМ по себе тоже
+# V2.5 фикс-пак (major 2, §7.2): ai-agent-answer теперь САМ по себе тоже
 # отбивает --text на kind=permission (exit 2) - двойной рубеж, проверен
 # отдельно в T18. Здесь остается только проверка чистой функции
 # answer_action(source=reply) - она отбивает permission-reply НЕЗАВИСИМО от
@@ -950,13 +950,13 @@ if tg_call reply_target "$ENTRY12"; then
   DK12=$(jq_str "$TG_OUT" 'd[0]')
   [[ "$DK12" == "mission" ]] && ok || fail "T12b: реальная запись sent_map (без qid) -> mission, не question ($TG_OUT)"
   # диспетчеризация реально следует за решением reply_target: если бы оно
-  # ошибочно вернуло "question", тест попытался бы вызвать claude-agent-answer
+  # ошибочно вернуло "question", тест попытался бы вызвать ai-agent-answer
   # (провалится - нет такого agent-dir/qid) и это стало бы видимым FAIL, а не
   # тавтологией "мы и так не звонили".
   if [[ "$DK12" == "question" ]]; then
     "$ANSWER" "$TMP/nonexistent-agent-dir" --qid "$(jq_str "$TG_OUT" 'd[1]')" --text x --by tg:1001 \
       >/dev/null 2>"$TMP/t12b_wrong.err"
-    fail "T12b: диспетчер по ошибке вызвал claude-agent-answer для mission-записи ($(cat "$TMP/t12b_wrong.err"))"
+    fail "T12b: диспетчер по ошибке вызвал ai-agent-answer для mission-записи ($(cat "$TMP/t12b_wrong.err"))"
   fi
 else
   fail "T12b: reply_target упал на реальной sent_map-записи ($TG_ERR)"
@@ -969,7 +969,7 @@ SENT13="$TMP/sent13.json"
 python3 -c 'import json; json.dump({}, open("'"$SENT13"'", "w"))'
 CONC13=10
 for i in $(seq 1 "$CONC13"); do
-  ( CLAUDE_AGENT_TG_SENT_MAP="$SENT13" python3 -c '
+  ( AI_AGENT_TG_SENT_MAP="$SENT13" python3 -c '
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
 loader = SourceFileLoader("m", sys.argv[1])
@@ -1010,7 +1010,7 @@ json.dump(seed, open(sentpath, "w"))
 ' "$SENT13B" "$QID13OPEN" "$QID13CLOSED"
 
 # триггерим RMW/прунинг-проход обычной (свежей) регистрацией
-CLAUDE_AGENT_TG_SENT_MAP="$SENT13B" python3 -c '
+AI_AGENT_TG_SENT_MAP="$SENT13B" python3 -c '
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
 loader = SourceFileLoader("m", sys.argv[1])
@@ -1020,7 +1020,7 @@ loader.exec_module(mod)
 mod.sent_map_register(9100, [3], "agentp13", 2)
 ' "$TGBOT"
 
-LOOKUP13_OPEN=$(CLAUDE_AGENT_TG_SENT_MAP="$SENT13B" python3 -c '
+LOOKUP13_OPEN=$(AI_AGENT_TG_SENT_MAP="$SENT13B" python3 -c '
 import importlib.util, sys, json
 from importlib.machinery import SourceFileLoader
 loader = SourceFileLoader("m", sys.argv[1])
@@ -1032,7 +1032,7 @@ print(json.dumps(mod.sent_map_lookup(9100, 1)))
 [[ "$LOOKUP13_OPEN" != "null" ]] \
   && ok || fail "T13b: запись с открытым qid переживает TTL-прунинг (14 суток), got $LOOKUP13_OPEN"
 
-LOOKUP13_CLOSED=$(CLAUDE_AGENT_TG_SENT_MAP="$SENT13B" python3 -c '
+LOOKUP13_CLOSED=$(AI_AGENT_TG_SENT_MAP="$SENT13B" python3 -c '
 import importlib.util, sys, json
 from importlib.machinery import SourceFileLoader
 loader = SourceFileLoader("m", sys.argv[1])
@@ -1063,7 +1063,7 @@ printf '===\n' >> "$TMP/alert-argv.log"
 EOF
 chmod +x "$TMP/mock-alert.sh"
 echo ask_ok > "$MOCK_MODE_FILE"
-CLAUDE_AGENT_ALERT_CMD="$TMP/mock-alert.sh" "$RUN" step "$AGT15" >/dev/null 2>"$TMP/t15run.err"
+AI_AGENT_ALERT_CMD="$TMP/mock-alert.sh" "$RUN" step "$AGT15" >/dev/null 2>"$TMP/t15run.err"
 echo ok > "$MOCK_MODE_FILE"
 QFILES15=("$AGT15"/questions/*.json)
 [[ -f "${QFILES15[0]}" ]] && ok || fail "T15: вопрос реально создан мок-агентом"
@@ -1133,8 +1133,8 @@ echo "=== T25 (Р11, план §12): счетчик карточек расте�
 CARDS25="$TMP/t25-cards.json"
 QID25=$(new_uuid)
 DETAIL25=$(qcard_detail "agent25" "$QID25" "info" "T25 продолжать?" "")
-CLAUDE_AGENT_TG_TOKEN="TESTTOKEN" CLAUDE_AGENT_TG_WHITELIST="7001" \
-  CLAUDE_AGENT_TG_CARDS_COUNT="$CARDS25" \
+AI_AGENT_TG_TOKEN="TESTTOKEN" AI_AGENT_TG_WHITELIST="7001" \
+  AI_AGENT_TG_CARDS_COUNT="$CARDS25" \
   python3 - "$TGBOT" "$DETAIL25" <<'PY'
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
@@ -1154,8 +1154,8 @@ PY
 echo "--- T25b: неудачная доставка (Telegram API падает у всех получателей) НЕ двигает счетчик ---"
 QID25B=$(new_uuid)
 DETAIL25B=$(qcard_detail "agent25b" "$QID25B" "info" "T25b продолжать?" "")
-CLAUDE_AGENT_TG_TOKEN="TESTTOKEN" CLAUDE_AGENT_TG_WHITELIST="7001" \
-  CLAUDE_AGENT_TG_CARDS_COUNT="$CARDS25" \
+AI_AGENT_TG_TOKEN="TESTTOKEN" AI_AGENT_TG_WHITELIST="7001" \
+  AI_AGENT_TG_CARDS_COUNT="$CARDS25" \
   python3 - "$TGBOT" "$DETAIL25B" <<'PY'
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
@@ -1174,8 +1174,8 @@ PY
 
 echo "--- T25c: обычный текст-алерт (без json-карточки) НЕ считается карточкой-решением ---"
 CARDS25C="$TMP/t25c-cards.json"
-CLAUDE_AGENT_TG_TOKEN="TESTTOKEN" CLAUDE_AGENT_TG_WHITELIST="7001" \
-  CLAUDE_AGENT_TG_CARDS_COUNT="$CARDS25C" \
+AI_AGENT_TG_TOKEN="TESTTOKEN" AI_AGENT_TG_WHITELIST="7001" \
+  AI_AGENT_TG_CARDS_COUNT="$CARDS25C" \
   python3 - "$TGBOT" <<'PY'
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
@@ -1199,8 +1199,8 @@ PY
 # случилось на живом контуре 2026-07-29 (задачи task-tg120899970/971).
 echo "=== T26: done-карточка - qid в sent_map == gen8 == sha8 кнопки (reply и тап сверяются одним идентификатором) ==="
 SENT26="$TMP/t26-sent.json"
-OUT26=$(CLAUDE_AGENT_TG_TOKEN="TESTTOKEN" CLAUDE_AGENT_TG_WHITELIST="7001" \
-  CLAUDE_AGENT_TG_SENT_MAP="$SENT26" \
+OUT26=$(AI_AGENT_TG_TOKEN="TESTTOKEN" AI_AGENT_TG_WHITELIST="7001" \
+  AI_AGENT_TG_SENT_MAP="$SENT26" \
   python3 - "$TGBOT" <<'PY'
 import importlib.util, json, sys
 from importlib.machinery import SourceFileLoader
@@ -1246,7 +1246,7 @@ print("%s|%s" % (ent.get("kind"), ent.get("qid")))
 # T26 подставляет detail руками, поэтому порчу СТОРОНЫ ПРОИЗВОДИТЕЛЯ
 # (done-notify перестал кладывать gen8 / переименовал ключ) он не ловит -
 # ровно тот класс дефекта, что дал живой блокер r5. Здесь detail берется
-# из РЕАЛЬНОГО вызова done-notify (через CLAUDE_AGENT_ALERT_CMD) и
+# из РЕАЛЬНОГО вызова done-notify (через AI_AGENT_ALERT_CMD) и
 # скармливается настоящему mode_send: идентификатор кнопок и reply-роутинга
 # обязан присутствовать в detail производителя и совпадать в обоих местах.
 echo "=== T27: detail от РЕАЛЬНОГО done-notify - gen8 присутствует, кнопки и sent_map используют его же ==="
@@ -1272,7 +1272,7 @@ cat > "$TMP/t27-alert.sh" <<EOF
 printf '%s\n' "\$4" >> "$TMP/t27-alert.log"
 EOF
 chmod +x "$TMP/t27-alert.sh"
-CLAUDE_AGENT_ALERT_CMD="$TMP/t27-alert.sh" "$RUN" done-notify "$AGT27" \
+AI_AGENT_ALERT_CMD="$TMP/t27-alert.sh" "$RUN" done-notify "$AGT27" \
   >/dev/null 2>"$TMP/t27.err" \
   && ok || fail "T27: done-notify exit 0 ($(cat "$TMP/t27.err"))"
 DETAIL27=$(head -1 "$TMP/t27-alert.log")
@@ -1285,8 +1285,8 @@ print(d.get("gen8") or "")
 [[ -n "$GEN27" ]] \
   && ok || fail "T27: detail производителя несет непустой gen8 (порча стороны done-notify)"
 SENT27="$TMP/t27-sent.json"
-OUT27=$(CLAUDE_AGENT_TG_TOKEN="TESTTOKEN" CLAUDE_AGENT_TG_WHITELIST="7027" \
-  CLAUDE_AGENT_TG_SENT_MAP="$SENT27" \
+OUT27=$(AI_AGENT_TG_TOKEN="TESTTOKEN" AI_AGENT_TG_WHITELIST="7027" \
+  AI_AGENT_TG_SENT_MAP="$SENT27" \
   python3 - "$TGBOT" "$DETAIL27" <<'PY'
 import importlib.util, json, sys
 from importlib.machinery import SourceFileLoader

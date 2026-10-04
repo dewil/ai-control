@@ -53,7 +53,7 @@ class BrokerContract(unittest.TestCase):
         self.calls.append((args,kwargs))
         if self.timeout:
             raise subprocess.TimeoutExpired(args, 1, stderr='synthetic-oauth-secret')
-        if self.rc == 0 and Path(args[0]).name == 'claude-agent-answer':
+        if self.rc == 0 and Path(args[0]).name == 'ai-agent-answer':
             path = self.agent/'questions'/f'{args[args.index("--qid")+1]}.json'
             record = json.loads(path.read_text())
             if not record.get('answered_at'):
@@ -116,12 +116,12 @@ class BrokerContract(unittest.TestCase):
     def test_INV_WEB_04_trusted_writer_exact_argv_and_no_shell(self):
         self.assertEqual(self.backend.answer('task-one',QID,'text','$(touch forbidden)'),{'status':'applied'})
         args,kw = self.calls[-1]
-        self.assertEqual(args,[str(self.bin/'claude-agent-answer'),str(self.agent),'--qid',QID,'--text','$(touch forbidden)','--by','web'])
+        self.assertEqual(args,[str(self.bin/'ai-agent-answer'),str(self.agent),'--qid',QID,'--text','$(touch forbidden)','--by','web'])
         self.assertFalse(kw.get('shell',False))
         self.assertGreater(kw['timeout'],0)
         self.assertLessEqual(kw['timeout'],120)
         self.assertEqual(self.backend.verdict('task-one',self.generation,'accept','Human comment'),{'status':'applied'})
-        self.assertEqual(self.calls[-1][0],[str(self.bin/'claude-agent-run'),'done-verdict',str(self.agent),'--accept','--expect-sha',self.generation,'--comment','Human comment'])
+        self.assertEqual(self.calls[-1][0],[str(self.bin/'ai-agent-run'),'done-verdict',str(self.agent),'--accept','--expect-sha',self.generation,'--comment','Human comment'])
     def test_INV_WEB_04_returncodes_and_timeout_sanitized(self):
         for rc, expected in [(1,'invalid_or_stale'),(2,'invalid_or_stale'),(7,'saved_pending'),(88,'unavailable')]:
             self.rc=rc

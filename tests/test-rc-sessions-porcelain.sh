@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for `claude-rc sessions <project> --porcelain` (V3.0 §5): машиночитаемый
+# Tests for `ai-rc sessions <project> --porcelain` (V3.0 §5): машиночитаемый
 # список сессий, из которого бот строит меню. Человеческое меню остается как было.
 #
 # Формат строки: uuid \t mtime \t origin \t cwd \t title \t live \t ctx%
@@ -9,7 +9,7 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RC="$HERE/../bin/claude-rc"
+RC="$HERE/../bin/ai-rc"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -18,12 +18,12 @@ ok()   { PASS=$((PASS+1)); }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1" >&2; }
 
 export CLAUDE_CONFIG_DIR="$TMP/claude"
-export CLAUDE_RC_PROJECTS_FILE="$TMP/projects.yaml"
-export CLAUDE_RC_LOG_DIR="$TMP/logs"
-mkdir -p "$CLAUDE_RC_LOG_DIR"
+export AI_RC_PROJECTS_FILE="$TMP/projects.yaml"
+export AI_RC_LOG_DIR="$TMP/logs"
+mkdir -p "$AI_RC_LOG_DIR"
 
 PROJ="$TMP/proj"; mkdir -p "$PROJ"
-printf 'proj: %s\n' "$PROJ" > "$CLAUDE_RC_PROJECTS_FILE"
+printf 'proj: %s\n' "$PROJ" > "$AI_RC_PROJECTS_FILE"
 SLUG="$(printf '%s' "$PROJ" | sed 's/[^a-zA-Z0-9]/-/g')"
 TDIR="$CLAUDE_CONFIG_DIR/projects/$SLUG"
 mkdir -p "$TDIR"
@@ -128,7 +128,7 @@ else fail "имя сессии с чужим cwd не прочиталось: '$
 #     реестре 2026-08-01, когда пути переписали на ~/Work/... .
 LINKED="$TMP/link-to-proj"
 ln -s "$PROJ" "$LINKED"
-printf 'proj: %s\nlinked: %s\n' "$PROJ" "$LINKED" > "$CLAUDE_RC_PROJECTS_FILE"
+printf 'proj: %s\nlinked: %s\n' "$PROJ" "$LINKED" > "$AI_RC_PROJECTS_FILE"
 "$RC" sessions linked --porcelain > "$TMP/out-linked" 2>/dev/null
 n_linked="$(wc -l < "$TMP/out-linked")"
 n_direct="$(wc -l < "$OUT")"
@@ -138,7 +138,7 @@ else fail "проект через симлинк отдал $n_linked стро�
 # 11. Занятость контекста - седьмым полем. Считается по usage ПОСЛЕДНЕГО ответа
 #     модели: там лежит то, что реально ушло в запрос. Сумма по всей переписке не
 #     годится - она растет вечно и после сжатия не падает.
-printf 'proj: %s\n' "$PROJ" > "$CLAUDE_RC_PROJECTS_FILE"
+printf 'proj: %s\n' "$PROJ" > "$AI_RC_PROJECTS_FILE"
 SID_E="eeeeeeee-5555-4555-8555-555555555555"
 {
   printf '{"type":"user","message":{"content":[{"type":"text","text":"с токенами"}]},"cwd":"%s"}\n' "$PROJ"
@@ -146,7 +146,7 @@ SID_E="eeeeeeee-5555-4555-8555-555555555555"
   printf '{"type":"assistant","message":{"model":"claude-opus-5","usage":{"input_tokens":10,"cache_read_input_tokens":100000,"cache_creation_input_tokens":390,"output_tokens":7}}}\n'
 } > "$TDIR/$SID_E.jsonl"
 touch -d '2020-01-05 10:00' "$TDIR/$SID_E.jsonl"
-CLAUDE_RC_CTX_WINDOW=200000 "$RC" sessions proj --porcelain > "$OUT" 2>/dev/null
+AI_RC_CTX_WINDOW=200000 "$RC" sessions proj --porcelain > "$OUT" 2>/dev/null
 
 bad="$(awk -F'\t' 'NF!=7 {c++} END {print c+0}' "$OUT")"
 if [[ "$bad" == 0 ]]; then ok; else fail "$bad строк не с 7 полями"; fi
@@ -163,7 +163,7 @@ if [[ -z "$pct_a" ]]; then ok; else fail "у сессии без usage проц�
 # Окно в миллион: те же токены дают вдесятеро меньший процент. Гадать по
 # наблюдаемому максимуму нельзя - сессия на миллионе показала бы 50% там, где
 # занято 10, и человек погнал бы сжимать зря.
-CLAUDE_RC_CTX_WINDOW=1000000 "$RC" sessions proj --porcelain > "$TMP/out-1m" 2>/dev/null
+AI_RC_CTX_WINDOW=1000000 "$RC" sessions proj --porcelain > "$TMP/out-1m" 2>/dev/null
 pct_1m="$(awk -F'\t' '$1 ~ /^eeeeeeee/ {print $7}' "$TMP/out-1m")"
 if [[ "$pct_1m" == 10 ]]; then ok; else fail "при окне 1M процент '$pct_1m', ожидалось 10"; fi
 
@@ -230,7 +230,7 @@ SID_Z="7777777f-7777-4777-8777-777777777777"
   printf '{"type":"assistant","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":80000,"cache_creation_input_tokens":0,"output_tokens":7}}}\n'
   printf '{"type":"assistant","message":{"usage":{"input_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":0}}}\n'
 } > "$TDIR/$SID_Z.jsonl"
-CLAUDE_RC_CTX_WINDOW=200000 "$RC" sessions proj --porcelain --only "${SID_Z:0:8}" > "$TMP/zero" 2>/dev/null
+AI_RC_CTX_WINDOW=200000 "$RC" sessions proj --porcelain --only "${SID_Z:0:8}" > "$TMP/zero" 2>/dev/null
 if [[ "$(cut -f7 "$TMP/zero")" == 40 ]]; then ok
 else fail "нулевая запись принята за последний ответ: '$(cut -f7 "$TMP/zero")'"; fi
 
@@ -266,10 +266,10 @@ if ! grep -q 'eeeeeeee' "$TMP/menu"; then ok; else fail "headless-прогон �
 rm -f "$TDIR/$SID_H.jsonl" "$TDIR/$SID_S.jsonl"
 
 # 16. Раздел B спеки (2026-09-19-spec-session-titles.md): имя с сервера
-#     (кэш $CLAUDE_RC_STATE_DIR/session-titles.json, найденное по
+#     (кэш $AI_RC_STATE_DIR/session-titles.json, найденное по
 #     bridgeSessionId из записи bridge-session) перебивает custom-title в
 #     5-м поле --porcelain. Без кэша - custom-title как раньше.
-export CLAUDE_RC_STATE_DIR="$TMP/state"; mkdir -p "$CLAUDE_RC_STATE_DIR"
+export AI_RC_STATE_DIR="$TMP/state"; mkdir -p "$AI_RC_STATE_DIR"
 SID_BR="00000000-1234-4234-8234-000000000001"
 BID_BR="cse_porcelain01"
 {
@@ -279,7 +279,7 @@ BID_BR="cse_porcelain01"
 } > "$TDIR/$SID_BR.jsonl"
 touch -d '2020-01-07 10:00' "$TDIR/$SID_BR.jsonl"
 
-python3 - "$CLAUDE_RC_STATE_DIR/session-titles.json" "$BID_BR" <<'PY'
+python3 - "$AI_RC_STATE_DIR/session-titles.json" "$BID_BR" <<'PY'
 import json, sys
 path, bid = sys.argv[1], sys.argv[2]
 json.dump({"schema": 1, "fetched_at": "2026-09-19T00:00:00Z",
@@ -291,7 +291,7 @@ t_br="$(awk -F'\t' '$1 ~ /^00000000-1234/ {print $5}' "$OUT")"
 if [[ "$t_br" == "Серверное имя" ]]; then ok
 else fail "порядок приоритета: серверное имя не попало в 5-е поле porcelain: '$t_br'"; fi
 
-rm -f "$CLAUDE_RC_STATE_DIR/session-titles.json"
+rm -f "$AI_RC_STATE_DIR/session-titles.json"
 "$RC" sessions proj --porcelain > "$OUT" 2>/dev/null
 t_br="$(awk -F'\t' '$1 ~ /^00000000-1234/ {print $5}' "$OUT")"
 if [[ "$t_br" == "локальное имя" ]]; then ok

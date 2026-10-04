@@ -1,11 +1,11 @@
 """_agent_question_io: общий код создания вопроса под questions/.lock -
-единственный вопрос-creation путь для claude-agent-ask (kind=info, V2.3
-§2) и claude-agent-permit (kind=permission, V2.4 §2). Singleton (не больше
+единственный вопрос-creation путь для ai-agent-ask (kind=info, V2.3
+§2) и ai-agent-permit (kind=permission, V2.4 §2). Singleton (не больше
 одного status=open) и fail-closed на битом состоянии (аудит V2.3 major 7)
 реализованы здесь ровно один раз.
 
 durable_write/durable_json/fsync_dir - тот же протокол tmp+fsync+rename+
-fsync(dir), что в claude-agent-run.
+fsync(dir), что в ai-agent-run.
 """
 
 import fcntl
@@ -59,8 +59,8 @@ def envelope_in_inflight(agent_dir, envelope_key):
     """True - envelope_key реально лежит в inbox/inflight/ этого агента
     сейчас (V2.3 major 6 / V2.4 major 6: произвольный/устаревший ключ не
     должен создавать вопрос, не привязанный ни к одному живому прогону, но
-    безусловно морозящий очередь). Общая проверка для claude-agent-ask и
-    claude-agent-permit."""
+    безусловно морозящий очередь). Общая проверка для ai-agent-ask и
+    ai-agent-permit."""
     # containment ДО вывода "да" (тот же протокол, что qid_safe_path в
     # V2.3): без него ключ вида "../../tmp/x" проходил бы проверку при
     # существовании любого чужого .json - то есть создавал бы ровно тот

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for `claude-rc rm|trash` - удаление сессии из бота.
+# Tests for `ai-rc rm|trash` - удаление сессии из бота.
 #
 # Ключевое решение: удаление НЕ трет файл, а переносит транскрипт в корзину с TTL.
 # Причина - асимметрия цены ошибки: тап делается одним пальцем на ходу, а переписка
@@ -7,7 +7,7 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RC="$HERE/../bin/claude-rc"
+RC="$HERE/../bin/ai-rc"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -16,13 +16,13 @@ ok()   { PASS=$((PASS+1)); }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1" >&2; }
 
 export CLAUDE_CONFIG_DIR="$TMP/claude"
-export CLAUDE_RC_PROJECTS_FILE="$TMP/projects.yaml"
-export CLAUDE_RC_LOG_DIR="$TMP/logs"
-export CLAUDE_RC_TRASH_DIR="$TMP/trash"
-mkdir -p "$CLAUDE_RC_LOG_DIR"
+export AI_RC_PROJECTS_FILE="$TMP/projects.yaml"
+export AI_RC_LOG_DIR="$TMP/logs"
+export AI_RC_TRASH_DIR="$TMP/trash"
+mkdir -p "$AI_RC_LOG_DIR"
 
 PROJ="$TMP/proj"; mkdir -p "$PROJ"
-printf 'proj: %s\n' "$PROJ" > "$CLAUDE_RC_PROJECTS_FILE"
+printf 'proj: %s\n' "$PROJ" > "$AI_RC_PROJECTS_FILE"
 SLUG="$(printf '%s' "$PROJ" | sed 's/[^a-zA-Z0-9]/-/g')"
 TDIR="$CLAUDE_CONFIG_DIR/projects/$SLUG"; mkdir -p "$TDIR"
 
@@ -58,7 +58,7 @@ rc=$?
 if [[ "$rc" == 0 && ! -f "$TDIR/$SID.jsonl" ]]; then ok
 else fail "rm: rc=$rc, исходный файл на месте? ($(head -c120 "$TMP/err"))"; fi
 
-trashed="$(find "$CLAUDE_RC_TRASH_DIR" -name "*$SID*.jsonl" 2>/dev/null | head -1)"
+trashed="$(find "$AI_RC_TRASH_DIR" -name "*$SID*.jsonl" 2>/dev/null | head -1)"
 if [[ -n "$trashed" ]]; then ok; else fail "в корзине нет файла сессии"; fi
 
 # 2. Рядом лежит метка с исходным путем - иначе восстанавливать некуда.
@@ -89,12 +89,12 @@ if "$RC" trash list 2>/dev/null | grep -q "$SID"; then ok
 else fail "trash list не показал удаленную сессию"; fi
 
 # 7. TTL: файл старше срока уходит при следующем обращении, свежий остается.
-old="$CLAUDE_RC_TRASH_DIR/2000-01-01-bbbbbbbb-2222-4222-8222-222222222222.jsonl"
+old="$AI_RC_TRASH_DIR/2000-01-01-bbbbbbbb-2222-4222-8222-222222222222.jsonl"
 printf '{}\n' > "$old"; printf '{"orig":"/nowhere"}\n' > "${old%.jsonl}.meta"
 touch -d '2000-01-01' "$old" "${old%.jsonl}.meta"
 "$RC" trash list >/dev/null 2>&1
 if [[ ! -f "$old" ]]; then ok; else fail "TTL не вычистил протухший файл"; fi
-if [[ -n "$(find "$CLAUDE_RC_TRASH_DIR" -name "*$SID*.jsonl" 2>/dev/null)" ]]; then ok
+if [[ -n "$(find "$AI_RC_TRASH_DIR" -name "*$SID*.jsonl" 2>/dev/null)" ]]; then ok
 else fail "TTL снес свежий файл"; fi
 
 # 8. Кривой uuid и чужой проект отвергаются до любых действий.

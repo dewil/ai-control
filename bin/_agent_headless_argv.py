@@ -1,6 +1,6 @@
 """Общий хелпер сборки headless-argv для `claude -p` (V2.1 §3).
 
-Используется run_event (bin/claude-agent-run) и bin/claude-agent-review.
+Используется run_event (bin/ai-agent-run) и bin/ai-agent-review.
 Параметризован политикой прав: старый blacklist (`disallowed_tools`) ИЛИ
 settings-файл + permission_mode (пояс прав из спеки). Порядок флагов
 совпадает с прежним хардкодом в обоих местах - ревьюер обязан остаться

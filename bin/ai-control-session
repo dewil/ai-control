@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# ai-control-session: service entrypoint for the always-on "control"
+# remote-control session. It runs claude in the ~/.ai-control directory,
+# so the project-level CLAUDE.md there is loaded as context.
+case "$(uname -s)" in
+  Darwin) export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/bin:/usr/bin:/bin" ;;
+  *)      export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:/bin" ;;
+esac
+
+# Optional env overrides (CLAUDE_BIN, proxy vars). On Linux the systemd unit
+# already sources this via EnvironmentFile; we source it here too so macOS/launchd
+# (no EnvironmentFile) and manual runs honor the same file. Auto-export so children
+# spawned during the session (ai-rc -> project sessions) inherit the values.
+ENV_FILE="${AI_CONTROL_ENV_FILE:-$HOME/.config/ai-control/env}"
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  . "$ENV_FILE"
+  set +a
+fi
+
+cd "$HOME/.ai-control" || exit 1
+# --debug-file gives the watchdog a real liveness signal: it records actual
+# network/poll activity, unlike control.log which only updates on TUI redraws and
+# so looks identical when healthy-idle vs frozen ("zombie-Connected" after a 403
+# flap). The watchdog heartbeats on this file's mtime. logrotate caps its growth.
+DEBUG_FILE="${AI_CONTROL_DEBUG_FILE:-$HOME/.ai-control/control.debug.log}"
+# claude --remote-control is an interactive session and needs a PTY; the service
+# (launchd/systemd) has none, so claude inits and exits. Wrap in script(1) to give
+# it a PTY. Syntax differs: util-linux (Linux) vs BSD (macOS).
+case "$(uname -s)" in
+  Darwin) exec script -q /dev/null "${CLAUDE_BIN:-claude}" --remote-control control --debug-file "$DEBUG_FILE" ;;
+  *)      exec script -qec "${CLAUDE_BIN:-claude} --remote-control control --debug-file $DEBUG_FILE" /dev/null ;;
+esac

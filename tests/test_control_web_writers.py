@@ -26,10 +26,10 @@ class TrustedWriters(unittest.TestCase):
             p=self.mock/name
             p.write_text('#!/bin/sh\nexit 99\n');p.chmod(0o700)
         self.env=dict(os.environ,HOME=str(self.root),XDG_RUNTIME_DIR=str(self.root/'runtime'),
-            CLAUDE_AGENTS_DIR=str(self.agent.parent),CLAUDE_AGENT_SPOOL_BASE=str(self.root/'spool'),
-            CLAUDE_CONFIG_DIR=str(self.root/'config'),CLAUDE_AGENT_ALERT_CMD='/usr/bin/true',
+            AI_AGENTS_DIR=str(self.agent.parent),AI_AGENT_SPOOL_BASE=str(self.root/'spool'),
+            CLAUDE_CONFIG_DIR=str(self.root/'config'),AI_AGENT_ALERT_CMD='/usr/bin/true',
             PATH=str(self.mock)+':'+os.environ['PATH'])
-        self.env.pop('CLAUDE_AGENTS_REQUIRE_MOUNT',None)
+        self.env.pop('AI_AGENTS_REQUIRE_MOUNT',None)
         self.agent.joinpath('spec.yaml').write_text('type: task\nengine: claude\nname: task-one\n')
         self.write('control.json',{'generation':1})
         self.write('state.1.json',{'phase':'waiting'})

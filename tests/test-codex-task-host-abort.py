@@ -39,7 +39,7 @@ class Manager:
     def start(self, unit, argv, cwd, token, *, deadline):
         self.check('start', deadline)
         self.status = dict(invocation_id='a' * 32,
-            description='claude-control task ' + token, kill_mode='control-group',
+            description='ai-control task ' + token, kill_mode='control-group',
             active_state='active', sub_state='running', main_pid=12345,
             control_group='/test/owned', type='exec', exit_type='main',
             restart='no', remain_after_exit=False, send_sigkill=True)
@@ -55,7 +55,7 @@ class Manager:
         assert self.case.journal()['phase'] == 'stopping', 'signal preceded intent'
         assert invocation_id == self.status['invocation_id']
         assert main_pid == self.status['main_pid']
-        assert self.status['description'] == 'claude-control task ' + token
+        assert self.status['description'] == 'ai-control task ' + token
         if self.before_stop:
             self.before_stop()
         if self.stop_error:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh: set up claude-control on macOS (launchd) or Linux (systemd --user).
+# install.sh: set up ai-control on macOS (launchd) or Linux (systemd --user).
 #
 #   ./install.sh             Copy bin/ scripts into ~/.local/bin/.
 #   ./install.sh --link      Symlink bin/ scripts (useful when hacking on the repo).
@@ -7,7 +7,7 @@
 # Other options:
 #   --prefix DIR             Install scripts into DIR/bin/ instead of ~/.local/bin/.
 #   --label LABEL            launchd Label prefix (macOS only).
-#                            Default: com.${USER}.claude-control.
+#                            Default: com.${USER}.ai-control.
 #                            On Linux unit names are fixed; passing --label is rejected.
 #   --no-watchdog            Skip the watchdog unit (not recommended).
 #   --with-backup            Also install the restic two-S3 backup module (Linux).
@@ -47,7 +47,7 @@ done
 # негде прогнать, кроме Mac, а отстает от кода как раз она (V3.0 полгода жил
 # только в Linux-ветке). На поведение установки это не влияет - значение
 # проходит ту же проверку ниже.
-OS_KIND="${CLAUDE_CONTROL_OS:-$(uname -s)}"
+OS_KIND="${AI_CONTROL_OS:-$(uname -s)}"
 case "$OS_KIND" in
   Darwin) OS_KIND="darwin" ;;
   Linux)  OS_KIND="linux"  ;;
@@ -59,34 +59,34 @@ esac
 
 if [[ "$OS_KIND" == "linux" && $LABEL_EXPLICIT -eq 1 ]]; then
   echo "--label is macOS-only (launchd Label). On Linux unit names are fixed:" >&2
-  echo "  claude-control.service, claude-control-watchdog.{service,timer}" >&2
+  echo "  ai-control.service, ai-control-watchdog.{service,timer}" >&2
   exit 2
 fi
 
-[[ -z "$LABEL" ]] && LABEL="com.${USER}.claude-control"
+[[ -z "$LABEL" ]] && LABEL="com.${USER}.ai-control"
 WATCHDOG_LABEL="${LABEL}-watchdog"
 PROJECT_WATCHDOG_LABEL="${LABEL}-project-watchdog"
 LOGROTATE_LABEL="${LABEL}-logrotate"
 # Fixed systemd unit names. Kept here so they're set on both platforms - the
 # watchdog reads SERVICE_UNIT via env to know what to restart.
-SERVICE_UNIT="claude-control.service"
-WATCHDOG_SERVICE_UNIT="claude-control-watchdog.service"
-WATCHDOG_TIMER_UNIT="claude-control-watchdog.timer"
-PROJECT_WATCHDOG_SERVICE_UNIT="claude-control-project-watchdog.service"
-PROJECT_WATCHDOG_TIMER_UNIT="claude-control-project-watchdog.timer"
-LOGROTATE_SERVICE_UNIT="claude-control-logrotate.service"
-LOGROTATE_TIMER_UNIT="claude-control-logrotate.timer"
+SERVICE_UNIT="ai-control.service"
+WATCHDOG_SERVICE_UNIT="ai-control-watchdog.service"
+WATCHDOG_TIMER_UNIT="ai-control-watchdog.timer"
+PROJECT_WATCHDOG_SERVICE_UNIT="ai-control-project-watchdog.service"
+PROJECT_WATCHDOG_TIMER_UNIT="ai-control-project-watchdog.timer"
+LOGROTATE_SERVICE_UNIT="ai-control-logrotate.service"
+LOGROTATE_TIMER_UNIT="ai-control-logrotate.timer"
 # Agent layer (Linux only: transient units + cgroups need systemd --user).
-RECONCILER_UNIT="claude-agent-reconciler.service"
-TGBOT_UNIT="claude-agent-tgbot.service"
-LIMITS_DIGEST_SERVICE_UNIT="claude-agent-limits-digest.service"
-LIMITS_DIGEST_TIMER_UNIT="claude-agent-limits-digest.timer"
+RECONCILER_UNIT="ai-agent-reconciler.service"
+TGBOT_UNIT="ai-agent-tgbot.service"
+LIMITS_DIGEST_SERVICE_UNIT="ai-agent-limits-digest.service"
+LIMITS_DIGEST_TIMER_UNIT="ai-agent-limits-digest.timer"
 # Optional backup module (Linux only; installed with --with-backup).
-BACKUP_SERVICE_UNIT="claude-control-backup.service"
-BACKUP_TIMER_UNIT="claude-control-backup.timer"
+BACKUP_SERVICE_UNIT="ai-control-backup.service"
+BACKUP_TIMER_UNIT="ai-control-backup.timer"
 
 BIN_DIR="$PREFIX/bin"
-CONTROL_DIR="$HOME/.claude-control"
+CONTROL_DIR="$HOME/.ai-control"
 if [[ "$OS_KIND" == "darwin" ]]; then
   UNIT_DIR="$HOME/Library/LaunchAgents"
 else
@@ -137,7 +137,7 @@ fi
 # yq has two unrelated projects with the same binary name. We need mikefarah/yq v4.
 yq_version_line="$(yq --version 2>&1 | head -1 || true)"
 if ! echo "$yq_version_line" | grep -qi 'mikefarah'; then
-  fail "claude-rc needs mikefarah/yq v4. Detected: ${yq_version_line:-<no output>}.
+  fail "ai-rc needs mikefarah/yq v4. Detected: ${yq_version_line:-<no output>}.
        Get it from https://github.com/mikefarah/yq/releases (or 'brew install yq' on macOS)."
 fi
 
@@ -150,7 +150,7 @@ fi
 # without systemd, minimal containers, ssh without user bus.
 if [[ "$OS_KIND" == "linux" ]]; then
   if ! command -v systemctl >/dev/null 2>&1; then
-    fail "systemctl not found. claude-control on Linux requires systemd."
+    fail "systemctl not found. ai-control on Linux requires systemd."
   fi
   if ! systemctl --user show-environment >/dev/null 2>&1; then
     fail "systemctl --user is not reachable. Make sure you are running under a
@@ -269,7 +269,7 @@ copy_example_if_missing "$REPO_DIR/examples/projects.yaml.example" \
 copy_example_if_missing "$REPO_DIR/examples/control-CLAUDE.md.example" \
                         "$CONTROL_DIR/CLAUDE.md"
 
-# V2.7a §2: `claude-rc agent new-task` fail-closed без шаблона - без засева
+# V2.7a §2: `ai-rc agent new-task` fail-closed без шаблона - без засева
 # рождение задачи с телефона (/new) не работает на свежей установке вовсе.
 #
 # V2.10 §1.3: обычный copy_example_if_missing здесь недостаточен - машина, на
@@ -288,6 +288,8 @@ copy_example_if_missing "$REPO_DIR/examples/control-CLAUDE.md.example" \
 # и остается с сырым git в поясе навсегда. Пересчитано по всей git-истории
 # файла (git log --follow -- examples/task-template.yaml.example).
 TASK_TEMPLATE_KNOWN_SHA256=(
+  # Canonical naming: trusted unmodified template immediately before rename.
+  0cebe0c8f019c0431bc492fc2aad928a35ad5d743fe2b0a492342a3f65ff951b
   # Ревизии названы описанием, а не хешем: обезличивание репозитория
   # переписало историю, и прежние хеши (5f2ea56, 2922e48, dcf55c2) больше не
   # резолвятся. Актуальный список ревизий - git log --follow -- этот файл.
@@ -468,7 +470,7 @@ if [[ -e "$CONTROL_DIR/CLAUDE.md" ]] \
   warn "$CONTROL_DIR/CLAUDE.md differs from the shipped example and was NOT changed."
   warn "Review examples/control-CLAUDE.md.example for updates you may want to merge"
   warn "(V3.0 verbs: new / up <uuid> / down <uuid> / live - the tmux-era commands"
-  warn "claude-rc stop|status and 'tmux ls' no longer exist)."
+  warn "ai-rc stop|status and 'tmux ls' no longer exist)."
 fi
 
 run mkdir -p "$CONTROL_DIR/.claude"
@@ -479,7 +481,7 @@ copy_example_if_missing "$REPO_DIR/examples/control-settings.local.json.example"
 # Optional backup module config (--with-backup): seed backup-env and lock it down,
 # since it holds S3 credentials + the restic password.
 if [[ $WITH_BACKUP -eq 1 ]]; then
-  BACKUP_ENV="${XDG_CONFIG_HOME:-$HOME/.config}/claude-control/backup-env"
+  BACKUP_ENV="${XDG_CONFIG_HOME:-$HOME/.config}/ai-control/backup-env"
   run mkdir -p "$(dirname "$BACKUP_ENV")"
   copy_example_if_missing "$REPO_DIR/examples/backup-env.example" "$BACKUP_ENV"
   if [[ $DRY_RUN -eq 0 && -e "$BACKUP_ENV" ]]; then run chmod 600 "$BACKUP_ENV"; fi
@@ -574,16 +576,16 @@ if [[ "$OS_KIND" == "darwin" ]]; then
   # bootstrap'им и снимаем с уже установленных машин - пропуск bootstrap сам по
   # себе ничего не снимает, загруженный агент остается загруженным.
   CONTROL_PLIST="$UNIT_DIR/${LABEL}.plist"
-  render_template "$REPO_DIR/launchd/com.USER.claude-control.plist.tmpl" "$CONTROL_PLIST"
+  render_template "$REPO_DIR/launchd/com.USER.ai-control.plist.tmpl" "$CONTROL_PLIST"
   bootout_if_loaded "$LABEL"
 
   if [[ $WATCHDOG -eq 1 ]]; then
     WATCHDOG_PLIST="$UNIT_DIR/${WATCHDOG_LABEL}.plist"
-    render_template "$REPO_DIR/launchd/com.USER.claude-control-watchdog.plist.tmpl" "$WATCHDOG_PLIST"
+    render_template "$REPO_DIR/launchd/com.USER.ai-control-watchdog.plist.tmpl" "$WATCHDOG_PLIST"
     bootout_if_loaded "$WATCHDOG_LABEL"
 
     PROJECT_WATCHDOG_PLIST="$UNIT_DIR/${PROJECT_WATCHDOG_LABEL}.plist"
-    render_template "$REPO_DIR/launchd/com.USER.claude-control-project-watchdog.plist.tmpl" "$PROJECT_WATCHDOG_PLIST"
+    render_template "$REPO_DIR/launchd/com.USER.ai-control-project-watchdog.plist.tmpl" "$PROJECT_WATCHDOG_PLIST"
     bootout_if_loaded "$PROJECT_WATCHDOG_LABEL"
   else
     # --no-watchdog: tear down any watchdog from a previous install so it doesn't
@@ -606,7 +608,7 @@ if [[ "$OS_KIND" == "darwin" ]]; then
   # Log rotation timer: installed regardless of --watchdog so logs stay bounded
   # even without the health watchdog.
   LOGROTATE_PLIST="$UNIT_DIR/${LOGROTATE_LABEL}.plist"
-  render_template "$REPO_DIR/launchd/com.USER.claude-control-logrotate.plist.tmpl" "$LOGROTATE_PLIST"
+  render_template "$REPO_DIR/launchd/com.USER.ai-control-logrotate.plist.tmpl" "$LOGROTATE_PLIST"
   bootout_if_loaded "$LOGROTATE_LABEL"
   bootstrap_unit "$LOGROTATE_PLIST"
 
@@ -618,13 +620,13 @@ else  # linux
   PROJECT_WATCHDOG_SERVICE_PATH="$UNIT_DIR/$PROJECT_WATCHDOG_SERVICE_UNIT"
   PROJECT_WATCHDOG_TIMER_PATH="$UNIT_DIR/$PROJECT_WATCHDOG_TIMER_UNIT"
 
-  render_template "$REPO_DIR/systemd/claude-control.service.tmpl" "$CONTROL_UNIT_PATH"
+  render_template "$REPO_DIR/systemd/ai-control.service.tmpl" "$CONTROL_UNIT_PATH"
 
   if [[ $WATCHDOG -eq 1 ]]; then
-    render_template "$REPO_DIR/systemd/claude-control-watchdog.service.tmpl" "$WATCHDOG_SERVICE_PATH"
-    render_template "$REPO_DIR/systemd/claude-control-watchdog.timer.tmpl"   "$WATCHDOG_TIMER_PATH"
-    render_template "$REPO_DIR/systemd/claude-control-project-watchdog.service.tmpl" "$PROJECT_WATCHDOG_SERVICE_PATH"
-    render_template "$REPO_DIR/systemd/claude-control-project-watchdog.timer.tmpl"   "$PROJECT_WATCHDOG_TIMER_PATH"
+    render_template "$REPO_DIR/systemd/ai-control-watchdog.service.tmpl" "$WATCHDOG_SERVICE_PATH"
+    render_template "$REPO_DIR/systemd/ai-control-watchdog.timer.tmpl"   "$WATCHDOG_TIMER_PATH"
+    render_template "$REPO_DIR/systemd/ai-control-project-watchdog.service.tmpl" "$PROJECT_WATCHDOG_SERVICE_PATH"
+    render_template "$REPO_DIR/systemd/ai-control-project-watchdog.timer.tmpl"   "$PROJECT_WATCHDOG_TIMER_PATH"
   else
     # --no-watchdog: physically remove any leftover unit files from a previous
     # install. Just skipping enable is not enough - they would still be loaded.
@@ -645,33 +647,33 @@ else  # linux
   # even without the health watchdog.
   LOGROTATE_SERVICE_PATH="$UNIT_DIR/$LOGROTATE_SERVICE_UNIT"
   LOGROTATE_TIMER_PATH="$UNIT_DIR/$LOGROTATE_TIMER_UNIT"
-  render_template "$REPO_DIR/systemd/claude-control-logrotate.service.tmpl" "$LOGROTATE_SERVICE_PATH"
-  render_template "$REPO_DIR/systemd/claude-control-logrotate.timer.tmpl"   "$LOGROTATE_TIMER_PATH"
+  render_template "$REPO_DIR/systemd/ai-control-logrotate.service.tmpl" "$LOGROTATE_SERVICE_PATH"
+  render_template "$REPO_DIR/systemd/ai-control-logrotate.timer.tmpl"   "$LOGROTATE_TIMER_PATH"
 
   # Agent-layer reconciler (Linux only): supervises agents/<name>/ registry.
   # Idle no-op while the registry is empty, so installed unconditionally.
   RECONCILER_UNIT_PATH="$UNIT_DIR/$RECONCILER_UNIT"
-  render_template "$REPO_DIR/systemd/claude-agent-reconciler.service.tmpl" "$RECONCILER_UNIT_PATH"
+  render_template "$REPO_DIR/systemd/ai-agent-reconciler.service.tmpl" "$RECONCILER_UNIT_PATH"
 
   # TG dashboard bot: unit ставится всегда, стартует только при настроенном
   # токене (env-файл); без токена выходит с кодом 0 и не рестартится.
   TGBOT_UNIT_PATH="$UNIT_DIR/$TGBOT_UNIT"
-  render_template "$REPO_DIR/systemd/claude-agent-tgbot.service.tmpl" "$TGBOT_UNIT_PATH"
+  render_template "$REPO_DIR/systemd/ai-agent-tgbot.service.tmpl" "$TGBOT_UNIT_PATH"
 
   # Дайджест лимитов LLM: oneshot + 30min-timer; шлет через tgbot notify,
   # поэтому включается по тому же условию, что и tgbot (токен в env).
   LIMITS_DIGEST_SERVICE_PATH="$UNIT_DIR/$LIMITS_DIGEST_SERVICE_UNIT"
   LIMITS_DIGEST_TIMER_PATH="$UNIT_DIR/$LIMITS_DIGEST_TIMER_UNIT"
-  render_template "$REPO_DIR/systemd/claude-agent-limits-digest.service.tmpl" "$LIMITS_DIGEST_SERVICE_PATH"
-  render_template "$REPO_DIR/systemd/claude-agent-limits-digest.timer.tmpl"   "$LIMITS_DIGEST_TIMER_PATH"
+  render_template "$REPO_DIR/systemd/ai-agent-limits-digest.service.tmpl" "$LIMITS_DIGEST_SERVICE_PATH"
+  render_template "$REPO_DIR/systemd/ai-agent-limits-digest.timer.tmpl"   "$LIMITS_DIGEST_TIMER_PATH"
 
   # Optional backup module (--with-backup). Timer is NOT enabled here: it needs
-  # backup-env filled in and `claude-control-backup-init` run first.
+  # backup-env filled in and `ai-control-backup-init` run first.
   if [[ $WITH_BACKUP -eq 1 ]]; then
     BACKUP_SERVICE_PATH="$UNIT_DIR/$BACKUP_SERVICE_UNIT"
     BACKUP_TIMER_PATH="$UNIT_DIR/$BACKUP_TIMER_UNIT"
-    render_template "$REPO_DIR/systemd/claude-control-backup.service.tmpl" "$BACKUP_SERVICE_PATH"
-    render_template "$REPO_DIR/systemd/claude-control-backup.timer.tmpl"   "$BACKUP_TIMER_PATH"
+    render_template "$REPO_DIR/systemd/ai-control-backup.service.tmpl" "$BACKUP_SERVICE_PATH"
+    render_template "$REPO_DIR/systemd/ai-control-backup.timer.tmpl"   "$BACKUP_TIMER_PATH"
   fi
 
   # Catch unit-file syntax errors early instead of after daemon-reload.
@@ -724,19 +726,19 @@ else  # linux
   # диске новые, а проход шел по старому коду. try-restart не поднимает то,
   # что намеренно остановлено.
   run systemctl --user try-restart "$RECONCILER_UNIT"
-  if grep -q '^CLAUDE_AGENT_TG_TOKEN=' \
-       "${XDG_CONFIG_HOME:-$HOME/.config}/claude-control/env" 2>/dev/null; then
+  if grep -q '^AI_AGENT_TG_TOKEN=' \
+       "${XDG_CONFIG_HOME:-$HOME/.config}/ai-control/env" 2>/dev/null; then
     run systemctl --user enable --now "$TGBOT_UNIT"
     run systemctl --user enable --now "$LIMITS_DIGEST_TIMER_UNIT"
   else
-    say "TG-бот: добавь CLAUDE_AGENT_TG_TOKEN и CLAUDE_AGENT_TG_WHITELIST в"
-    say "  ~/.config/claude-control/env, затем: systemctl --user enable --now $TGBOT_UNIT"
+    say "TG-бот: добавь AI_AGENT_TG_TOKEN и AI_AGENT_TG_WHITELIST в"
+    say "  ~/.config/ai-control/env, затем: systemctl --user enable --now $TGBOT_UNIT"
     say "  (дайджест лимитов $LIMITS_DIGEST_TIMER_UNIT включится тем же путем)"
   fi
 
   if [[ $WITH_BACKUP -eq 1 ]]; then
-    say "Backup: заполни ~/.config/claude-control/backup-env, затем:"
-    say "  claude-control-backup-init && systemctl --user enable --now $BACKUP_TIMER_UNIT"
+    say "Backup: заполни ~/.config/ai-control/backup-env, затем:"
+    say "  ai-control-backup-init && systemctl --user enable --now $BACKUP_TIMER_UNIT"
   fi
 
   # Lingering: without it, the user manager (and our services) stops on logout.
@@ -747,7 +749,7 @@ else  # linux
       cat >&2 <<EOF
 
 WARNING: lingering is NOT enabled for $USER (loginctl Linger=$linger_state).
-         claude-control will stop when you log out, and won't start after reboot.
+         ai-control will stop when you log out, and won't start after reboot.
          Enable it once:
              loginctl enable-linger $USER
          (May require sudo depending on your polkit setup.)
@@ -768,11 +770,11 @@ Next steps:
   1. Edit $CONTROL_DIR/projects.yaml and list the projects you want to expose.
   2. Make sure '$BIN_DIR' is on your PATH (add it to your shell profile if not).
   3. Open the bot in Telegram: /sessions -> project -> session, raised by a tap.
-     The same from a shell: claude-rc sessions <project>, then
-     claude-rc new <project> or claude-rc up <project> <uuid>.
+     The same from a shell: ai-rc sessions <project>, then
+     ai-rc new <project> or ai-rc up <project> <uuid>.
 
 What is up right now:
-  claude-rc live --porcelain
+  ai-rc live --porcelain
 EOF
 
 if [[ "$OS_KIND" == "linux" ]]; then

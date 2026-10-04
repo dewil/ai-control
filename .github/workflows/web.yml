@@ -23,7 +23,8 @@ jobs:
       - name: Web boundary contracts and writer integration
         run: |
           python -m unittest discover -s tests -p 'test_control_web*.py'
-          python -m py_compile bin/_control_web.py bin/_control_web_broker.py bin/claude-control-web
+          python -m unittest discover -s tests -p 'test_ai_control_names.py'
+          python -m py_compile bin/_control_web.py bin/_control_web_broker.py bin/ai-control-web
       - name: Installation regression
         run: |
           # These install tests mock launchd; they need an inert CLI prerequisite,

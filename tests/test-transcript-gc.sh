@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for claude-control-transcript-gc - сборщик машинных транскриптов.
+# Tests for ai-control-transcript-gc - сборщик машинных транскриптов.
 #
 # Каждый прогон claude -p из cron оставляет полноценный транскрипт рядом с
 # рабочими сессиями; в домашнем каталоге их накопилось 246 за месяц. Удаление
@@ -8,7 +8,7 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-GC="${GC_BIN:-$HERE/../bin/claude-control-transcript-gc}"
+GC="${GC_BIN:-$HERE/../bin/ai-control-transcript-gc}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -17,9 +17,9 @@ ok()   { PASS=$((PASS+1)); }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1" >&2; }
 
 export HOME="$TMP"
-mkdir -p "$TMP/bin" "$TMP/.claude-control"
+mkdir -p "$TMP/bin" "$TMP/.ai-control"
 DIR="$TMP/.claude/projects/-home-x"; mkdir -p "$DIR"
-LOG="$TMP/.claude-control/transcript-gc.log"
+LOG="$TMP/.ai-control/transcript-gc.log"
 
 # Живые сессии - мок systemctl: одна живая, по uuid без дефисов.
 LIVE="aaaaaaaa-1111-4111-8111-111111111111"
@@ -89,7 +89,7 @@ echo "=== INV-RECON-21: опрос живых сессий - три исхода
 # пересекались друг с другом и с проверками выше.
 recon_setup() {
   local d; d="$(mktemp -d)"
-  mkdir -p "$d/.claude/projects/-home-x" "$d/.claude-control"
+  mkdir -p "$d/.claude/projects/-home-x" "$d/.ai-control"
   printf '{"type":"user","message":{"content":"старый безымянный"}}\n' \
     > "$d/.claude/projects/-home-x/old-unnamed.jsonl"
   touch -d "10 days ago" "$d/.claude/projects/-home-x/old-unnamed.jsonl"
@@ -113,7 +113,7 @@ env HOME="$R1" PATH="$R1/bad-bin:$PATH" \
   "$GC" --dir "$R1/.claude/projects/-home-x" --days 7 >/dev/null 2>&1; rc=$?
 [[ "$rc" != 0 ]] && ok || fail "INV-RECON-21: ненулевой код опроса с пустым выводом дал rc=0"
 [[ -f "$R1/.claude/projects/-home-x/old-unnamed.jsonl" ]] && ok || fail "INV-RECON-21: удалил файлы при непроверенном опросе (rc=$rc)"
-recon_reason_logged "$R1/.claude-control/transcript-gc.log" && ok || fail "INV-RECON-21: в логе нет причины отказа (код без вывода)"
+recon_reason_logged "$R1/.ai-control/transcript-gc.log" && ok || fail "INV-RECON-21: в логе нет причины отказа (код без вывода)"
 rm -rf "$R1"
 
 # Критерий 2: то же самое, но команда отсутствует вовсе (исключение) - теперь
@@ -124,7 +124,7 @@ env HOME="$R2" PATH="$R2/fakebin" \
   "$GC" --dir "$R2/.claude/projects/-home-x" --days 7 >/dev/null 2>&1; rc=$?
 [[ "$rc" != 0 ]] && ok || fail "INV-RECON-21: systemctl отсутствует, а rc=0"
 [[ -f "$R2/.claude/projects/-home-x/old-unnamed.jsonl" ]] && ok || fail "INV-RECON-21: удалил файлы при отсутствующем systemctl (rc=$rc)"
-recon_reason_logged "$R2/.claude-control/transcript-gc.log" && ok || fail "INV-RECON-21: в логе нет причины отказа (команда отсутствует)"
+recon_reason_logged "$R2/.ai-control/transcript-gc.log" && ok || fail "INV-RECON-21: в логе нет причины отказа (команда отсутствует)"
 rm -rf "$R2"
 
 # Критерий 3: нулевой код и пустой вывод - законное "живых нет", уборка идет.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for `claude-rc live --porcelain` - что запущено прямо сейчас, по всем
+# Tests for `ai-rc live --porcelain` - что запущено прямо сейчас, по всем
 # проектам сразу.
 #
 # Зачем отдельный глагол: иначе, чтобы понять, что работает, надо обойти все
@@ -11,7 +11,7 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RC="$HERE/../bin/claude-rc"
+RC="$HERE/../bin/ai-rc"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -20,13 +20,13 @@ ok()   { PASS=$((PASS+1)); }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1" >&2; }
 
 export CLAUDE_CONFIG_DIR="$TMP/claude"
-export CLAUDE_RC_PROJECTS_FILE="$TMP/projects.yaml"
-export CLAUDE_RC_LOG_DIR="$TMP/logs"
-mkdir -p "$CLAUDE_RC_LOG_DIR"
+export AI_RC_PROJECTS_FILE="$TMP/projects.yaml"
+export AI_RC_LOG_DIR="$TMP/logs"
+mkdir -p "$AI_RC_LOG_DIR"
 
 # Два проекта, чтобы проверить: live обходит их все, а не только первый.
 PA="$TMP/alpha"; PB="$TMP/beta"; mkdir -p "$PA" "$PB"
-printf 'alpha: %s\nbeta: %s\n' "$PA" "$PB" > "$CLAUDE_RC_PROJECTS_FILE"
+printf 'alpha: %s\nbeta: %s\n' "$PA" "$PB" > "$AI_RC_PROJECTS_FILE"
 slug() { printf '%s' "$1" | sed 's/[^a-zA-Z0-9]/-/g'; }
 DA="$CLAUDE_CONFIG_DIR/projects/$(slug "$PA")"; mkdir -p "$DA"
 DB="$CLAUDE_CONFIG_DIR/projects/$(slug "$PB")"; mkdir -p "$DB"
@@ -45,9 +45,9 @@ mk "$DA" "$PA" "$SID_B" "залипшая"
 mk "$DB" "$PB" "$SID_C" "спящая"
 
 # debug-логи: у A свежий, у B - замерший час назад.
-: > "$CLAUDE_RC_LOG_DIR/alpha-${SID_A:0:8}.debug.log"
-: > "$CLAUDE_RC_LOG_DIR/alpha-${SID_B:0:8}.debug.log"
-touch -d '-1 hour' "$CLAUDE_RC_LOG_DIR/alpha-${SID_B:0:8}.debug.log"
+: > "$AI_RC_LOG_DIR/alpha-${SID_A:0:8}.debug.log"
+: > "$AI_RC_LOG_DIR/alpha-${SID_B:0:8}.debug.log"
+touch -d '-1 hour' "$AI_RC_LOG_DIR/alpha-${SID_B:0:8}.debug.log"
 
 mkdir -p "$TMP/bin"
 export LIVE_UNITS="$TMP/live-units"
@@ -99,7 +99,7 @@ else fail "залипшая сессия не помечена stale: $(grep "$S
 
 # 6. Нет debug-файла вовсе (сессию подняли не нами) - не пугаем "stale",
 #    состояние неизвестно.
-rm -f "$CLAUDE_RC_LOG_DIR/alpha-${SID_A:0:8}.debug.log"
+rm -f "$AI_RC_LOG_DIR/alpha-${SID_A:0:8}.debug.log"
 "$RC" live --porcelain > "$OUT" 2>/dev/null
 if [[ "$(awk -F'\t' -v s="$SID_A" '$1==s {print $4}' "$OUT")" == "unknown" ]]; then ok
 else fail "без debug-файла состояние должно быть unknown"; fi

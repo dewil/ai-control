@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Tests for bin/claude-rc-agent: lifecycle of the operator CLI (§4.2).
+# Tests for bin/ai-rc-agent: lifecycle of the operator CLI (§4.2).
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RC="$HERE/../bin/claude-rc"
+RC="$HERE/../bin/ai-rc"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-export CLAUDE_AGENTS_DIR="$TMP/agents"
+export AI_AGENTS_DIR="$TMP/agents"
 
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); }
@@ -20,7 +20,7 @@ assert() { # <desc> <expected-exit> <cmd...>
 cget() { # <name> <py-expr over control dict d>
   python3 -c 'import json,sys
 d=json.load(open(sys.argv[1]))
-print(eval(sys.argv[2], {"d": d}))' "$CLAUDE_AGENTS_DIR/$1/control.json" "$2"
+print(eval(sys.argv[2], {"d": d}))' "$AI_AGENTS_DIR/$1/control.json" "$2"
 }
 edetail() { # <name> <event-type> -> detail.note последнего события этого типа
   python3 -c 'import json,sys
@@ -35,7 +35,7 @@ try:
             note = (d.get("detail") or {}).get("note", "")
 except FileNotFoundError:
     pass
-print(note)' "$CLAUDE_AGENTS_DIR/$1/events.jsonl" "$2"
+print(note)' "$AI_AGENTS_DIR/$1/events.jsonl" "$2"
 }
 
 # --- fixture: tiny git project ---
@@ -68,21 +68,21 @@ assert "create bad role"   2 "$RC" agent create badrole --spec "$TMP/spec-badrol
 [[ "$(cget demo 'd["desired"]')" == "paused" ]] && ok || fail "create desired"
 [[ -n "$(cget demo 'd["mission_base"]')" ]] && ok || fail "mission_base set"
 git -C "$PROJ" show-ref --verify -q refs/heads/agent/demo && ok || fail "branch created"
-[[ -d "$CLAUDE_AGENTS_DIR/demo/work" ]] && ok || fail "worktree created"
+[[ -d "$AI_AGENTS_DIR/demo/work" ]] && ok || fail "worktree created"
 # 7b Д2: incarnation-id (CSPRNG hex32) в control.json при create
 [[ "$(cget demo 'd.get("incarnation","")')" =~ ^[0-9a-f]{32}$ ]] \
   && ok "incarnation в control.json" || fail "incarnation отсутствует/невалиден"
 # атомарность (adversarial р2 находка 7): worktree создаётся в staging и
 # публикуется единым mv -> после публикации gitdir починен, worktree рабочий
-git -C "$CLAUDE_AGENTS_DIR/demo/work" status --short >/dev/null 2>&1 \
+git -C "$AI_AGENTS_DIR/demo/work" status --short >/dev/null 2>&1 \
   && ok "worktree функционален после repair" || fail "worktree сломан (gitdir не починен)"
-ls "$CLAUDE_AGENTS_DIR"/.new-* >/dev/null 2>&1 \
+ls "$AI_AGENTS_DIR"/.new-* >/dev/null 2>&1 \
   && fail "staging .new-* протёк после успешного create" || ok "staging не течёт"
 # per-agent permissions (модель доверия п.5): settings в РЕЕСТРЕ (не worktree,
 # adversarial находка 5), передаётся claude флагом --settings из session
-SLJ="$CLAUDE_AGENTS_DIR/demo/agent-settings.json"
+SLJ="$AI_AGENTS_DIR/demo/agent-settings.json"
 [[ -f "$SLJ" ]] && ok || fail "agent-settings.json в реестре"
-[[ ! -e "$CLAUDE_AGENTS_DIR/demo/work/.claude" ]] \
+[[ ! -e "$AI_AGENTS_DIR/demo/work/.claude" ]] \
   && ok "в worktree ничего не пишем (.claude отсутствует)" || fail ".claude в worktree"
 python3 -c 'import json,sys; a=json.load(open(sys.argv[1]))["permissions"]["allow"]; sys.exit(0 if any("bypass" in r.lower() for r in a) else 1)' "$SLJ" \
   && fail "bypassPermissions в allow!" || ok "без bypassPermissions"
@@ -92,39 +92,39 @@ python3 -c 'import json,sys; a=json.load(open(sys.argv[1]))["permissions"]["allo
 sed 's/name: demo/name: demo-s/; s/autonomy: act/autonomy: suggest/' "$SPEC" > "$TMP/spec-demo-s.yaml"
 assert "create demo-s (suggest)" 0 "$RC" agent create demo-s --spec "$TMP/spec-demo-s.yaml" --mission "$TMP/mission.md"
 python3 -c 'import json,sys; a=json.load(open(sys.argv[1]))["permissions"]["allow"]; sys.exit(0 if "Bash" in a else 1)' \
-  "$CLAUDE_AGENTS_DIR/demo-s/agent-settings.json" \
+  "$AI_AGENTS_DIR/demo-s/agent-settings.json" \
   && fail "suggest: Bash разрешён!" || ok "suggest: без Bash (минимальные руки)"
 # recreate: create чистит stale-scratch (flags/spool/alerts) прежней инкарнации
-export CLAUDE_RECONCILER_DIR="$TMP/reconciler"
-mkdir -p "$CLAUDE_RECONCILER_DIR/cache"
-echo "kick_g1=1" > "$CLAUDE_RECONCILER_DIR/cache/demo3.flags"
+export AI_RECONCILER_DIR="$TMP/reconciler"
+mkdir -p "$AI_RECONCILER_DIR/cache"
+echo "kick_g1=1" > "$AI_RECONCILER_DIR/cache/demo3.flags"
 echo '{"demo3/accepted":{"episode":"old","pushed_at":9999999999,"count":1}}' \
-  > "$CLAUDE_RECONCILER_DIR/cache/alerts-state.json"
+  > "$AI_RECONCILER_DIR/cache/alerts-state.json"
 mkdir -p "$TMP/spool/demo3"; touch "$TMP/spool/demo3/ev-0000000000001.json"
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
 sed 's/name: demo/name: demo3/' "$SPEC" > "$TMP/spec-demo3.yaml"
 assert "create demo3 (recreate)" 0 "$RC" agent create demo3 --spec "$TMP/spec-demo3.yaml" --mission "$TMP/mission.md"
-[[ ! -f "$CLAUDE_RECONCILER_DIR/cache/demo3.flags" ]] \
+[[ ! -f "$AI_RECONCILER_DIR/cache/demo3.flags" ]] \
   && ok "create снёс stale-флаги" || fail "stale kick_g1 пережил create"
 [[ ! -e "$TMP/spool/demo3/ev-0000000000001.json" ]] \
   && ok "create снёс stale-spool" || fail "stale spool пережил create"
 python3 -c 'import json,sys; sys.exit(0 if "demo3/accepted" in json.load(open(sys.argv[1])) else 1)' \
-  "$CLAUDE_RECONCILER_DIR/cache/alerts-state.json" \
+  "$AI_RECONCILER_DIR/cache/alerts-state.json" \
   && fail "stale alerts-эпизод пережил create" || ok "create снёс stale alerts-эпизод"
 # recreate с живой веткой agent/demo3 -> fail-closed (находка 3): оператор снёс
 # registry, но ветку/worktree - нет. create должен упасть и откатить registry,
 # а не печатать ложный успех и оставить полуагента
-rm -rf "$CLAUDE_AGENTS_DIR/demo3"
+rm -rf "$AI_AGENTS_DIR/demo3"
 assert "recreate с живой веткой отбит (fail-closed)" 4 "$RC" agent create demo3 --spec "$TMP/spec-demo3.yaml" --mission "$TMP/mission.md"
-[[ ! -e "$CLAUDE_AGENTS_DIR/demo3" ]] \
+[[ ! -e "$AI_AGENTS_DIR/demo3" ]] \
   && ok "registry откатан (не полуагент)" || fail "полуагент остался после fail"
-ls "$CLAUDE_AGENTS_DIR"/.new-* >/dev/null 2>&1 \
+ls "$AI_AGENTS_DIR"/.new-* >/dev/null 2>&1 \
   && fail "staging .new-* протёк после отката" || ok "staging откатан trap-ом"
 git -C "$PROJ" branch -D agent/demo3 >/dev/null 2>&1 || true
 git -C "$PROJ" worktree prune >/dev/null 2>&1 || true
 
 # event-агент (этап 4): создается с inbox+spool, без worktree и mission
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
 sed 's/type: mission/type: event/; s/name: demo/name: evt/' "$SPEC" > "$TMP/spec-evt.yaml"
 assert "create event без source" 2 "$RC" agent create evt --spec "$TMP/spec-evt.yaml"
 cat >> "$TMP/spec-evt.yaml" <<EOF
@@ -134,9 +134,9 @@ EOF
 assert "create event с autonomy=act отбит" 2 "$RC" agent create evt --spec "$TMP/spec-evt.yaml"
 sed -i.bak 's/autonomy: act/autonomy: suggest/' "$TMP/spec-evt.yaml"
 assert "create event" 0 "$RC" agent create evt --spec "$TMP/spec-evt.yaml"
-[[ -d "$CLAUDE_AGENTS_DIR/evt/inbox/pending" ]] && ok || fail "event: inbox создан"
+[[ -d "$AI_AGENTS_DIR/evt/inbox/pending" ]] && ok || fail "event: inbox создан"
 [[ -d "$TMP/spool/evt" ]] && ok || fail "event: spool создан"
-[[ ! -d "$CLAUDE_AGENTS_DIR/evt/work" ]] && ok || fail "event: без worktree"
+[[ ! -d "$AI_AGENTS_DIR/evt/work" ]] && ok || fail "event: без worktree"
 [[ "$(cget evt 'd["mission_base"]')" == "None" ]] && ok || fail "event: mission_base=null"
 assert "attach event отказ" 4 "$RC" agent attach evt
 assert "dlq event пуст" 0 "$RC" agent dlq evt
@@ -175,7 +175,7 @@ mk_mission_spec rv3 'acceptance: { kind: both, deterministic: true }'
 assert "both без check отбит" 2 "$RC" agent create rv3 --spec "$TMP/rv3.spec.yaml" --mission "$TMP/mission.md" --reviewer-role "$RR"
 mk_mission_spec rv4 'acceptance: { kind: role-review }'
 assert "role-review + reviewer-role ok" 0 "$RC" agent create rv4 --spec "$TMP/rv4.spec.yaml" --mission "$TMP/mission.md" --reviewer-role "$RR"
-[[ -f "$CLAUDE_AGENTS_DIR/rv4/reviewer-role/prompt.md" ]] && ok || fail "reviewer-role заморожен снапшотом"
+[[ -f "$AI_AGENTS_DIR/rv4/reviewer-role/prompt.md" ]] && ok || fail "reviewer-role заморожен снапшотом"
 # reviewer-role без manifest отбит (ревью-3: revoke обходится без manifest)
 RRB="$TMP/rr-nomanifest"; mkdir -p "$RRB"; echo x > "$RRB/prompt.md"
 mk_mission_spec rv5 'acceptance: { kind: role-review }'
@@ -208,19 +208,19 @@ assert "stop idemp"   0 "$RC" agent stop demo
 [[ "$(cget demo 'd["desired"]')" == "stopped" ]] && ok || fail "stop desired"
 
 # --- attention: start блокируется, гашение нет ---
-"$HERE/../bin/claude-agent-io" control-cas "$CLAUDE_AGENTS_DIR/demo" \
+"$HERE/../bin/ai-agent-io" control-cas "$AI_AGENTS_DIR/demo" \
   --set 'attention={"reason":"resume_failed","since":"x","episode":"e1","count":4}' \
   --set 'desired="paused"' --event test_setup >/dev/null
 assert "start blocked by attention" 4 "$RC" agent start demo
 assert "stop allowed with attention" 0 "$RC" agent stop demo
-"$HERE/../bin/claude-agent-io" control-cas "$CLAUDE_AGENTS_DIR/demo" \
+"$HERE/../bin/ai-agent-io" control-cas "$AI_AGENTS_DIR/demo" \
   --set 'desired="running"' --event test_setup >/dev/null
 assert "resolve no mode"  2 "$RC" agent resolve demo
 assert "resolve resume"   0 "$RC" agent resolve demo --resume
 [[ "$(cget demo 'd["attention"]')" == "None" ]] && ok || fail "attention cleared"
 
 # mission_timeout требует --extend-hours
-"$HERE/../bin/claude-agent-io" control-cas "$CLAUDE_AGENTS_DIR/demo" \
+"$HERE/../bin/ai-agent-io" control-cas "$AI_AGENTS_DIR/demo" \
   --set 'attention={"reason":"mission_timeout","since":"x","episode":"e2","count":1}' \
   --event test_setup >/dev/null
 assert "timeout resume w/o extend" 4 "$RC" agent resolve demo --resume
@@ -229,7 +229,7 @@ assert "timeout resume + extend"   0 "$RC" agent resolve demo --resume --extend-
 
 # --- acceptance: claim -> accept терминален, одной записью с desired ---
 GEN=$(cget demo 'd["generation"]')
-cat > "$CLAUDE_AGENTS_DIR/demo/state.$GEN.json" <<EOF
+cat > "$AI_AGENTS_DIR/demo/state.$GEN.json" <<EOF
 {"schema":1,"generation":$GEN,"attempt_id":"a","phase":"sleeping",
 "agent_claim":"done","claim_artifact":"abc123","session_id":"s",
 "iteration_started_at":"x","last_progress_at":"x","next_wakeup_at":"y",
@@ -247,7 +247,7 @@ assert "revise from accepted" 4 "$RC" agent revise demo --note "redo"
 # второй агент: needs-human -> revise
 sed 's/name: demo/name: demo2/' "$SPEC" > "$TMP/spec2.yaml"
 assert "create demo2" 0 "$RC" agent create demo2 --spec "$TMP/spec2.yaml" --mission "$TMP/mission.md"
-"$HERE/../bin/claude-agent-io" control-cas "$CLAUDE_AGENTS_DIR/demo2" \
+"$HERE/../bin/ai-agent-io" control-cas "$AI_AGENTS_DIR/demo2" \
   --set 'acceptance.status="needs-human"' --event test_setup >/dev/null
 assert "revise ok" 0 "$RC" agent revise demo2 --note "поправь тесты"
 [[ "$(cget demo2 'd["acceptance"]["status"]')" == "revise" ]] && ok || fail "revise status"
@@ -257,7 +257,7 @@ assert "revise ok" 0 "$RC" agent revise demo2 --note "поправь тесты"
   && ok "revise note в detail события" || fail "revise detail.note не записан"
 
 # reject требует --reason
-"$HERE/../bin/claude-agent-io" control-cas "$CLAUDE_AGENTS_DIR/demo2" \
+"$HERE/../bin/ai-agent-io" control-cas "$AI_AGENTS_DIR/demo2" \
   --expect 'acceptance.status="revise"' --set 'acceptance.status="needs-human"' \
   --event test_setup >/dev/null
 assert "reject w/o reason" 2 "$RC" agent reject demo2
@@ -287,7 +287,7 @@ assert "create --base-commit (от первого commit)" 0 "$RC" agent create 
   --spec "$TMP/spec-bc.yaml" --mission "$TMP/mission.md" --base-commit "$C1"
 [[ "$(cget bcagent 'd["mission_base"]')" == "$C1" ]] \
   && ok "mission_base = base-commit (не HEAD)" || fail "mission_base != base-commit"
-[[ "$(git -C "$CLAUDE_AGENTS_DIR/bcagent/work" rev-parse HEAD)" == "$C1" ]] \
+[[ "$(git -C "$AI_AGENTS_DIR/bcagent/work" rev-parse HEAD)" == "$C1" ]] \
   && ok "worktree выписан на base-commit (materialization)" || fail "worktree HEAD != base-commit"
 # спек с заданным именем (spec.name обязан совпадать с именем агента)
 mkspec_bc() { sed "s/^name: bcagent/name: $1/" "$TMP/spec-bc.yaml" > "$TMP/spec-$1.yaml"; }
@@ -296,7 +296,7 @@ mkspec_bc bcbad
 assert "--base-commit несуществующий -> fail-closed" 4 "$RC" agent create bcbad \
   --spec "$TMP/spec-bcbad.yaml" --mission "$TMP/mission.md" \
   --base-commit 0000000000000000000000000000000000000000
-[[ -e "$CLAUDE_AGENTS_DIR/bcbad" ]] && fail "полуагент bcbad остался" || ok "нет полуагента после fail-closed"
+[[ -e "$AI_AGENTS_DIR/bcbad" ]] && fail "полуагент bcbad остался" || ok "нет полуагента после fail-closed"
 git -C "$PROJ" show-ref -q refs/heads/agent/bcbad && fail "stray ветка bcbad" || ok "нет stray ветки"
 # невалидный формат sha -> отказ (fail дефолт exit 2)
 mkspec_bc bcbad2

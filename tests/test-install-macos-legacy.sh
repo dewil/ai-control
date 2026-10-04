@@ -5,7 +5,7 @@
 # правка легла только в Linux-ветку: macOS продолжал bootstrap'ить их при каждом
 # апгрейде, и заметить это было негде - Mac у проекта не в проверочном контуре.
 # Ветка, которую нельзя прогнать, отстает молча, поэтому здесь она прогоняется на
-# Linux: OS выбирается переменной CLAUDE_CONTROL_OS, а launchctl подменяется
+# Linux: OS выбирается переменной AI_CONTROL_OS, а launchctl подменяется
 # стабом, который пишет вызовы в лог и держит список "загруженных" меток.
 #
 # Что тест НЕ проверяет: настоящую семантику launchd (коды возврата bootstrap,
@@ -58,18 +58,18 @@ exit 0
 STUBEOF
 chmod +x "$STUB/launchctl"
 
-LABEL="com.test.claude-control"
+LABEL="com.test.ai-control"
 # Машина ДО апгрейда: legacy-обвязка загружена. Именно ее установщик обязан снять,
 # а не просто "не поднимать заново" - пропуск bootstrap загруженный агент не трогает.
 printf '%s\n' "$LABEL" "$LABEL-watchdog" "$LABEL-project-watchdog" > "$LOADED"
 
 out="$SANDBOX/install.out"
-env -u CLAUDE_CONTROL_OS \
+env -u AI_CONTROL_OS \
     HOME="$SANDBOX/home" \
     PATH="$STUB:$PATH" \
     LAUNCHCTL_LOG="$CALLS" \
     LAUNCHCTL_LOADED="$LOADED" \
-    CLAUDE_CONTROL_OS=Darwin \
+    AI_CONTROL_OS=Darwin \
     "$ROOT/install.sh" --prefix "$SANDBOX/local" --label "$LABEL" \
     > "$out" 2>&1
 rc=$?
@@ -104,8 +104,8 @@ for lbl in "$LABEL" "$LABEL-watchdog" "$LABEL-project-watchdog"; do
 done
 
 # 5. Скрипты доехали в prefix (общая проверка, что прогон вообще что-то сделал).
-if [[ -x "$SANDBOX/local/bin/claude-rc" ]]; then ok
-else fail "claude-rc не установлен в prefix"; fi
+if [[ -x "$SANDBOX/local/bin/ai-rc" ]]; then ok
+else fail "ai-rc не установлен в prefix"; fi
 
 # 6. Ни одного обращения к systemd на macOS-ветке.
 if grep -q 'systemctl' "$out"; then

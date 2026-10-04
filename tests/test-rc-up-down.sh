@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for `claude-rc up|down|live` (V3.0 §3, §5): подъем сессии транзиентным
+# Tests for `ai-rc up|down|live` (V3.0 §3, §5): подъем сессии транзиентным
 # systemd-юнитом вместо tmux, гашение и список поднятых.
 #
 # Две вещи, без которых подъем не работает вообще (V3.0 §1) и которые поэтому
@@ -11,9 +11,9 @@ set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # Проверяемый бинарь подменяется (RC_BIN=...) - без этого мутационная проверка
-# молча гоняет НАСТОЯЩИЙ claude-rc и всегда зеленая: ровно так один раз уже
+# молча гоняет НАСТОЯЩИЙ ai-rc и всегда зеленая: ровно так один раз уже
 # получили ложное "мутант не пойман".
-RC="${RC_BIN:-$HERE/../bin/claude-rc}"
+RC="${RC_BIN:-$HERE/../bin/ai-rc}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -22,13 +22,13 @@ ok()   { PASS=$((PASS+1)); }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1" >&2; }
 
 export CLAUDE_CONFIG_DIR="$TMP/claude"
-export CLAUDE_RC_PROJECTS_FILE="$TMP/projects.yaml"
-export CLAUDE_RC_LOG_DIR="$TMP/logs"
-export CLAUDE_RC_STATE_DIR="$TMP/state"
-mkdir -p "$CLAUDE_RC_LOG_DIR"
+export AI_RC_PROJECTS_FILE="$TMP/projects.yaml"
+export AI_RC_LOG_DIR="$TMP/logs"
+export AI_RC_STATE_DIR="$TMP/state"
+mkdir -p "$AI_RC_LOG_DIR"
 
 PROJ="$TMP/proj"; mkdir -p "$PROJ"
-printf 'proj: %s\n' "$PROJ" > "$CLAUDE_RC_PROJECTS_FILE"
+printf 'proj: %s\n' "$PROJ" > "$AI_RC_PROJECTS_FILE"
 SLUG="$(printf '%s' "$PROJ" | sed 's/[^a-zA-Z0-9]/-/g')"
 TDIR="$CLAUDE_CONFIG_DIR/projects/$SLUG"; mkdir -p "$TDIR"
 
@@ -219,9 +219,9 @@ if [[ "$cmd_line" == *pretty-записи* ]]; then ok
 else fail "pretty-формат custom-title не прочитан: $cmd_line"; fi
 
 # 20. Раздел B/C спеки 2026-09-19-spec-session-titles.md: серверное имя
-#     (кэш $CLAUDE_RC_STATE_DIR/session-titles.json по bridgeSessionId из
+#     (кэш $AI_RC_STATE_DIR/session-titles.json по bridgeSessionId из
 #     записи bridge-session) доходит до --name при подъеме через тот же
-#     session_custom_title, что читает custom-title. Правки в claude-rc не
+#     session_custom_title, что читает custom-title. Правки в ai-rc не
 #     нужны по спеке - сойтись должно само, через _rc_meta.py titles.
 SID_SRV="77777777-1111-4111-8111-777777777777"
 BID_SRV="cse_updown01"
@@ -230,7 +230,7 @@ BID_SRV="cse_updown01"
   printf '{"type":"user","message":{"content":[{"type":"text","text":"с сервера"}]},"cwd":"%s"}\n' "$PROJ"
   printf '{"type":"custom-title","customTitle":"локальное имя","sessionId":"%s"}\n' "$SID_SRV"
 } > "$TDIR/$SID_SRV.jsonl"
-python3 - "$CLAUDE_RC_STATE_DIR/session-titles.json" "$BID_SRV" <<'PY'
+python3 - "$AI_RC_STATE_DIR/session-titles.json" "$BID_SRV" <<'PY'
 import json, os, sys
 path, bid = sys.argv[1], sys.argv[2]
 os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -245,7 +245,7 @@ if [[ "$cmd_line" == *"Серверное"* ]]; then ok
 else fail "up не передал серверное имя в --name: $cmd_line"; fi
 if [[ "$cmd_line" != *"локальное"* ]]; then ok
 else fail "up передал custom-title вместо серверного имени: $cmd_line"; fi
-rm -f "$CLAUDE_RC_STATE_DIR/session-titles.json" "$TDIR/$SID_SRV.jsonl"
+rm -f "$AI_RC_STATE_DIR/session-titles.json" "$TDIR/$SID_SRV.jsonl"
 
 # --- new: свежая пустая сессия проекта ---
 # Id генерируем сами и отдаем CLI через --session-id: иначе имя транзиентного юнита
@@ -294,7 +294,7 @@ else fail "второй сессии не достался номер 2: $cmd2";
 
 # Номера не сбрасываются, даже если счетчик потерян: берем максимум из уже
 # существующих имен вида "<проект> N", иначе новая сессия затрет смысл старой.
-rm -rf "$CLAUDE_RC_STATE_DIR" 2>/dev/null
+rm -rf "$AI_RC_STATE_DIR" 2>/dev/null
 printf '{"type":"user","message":{"content":[{"type":"text","text":"было"}]},"cwd":"%s"}\n{"type":"custom-title","customTitle":"proj 7","sessionId":"99999999-9999-4999-8999-999999999999"}\n' \
   "$PROJ" > "$TDIR/99999999-9999-4999-8999-999999999999.jsonl"
 : > "$RUN_ARGS"
@@ -401,7 +401,7 @@ else fail "в argv ушел не тот uuid"; fi
 #
 # Изображаем пару script+claude настоящими процессами: сигнал должен дойти до
 # РЕБЕНКА, потому что именно он держит мост.
-DBG="$CLAUDE_RC_LOG_DIR/proj-${SID:0:8}.debug.log"
+DBG="$AI_RC_LOG_DIR/proj-${SID:0:8}.debug.log"
 echo "ccsession-${SID//-/}" > "$LIVE_UNITS"
 
 start_fake_session() {
@@ -417,7 +417,7 @@ start_fake_session() {
 printf 'работали\n' > "$DBG"
 start_fake_session
 CHILD="$(cat "$TMP/child.pid")"
-CLAUDE_RC_DRAIN_S=3 "$RC" down "$SID" >/dev/null 2>&1
+AI_RC_DRAIN_S=3 "$RC" down "$SID" >/dev/null 2>&1
 if ! kill -0 "$CHILD" 2>/dev/null; then ok
 else fail "claude не получил сигнала - гасим сразу всю группу"; kill -9 "$CHILD" 2>/dev/null; fi
 if [[ -s "$STOP_ARGS" ]]; then ok; else fail "systemctl stop так и не вызван"; fi
@@ -428,7 +428,7 @@ printf 'работали\n[remote-bridge] Torn down (archive=200)\n' > "$DBG"
 start_fake_session
 CHILD="$(cat "$TMP/child.pid")"
 start="$(date +%s)"
-CLAUDE_RC_DRAIN_S=20 "$RC" down "$SID" >/dev/null 2>&1
+AI_RC_DRAIN_S=20 "$RC" down "$SID" >/dev/null 2>&1
 took=$(( $(date +%s) - start ))
 kill -9 "$CHILD" 2>/dev/null
 if (( took < 6 )); then ok; else fail "не заметил готовую архивацию, просидел ${took}с"; fi
@@ -441,7 +441,7 @@ echo $! > "$MAINPID_FILE"
 for _ in 1 2 3 4 5; do [[ -s "$TMP/child.pid" ]] && break; sleep 0.2; done
 CHILD="$(cat "$TMP/child.pid")"
 start="$(date +%s)"
-CLAUDE_RC_DRAIN_S=2 "$RC" down "$SID" >/dev/null 2>&1
+AI_RC_DRAIN_S=2 "$RC" down "$SID" >/dev/null 2>&1
 took=$(( $(date +%s) - start ))
 kill -9 "$CHILD" 2>/dev/null
 if (( took < 9 )) && [[ -s "$STOP_ARGS" ]]; then ok

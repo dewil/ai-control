@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Tests for V2.8: расписание как источник событий (`claude-agent-run
+# Tests for V2.8: расписание как источник событий (`ai-agent-run
 # schedule-tick <agent_dir>`), durable-состояние `agents/<name>/schedule.json`.
 # Контракт: docs/design-2026-07-27-v2.8-schedule-source.md §6 (кейсы S1-S22).
 #
 # Написано с чистого листа по спеке (SDD, RED-фаза): реализация V2.8 НЕ
-# читана - bin/claude-rc-agent, bin/claude-agent-run, bin/claude-agent-reconciler
+# читана - bin/ai-rc-agent, bin/ai-agent-run, bin/ai-agent-reconciler
 # ни разу не открывались через Read. Публичный контракт взят из самой спеки и
 # из design-2026-07-12-stage4-event-spool.md (коды возврата spool-put:
 # 2 - валидация/id-payload mismatch, 3 - нет агента, 5 - lock busy,
 # 6 - кап, 7 - файловая небезопасность симлинка), плюс стиль и приемы -
 # из tests/test-agent-run.sh (spool-put/intake, симлинк-атака на spool ->
-# exit 7, кап через CLAUDE_AGENT_EVENT_MAX_BYTES -> exit 6),
+# exit 7, кап через AI_AGENT_EVENT_MAX_BYTES -> exit 6),
 # tests/test-agent-cli.sh (минимальная валидная спека type:event workspace:none
 # без git-проекта, конвенция exit 2 для всех отказов валидации спеки при
 # create), tests/test-agent-task-lifecycle.sh (B35/B36 - образец сквозного
-# прохода реального `claude-agent-reconciler --once` с изолированными
-# CLAUDE_AGENTS_DIR/CLAUDE_RECONCILER_DIR).
+# прохода реального `ai-agent-reconciler --once` с изолированными
+# AI_AGENTS_DIR/AI_RECONCILER_DIR).
 #
-# Формат CLAUDE_AGENT_NOW - unix-секунды (docstring _schedule_now() в
-# bin/claude-agent-run - единственное, что было целенаправленно проверено
+# Формат AI_AGENT_NOW - unix-секунды (docstring _schedule_now() в
+# bin/ai-agent-run - единственное, что было целенаправленно проверено
 # точечным grep по этой одной строке контракта env-переменной, ПОСЛЕ того как
 # черным ящиком было обнаружено, что ISO8601 тайм-инъекция молча игнорируется
 # и подставляется реальное время хоста; тела функций не читались).
@@ -36,10 +36,10 @@ set -u
 shopt -s nullglob
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RC="$HERE/../bin/claude-rc"
-RUN="$HERE/../bin/claude-agent-run"
-RECON="$HERE/../bin/claude-agent-reconciler"
-IO="$HERE/../bin/claude-agent-io"
+RC="$HERE/../bin/ai-rc"
+RUN="$HERE/../bin/ai-agent-run"
+RECON="$HERE/../bin/ai-agent-reconciler"
+IO="$HERE/../bin/ai-agent-io"
 TMP="$(mktemp -d)"
 # Тест поднимает НАСТОЯЩИЕ user-юниты агентов (agent-<имя>.service), и после
 # прогона они остаются в systemd в состоянии failed - копятся от прогона к
@@ -53,10 +53,10 @@ cleanup() {
 trap cleanup EXIT
 
 export TZ=UTC
-export CLAUDE_AGENTS_DIR="$TMP/agents"
-export CLAUDE_AGENT_SPOOL_BASE="$TMP/spool"
-export CLAUDE_AGENT_PROBE_CMD=/usr/bin/true
-export CLAUDE_AGENT_GENERATION=1 CLAUDE_AGENT_ATTEMPT=test-attempt
+export AI_AGENTS_DIR="$TMP/agents"
+export AI_AGENT_SPOOL_BASE="$TMP/spool"
+export AI_AGENT_PROBE_CMD=/usr/bin/true
+export AI_AGENT_GENERATION=1 AI_AGENT_ATTEMPT=test-attempt
 
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); }
@@ -79,12 +79,12 @@ print(eval(sys.argv[2], {"d": d}))' "$1" "$2" 2>/dev/null
 }
 sched_get() { jq_file "$1/schedule.json" "$2"; } # <agent-dir> <py-expr over d>
 ctrl_get()  { jq_file "$1/control.json" "$2"; }   # <agent-dir> <py-expr over d>
-spool_count() { ls "$CLAUDE_AGENT_SPOOL_BASE/$1"/*.json 2>/dev/null | grep -c '\.json$'; } # <name>
-last_spool_file() { ls "$CLAUDE_AGENT_SPOOL_BASE/$1"/*.json 2>/dev/null | sort | tail -1; } # <name>
+spool_count() { ls "$AI_AGENT_SPOOL_BASE/$1"/*.json 2>/dev/null | grep -c '\.json$'; } # <name>
+last_spool_file() { ls "$AI_AGENT_SPOOL_BASE/$1"/*.json 2>/dev/null | sort | tail -1; } # <name>
 
-tick() { # <agent-dir> <now-unix-seconds> -> запускает schedule-tick c CLAUDE_AGENT_NOW=<now-unix-seconds>;
+tick() { # <agent-dir> <now-unix-seconds> -> запускает schedule-tick c AI_AGENT_NOW=<now-unix-seconds>;
   # exit code - через $? сразу после вызова; stdout/stderr - в $TMP/tick.out/.err
-  CLAUDE_AGENT_NOW="$2" "$RUN" schedule-tick "$1" >"$TMP/tick.out" 2>"$TMP/tick.err"
+  AI_AGENT_NOW="$2" "$RUN" schedule-tick "$1" >"$TMP/tick.out" 2>"$TMP/tick.err"
 }
 
 # --- общий проект (workspace:none не создает worktree - плоский каталог без
@@ -147,7 +147,7 @@ mk_ticking_agent() { # <name> <schedule-yaml-блок> -> печатает agent
   "$RC" agent start "$name" >/dev/null 2>"$TMP/start-$name.err"
   local rc2=$?
   [[ "$rc2" == 0 ]] && ok || fail "fixture: start $name ($(cat "$TMP/start-$name.err"))"
-  echo "$CLAUDE_AGENTS_DIR/$name"
+  echo "$AI_AGENTS_DIR/$name"
 }
 
 # =============================================================== S1
@@ -183,14 +183,14 @@ SPEC3=$(write_event_spec "s3-both" 'schedule:
   at: "09:00"
   text: "s3"')
 assert "S3: every+at вместе -> отказ" 2 "$RC" agent create s3-both --spec "$SPEC3"
-[[ ! -e "$CLAUDE_AGENTS_DIR/s3-both" ]] && ok || fail "S3: агент не создан"
+[[ ! -e "$AI_AGENTS_DIR/s3-both" ]] && ok || fail "S3: агент не создан"
 
 # =============================================================== S4
 echo "=== S4: schedule без text/json - отказ ==="
 SPEC4=$(write_event_spec "s4-notext" 'schedule:
   every: 1h')
 assert "S4: schedule без text/json -> отказ" 2 "$RC" agent create s4-notext --spec "$SPEC4"
-[[ ! -e "$CLAUDE_AGENTS_DIR/s4-notext" ]] && ok || fail "S4: агент не создан"
+[[ ! -e "$AI_AGENTS_DIR/s4-notext" ]] && ok || fail "S4: агент не создан"
 
 # =============================================================== S5
 echo "=== S5: every: 30s (меньше минуты, неверный суффикс) - отказ ==="
@@ -198,7 +198,7 @@ SPEC5=$(write_event_spec "s5-tooshort" 'schedule:
   every: 30s
   text: "s5"')
 assert "S5: every 30s -> отказ" 2 "$RC" agent create s5-tooshort --spec "$SPEC5"
-[[ ! -e "$CLAUDE_AGENTS_DIR/s5-tooshort" ]] && ok || fail "S5: агент не создан"
+[[ ! -e "$AI_AGENTS_DIR/s5-tooshort" ]] && ok || fail "S5: агент не создан"
 
 # =============================================================== S6
 echo "=== S6: незнакомый ключ внутри schedule - отказ (молча проигнорированная опечатка недопустима) ==="
@@ -207,7 +207,7 @@ SPEC6=$(write_event_spec "s6-badkey" 'schedule:
   text: "s6"
   wat: 1')
 assert "S6: неизвестный ключ schedule.wat -> отказ" 2 "$RC" agent create s6-badkey --spec "$SPEC6"
-[[ ! -e "$CLAUDE_AGENTS_DIR/s6-badkey" ]] && ok || fail "S6: агент не создан"
+[[ ! -e "$AI_AGENTS_DIR/s6-badkey" ]] && ok || fail "S6: агент не создан"
 
 # =============================================================== S7
 echo "=== S7: schedule при type: mission - отказ (schedule допустим только для type:event/source.kind:spool) ==="
@@ -215,7 +215,7 @@ SPEC7=$(write_mission_spec "s7-mission" 'schedule:
   every: 1h
   text: "s7"')
 assert "S7: schedule на type:mission -> отказ" 2 "$RC" agent create s7-mission --spec "$SPEC7" --mission "$MISSION_MD"
-[[ ! -e "$CLAUDE_AGENTS_DIR/s7-mission" ]] && ok || fail "S7: агент не создан"
+[[ ! -e "$AI_AGENTS_DIR/s7-mission" ]] && ok || fail "S7: агент не создан"
 
 # =============================================================== S8
 echo "=== S8: сетка every глобальная - тот же слот для двух НЕЗАВИСИМЫХ агентов в одном часовом окне; иной слот в следующем часе ==="
@@ -303,24 +303,24 @@ tick "$AGS9A" "1773252000"; RCS9A5=$?  # day2 18:00 - позже тем же д�
 [[ "$(spool_count s9a-daily)" == "1" ]] && ok || fail "S9a: до конца дня новых событий не появилось (по-прежнему одно)"
 
 # =============================================================== S9b
-echo "=== S9b: неразбираемый CLAUDE_AGENT_NOW - отказ, а не тихий откат на системное время ==="
+echo "=== S9b: неразбираемый AI_AGENT_NOW - отказ, а не тихий откат на системное время ==="
 AGS9B=$(mk_ticking_agent "s9b-badnow" 'schedule:
   every: 1h
   text: "s9b"')
-CLAUDE_AGENT_NOW="not-a-number" "$RUN" schedule-tick "$AGS9B" \
+AI_AGENT_NOW="not-a-number" "$RUN" schedule-tick "$AGS9B" \
   >"$TMP/tick.out" 2>"$TMP/tick.err"; RCS9B1=$?
-[[ "$RCS9B1" != 0 ]] && ok || fail "S9b: CLAUDE_AGENT_NOW=not-a-number -> отказ (got $RCS9B1)"
+[[ "$RCS9B1" != 0 ]] && ok || fail "S9b: AI_AGENT_NOW=not-a-number -> отказ (got $RCS9B1)"
 [[ -s "$TMP/tick.err" ]] && ok || fail "S9b: сообщение об ошибке непусто"
 [[ ! -f "$AGS9B/schedule.json" ]] && ok || fail "S9b: schedule.json не создан на отказавшем тике"
-CLAUDE_AGENT_NOW="2026-07-27T09:00:00Z" "$RUN" schedule-tick "$AGS9B" \
+AI_AGENT_NOW="2026-07-27T09:00:00Z" "$RUN" schedule-tick "$AGS9B" \
   >"$TMP/tick.out" 2>"$TMP/tick.err"; RCS9B2=$?
-[[ "$RCS9B2" != 0 ]] && ok || fail "S9b: CLAUDE_AGENT_NOW=ISO8601 -> отказ, не молчаливый откат на системное время (got $RCS9B2)"
+[[ "$RCS9B2" != 0 ]] && ok || fail "S9b: AI_AGENT_NOW=ISO8601 -> отказ, не молчаливый откат на системное время (got $RCS9B2)"
 # аудит мелочь 11: пустая строка - тоже неразбираемое значение, а не "переменная
 # не задана" (именно так выглядит сорвавшаяся подстановка в вызывающем скрипте).
 # Падает, если код проверяет `if raw:` (пустая строка falsy) вместо `is None`.
-CLAUDE_AGENT_NOW="" "$RUN" schedule-tick "$AGS9B" \
+AI_AGENT_NOW="" "$RUN" schedule-tick "$AGS9B" \
   >"$TMP/tick.out" 2>"$TMP/tick.err"; RCS9B3=$?
-[[ "$RCS9B3" != 0 ]] && ok || fail "S9b: CLAUDE_AGENT_NOW='' (пустая строка) -> отказ, не молчаливый откат на системное время (got $RCS9B3)"
+[[ "$RCS9B3" != 0 ]] && ok || fail "S9b: AI_AGENT_NOW='' (пустая строка) -> отказ, не молчаливый откат на системное время (got $RCS9B3)"
 
 # =============================================================== S9c
 echo "=== S9c: at устойчив к осеннему переводу часов (явная TZ, не глобальный UTC) ==="
@@ -388,7 +388,7 @@ tick "$AGS11" "1775044800"; RCS11_1=$?
 tick "$AGS11" "1775044860"; RCS11_2=$?
 [[ "$RCS11_2" == 0 ]] && ok || fail "S11: тик, продвигающий слот (got $RCS11_2: $(cat "$TMP/tick.err"))"
 [[ "$(spool_count s11-noop)" == "1" ]] && ok || fail "S11: fixture - одно событие после продвижения"
-CLAUDE_AGENT_EVENT_MAX_BYTES=1 CLAUDE_AGENT_NOW="1775044860" "$RUN" schedule-tick "$AGS11" \
+AI_AGENT_EVENT_MAX_BYTES=1 AI_AGENT_NOW="1775044860" "$RUN" schedule-tick "$AGS11" \
   >"$TMP/tick.out" 2>"$TMP/tick.err"; RCS11_3=$?
 [[ "$RCS11_3" == 0 ]] && ok \
   || fail "S11: повтор в том же слоте - настоящий no-op, spool-put не вызывается (got $RCS11_3: $(cat "$TMP/tick.err"))"
@@ -478,7 +478,7 @@ cp "$AGS16/schedule.json" "$TMP/s16-pre-advance.json"   # состояние Д�
 # spool-put" оставляла бы last_slot уже продвинутым несмотря на отказ
 # публикации - именно порядок здесь и доказывается, в отличие от проверки
 # ниже (дедуп при восстановлении состояния), которая порядок не видит.
-CLAUDE_AGENT_EVENT_MAX_BYTES=1 CLAUDE_AGENT_NOW="1775300460" "$RUN" schedule-tick "$AGS16" \
+AI_AGENT_EVENT_MAX_BYTES=1 AI_AGENT_NOW="1775300460" "$RUN" schedule-tick "$AGS16" \
   >"$TMP/tick.out" 2>"$TMP/tick.err"; RCS16_ORDER=$?
 [[ "$RCS16_ORDER" != 0 ]] && ok || fail "S16: форсированный отказ публикации (event too large) действительно отказал"
 [[ "$(spool_count s16-crash)" == "0" ]] && ok || fail "S16: событие не появилось при отказе публикации"
@@ -531,7 +531,7 @@ tick "$AGS18" "1775484000"; RCS18_1=$?
 [[ "$RCS18_1" == 0 ]] && ok || fail "S18: baseline-тик (got $RCS18_1)"
 [[ "$(ctrl_get "$AGS18" 'd.get("attention")')" == "None" ]] && ok || fail "S18: fixture - attention пуст изначально"
 LS18_0=$(sched_get "$AGS18" 'd.get("last_slot")')
-CLAUDE_AGENT_EVENT_MAX_BYTES=1 CLAUDE_AGENT_NOW="1775484060" "$RUN" schedule-tick "$AGS18" \
+AI_AGENT_EVENT_MAX_BYTES=1 AI_AGENT_NOW="1775484060" "$RUN" schedule-tick "$AGS18" \
   >"$TMP/tick.out" 2>"$TMP/tick.err"; RCS18_2=$?
 # аудит серьезная 9: код == 6 конкретно (не только != 0) - мутация "убрать
 # спец-ветку rc==6" меняла бы код на rc от последнего sys.exit(rc) общего
@@ -556,9 +556,9 @@ tick "$AGS19" "1775574000"; RCS19_1=$?
 [[ "$RCS19_1" == 0 ]] && ok || fail "S19: baseline-тик (got $RCS19_1)"
 [[ "$(ctrl_get "$AGS19" 'd.get("attention")')" == "None" ]] && ok || fail "S19: fixture - attention пуст изначально"
 LS19_0=$(sched_get "$AGS19" 'd.get("last_slot")')
-rm -rf "$CLAUDE_AGENT_SPOOL_BASE/s19-otherfail"
+rm -rf "$AI_AGENT_SPOOL_BASE/s19-otherfail"
 mkdir -p "$TMP/elsewhere-s19"
-ln -s "$TMP/elsewhere-s19" "$CLAUDE_AGENT_SPOOL_BASE/s19-otherfail"  # симлинк вместо spool -> spool-put die(7)
+ln -s "$TMP/elsewhere-s19" "$AI_AGENT_SPOOL_BASE/s19-otherfail"  # симлинк вместо spool -> spool-put die(7)
 tick "$AGS19" "1775574060"; RCS19_2=$?
 [[ "$RCS19_2" != 0 ]] && ok || fail "S19: тик отказывает на небезопасном spool (exit != 0, got $RCS19_2)"
 [[ "$(ctrl_get "$AGS19" 'd.get("attention") is not None')" == "True" ]] && ok \
@@ -568,7 +568,7 @@ tick "$AGS19" "1775574060"; RCS19_2=$?
 # =============================================================== S20
 echo "=== S20: битый/нечитаемый schedule.json - attention по этому агенту, СОСЕДНИЙ агент тикает ЭТИМ ЖЕ РЕАЛЬНЫМ проходом реконсилера (бульхед) ==="
 # Аудит серьезная 10: два независимых прямых вызова schedule-tick (как было
-# раньше) не проходят через bin/claude-agent-reconciler вообще и потому не
+# раньше) не проходят через bin/ai-agent-reconciler вообще и потому не
 # могут поймать регресс бульхеда в САМОМ реконсилере (напр. "|| true" на
 # schedule-tick заменили на "|| exit 1" - это уже не no-op: в реальном
 # проходе оно оборвало бы весь `for dir in .../*` до соседей, идущих по
@@ -594,10 +594,10 @@ source: { kind: spool, replay_window_h: 72 }
 workspace: none
 $sched
 EOF
-  CLAUDE_AGENTS_DIR="$BASE_S20" "$RC" agent create "$name" --spec "$spec" \
+  AI_AGENTS_DIR="$BASE_S20" "$RC" agent create "$name" --spec "$spec" \
     >/dev/null 2>"$TMP/s20-create-$name.err"
   [[ "$?" == 0 ]] && ok || fail "S20: fixture - create $name ($(cat "$TMP/s20-create-$name.err"))"
-  CLAUDE_AGENTS_DIR="$BASE_S20" "$RC" agent start "$name" \
+  AI_AGENTS_DIR="$BASE_S20" "$RC" agent start "$name" \
     >/dev/null 2>"$TMP/s20-start-$name.err"
   [[ "$?" == 0 ]] && ok || fail "S20: fixture - start $name ($(cat "$TMP/s20-start-$name.err"))"
   echo "$BASE_S20/$name"
@@ -612,14 +612,14 @@ AGS20OK=$(mk_s20_agent "s20b-ok" 'schedule:
 # baseline-фиксация точки отсчета обоих (прямой вызов - как в S22, сам
 # предмет S20 не в этом, а в СЛЕДУЮЩЕМ проходе, сделанном РЕАЛЬНЫМ
 # реконсилером)
-CLAUDE_AGENTS_DIR="$BASE_S20" tick "$AGS20" "1775664000"; RCS20_BASE1=$?
+AI_AGENTS_DIR="$BASE_S20" tick "$AGS20" "1775664000"; RCS20_BASE1=$?
 [[ "$RCS20_BASE1" == 0 ]] && ok || fail "S20: fixture - baseline-тик битого (got $RCS20_BASE1)"
-CLAUDE_AGENTS_DIR="$BASE_S20" tick "$AGS20OK" "1775664000"; RCS20_BASE2=$?
+AI_AGENTS_DIR="$BASE_S20" tick "$AGS20OK" "1775664000"; RCS20_BASE2=$?
 [[ "$RCS20_BASE2" == 0 ]] && ok || fail "S20: fixture - baseline-тик здорового (got $RCS20_BASE2)"
 printf 'not valid json {{{' > "$AGS20/schedule.json"   # ломаем ПОСЛЕ фиксации
 
-CLAUDE_AGENTS_DIR="$BASE_S20" CLAUDE_RECONCILER_DIR="$RCDIR_S20" CLAUDE_AGENT_SPOOL_BASE="$CLAUDE_AGENT_SPOOL_BASE" \
-  CLAUDE_AGENT_NOW="1775664060" "$RECON" --once >/dev/null 2>"$TMP/s20-recon.err"; RCS20R=$?
+AI_AGENTS_DIR="$BASE_S20" AI_RECONCILER_DIR="$RCDIR_S20" AI_AGENT_SPOOL_BASE="$AI_AGENT_SPOOL_BASE" \
+  AI_AGENT_NOW="1775664060" "$RECON" --once >/dev/null 2>"$TMP/s20-recon.err"; RCS20R=$?
 [[ "$RCS20R" == 0 ]] && ok \
   || fail "S20: реальный проход реконсилера завершается штатно, несмотря на битого агента (got $RCS20R: $(cat "$TMP/s20-recon.err"))"
 [[ "$(ctrl_get "$AGS20" 'd.get("attention") is not None')" == "True" ]] && ok \
@@ -636,7 +636,7 @@ tick "$AGS21" "1775754000"; RCS21=$?
 [[ "$(spool_count s21-none)" == "0" ]] && ok || fail "S21: событий нет"
 
 # =============================================================== S22
-echo "=== S22: сквозное - через РЕАЛЬНЫЙ проход claude-agent-reconciler --once, агент получает событие в spool, intake его подхватывает ==="
+echo "=== S22: сквозное - через РЕАЛЬНЫЙ проход ai-agent-reconciler --once, агент получает событие в spool, intake его подхватывает ==="
 BASE_S22="$TMP/agents-s22"; mkdir -p "$BASE_S22"
 RCDIR_S22="$TMP/reconciler-s22"; mkdir -p "$RCDIR_S22"
 PROJ_S22="$TMP/proj-s22"; mkdir -p "$PROJ_S22"
@@ -657,20 +657,20 @@ schedule:
   every: 1m
   text: "s22"
 EOF
-CLAUDE_AGENTS_DIR="$BASE_S22" "$RC" agent create s22-e2e --spec "$SPEC_S22" >/dev/null 2>"$TMP/s22-create.err"
+AI_AGENTS_DIR="$BASE_S22" "$RC" agent create s22-e2e --spec "$SPEC_S22" >/dev/null 2>"$TMP/s22-create.err"
 RCS22C=$?
 [[ "$RCS22C" == 0 ]] && ok || fail "S22: fixture - create (got $RCS22C: $(cat "$TMP/s22-create.err"))"
-CLAUDE_AGENTS_DIR="$BASE_S22" "$RC" agent start s22-e2e >/dev/null 2>"$TMP/s22-start.err"
+AI_AGENTS_DIR="$BASE_S22" "$RC" agent start s22-e2e >/dev/null 2>"$TMP/s22-start.err"
 RCS22S=$?
 [[ "$RCS22S" == 0 ]] && ok || fail "S22: fixture - start (got $RCS22S: $(cat "$TMP/s22-start.err"))"
 AGS22="$BASE_S22/s22-e2e"
 # baseline-тик (прямой вызов - только чтобы зафиксировать точку отсчета слота,
 # см. S12: первый тик не порождает событие; сам предмет S22 - следующий проход,
 # сделанный РЕАЛЬНЫМ реконсилером, не имитацией)
-CLAUDE_AGENTS_DIR="$BASE_S22" tick "$AGS22" "1775844000"; RCS22T1=$?
+AI_AGENTS_DIR="$BASE_S22" tick "$AGS22" "1775844000"; RCS22T1=$?
 [[ "$RCS22T1" == 0 ]] && ok || fail "S22: fixture - baseline-тик (got $RCS22T1)"
-CLAUDE_AGENTS_DIR="$BASE_S22" CLAUDE_RECONCILER_DIR="$RCDIR_S22" CLAUDE_AGENT_SPOOL_BASE="$CLAUDE_AGENT_SPOOL_BASE" \
-  CLAUDE_AGENT_NOW="1775844060" "$RECON" --once >/dev/null 2>"$TMP/s22-recon.err"; RCS22R=$?
+AI_AGENTS_DIR="$BASE_S22" AI_RECONCILER_DIR="$RCDIR_S22" AI_AGENT_SPOOL_BASE="$AI_AGENT_SPOOL_BASE" \
+  AI_AGENT_NOW="1775844060" "$RECON" --once >/dev/null 2>"$TMP/s22-recon.err"; RCS22R=$?
 [[ "$RCS22R" == 0 ]] && ok || fail "S22: реальный проход реконсилера завершается штатно (got $RCS22R: $(cat "$TMP/s22-recon.err"))"
 [[ "$(spool_count s22-e2e)" == "1" ]] && ok || fail "S22: событие появилось в spool за реальный проход"
 # НЕ ls по inbox/pending: реальный --once проход не только делает intake,
@@ -817,9 +817,9 @@ tick "$AGS27" "1776176400"; RCS27_1=$?
 [[ "$(ctrl_get "$AGS27" 'd.get("attention", {}).get("reason")')" == "done_phase" ]] && ok \
   || fail "S27: fixture - attention.reason == done_phase"
 
-rm -rf "$CLAUDE_AGENT_SPOOL_BASE/s27-foreign-attention"
+rm -rf "$AI_AGENT_SPOOL_BASE/s27-foreign-attention"
 mkdir -p "$TMP/elsewhere-s27"
-ln -s "$TMP/elsewhere-s27" "$CLAUDE_AGENT_SPOOL_BASE/s27-foreign-attention"  # симлинк -> spool-put die(7), как в S19
+ln -s "$TMP/elsewhere-s27" "$AI_AGENT_SPOOL_BASE/s27-foreign-attention"  # симлинк -> spool-put die(7), как в S19
 tick "$AGS27" "1776176460"; RCS27_2=$?
 [[ "$RCS27_2" != 0 ]] && ok || fail "S27: тик отказывает на небезопасном spool, как в S19 (got $RCS27_2)"
 [[ "$(ctrl_get "$AGS27" 'd.get("attention", {}).get("reason")')" == "done_phase" ]] && ok \
@@ -1051,17 +1051,17 @@ done
 # который на отсутствии такого файла делает fail-closed отказ
 # ([[ -f "$path" ]] || fail ...), на свежей установке без засева не
 # запускается вовсе. Ровно так на боевой раскатке ломался
-# `claude-rc-agent new-task` (рождение задачи с телефона, /new):
+# `ai-rc-agent new-task` (рождение задачи с телефона, /new):
 # task-template.yaml.example не копировался, а new-task fail-closed
-# требует $CONTROL_DIR/task-template.yaml (bin/claude-rc-agent:646-647).
+# требует $CONTROL_DIR/task-template.yaml (bin/ai-rc-agent:646-647).
 #
 # СПИСОК ЯВНЫЙ (не обход examples/*.example целиком), потому что не каждый
 # засеваемый install.sh файл относится к ЭТОМУ классу дефекта - относятся
 # только те, что хотя бы один bin/-скрипт требует fail-closed. Проверено
 # точечным grep по bin/ (без чтения тел функций целиком, только сигнатура
 # отказа "[[ -f ... ]] || fail"):
-#   - task-template.yaml - bin/claude-rc-agent:647
-#   - projects.yaml       - bin/claude-rc:80, bin/claude-rc-agent:628
+#   - task-template.yaml - bin/ai-rc-agent:647
+#   - projects.yaml       - bin/ai-rc:80, bin/ai-rc-agent:628
 # install.sh также засевает control-CLAUDE.md.example и
 # control-settings.local.json.example, но их читает сам бинарь `claude`
 # (инструкции/permissions), а не наш bin/*; отсутствие не роняет запуск
@@ -1134,18 +1134,18 @@ if [[ "$S35_PARSE_RC" == 0 ]]; then
     && ok || fail "S35: permissions.allow содержит Write"
   [[ "$(jq_file "$S35_JSON" '"Edit" in d.get("permissions",{}).get("allow",[])')" == "True" ]] \
     && ok || fail "S35: permissions.allow содержит Edit"
-  [[ "$(jq_file "$S35_JSON" '"Bash(claude-agent-done:*)" in d.get("permissions",{}).get("allow",[])')" == "True" ]] \
-    && ok || fail "S35: permissions.allow содержит Bash(claude-agent-done:*)"
-  [[ "$(jq_file "$S35_JSON" '"Bash(claude-agent-ask:*)" in d.get("permissions",{}).get("allow",[])')" == "True" ]] \
-    && ok || fail "S35: permissions.allow содержит Bash(claude-agent-ask:*)"
+  [[ "$(jq_file "$S35_JSON" '"Bash(ai-agent-done:*)" in d.get("permissions",{}).get("allow",[])')" == "True" ]] \
+    && ok || fail "S35: permissions.allow содержит Bash(ai-agent-done:*)"
+  [[ "$(jq_file "$S35_JSON" '"Bash(ai-agent-ask:*)" in d.get("permissions",{}).get("allow",[])')" == "True" ]] \
+    && ok || fail "S35: permissions.allow содержит Bash(ai-agent-ask:*)"
   [[ "$(jq_file "$S35_JSON" 'd.get("permissions",{}).get("ask",["nonempty"])')" == "[]" ]] \
     && ok || fail "S35: permissions.ask пуст"
 else
   fail "S35: runtime: drain (пропущено - шаблон не парсится)"
   fail "S35: permissions.allow содержит Write (пропущено - шаблон не парсится)"
   fail "S35: permissions.allow содержит Edit (пропущено - шаблон не парсится)"
-  fail "S35: permissions.allow содержит Bash(claude-agent-done:*) (пропущено - шаблон не парсится)"
-  fail "S35: permissions.allow содержит Bash(claude-agent-ask:*) (пропущено - шаблон не парсится)"
+  fail "S35: permissions.allow содержит Bash(ai-agent-done:*) (пропущено - шаблон не парсится)"
+  fail "S35: permissions.allow содержит Bash(ai-agent-ask:*) (пропущено - шаблон не парсится)"
   fail "S35: permissions.ask пуст (пропущено - шаблон не парсится)"
 fi
 
@@ -1153,7 +1153,7 @@ fi
 # V2.10 фикс-пак (docs/design-2026-07-28-v2.10-task-actually-works.md,
 # после аудита): T7 (обертка claude-agent-commit, §1.2) и T8 (миграция
 # шаблона по хешу, §1.3). Написано с чистого листа по контракту -
-# bin/claude-agent-run, bin/claude-agent-commit, bin/_rc_projects.sh,
+# bin/ai-agent-run, bin/claude-agent-commit, bin/_rc_projects.sh,
 # install.sh НЕ читаны для вывода ожидаемого поведения (оно все целиком
 # зафиксировано в контракте выше). Точечное обращение к install.sh ниже -
 # тот же структурный жанр, что S28/S34/S35 (регексом/awk достается ровно
@@ -1418,7 +1418,7 @@ DRY_RUN=1 run_migrate_task_template "$S37_INSTALL_SH" "$S37_SRC" "$S37_DST_F" >/
 
 # =============================================================== S38 (структурный: класс дефекта "две функции с одним именем")
 # Найдено при починке V2.10 (см. docs/design.../4d4fd42): в
-# bin/claude-agent-run существовали ДВЕ функции верхнего уровня с именем
+# bin/ai-agent-run существовали ДВЕ функции верхнего уровня с именем
 # _project_lessons_path (V2.9 и V2.10) - побеждала последняя, первая была
 # мертвым кодом, и вся суита была зеленой, потому что исключение работало
 # через чужой (не тот, что правили) резолвер. AST-парсинг ловит этот класс
@@ -1465,8 +1465,8 @@ done
 # навсегда нефинализирована, worktree грязный, задача клинит). Порядок -
 # это инвариант, а не деталь реализации, и пинится он структурно: внутри
 # recovery_pass вызовы шва обязаны стоять ВЫШЕ env_move в исходник.
-echo "=== S40: в recovery_pass (bin/claude-agent-run) вызовы терминального шва стоят ДО env_move ==="
-S40_OUT=$(python3 - "$HERE/../bin/claude-agent-run" <<'PY'
+echo "=== S40: в recovery_pass (bin/ai-agent-run) вызовы терминального шва стоят ДО env_move ==="
+S40_OUT=$(python3 - "$HERE/../bin/ai-agent-run" <<'PY'
 import ast, sys
 src = open(sys.argv[1]).read()
 tree = ast.parse(src)

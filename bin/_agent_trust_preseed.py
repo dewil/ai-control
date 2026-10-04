@@ -3,8 +3,8 @@
 $CLAUDE_CONFIG_DIR/.claude.json для заданного cwd. Headless `-p` не может
 пройти trust-диалог интерактивно.
 
-Общий код: claude-agent-session (mission, tmux-обертка) вызывает как CLI
-(bash не импортирует python-модули), claude-agent-run (event, workspace!=
+Общий код: ai-agent-session (mission, tmux-обертка) вызывает как CLI
+(bash не импортирует python-модули), ai-agent-run (event, workspace!=
 none) - импортом функции напрямую.
 
 RMW под локом (аудит V2.1, major 5): .claude.json - глобальный файл, его пишут

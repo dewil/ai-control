@@ -1,0 +1,30 @@
+[Unit]
+Description=Control task web frontend (isolated UID)
+After=network.target
+
+[Service]
+Type=simple
+User=ai-panel
+Group=ai-panel
+WorkingDirectory=/opt/ai-control-web
+ExecStart=/opt/ai-control-web/venv/bin/python /opt/ai-control-web/bin/ai-control-web web --auth /var/lib/ai-control-web/auth.json --totp-state /var/lib/ai-control-web/totp-state.json --socket /run/ai-control-web/broker.sock
+Restart=on-failure
+RestartSec=3
+UMask=0077
+MemoryMax=256M
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/ai-control-web
+InaccessiblePaths=/data
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

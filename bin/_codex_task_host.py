@@ -266,7 +266,7 @@ class SystemdTaskManager:
         _require(all(_text(arg) for arg in argv))
         _path(argv[0])
         command = ['systemd-run', '--user', '--no-ask-password', '--quiet', '--unit=' + unit,
-                   '--description=claude-control task ' + token, '--service-type=exec',
+                   '--description=ai-control task ' + token, '--service-type=exec',
                    '--property=KillMode=control-group', '--property=Restart=no', '--property=UMask=0077',
                    '--property=TimeoutStopSec=5s', '--property=ExitType=main',
                    '--property=RemainAfterExit=no', '--property=SendSIGKILL=yes', '--working-directory=' + cwd, '--expand-environment=no']
@@ -291,7 +291,7 @@ class SystemdTaskManager:
             def owned(status):
                 _status(status)
                 _cleanup(status)
-                _require(status['invocation_id'] == invocation_id and status['description'] == 'claude-control task ' + token
+                _require(status['invocation_id'] == invocation_id and status['description'] == 'ai-control task ' + token
                          and status['kill_mode'] == 'control-group')
             status = self.inspect(unit, deadline=deadline)
             owned(status)
@@ -541,7 +541,7 @@ class CodexTaskHost:
                 return self._snapshot(journal, 'stopped' if journal['phase'] == 'stopped' else 'unknown')
             _status(status)
             _cleanup(status)
-            _require(status['description'] == 'claude-control task ' + journal['token'] and status['kill_mode'] == 'control-group')
+            _require(status['description'] == 'ai-control task ' + journal['token'] and status['kill_mode'] == 'control-group')
             _require(journal['invocation_id'] is None or journal['invocation_id'] == status['invocation_id'])
             drained = status['active_state'] in ('inactive', 'failed') and status['main_pid'] == 0 and status['control_group'] == ''
             active = status['active_state'] == 'active' and status['sub_state'] == 'running' and status['main_pid'] > 0

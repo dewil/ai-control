@@ -275,7 +275,7 @@ class BackendContract(unittest.TestCase):
     def test_real_question_and_environment_cannot_redirect(self):
         alternate = self.root / "wrong-agent"
         alternate.mkdir()
-        with mock.patch.dict(os.environ, {"CLAUDE_AGENT_DIR": str(alternate), "CLAUDE_AGENT_EVENT_KEY": "wrong"}):
+        with mock.patch.dict(os.environ, {"AI_AGENT_DIR": str(alternate), "AI_AGENT_EVENT_KEY": "wrong"}):
             with self.guard():
                 result = self.write(args={"question": "Proceed?", "options": ["Yes", "No"], "context": "Details"})
         qid = result["qid"]

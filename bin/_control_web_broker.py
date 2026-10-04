@@ -15,7 +15,7 @@ NAME = re.compile(r'[a-z][a-z0-9-]{0,30}[a-z0-9]\Z')
 GEN = re.compile(r'[0-9a-f]{8}\Z')
 
 
-# Intentional per-binary copy of claude-agent-run's complete export policy.
+# Intentional per-binary copy of ai-agent-run's complete export policy.
 # Keep the established credential aliases without importing writer runtime.
 SECRET_RE = re.compile(
     # покрытие расширено (аудит V2.7a, major 7): pwd/passwd/access_key -
@@ -287,7 +287,7 @@ class RegistryBackend:
                 return {'error': 'invalid_or_stale'}
             elif not q['answered'] and decision != 'text' and decision not in q['allowed_decisions']:
                 return {'error': 'invalid_or_stale'}
-            args = [os.path.join(self.bin_dir, 'claude-agent-answer'), os.path.join(self.registry, agent), '--qid', qid]
+            args = [os.path.join(self.bin_dir, 'ai-agent-answer'), os.path.join(self.registry, agent), '--qid', qid]
             args += ['--text', text] if decision == 'text' else ['--' + decision]
             args += ['--by', 'web']
             result = self._run(args)
@@ -315,7 +315,7 @@ class RegistryBackend:
                 return {'error': 'stale'}
             if done['state'] == 'requested' and not done['finalized']:
                 return {'error': 'invalid_or_stale'}
-            args = [os.path.join(self.bin_dir, 'claude-agent-run'), 'done-verdict', os.path.join(self.registry, agent), '--' + decision, '--expect-sha', generation]
+            args = [os.path.join(self.bin_dir, 'ai-agent-run'), 'done-verdict', os.path.join(self.registry, agent), '--' + decision, '--expect-sha', generation]
             if comment:
                 args += ['--comment', comment]
             result = self._run(args)

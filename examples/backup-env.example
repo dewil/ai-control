@@ -1,5 +1,5 @@
-# Конфиг claude-control-backup. Боевой файл: ~/.config/claude-control/backup-env
-# (или путь из $CLAUDE_BACKUP_ENV), chmod 600. Это bash-файл - он source'ится
+# Конфиг ai-control-backup. Боевой файл: ~/.config/ai-control/backup-env
+# (или путь из $AI_BACKUP_ENV), chmod 600. Это bash-файл - он source'ится
 # скриптом, поэтому значения в кавычках, а BACKUP_PATHS - настоящий bash-массив.
 # НЕ коммитить с реальными кредами: реальные значения живут только тут, на машине.
 #

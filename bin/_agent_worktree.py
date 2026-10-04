@@ -1,9 +1,9 @@
 """_agent_worktree: единственное место, где считаются факты о worktree
-задачи (commit_sha/base/branch/empty), общее для claude-agent-done
-(создание заявки о готовности, V2.7a §3) и claude-agent-run
+задачи (commit_sha/base/branch/empty), общее для ai-agent-done
+(создание заявки о готовности, V2.7a §3) и ai-agent-run
 (commit_worktree/finalize_worktree_done - коммит рантайма и перечитка HEAD
 в терминальной ветке прогона, V2.10 §3a/§3d.1). Второй реализации этой
-проверки заводить нельзя - расхождение между "что видит claude-agent-done"
+проверки заводить нельзя - расхождение между "что видит ai-agent-done"
 и "что видит раннер" было бы дырой в фенсинге само по себе.
 
 git_run() здесь - ЕДИНАЯ точка вызова git там, где может присутствовать
@@ -175,7 +175,7 @@ def _worktree_filter_clean(work, *, deadline=None, clock=time.monotonic):
     check-attr -z --stdin filter`, а не grep по .gitattributes: check-attr -
     единственный источник ИТОГОВОГО значения атрибута, учитывающий
     $GIT_DIR/info/attributes и внешний core.attributesFile, которые
-    grep-проверка прежней обертки (claude-agent-commit, §1.2) не видела.
+    grep-проверка прежней обертки (ai-agent-commit, §1.2) не видела.
     Отсутствие узлов в дереве (кроме .git) - нечего проверять, ok."""
     paths = []
     for root, dirs, files in os.walk(work):
@@ -260,7 +260,7 @@ def _private_index(path, cwd, project):
 def git_run(args, cwd, project_path, timeout=30, text=True, input=None, *, deadline=None, clock=time.monotonic, index_file=None):
     """ЕДИНАЯ точка вызова git в присутствии агентского worktree (V2.10
     §3d.2): коммит рантайма, факты ветки (worktree_facts ниже), статус для
-    фазы интеграции (_branch_worktree_status в claude-agent-run). project_path
+    фазы интеграции (_branch_worktree_status в ai-agent-run). project_path
     - путь ПРОЕКТА (не worktree), из которого worktree заведен - обязателен,
     без него отказ (fail-closed, а не "пропустить проверку").
 
@@ -328,7 +328,7 @@ def commit_worktree(work, project_path, message):
     """Коммитит ВСЕ изменения агентского worktree (V2.10 §3d.1): рантайм
     индексирует содержимое (`git add -A`) и создает коммит с текстом
     message - агенту это делать больше не дано, единственный путь к git
-    закрыт вовсе (обертка claude-agent-commit упразднена). Хуки/fsmonitor/
+    закрыт вовсе (обертка ai-agent-commit упразднена). Хуки/fsmonitor/
     pager/editor глушит и fail-closed проверяет ЕДИНЫЙ git_run() (§3d.2).
 
     (ok, reason): ok=True - коммит создан ЛИБО индексировать было нечего
@@ -359,8 +359,8 @@ def commit_worktree(work, project_path, message):
         # "unable to auto-detect email address" на машине без user.name/
         # email в ЛОКАЛЬНОМ конфиге проекта; проверено опытом).
         commit = git_run(
-            ["-c", "user.name=claude-control",
-             "-c", "user.email=claude-control@localhost",
+            ["-c", "user.name=ai-control",
+             "-c", "user.email=ai-control@localhost",
              "commit", "--no-verify", "--no-gpg-sign", "-m", message],
             work, project_path)
     except GitGuardError as e:

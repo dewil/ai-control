@@ -1,0 +1,441 @@
+#!/usr/bin/env python3
+"""Offline, fail-closed migration of the three private ai-control data roots."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+from _codex_task_store import CodexTaskOperationStore
+from _codex_task_bridge import CodexTaskBridge, TaskBinding
+
+ROOTS = (('.claude-control', '.ai-control'),
+         ('.config/claude-control', '.config/ai-control'),
+         ('.local/share/claude-control', '.local/share/ai-control'))
+ACTIVE = re.compile(r'^(?:claude-control|claude-agent|ai-control|ai-agent|ccsession-|cctask-)')
+
+
+class MigrationError(Exception):
+    pass
+
+
+def ancestors(path):
+    for part in reversed((path, *path.parents)):
+        if part.is_symlink():
+            raise MigrationError('symlink in migration path')
+
+
+def preflight(home):
+    ancestors(home)
+    if os.path.lexists(home / '.ai-control-naming-transaction'):
+        raise MigrationError('existing transaction checkpoint requires reviewed local recovery')
+    if not home.is_dir() or home.stat().st_uid != os.getuid():
+        raise MigrationError('--home must be an existing owned directory')
+    planned = []
+    for old, new in ROOTS:
+        source, target = home / old, home / new
+        ancestors(source)
+        ancestors(target)
+        if not source.exists():
+            continue
+        if target.exists():
+            raise MigrationError('source and destination both exist: ' + new)
+        info = source.stat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise MigrationError('source must be an owned private directory: ' + old)
+        parent = target.parent
+        while not parent.exists():
+            parent = parent.parent
+        if parent.stat().st_dev != info.st_dev:
+            raise MigrationError('cross-device migration is unsupported')
+        for directory, dirs, files in os.walk(source, followlinks=False):
+            for name in dirs + files:
+                path = Path(directory) / name
+                child = path.lstat()
+                if stat.S_ISLNK(child.st_mode):
+                    raise MigrationError('symlink inside migration root')
+                if child.st_uid != os.getuid() or child.st_dev != info.st_dev:
+                    raise MigrationError('unowned or cross-device migration content')
+                if not (stat.S_ISDIR(child.st_mode) or stat.S_ISREG(child.st_mode)):
+                    raise MigrationError('live socket or unsupported migration content')
+                if name == '.git' and path.is_file():
+                    raise MigrationError('registered worktree requires operator repair before migration')
+        planned.append((source, target))
+    receipt = home / '.ai-control/naming-migration.json'
+    old_receipt = home / '.claude-control/naming-migration.json'
+    if planned and (receipt.exists() or old_receipt.exists()):
+        raise MigrationError('existing migration receipt would be overwritten')
+    return planned
+
+
+def metadata(home):
+    """Validate old authority first; stage changes only to known schema path fields."""
+    old, new = home / '.claude-control', home / '.ai-control'
+    state = old / 'codex-task-state'
+    updates, stores = {}, []
+
+    def relocate(value):
+        if not isinstance(value, str):
+            raise MigrationError('invalid authoritative metadata path')
+        for source, target in ROOTS:
+            prefix = str(home / source)
+            if value == prefix or value.startswith(prefix + '/'):
+                return str(home / target) + value[len(prefix):]
+        return value
+
+    def stage(path, value):
+        original = path.read_bytes()
+        encoded = (json.dumps(value, sort_keys=True) + '\n').encode()
+        if original != encoded:
+            updates[path] = (original, encoded, stat.S_IMODE(path.stat().st_mode))
+
+    def operation(value):
+        result = json.loads(json.dumps(value))
+        result['host_state_dir'] = relocate(result['host_state_dir'])
+        if result['drain_evidence'] is not None:
+            result['drain_evidence']['host_state_dir'] = relocate(result['drain_evidence']['host_state_dir'])
+        return result
+
+    try:
+        def pairs(items):
+            value = {}
+            for key, item in items:
+                if key in value:
+                    raise MigrationError('duplicate saved settings field')
+                value[key] = item
+            return value
+
+        def constant(_):
+            raise ValueError('non-finite saved settings value')
+
+        canonical_commands = ('ai-agent-answer', 'ai-agent-ask', 'ai-agent-checkrun', 'ai-agent-done', 'ai-agent-harvest', 'ai-agent-io', 'ai-agent-limits-digest', 'ai-agent-model-advice', 'ai-agent-permit', 'ai-agent-reconciler', 'ai-agent-review', 'ai-agent-run', 'ai-agent-session', 'ai-agent-tgbot', 'ai-agent-voice-hook', 'ai-agent-waiting-hook', 'ai-control-backup', 'ai-control-backup-init', 'ai-control-backup-restore-test', 'ai-control-logrotate', 'ai-control-project-watchdog', 'ai-control-session', 'ai-control-transcript-gc', 'ai-control-watchdog', 'ai-control-web', 'ai-rc-agent', 'ai-rc-takeover', 'ai-rc')
+        commands = {}
+        for name in canonical_commands:
+            for canonical, legacy in (("ai-agent", "claude-agent"), ("ai-rc", "claude-rc"), ("ai-control", "claude-control")):
+                if name == canonical or name.startswith(canonical + "-"):
+                    commands[legacy + name[len(canonical):]] = name
+        for path in (old / 'agents').glob('*/agent-settings.json'):
+            info = path.stat()
+            if info.st_nlink != 1 or info.st_size > 1024 * 1024 or stat.S_IMODE(info.st_mode) != 0o600:
+                raise MigrationError('saved settings must be a private regular file')
+            settings = json.loads(path.read_bytes(), object_pairs_hook=pairs,
+                                  parse_constant=constant)
+            if type(settings) is not dict or type(settings.get('permissions')) is not dict:
+                raise MigrationError('unsupported saved settings schema')
+            permissions = settings['permissions']
+            if type(permissions.get('allow')) is not list or any(type(value) is not str for value in permissions['allow']):
+                raise MigrationError('unsupported saved allow permissions')
+            if 'deny' in permissions and (type(permissions['deny']) is not list or any(type(value) is not str for value in permissions['deny'])):
+                raise MigrationError('unsupported saved deny permissions')
+            if set(permissions) - {'allow', 'deny'}:
+                raise MigrationError('unsupported saved permission fields')
+            agent = str(path.parent)
+            scopes = {}
+            for slashes in ('', '/', '//'):
+                for tool in ('Read', 'Edit', 'Write', 'NotebookEdit'):
+                    suffixes = ('/**', '/work/**', '/run/**') if tool in ('Read', 'Edit') else ()
+                    suffixes += ('/questions/**', '/reject_comments/**', '/lessons.json', '/done.json')
+                    for suffix in suffixes:
+                        scopes[tool + '(' + slashes + agent + suffix + ')'] = tool + '(' + slashes + relocate(agent) + suffix + ')'
+            for field in ('allow', 'deny'):
+                if field not in permissions:
+                    continue
+                replaced = []
+                for value in permissions[field]:
+                    if value in scopes:
+                        replaced.append(scopes[value])
+                        continue
+                    match = re.fullmatch(r'Bash\(([^:\s()]+)(.*)\)', value)
+                    if match:
+                        command, suffix = match.groups()
+                        name = Path(command).name
+                        if name in commands and (command == name or Path(command).parent == home / '.local/bin'):
+                            command = command[:-len(name)] + commands[name]
+                            replaced.append('Bash(' + command + suffix + ')')
+                            continue
+                    if str(old) + '/' in value:
+                        raise MigrationError('ambiguous saved product permission requires local review')
+                    replaced.append(value)
+                permissions[field] = replaced
+            if 'hooks' in settings:
+                hooks = settings['hooks']
+                if type(hooks) is not dict or set(hooks) != {'PreToolUse'} or type(hooks['PreToolUse']) is not list:
+                    raise MigrationError('unsupported saved hook schema')
+                for entry in hooks['PreToolUse']:
+                    if type(entry) is not dict or set(entry) != {'matcher', 'hooks'} or type(entry['matcher']) is not str or type(entry['hooks']) is not list:
+                        raise MigrationError('unsupported saved hook entry')
+                    for hook in entry['hooks']:
+                        if type(hook) is not dict or set(hook) != {'type', 'command'} or hook['type'] != 'command':
+                            raise MigrationError('unsupported saved command hook')
+                        command = hook['command']
+                        trusted = (Path(__file__).resolve().parent, home / '.local/bin')
+                        equivalents = {str(directory / 'claude-agent-permit') + ' --hook': str(directory / 'ai-agent-permit') + ' --hook' for directory in trusted}
+                        if command not in equivalents:
+                            raise MigrationError('unsupported saved command hook')
+                        hook['command'] = equivalents[command]
+            stage(path, settings)
+    except MigrationError:
+        raise
+    except Exception:
+        raise MigrationError('saved mission settings validation refused') from None
+
+    if not state.exists():
+        return updates, stores
+    if any(state.rglob('admission.json')) or any(state.rglob('bootstrap-proof.json')) or any(state.glob('**/lifecycle/*.json')):
+        raise MigrationError('retained native admission/bootstrap/lifecycle evidence requires supported provider rebind before migration')
+    try:
+        for directory in state.iterdir():
+            if not directory.is_dir() or not (directory / 'index.json').is_file():
+                raise MigrationError('unknown TASK state layout')
+            index = json.loads((directory / 'index.json').read_bytes())
+            store = CodexTaskOperationStore(index['agent_dir'], state_root=str(state))
+            before = store.snapshot(deadline=time.monotonic() + 10)
+            if before['reconciliation_required']:
+                raise MigrationError('TASK metadata requires reconciliation before migration')
+            before.pop('reconciliation_required')
+            agent = Path(before['agent_dir'])
+            if not agent.is_relative_to(old / 'agents'):
+                raise MigrationError('TASK agent outside product registry')
+            bridges = []
+            changed = json.loads(json.dumps(before))
+            changed['agent_dir'] = relocate(changed['agent_dir'])
+            for opid, op in before['operations'].items():
+                host = Path(op['host_state_dir'])
+                journal_path = host / 'journal.json'
+                journal = json.loads(journal_path.read_bytes())
+                if journal['schema'] != 1 or journal['phase'] != 'stopped' or op['drain_evidence'] is None:
+                    raise MigrationError('TASK operation lacks stopped drain proof')
+                # The store snapshot has validated journal, evidence and directory identities.
+                journal['cwd'] = relocate(journal['cwd'])
+                journal['socket'] = relocate(journal['socket'])
+                journal['executable'] = relocate(journal['executable'])
+                if isinstance(journal['socket_identity'], dict):
+                    journal['socket_identity']['target_path'] = relocate(journal['socket_identity']['target_path'])
+                stage(journal_path, journal)
+                identity_path = host.parent / 'directory-identity.json'
+                identity = json.loads(identity_path.read_bytes())
+                identity['directories'] = {relocate(key): value for key, value in identity['directories'].items()}
+                stage(identity_path, identity)
+                bridge_path = host.parent / 'bridge/journal.json'
+                if bridge_path.exists():
+                    binding = dict(task_incarnation=op['task_incarnation'], event_key=op['event_key'],
+                                   agent_dir=str(agent), thread_id=op['thread_id'], turn_id=op['turn_id'])
+                    bridge = validate_bridge(bridge_path, binding)
+                    bridge['binding']['agent_dir'] = relocate(str(agent))
+                    stage(bridge_path, bridge)
+                    bridges.append((relocate(str(bridge_path)), bridge['binding']))
+                changed['operations'][opid] = operation(op)
+                envelope_paths = [path for folder in ('inflight', 'done', 'pending', 'dlq')
+                                  for path in (agent / 'inbox' / folder).glob('*.json')]
+                found = False
+                for envelope_path in envelope_paths:
+                    envelope = json.loads(envelope_path.read_bytes())
+                    projection = envelope.get('meta', {}).get('codex_operation')
+                    if projection is not None and projection.get('operation_id') == opid:
+                        if projection != op:
+                            raise MigrationError('TASK envelope authority mismatch')
+                        envelope['meta']['codex_operation'] = operation(projection)
+                        stage(envelope_path, envelope)
+                        found = True
+                if not found:
+                    raise MigrationError('TASK envelope not found')
+            stage(directory / 'index.json', changed)
+            stores.append((relocate(str(agent)), relocate(str(state)), bridges))
+        return updates, stores
+    except MigrationError:
+        raise
+    except Exception:
+        raise MigrationError('TASK authoritative metadata validation refused') from None
+
+
+def validate_bridge(path, binding):
+    bridge = CodexTaskBridge(Path(path).parent, TaskBinding(**binding),
+                             guard=lambda *args, **kwargs: None,
+                             writer=lambda *args, **kwargs: None)
+    return bridge._read()
+
+
+def replace_private(path, payload, mode):
+    fd, name = tempfile.mkstemp(prefix='.naming-metadata-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(name, mode)
+        os.replace(name, path)
+        sync_directory(path.parent)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def manager(dry_run):
+    try:
+        result = subprocess.run(['systemctl', '--user', 'list-units', '--state=active',
+                                 '--no-legend', '--plain'],
+                                capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        result = None
+    if result is None or result.returncode:
+        if dry_run:
+            print('dry-run: user manager unavailable; apply would refuse')
+            return
+        raise MigrationError('user manager unavailable; stop/drain proof is required')
+    for line in result.stdout.decode('utf-8', errors='replace').splitlines():
+        fields = line.split()
+        if fields and ACTIVE.match(fields[0]) and fields[0].endswith(('.service', '.timer')):
+            raise MigrationError('active runtime must be stopped and drained before migration')
+
+
+def sync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def checkpoint(home, planned, updates):
+    directory = home / '.ai-control-naming-transaction'
+    directory.mkdir(mode=0o700)
+    plan = {'version': 1,
+            'roots': [{'source': str(source.relative_to(home)), 'destination': str(target.relative_to(home))}
+                      for source, target in planned], 'backups': []}
+    for number, (path, (original, _, mode)) in enumerate(updates.items()):
+        name = str(number) + '.original'
+        fd = os.open(directory / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(original)
+            stream.flush()
+            os.fsync(stream.fileno())
+        plan['backups'].append({'path': str(path.relative_to(home)), 'backup': name, 'mode': mode})
+    fd = os.open(directory / 'plan.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as stream:
+        json.dump(plan, stream, sort_keys=True)
+        stream.write('\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+    sync_directory(directory)
+    sync_directory(home)
+    return directory
+
+
+def clear_checkpoint(directory):
+    shutil.rmtree(directory)
+    sync_directory(directory.parent)
+
+
+def apply(home, planned, updates, stores, retain_checkpoint=False):
+    recovery = checkpoint(home, planned, updates)
+    moved, created, changed = [], [], []
+    temporary = None
+    receipt_created = False
+    try:
+        for source, target in planned:
+            parents = []
+            parent = target.parent
+            while not parent.exists():
+                parents.append(parent)
+                parent = parent.parent
+            for parent in reversed(parents):
+                parent.mkdir(mode=0o700)
+                created.append(parent)
+            source.rename(target)
+            moved.append((source, target))
+            sync_directory(source.parent)
+            if target.parent != source.parent:
+                sync_directory(target.parent)
+        for path, (original, payload, mode) in updates.items():
+            destination = home / '.ai-control' / path.relative_to(home / '.claude-control')
+            replace_private(destination, payload, mode)
+            changed.append((destination, original, mode))
+        for agent, state, bridges in stores:
+            if CodexTaskOperationStore(agent, state_root=state).snapshot(deadline=time.monotonic() + 10)['reconciliation_required']:
+                raise MigrationError('relocated TASK authority refused')
+            for path, binding in bridges:
+                validate_bridge(path, binding)
+        runtime = home / '.ai-control'
+        if not runtime.exists():
+            runtime.mkdir(mode=0o700)
+            created.append(runtime)
+        fd, temporary = tempfile.mkstemp(prefix='.naming-migration-', dir=runtime)
+        with os.fdopen(fd, 'w') as stream:
+            json.dump({'version': 1, 'migrated_roots': [str(target.relative_to(home)) for _, target in planned]}, stream)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, runtime / 'naming-migration.json')
+        receipt_created = True
+        os.unlink(temporary)
+        temporary = None
+        sync_directory(runtime)
+    except Exception:
+        try:
+            if temporary is not None and os.path.exists(temporary):
+                os.unlink(temporary)
+            if receipt_created:
+                (home / '.ai-control/naming-migration.json').unlink()
+            for path, original, mode in reversed(changed):
+                replace_private(path, original, mode)
+            for source, target in reversed(moved):
+                target.rename(source)
+                sync_directory(source.parent)
+            for parent in reversed(created):
+                parent.rmdir()
+            for source, target in planned:
+                if not source.is_dir() or target.exists():
+                    raise MigrationError('rollback root verification refused')
+            for path, (original, _, mode) in updates.items():
+                if path.read_bytes() != original or stat.S_IMODE(path.stat().st_mode) != mode:
+                    raise MigrationError('rollback metadata verification refused')
+            for agent, state, bridges in stores:
+                old_agent = str(home / '.claude-control') + agent[len(str(home / '.ai-control')):]
+                old_state = str(home / '.claude-control') + state[len(str(home / '.ai-control')):]
+                if CodexTaskOperationStore(old_agent, state_root=old_state).snapshot(deadline=time.monotonic() + 10)['reconciliation_required']:
+                    raise MigrationError('rollback TASK authority refused')
+                for path, binding in bridges:
+                    restored = dict(binding, agent_dir=old_agent)
+                    old_path = str(home / '.claude-control') + path[len(str(home / '.ai-control')):]
+                    validate_bridge(old_path, restored)
+            clear_checkpoint(recovery)
+        except Exception:
+            raise MigrationError('migration failed; recovery checkpoint retained, local review required') from None
+        raise MigrationError('migration failed; verified original roots and metadata restored') from None
+    if not retain_checkpoint:
+        clear_checkpoint(recovery)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--home', required=True, type=Path)
+    parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--retain-checkpoint', action='store_true', help='retain originals until operator topology validation completes')
+    args = parser.parse_args()
+    home = Path(os.path.abspath(args.home))
+    try:
+        planned = preflight(home)
+        if not planned:
+            print('no migration required')
+            return 0
+        updates, stores = metadata(home)
+        manager(args.dry_run)
+        if args.dry_run:
+            print('dry-run: migration preflight passed; no changes made')
+            return 0
+        apply(home, planned, updates, stores, args.retain_checkpoint)
+        print('root migration complete; checkpoint retained for operator validation' if args.retain_checkpoint else 'migration complete; local receipt saved')
+        return 0
+    except (MigrationError, OSError) as error:
+        message = str(error) if isinstance(error, MigrationError) else 'filesystem operation refused'
+        print('ai-control-migrate-names: ' + message, file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

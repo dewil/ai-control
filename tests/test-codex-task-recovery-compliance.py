@@ -41,9 +41,9 @@ class RecoveryCompliance(unittest.TestCase):
         canonical_state = self.f.agent.parent.parent / 'codex-task-state'
         self.f.state.rename(canonical_state)
         self.f.state = canonical_state
-        self.env = dict(self.f.git_env, CLAUDE_AGENTS_DIR=str(self.f.agent.parent),
-            CLAUDE_AGENT_SPOOL_BASE=str(self.f.root / 'spool'),
-            CLAUDE_AGENT_GENERATION='7', CLAUDE_AGENT_ATTEMPT='attempt-1')
+        self.env = dict(self.f.git_env, AI_AGENTS_DIR=str(self.f.agent.parent),
+            AI_AGENT_SPOOL_BASE=str(self.f.root / 'spool'),
+            AI_AGENT_GENERATION='7', AI_AGENT_ATTEMPT='attempt-1')
 
     def cycle(self, controller):
         calls = []
@@ -70,7 +70,7 @@ class RecoveryCompliance(unittest.TestCase):
         boundary.CodexTaskRuntime = RecoveryOnly
         boundary.RuntimeError = fixture_module.runtime_module.RuntimeError
         with mock.patch.dict(os.environ, self.env), mock.patch.dict(sys.modules, {'_codex_task_runtime': boundary}):
-            runner = entry('claude-agent-run', 'second_compliance_runner')
+            runner = entry('ai-agent-run', 'second_compliance_runner')
             self.assertTrue(callable(getattr(runner, 'codex_cycle', None)), 'public codex_cycle is absent')
             result = runner.codex_cycle(str(f.agent), str(f.agent / 'inbox'), f.agent.name, 0)
         self.assertEqual(calls, ['reconcile'], 'reconcile must precede existing inflight infra_wait')
@@ -348,7 +348,7 @@ class RecoveryCompliance(unittest.TestCase):
         spool = self.f.root / 'spool/taskone'
         before_spool = {p.name: p.read_bytes() for p in spool.glob('*.json')}
         for decision in ('approve', 'reject'):
-            result = subprocess.run([str(ROOT / 'bin/claude-agent-answer'), str(self.f.agent),
+            result = subprocess.run([str(ROOT / 'bin/ai-agent-answer'), str(self.f.agent),
                 '--qid', question['qid'], '--' + decision, '--by', 'fixture-late-human'],
                 env=self.env, text=True, capture_output=True, timeout=5)
             self.assertNotEqual(result.returncode, 0)
@@ -405,7 +405,7 @@ class RecoveryCompliance(unittest.TestCase):
         spool_before = {p.name: p.read_bytes() for p in spool.glob('*.json')}
         for decision in ('approve', 'reject'):
             with self.subTest(decision=decision):
-                result = subprocess.run([str(ROOT / 'bin/claude-agent-answer'), str(self.f.agent),
+                result = subprocess.run([str(ROOT / 'bin/ai-agent-answer'), str(self.f.agent),
                     '--qid', question['qid'], '--' + decision, '--by', 'fixture-late-human'],
                     env=self.env, text=True, capture_output=True, timeout=5)
                 self.assertNotEqual(result.returncode, 0)
@@ -415,7 +415,7 @@ class RecoveryCompliance(unittest.TestCase):
     def test_expired_native_permission_card_has_no_active_buttons(self):
         path, question = self.expire_pending()
         with mock.patch.dict(os.environ, self.env):
-            bot = entry('claude-agent-tgbot', 'second_compliance_bot')
+            bot = entry('ai-agent-tgbot', 'second_compliance_bot')
             text, keyboard = bot.question_card(dict(question, agent=self.f.agent.name, project='fixture'))
         buttons = [button for row in keyboard['inline_keyboard'] for button in row]
         self.assertFalse(buttons, 'expired native permission must not offer actionable callback buttons')

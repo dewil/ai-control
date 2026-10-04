@@ -2,43 +2,51 @@
 
 Первый выпуск управляет вопросами и принятием результатов TASK. Код проверен локальными контрактами; публичная установка остаётся отдельной незавершённой проверкой. Запуск, отмена, сессии и diff не входят в него. Принятый результат проходит существующий Control workflow; нажатие не означает немедленный merge или deploy.
 
-Это отдельная установка для Linux/systemd, не автоматическое открытие порта. `install.sh` устанавливает CLI и модули из `scripts.manifest`, но не создаёт web-пользователя, не включает сервисы и не меняет firewall. Для production необходимы административные права: нельзя запускать frontend владельцем Control вместо отсутствующего `claude-panel`.
+Это отдельная установка для Linux/systemd, не автоматическое открытие порта. `install.sh` устанавливает CLI и модули из `scripts.manifest`, но не создаёт web-пользователя, не включает сервисы и не меняет firewall. Для production необходимы административные права: нельзя запускать frontend владельцем Control вместо отсутствующего `ai-panel`.
 
 ## Разделение прав
 
-- `claude-panel` запускает frontend, читает только его приватный auth-файл и пишет TOTP replay state. OAuth, owner home, `/data` и registry ему недоступны.
-- Owner broker запускается владельцем существующего Control. Он читает registry и вызывает только `claude-agent-answer` и `claude-agent-run done-verdict`; peer UID frontend проверяется ядром через `SO_PEERCRED`.
-- Root устанавливает неизменяемый пакет в `/opt/claude-control-web`, unit-файлы и узкую общую группу для socket. Owner binary helpers остаются существующей установленной версией Control.
+- `ai-panel` запускает frontend, читает только его приватный auth-файл и пишет TOTP replay state. OAuth, owner home, `/data` и registry ему недоступны.
+- Owner broker запускается владельцем существующего Control. Он читает registry и вызывает только `ai-agent-answer` и `ai-agent-run done-verdict`; peer UID frontend проверяется ядром через `SO_PEERCRED`.
+- Root устанавливает неизменяемый пакет в `/opt/ai-control-web`, unit-файлы и узкую общую группу для socket. Owner binary helpers остаются существующей установленной версией Control.
 
 Broker использует Python stdlib и существующий Control `yq` для полной проверки YAML spec через ограниченный stdin; JSON spec разбирается stdlib. Frontend использует отдельный venv с `requirements-web.lock`, один uvicorn worker. Frontend ограничен `MemoryMax=256M`; broker не получает этот cap, чтобы не менять бюджеты trusted/native writers. Сессии хранятся в памяти: рестарт требует входа. Использованные TOTP шаги перечитываются под stable private file lock и атомарно записываются и fsync-ятся в отдельный приватный файл до login/reject; рестарт не разрешает повтор кода. В login/reject действует общий лимит10 попыток в минуту. Reject требует нового кода после уже использованного при входе. Rate-limit после рестарта сбрасывается; frontend не должен перезапускаться как способ разблокировки входа.
 
 ## Конкретный host runbook: dwl / UID1000
 
-На текущем хосте владелец Control — `dwl`, UID1000, HOME `/home/dwl`; registry `/home/dwl/.claude-control/agents`, trusted bin `/home/dwl/.local/bin`. Административные действия не выполнены: в текущей среде нет `sudo` доступа. Следующие команды выполняет администратор локально, после проверки финального immutable SHA и выбора HTTPS origin.
+На текущем хосте владелец Control — `dwl`, UID1000, HOME `/home/dwl`; registry `/home/dwl/.ai-control/agents`, trusted bin `/home/dwl/.local/bin`. Administrative шаги выполняет назначенный оператор локально после accepted immutable SHA; origin этого хоста закреплён: `https://llm-web.dewil.ru:18443`. Установка и retained-state acceptance проверяются отдельно от code review.
 
 ### Пакет из принятого commit
 
 Задайте полный SHA, который прошёл независимый review, и путь к git репозиторию. Archive использует только этот commit; изменения рабочего дерева не входят в пакет.
 
 ```bash
-CONTROL_WEB_REPO=/data/git/claude-control-web-tasks
+CONTROL_WEB_REPO=/data/git/claude-control
 CONTROL_WEB_SHA=REPLACE_WITH_REVIEWED_FULL_40_HEX_SHA
-CONTROL_WEB_ORIGIN=https://REPLACE_WITH_CONFIRMED_HTTPS_HOST
+CONTROL_WEB_ORIGIN=https://llm-web.dewil.ru:18443
 [[ "$CONTROL_WEB_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
 [ "$(git -C "$CONTROL_WEB_REPO" rev-parse --verify "$CONTROL_WEB_SHA^{commit}")" = "$CONTROL_WEB_SHA" ] || exit 1
 [ "$(id -u dwl)" = 1000 ] || exit 1
 [ "$(getent passwd dwl | cut -d: -f6)" = /home/dwl ] || exit 1
-sudo test ! -L /opt/claude-control-web || exit 1
-sudo install -d -o root -g root -m 0755 /opt/claude-control-web
+# Полный read-only state/package preflight ДО первого install/account/move.
+sudo test ! -L /var/lib/claude-control-web || exit 1
+sudo test ! -L /var/lib/ai-control-web || exit 1
+if sudo test -e /var/lib/claude-control-web; then
+  sudo test ! -e /var/lib/ai-control-web || exit 1
+  [ "$(sudo stat -c %d /var/lib/claude-control-web)" = "$(sudo stat -c %d /var/lib)" ] || exit 1
+fi
+sudo test ! -e /opt/ai-control-web || exit 1
+sudo test ! -L /opt/ai-control-web || exit 1
+sudo install -d -o root -g root -m 0755 /opt/ai-control-web
 git -C "$CONTROL_WEB_REPO" archive "$CONTROL_WEB_SHA" \
-  bin/claude-control-web bin/_control_web.py bin/_control_web_broker.py \
+  bin/ai-control-web bin/_control_web.py bin/_control_web_broker.py \
   bin/_control_web.html bin/_control_web.css bin/_control_web.js \
-  requirements-web.lock systemd/claude-control-web.service.tmpl \
-  systemd/claude-control-web-broker.service.tmpl | sudo tar -x -C /opt/claude-control-web
-sudo chown -R root:root /opt/claude-control-web
-sudo chmod -R go-w /opt/claude-control-web
-sudo python3 -m venv /opt/claude-control-web/venv
-sudo /opt/claude-control-web/venv/bin/python -m pip install -r /opt/claude-control-web/requirements-web.lock
+  requirements-web.lock systemd/ai-control-web.service.tmpl \
+  systemd/ai-control-web-broker.service.tmpl | sudo tar -x -C /opt/ai-control-web
+sudo chown -R root:root /opt/ai-control-web
+sudo chmod -R go-w /opt/ai-control-web
+sudo python3 -m venv /opt/ai-control-web/venv
+sudo /opt/ai-control-web/venv/bin/python -m pip install -r /opt/ai-control-web/requirements-web.lock
 ```
 
 При повторной установке сначала остановите frontend/broker и сохраните private auth/state, не перезаписывая их пакетом. Пакет и venv root-owned, web UID не может их менять.
@@ -46,14 +54,25 @@ sudo /opt/claude-control-web/venv/bin/python -m pip install -r /opt/claude-contr
 ### Отдельная учётная запись
 
 ```bash
-getent group claude-panel >/dev/null || sudo groupadd --system claude-panel
-id claude-panel >/dev/null 2>&1 || sudo useradd --system --gid claude-panel \
-  --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin claude-panel
-CONTROL_WEB_UID=$(id -u claude-panel)
+getent group ai-panel >/dev/null || sudo groupadd --system ai-panel
+id ai-panel >/dev/null 2>&1 || sudo useradd --system --gid ai-panel \
+  --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ai-panel
+CONTROL_WEB_UID=$(id -u ai-panel)
 [ "$CONTROL_WEB_UID" != 1000 ] && [ "$CONTROL_WEB_UID" != 0 ] || exit 1
-[ "$(id -gn claude-panel)" = claude-panel ] || exit 1
+[ "$(id -gn ai-panel)" = ai-panel ] || exit 1
+# Полный source/target preflight выполнить ДО account/package/state mutation.
+# Нельзя заранее создавать target при существующем legacy state.
 sudo test ! -L /var/lib/claude-control-web || exit 1
-sudo install -d -o claude-panel -g claude-panel -m 0700 /var/lib/claude-control-web
+sudo test ! -L /var/lib/ai-control-web || exit 1
+if sudo test -e /var/lib/claude-control-web; then
+  sudo test ! -e /var/lib/ai-control-web || exit 1
+  [ "$(sudo stat -c %d /var/lib/claude-control-web)" = "$(sudo stat -c %d /var/lib)" ] || exit 1
+  sudo mv -T /var/lib/claude-control-web /var/lib/ai-control-web
+  sudo chown -R ai-panel:ai-panel /var/lib/ai-control-web
+  # Не менять bytes и существующие modes; проверить directory700/files600 локально.
+else
+  sudo test -e /var/lib/ai-control-web || sudo install -d -o ai-panel -g ai-panel -m 0700 /var/lib/ai-control-web
+fi
 ```
 
 Если учётная запись уже существует, проверьте, что это выделенный service account, а не человек или сторонний сервис. Owner не добавляется в web-процесс; broker остаётся владельцем Control, его shared primary group используется только для socket.
@@ -71,11 +90,11 @@ import sys
 values = {
     '@OWNER@': 'dwl', '@OWNER_UID@': '1000', '@OWNER_HOME@': '/home/dwl',
     '@WEB_UID@': str(int(sys.argv[1])),
-    '@REGISTRY@': '/home/dwl/.claude-control/agents',
+    '@REGISTRY@': '/home/dwl/.ai-control/agents',
     '@BIN_DIR@': '/home/dwl/.local/bin',
 }
-for name in ('claude-control-web', 'claude-control-web-broker'):
-    source = Path('/opt/claude-control-web/systemd') / (name + '.service.tmpl')
+for name in ('ai-control-web', 'ai-control-web-broker'):
+    source = Path('/opt/ai-control-web/systemd') / (name + '.service.tmpl')
     text = source.read_text()
     for key, value in values.items():
         text = text.replace(key, value)
@@ -90,30 +109,30 @@ for name in ('claude-control-web', 'claude-control-web-broker'):
     os.chown(target, 0, 0)
     os.chmod(target, 0o644)
 PYRENDER
-sudo systemd-analyze verify /etc/systemd/system/claude-control-web.service \
-  /etc/systemd/system/claude-control-web-broker.service
+sudo systemd-analyze verify /etc/systemd/system/ai-control-web.service \
+  /etc/systemd/system/ai-control-web-broker.service
 sudo systemctl daemon-reload
 ```
 
-Не запускайте services до private enrollment и настройки HTTPS proxy. Broker unit создаёт `/run/claude-control-web` (`dwl:claude-panel`,0750), socket0660. Frontend не читает `/home/dwl` или `/data`; writable только `/var/lib/claude-control-web`. `yq` должен существовать в `/home/dwl/.local/bin` либо системном PATH. Owner systemd user runtime `/run/user/1000` и bus должны уже работать.
+Не запускайте services до private enrollment и настройки HTTPS proxy. Broker unit создаёт `/run/ai-control-web` (`dwl:ai-panel`,0750), socket0660. Frontend не читает `/home/dwl` или `/data`; writable только `/var/lib/ai-control-web`. `yq` должен существовать в `/home/dwl/.local/bin` либо системном PATH. Owner systemd user runtime `/run/user/1000` и bus должны уже работать.
 
 ## Локальный enrollment
 
-Сначала выберите точный HTTPS origin без path/trailing slash. Enrollment выполняется локально от `claude-panel`, до включения сервисов:
+Сначала выберите точный HTTPS origin без path/trailing slash. Enrollment выполняется локально от `ai-panel`, до включения сервисов **только когда auth.json и totp-state.json оба отсутствуют**. Если оба уже сохранены, этот блок пропустить и проверить сохранность bytes/modes/origin локально; ровно один файл или mismatched origin блокирует start, нельзя перезаписывать enrollment:
 
 ```bash
-sudo -u claude-panel /opt/claude-control-web/venv/bin/python /opt/claude-control-web/bin/claude-control-web init-auth \
+sudo -u ai-panel /opt/ai-control-web/venv/bin/python /opt/ai-control-web/bin/ai-control-web init-auth \
   --origin "$CONTROL_WEB_ORIGIN" \
-  --output /var/lib/claude-control-web/auth.json \
-  --totp-state /var/lib/claude-control-web/totp-state.json
+  --output /var/lib/ai-control-web/auth.json \
+  --totp-state /var/lib/ai-control-web/totp-state.json
 ```
 
 Пароль вводится через скрытый терминальный prompt дважды; минимум12 символов. CLI создаёт новые auth/state файлы0600 в owner-only каталоге0700 и не печатает пароль или TOTP secret. Только локально откройте auth-файл разрешённым приватным редактором и добавьте `totp_secret` в свой аутентификатор. Не копируйте файл в чат, облачные заметки, git или `/data`. Два файла должны иметь разные пути. Не удаляйте state для «починки» кода: это разрешит replay. Сброс enrollment — отдельная локальная ротация credentials.
 
 ```bash
-sudo systemd-analyze verify /etc/systemd/system/claude-control-web.service /etc/systemd/system/claude-control-web-broker.service
+sudo systemd-analyze verify /etc/systemd/system/ai-control-web.service /etc/systemd/system/ai-control-web-broker.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now claude-control-web-broker.service claude-control-web.service
+sudo systemctl enable --now ai-control-web-broker.service ai-control-web.service
 ```
 
 При отсутствии административных прав локальное QA возможно; production isolation до выполнения host setup и установленной проверки не считается установленным.
@@ -121,6 +140,39 @@ sudo systemctl enable --now claude-control-web-broker.service claude-control-web
 ## HTTPS и приёмка установленной системы
 
 Frontend слушает только loopback127.0.0.1:8787. HTTPS reverse proxy на точном enrollment origin перенаправляет этот loopback. Установите сертификат и обычное сохранение Host/Origin; приложение не доверяет `X-Forwarded-*` для авторизации. Reverse proxy ограничивает body128KiB и timeout, не кэширует ответы. Web не открывает firewall и не создаёт tunnel автоматически.
+
+TLS terminate выполняет существующий nginx: `/etc/nginx/sites-available/control-web` уже включён symlink в sites-enabled, nginx active, TLS renewal dry-run проверен. До правки сохранить этот exact config в private root checkpoint, не создавать второй conflicting server. Для `llm-web.dewil.ru:18443` действующие certificate paths ниже; содержимое private key не читать/не выводить. Upstream только127.0.0.1:8787. Exact server directives:
+
+```nginx
+server {
+    listen 18443 ssl;
+    server_name llm-web.dewil.ru;
+    ssl_certificate /etc/letsencrypt/live/llm-web.dewil.ru/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/llm-web.dewil.ru/privkey.pem;
+    access_log off;
+    client_max_body_size 128k;
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_set_header Host $http_host;
+        proxy_set_header Origin $http_origin;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 65s;
+        proxy_send_timeout 65s;
+        proxy_no_cache 1;
+        proxy_cache_bypass 1;
+    }
+}
+```
+
+`$http_host` сохраняет `:18443`; нельзя заменять его на `$host`, теряющий port. `Origin` сохраняется из браузерного запроса; приложение проверяет его exact equality с auth origin и не доверяет X-Forwarded-* для допуска. Не создавать новый certificate или SSH tunnel вместо действующей topology. До start: `sudo nginx -t`, systemd-analyze units и проверка no old enabled units. После новых services: `sudo systemctl reload nginx` и read-only public проверки:
+
+```sh
+curl --fail --silent --show-error https://llm-web.dewil.ru:18443/ >/dev/null
+[ "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' https://llm-web.dewil.ru:18443/api/tasks)" = 401 ]
+[ "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' -H 'Host: llm-web.dewil.ru' https://llm-web.dewil.ru:18443/api/tasks)" = 403 ]
+```
+
+Отсутствие port в Host возвращает403 по exact origin contract. Browser phone login/reject использует origin `https://llm-web.dewil.ru:18443`, cookie Secure/HttpOnly/SameSite=Strict и preserved replay state.
 
 Production готов только после проверки публичного адреса, сертификата и следующих сценариев:
 

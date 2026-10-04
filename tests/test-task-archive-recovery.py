@@ -23,18 +23,18 @@ class ArchiveRecovery(unittest.TestCase):
         self.base = Path(self.tmp.name)
         self.mock = self.base / 'mockbin'
         self.mock.mkdir()
-        self.env = dict(os.environ, CLAUDE_AGENTS_DIR=str(self.base/'agents'),
-                        CLAUDE_AGENT_SPOOL_BASE=str(self.base/'spool'),
-                        CLAUDE_RECONCILER_DIR=str(self.base/'reconciler'),
+        self.env = dict(os.environ, AI_AGENTS_DIR=str(self.base/'agents'),
+                        AI_AGENT_SPOOL_BASE=str(self.base/'spool'),
+                        AI_RECONCILER_DIR=str(self.base/'reconciler'),
                         CLAUDE_CONFIG_DIR=str(self.base/'config'),
-                        CLAUDE_RC_PROJECTS_FILE=str(self.base/'projects.yaml'),
-                        CLAUDE_AGENT_ALERT_CMD='/usr/bin/true',
-                        CLAUDE_AGENT_PROBE_CMD='/usr/bin/true',
-                        CLAUDE_AGENT_LESSONS_JOURNAL_DIR=str(self.base/'lessons'),
-                        CLAUDE_AGENT_STOP_GRACE='0', TMPDIR=str(self.base),
+                        AI_RC_PROJECTS_FILE=str(self.base/'projects.yaml'),
+                        AI_AGENT_ALERT_CMD='/usr/bin/true',
+                        AI_AGENT_PROBE_CMD='/usr/bin/true',
+                        AI_AGENT_LESSONS_JOURNAL_DIR=str(self.base/'lessons'),
+                        AI_AGENT_STOP_GRACE='0', TMPDIR=str(self.base),
                         CC_ARCHIVE_FIXTURE=str(self.base),
                         PATH=str(self.mock)+':'+str(ROOT/'bin')+':'+os.environ['PATH'])
-        self.env.pop('CLAUDE_AGENTS_REQUIRE_MOUNT', None)
+        self.env.pop('AI_AGENTS_REQUIRE_MOUNT', None)
         (self.base/'projects.yaml').write_text('{}\n')
         self.system_state('inactive', 3)
         script = '''#!/usr/bin/env python3
@@ -105,9 +105,9 @@ limits: {{ runs_per_day: 100, run_timeout_s: 20 }}
 source: {{ kind: spool, replay_window_h: 72 }}
 workspace: none
 ''')
-        self.cli('claude-rc', 'agent', 'create', name, '--spec', spec, check=True)
+        self.cli('ai-rc', 'agent', 'create', name, '--spec', spec, check=True)
         agent=self.base/'agents'/name
-        self.cli('claude-rc', 'agent', 'stop', name, check=True)
+        self.cli('ai-rc', 'agent', 'stop', name, check=True)
         control=json.loads((agent/'control.json').read_text())
         control['desired']=desired
         (agent/'control.json').write_text(json.dumps(control))
@@ -131,7 +131,7 @@ workspace: none
                     name=f'a{phase}{state}{code}{desired}'
                     agent=self.fixture(phase,desired,name)
                     self.system_state(state,code)
-                    self.cli('claude-agent-run','done-advance',agent)
+                    self.cli('ai-agent-run','done-advance',agent)
                     self.assertTrue(agent.is_dir(), 'archive moved an unsafe agent directory')
                     if phase=='archived':
                         self.assertEqual(json.loads((agent/'done.json').read_text())['archived_at'],STAMP)
@@ -141,7 +141,7 @@ workspace: none
             with self.subTest(phase=phase):
                 agent=self.fixture(phase,name='absent'+phase)
                 self.system_state('inactive',4)
-                self.cli('claude-agent-run','done-advance',agent,check=True)
+                self.cli('ai-agent-run','done-advance',agent,check=True)
                 self.assertFalse(agent.exists(),'proved absent transient unit held archive forever')
                 tomb=self.base/'tombstones'/(agent.name+'.json')
                 self.assertTrue(tomb.exists(),'archive omitted tombstone')
@@ -163,7 +163,7 @@ workspace: none
                     agent=self.fixture(phase,name='absent'+phase+str(index))
                     self.system_state('inactive',4)
                     (self.base/'show-state').write_text(json.dumps(scenario))
-                    self.cli('claude-agent-run','done-advance',agent)
+                    self.cli('ai-agent-run','done-advance',agent)
                     self.assertTrue(agent.is_dir(),'unproved missing unit allowed archive')
                     if phase=='archived':
                         self.assertEqual(json.loads((agent/'done.json').read_text())['archived_at'],STAMP)
@@ -173,12 +173,12 @@ workspace: none
         tomb=self.base/'tombstones'/'archiveone.json'; tomb.parent.mkdir(exist_ok=True)
         dest=self.base/'archive'/('archiveone-'+STAMP)
         tomb.write_text(json.dumps({'name':'archiveone','archived_at':STAMP,'archived_to':str(dest)}))
-        self.cli('claude-agent-run','done-advance',agent,check=True)
+        self.cli('ai-agent-run','done-advance',agent,check=True)
         self.assertFalse(agent.exists())
         self.assertTrue(dest.is_dir())
         self.assertEqual(json.loads((dest/'done.json').read_text())['archived_at'],STAMP)
         self.assertEqual(len(list((self.base/'archive').iterdir())),1)
-        self.cli('claude-agent-run','done-advance',agent)
+        self.cli('ai-agent-run','done-advance',agent)
         self.assertFalse(agent.exists(), 'late retry resurrected the old path')
         self.assertEqual(len(list((self.base/'archive').iterdir())),1)
 
@@ -194,13 +194,13 @@ workspace: none
         agent=self.fixture(desired='paused')
         done=(agent/'done.json').read_text()
         (agent/'done.json').unlink()
-        self.cli('claude-rc','agent','start','archiveone',check=True)
+        self.cli('ai-rc','agent','start','archiveone',check=True)
         return agent,done
 
     def test_INV_TASK_44_reconciler_launch_wins_archive_waits(self):
         agent,done=self.launch_fixture()
         (self.base/'block-launch').touch()
-        launch=subprocess.Popen([str(ROOT/'bin'/'claude-agent-reconciler'),'--once'],
+        launch=subprocess.Popen([str(ROOT/'bin'/'ai-agent-reconciler'),'--once'],
                                 env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         archive=None
         try:
@@ -209,7 +209,7 @@ workspace: none
             control=json.loads((agent/'control.json').read_text())
             control['desired']='stopped'
             (agent/'control.json').write_text(json.dumps(control))
-            archive=subprocess.Popen([str(ROOT/'bin'/'claude-agent-run'),'done-advance',str(agent)],
+            archive=subprocess.Popen([str(ROOT/'bin'/'ai-agent-run'),'done-advance',str(agent)],
                                      env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
             try: archive.communicate(timeout=.3)
             except subprocess.TimeoutExpired: pass
@@ -228,7 +228,7 @@ workspace: none
     def test_INV_TASK_44_cached_reconciler_cannot_launch_after_archive(self):
         agent,done=self.launch_fixture()
         (self.base/'block-query').touch()
-        launch=subprocess.Popen([str(ROOT/'bin'/'claude-agent-reconciler'),'--once'],
+        launch=subprocess.Popen([str(ROOT/'bin'/'ai-agent-reconciler'),'--once'],
                                 env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         try:
             self.wait_marker(self.base/'query-entered',launch)
@@ -236,7 +236,7 @@ workspace: none
             control=json.loads((agent/'control.json').read_text())
             control['desired']='stopped'
             (agent/'control.json').write_text(json.dumps(control))
-            self.cli('claude-agent-run','done-advance',agent,check=True)
+            self.cli('ai-agent-run','done-advance',agent,check=True)
             self.assertFalse(agent.exists(),'fixture archive did not win admission')
             (self.base/'query-release').touch()
             launch.communicate(timeout=10)
@@ -250,7 +250,7 @@ workspace: none
     def test_INV_TASK_44_cached_reconciler_cannot_launch_replacement(self):
         agent,_=self.launch_fixture()
         (self.base/'block-query').touch()
-        launch=subprocess.Popen([str(ROOT/'bin'/'claude-agent-reconciler'),'--once'],
+        launch=subprocess.Popen([str(ROOT/'bin'/'ai-agent-reconciler'),'--once'],
                                 env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         try:
             self.wait_marker(self.base/'query-entered',launch)
@@ -277,7 +277,7 @@ workspace: none
     def test_INV_TASK_44_replaced_incarnation_is_not_archived(self):
         agent=self.fixture('cleaned')
         (self.base/'block-query').touch()
-        archive=subprocess.Popen([str(ROOT/'bin'/'claude-agent-run'),'done-advance',str(agent)],
+        archive=subprocess.Popen([str(ROOT/'bin'/'ai-agent-run'),'done-advance',str(agent)],
                                  env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         try:
             self.wait_marker(self.base/'query-entered',archive)
@@ -302,12 +302,12 @@ workspace: none
     def test_INV_TASK_44_archive_wins_start_cannot_recreate_original(self):
         agent=self.fixture('cleaned')
         (self.base/'block-query').touch()
-        archive=subprocess.Popen([str(ROOT/'bin'/'claude-agent-run'),'done-advance',str(agent)],
+        archive=subprocess.Popen([str(ROOT/'bin'/'ai-agent-run'),'done-advance',str(agent)],
                                  env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         start=None
         try:
             self.wait_marker(self.base/'query-entered',archive)
-            start=subprocess.Popen([str(ROOT/'bin'/'claude-rc'),'agent','start','archiveone'],
+            start=subprocess.Popen([str(ROOT/'bin'/'ai-rc'),'agent','start','archiveone'],
                                    env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
             # The query gate holds archive's admission; start must wait or refuse.
             try:
