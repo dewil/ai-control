@@ -2,7 +2,7 @@
 
 **[Русский](./README.md) · English**
 
-[![shellcheck](https://github.com/dewil/claude-control/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/dewil/claude-control/actions/workflows/shellcheck.yml)
+[![shellcheck](https://github.com/dewil/ai-control/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/dewil/ai-control/actions/workflows/shellcheck.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 Autonomous infrastructure on top of [Claude Code](https://claude.com/claude-code): an always-on control plane that (1) dispatches remote Claude sessions to any of your projects from your phone, and (2) runs a fleet of background agents — with an event spool, budgets, cross-machine handoff, independent-context acceptance.
@@ -165,7 +165,7 @@ This is a manual recommendation: it does not launch an executor or change the cu
 ## Quick start
 
 ```sh
-git clone https://github.com/dewil/claude-control.git ai-control
+git clone https://github.com/dewil/ai-control.git ai-control
 cd ai-control
 ./install.sh
 $EDITOR ~/.ai-control/projects.yaml   # add your projects
