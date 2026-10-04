@@ -45,6 +45,7 @@ class RPC:
         self.list_response = {'data': [{'id': SID, 'cwd': str(root), 'name': 'Synthetic session', 'status': {'type': 'idle'}}], 'nextCursor': None}
         self.read_id = SID
         self.resume_root = None
+        self.metadata_status = None
         self.start_error = None
         self.start_response = {'turn': {'id': TURN}}
         self.before_start = None
@@ -52,7 +53,10 @@ class RPC:
         self.calls.append((method, dict(params)))
         if method in ('thread/read', 'thread/resume'):
             cwd = self.resume_root if method == 'thread/resume' and self.resume_root else self.root
-            return {'thread': {'id': self.read_id, 'cwd': str(cwd)}}
+            metadata = {'id': self.read_id, 'cwd': str(cwd)}
+            if self.metadata_status is not None:
+                metadata['status'] = self.metadata_status
+            return {'thread': metadata}
         if method == 'thread/list':
             return self.list_response
         if method == 'thread/turns/list':
@@ -146,6 +150,41 @@ class SessionChatContract(unittest.TestCase):
         self.rpc.resume_root.mkdir(mode=0o700)
         self.assert_error(self.send(), 'stale')
         self.assertEqual(self.rpc.starts(), [])
+
+    def test_INV_WSESS_07_native_attention_from_active_flags(self):
+        for flag in ('waitingOnApproval', 'waitingOnUserInput'):
+            with self.subTest(flag=flag):
+                status = {'type': 'active', 'activeFlags': [flag]}
+                self.rpc.metadata_status = status
+                self.rpc.list_response['data'][0]['status'] = status
+                self.assertIs(self.chat.history('demo', SID).get('needs_native_attention'), True)
+                self.assertIs(self.chat.list_sessions('demo')['rows'][0].get('needs_native_attention'), True)
+
+    def test_INV_WSESS_07_no_false_native_attention_guarantee(self):
+        for status in (None, {'type': 'idle'}, {'type': 'active', 'activeFlags': []}):
+            with self.subTest(status=status):
+                self.rpc.metadata_status = status
+                self.rpc.list_response['data'][0]['status'] = status or {'type': 'idle'}
+                self.assertNotIn('needs_native_attention', self.chat.history('demo', SID))
+                self.assertNotIn('needs_native_attention', self.chat.list_sessions('demo')['rows'][0])
+
+    def test_INV_WSESS_03_native_arbitrary_client_ids_are_allowed_but_private(self):
+        for client_id in ('native-client-123', None):
+            with self.subTest(client_id=client_id):
+                page = turn(client_id='native-client-123')
+                page['items'][-1]['clientId'] = client_id
+                self.rpc.pages[None] = {'data': [page], 'nextCursor': None}
+                result = self.chat.history('demo', SID)
+                self.assertIn('turns', result)
+                self.assertEqual(result['turns'][0]['items'][-1]['text'], 'synthetic input')
+                self.assertNotIn('clientId', result['turns'][0]['items'][-1])
+
+    def test_INV_WSESS_05_native_client_id_never_confirms_our_unknown_send(self):
+        self.rpc.start_error = TimeoutError()
+        self.send()
+        self.rpc.pages[None] = {'data': [turn(client_id='native-client-123')], 'nextCursor': None}
+        self.assertEqual(self.chat.send_status('demo', SID, MID), self.receipt('delivery_unknown'))
+        self.assertEqual(len(self.rpc.starts()), 1)
 
     def test_INV_WSESS_03_history_exact_rpc_and_allowlist(self):
         self.rpc.pages[None] = {'data': [{'id': TURN, 'status': 'completed', 'items': [
