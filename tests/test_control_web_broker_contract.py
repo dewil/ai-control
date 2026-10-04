@@ -12,6 +12,13 @@ import unittest
 from test_control_web_contract import load_feature, QID
 
 
+def canonical_callback(decisions=None):
+    return dict(attempt_id='attempt-1',thread_id='thread-1',turn_id='turn-1',item_id='item-1',
+        operation_id=QID,task_incarnation='a'*32,generation=1,request_id='request-1',
+        method='item/fileChange/requestApproval',status='pending',payload_fingerprint='b'*64,
+        changes_digest='c'*64,allowed_decisions=decisions or ['approve','reject'])
+
+
 # INV-WEB-03 INV-WEB-04 INV-WEB-05 INV-WEB-06
 class BrokerContract(unittest.TestCase):
     def setUp(self):
@@ -46,6 +53,18 @@ class BrokerContract(unittest.TestCase):
         self.calls.append((args,kwargs))
         if self.timeout:
             raise subprocess.TimeoutExpired(args, 1, stderr='synthetic-oauth-secret')
+        if self.rc == 0 and Path(args[0]).name == 'claude-agent-answer':
+            path = self.agent/'questions'/f'{args[args.index("--qid")+1]}.json'
+            record = json.loads(path.read_text())
+            if not record.get('answered_at'):
+                if '--text' in args:
+                    record['answer'] = args[args.index('--text')+1]
+                else:
+                    record['decision'] = 'approve' if '--approve' in args else 'reject'
+                record['answered_at'] = '2026-10-04T00:00:00Z'
+                record['answered_by'] = 'web'
+            record['event_published_at'] = '2026-10-04T00:00:01Z'
+            self.write('questions/'+QID+'.json',record)
         return subprocess.CompletedProcess(args,self.rc,self.stdout,'synthetic-oauth-secret')
     def snapshot(self):
         return self.backend.snapshot()['tasks']
@@ -114,7 +133,7 @@ class BrokerContract(unittest.TestCase):
         self.assertEqual(self.backend.verdict('task-one',self.generation,'accept',''),{'error':'unavailable'})
     def test_INV_WEB_06_native_permission_advertised_decisions(self):
         self.write('spec.yaml',{'type':'task','engine':'codex','name':'task-one'})
-        self.write('questions/'+QID+'.json',{'qid':QID,'kind':'permission','status':'open','question':'May I?','envelope_key':'request-1','asked_at':1,'engine':'codex','native_callback':{'allowed_decisions':['reject']}})
+        self.write('questions/'+QID+'.json',{'qid':QID,'kind':'permission','status':'open','question':'May I?','envelope_key':'request-1','asked_at':1,'engine':'codex','native_callback':canonical_callback(['reject'])})
         self.assertEqual(self.snapshot()[0]['questions'][0]['allowed_decisions'],['reject'])
         self.assertIn('error',self.backend.answer('task-one',QID,'approve',''))
         self.assertEqual(self.calls,[])
