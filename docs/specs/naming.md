@@ -18,7 +18,7 @@ scripts.manifest перечисляет только canonical installed files. 
 04.10 repository rename позже; code/client-folder naming migration сейчас. Исторические public docs/PR/source references to dewil/claude-control остаются фактическими. Клиентский project identity/source .AI не reinitialize; folder rename делается с учётом sync/workspace ссылок отдельно root/operator шагом и сохранением ID/memory.
 
 ## Известные дыры
-Новые canonical names и offline migration ещё не реализованы. Public deployment ожидает новый SHA, enrollment и installed acceptance. Нет обещания hot migration активной сессии.
+Canonical names и offline migration реализованы и приняты review034a3cd; unsupported retained native evidence явно блокирует перенос до mutation. Public deployment ожидает новый SHA, enrollment и installed acceptance. Нет обещания hot migration активной сессии.
 
 ## Трассируемость
 INV-NAME-01..06 → tests/test_ai_control_names.py и installer/runtime regression suites.
