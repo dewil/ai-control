@@ -4,6 +4,8 @@
 
 ## Полный preflight и остановка
 
+Known closed operation-store и bridge records helper переносит с authoritative validation. Native admission.json, bootstrap-proof.json и lifecycle/*.json пока требуют unsupported-native refusal до первого move; provider history не менять, retained native tasks не сбрасывать ради rollout. Если такие records найдены, runtime остаётся остановлен до supported rebind implementation. Actual target inventory на момент проверки подтвердил нулевые counts; проверить повторно перед apply.
+
 До любого изменения выполнить read-only inventory всех трёх source/destination пар, root web путей и registered worktrees. Первый generic `ai-control-migrate-names --home "$HOME" --dry-run` при известном config symlink/registered worktrees ожидаемо отказывает: это обнаружение topology, а не успешный apply preflight. После operator staging/config preparation повторный helper dry-run обязан пройти. Источники должны принадлежать оператору, иметь mode700, destination отсутствовать; move только внутри одного filesystem. Нельзя объединять параллельно существующие source/destination.
 
 Остановить и disable старые frontend/broker:
