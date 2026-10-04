@@ -1,5 +1,7 @@
 # Проверка canonical ai-control naming
 
+Факт на 04.10.2026: публичный repository переименован в `dewil/ai-control`; локальные client-folder paths `/data/git/claude-control` пока сохранены. Исторические упоминания ниже оставлены как часть записи проверки.
+
 Реализация: canonical commands/templates/default paths/product env namespace, offline migration с authoritative stopped TASK relocation и durable recovery checkpoint. `dewil/claude-control`, provider CLI/config dirs и ccsession/cctask ownership UUID остаются прежними. Root и клиентский folder rollout идут отдельно по [runbook](runbook-ai-control-names.md).
 
 ## Независимые контракты

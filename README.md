@@ -2,7 +2,7 @@
 
 **Русский · [English](./README.en.md)**
 
-[![shellcheck](https://github.com/dewil/claude-control/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/dewil/claude-control/actions/workflows/shellcheck.yml)
+[![shellcheck](https://github.com/dewil/ai-control/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/dewil/ai-control/actions/workflows/shellcheck.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 Автономная инфраструктура поверх [Claude Code](https://claude.com/claude-code): control-плоскость в Telegram, которая (1) раздаёт с телефона удалённые Claude-сессии по всем твоим проектам - включая возврат в любую прошлую сессию по её имени - и (2) держит парк фоновых агентов - с событийной очередью, бюджетами, кросс-машинным handoff, независимой приёмкой результата.
@@ -172,7 +172,7 @@ Long-poll Telegram-бот (getUpdates, не webhook - webhooks режет DPI в
 ## Быстрый старт
 
 ```sh
-git clone https://github.com/dewil/claude-control.git ai-control
+git clone https://github.com/dewil/ai-control.git ai-control
 cd ai-control
 ./install.sh
 $EDITOR ~/.ai-control/projects.yaml   # вписать свои проекты

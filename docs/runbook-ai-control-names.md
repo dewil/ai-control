@@ -1,6 +1,6 @@
 # Переход установленного продукта на ai-control
 
-Выполнять локально после принятия immutable SHA и независимой сверки. Repository `dewil/claude-control` пока сохраняет имя. Секреты и содержимое auth/env не выводить. Administrative шаги выполняет назначенный оператор после accepted SHA.
+Выполнять локально после принятия immutable SHA и независимой сверки. Repository переименован в `dewil/ai-control` 04.10.2026; текущие локальные client-folder paths остаются `/data/git/claude-control`. Секреты и содержимое auth/env не выводить. Administrative шаги выполняет назначенный оператор после accepted SHA.
 
 ## Полный preflight и остановка
 
@@ -284,4 +284,4 @@ Existing `$HOME/.ai-control-naming-transaction` блокирует apply и dry-
 
 ## Приёмка
 
-Проверить package SHA, unit paths/account/socket/modes, остановку старых units и локальное сохранение auth/TOTP. Запустить новые units по web-install, проверить public TLS→HTTP app и browser с телефона. Пройти enrollment/login, retained TASK list/questions/answer/done/cancel и отсутствие потери state. До этих проверок rollout не считать завершённым. Client folder rename и repository rename выполняются отдельно с сохранением project_id/memory/workspace/sync ссылок.
+Проверить package SHA, unit paths/account/socket/modes, остановку старых units и локальное сохранение auth/TOTP. Запустить новые units по web-install, проверить public TLS→HTTP app и browser с телефона. Пройти enrollment/login, retained TASK list/questions/answer/done/cancel и отсутствие потери state. До этих проверок rollout не считать завершённым. Repository rename завершён 04.10.2026. Локальные client-folder paths `/data/git/claude-control` пока остаются прежними; их отдельное переименование требует сохранения project_id/memory/workspace/sync ссылок.
