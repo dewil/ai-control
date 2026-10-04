@@ -40,7 +40,10 @@ if PATH="$NOSD" command -v systemd-run >/dev/null 2>&1; then
   fail "systemd-run виден и в урезанном PATH - песочница собрана неверно"
 else ok; fi
 
-run_rc() { PATH="$NOSD" "$BASH" "$RC" "$@" 2>"$SANDBOX/err" >"$SANDBOX/out"; }
+# Canonical naming: the new default registry is not yet installed on the test host.
+# Supply a private fixture so the existing assertions reach the systemd gate.
+printf 'projects: {}\n' > "$SANDBOX/projects.yaml"
+run_rc() { AI_RC_PROJECTS_FILE="$SANDBOX/projects.yaml" PATH="$NOSD" "$BASH" "$RC" "$@" 2>"$SANDBOX/err" >"$SANDBOX/out"; }
 
 for verb in live up new down reap compact; do
   run_rc "$verb" nosuchproject 00000000-0000-0000-0000-000000000000
