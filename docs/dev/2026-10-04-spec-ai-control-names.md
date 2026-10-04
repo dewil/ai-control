@@ -7,3 +7,7 @@
 Добавить minimal offline user helper ai-control-migrate-names с контрактом из domain spec: preflight всего набора, no overwrite/merge/symlink/crossdevice, active user runtime refusal, dry-run/no-op, сохранение содержимого/прав. Root actions — отдельный конкретный migration runbook, не новая broad root automation. Нельзя мигрировать существующие task texts/specs blind sed или уничтожать TOTP state. Не переписывать historical docs или provider settings.
 
 Критерии приёмки: independent semanticRED; canonical executable/help, manifest и templates; private fixture migration preserving modes/bytes, conflict beforeanymutation, symlink refusal, active manager refusal, repeated no-op; provider dirs untouched. Полные regression groups для затронутых bin/install/tests, pinnedCI и distinct-modelreview. Deployment Mac held до acceptedSHA; после root migration publicTLS→HTTPapp→phone acceptance и retainedtasks proof отдельно.
+
+## Реализация и проверки
+
+Canonical code и offline helper реализованы; recovery checkpoint и trusted stopped metadata проходят независимые naming contracts. Итоговая проверка и честные environment reruns: [validation-ai-control-names.md](../validation-ai-control-names.md). Independent compliance review и live rollout ведутся отдельно; spec не переносится в done до принятой независимой сверки.

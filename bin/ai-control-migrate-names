@@ -100,6 +100,66 @@ def metadata(home):
             result['drain_evidence']['host_state_dir'] = relocate(result['drain_evidence']['host_state_dir'])
         return result
 
+    try:
+        def pairs(items):
+            value = {}
+            for key, item in items:
+                if key in value:
+                    raise MigrationError('duplicate saved settings field')
+                value[key] = item
+            return value
+
+        def constant(_):
+            raise ValueError('non-finite saved settings value')
+
+        commands = {}
+        for path in Path(__file__).parent.iterdir():
+            if path.name == 'ai-control-migrate-names':
+                continue
+            for canonical, legacy in (('ai-agent', 'claude-agent'), ('ai-rc', 'claude-rc'), ('ai-control', 'claude-control')):
+                if path.name == canonical or path.name.startswith(canonical + '-'):
+                    commands[legacy + path.name[len(canonical):]] = path.name
+        for path in (old / 'agents').glob('*/agent-settings.json'):
+            info = path.stat()
+            if info.st_nlink != 1 or info.st_size > 1024 * 1024 or stat.S_IMODE(info.st_mode) != 0o600:
+                raise MigrationError('saved settings must be a private regular file')
+            settings = json.loads(path.read_bytes(), object_pairs_hook=pairs,
+                                  parse_constant=constant)
+            if type(settings) is not dict or type(settings.get('permissions')) is not dict:
+                raise MigrationError('unsupported saved settings schema')
+            permissions = settings['permissions']
+            if type(permissions.get('allow')) is not list or any(type(value) is not str for value in permissions['allow']):
+                raise MigrationError('unsupported saved allow permissions')
+            if 'deny' in permissions and (type(permissions['deny']) is not list or any(type(value) is not str for value in permissions['deny'])):
+                raise MigrationError('unsupported saved deny permissions')
+            if any(value.startswith('Read(') and str(old) + '/' in value for value in permissions.get('deny', [])):
+                raise MigrationError('ambiguous saved product deny permission requires local review')
+            agent = str(path.parent)
+            scopes = {'Read(' + agent + '/**)': 'Read(' + relocate(agent) + '/**)',
+                      'Read(/' + agent + '/**)': 'Read(/' + relocate(agent) + '/**)'}
+            replaced = []
+            for value in permissions['allow']:
+                if value in scopes:
+                    replaced.append(scopes[value])
+                    continue
+                match = re.fullmatch(r'Bash\(([^:\s()]+)(.*)\)', value)
+                if match:
+                    command, suffix = match.groups()
+                    name = Path(command).name
+                    if name in commands and (command == name or Path(command).parent == home / '.local/bin'):
+                        command = command[:-len(name)] + commands[name]
+                        replaced.append('Bash(' + command + suffix + ')')
+                        continue
+                if value.startswith('Read(') and str(old) + '/' in value:
+                    raise MigrationError('ambiguous saved product permission requires local review')
+                replaced.append(value)
+            permissions['allow'] = replaced
+            stage(path, settings)
+    except MigrationError:
+        raise
+    except Exception:
+        raise MigrationError('saved mission settings validation refused') from None
+
     if not state.exists():
         return updates, stores
     try:

@@ -14,20 +14,28 @@ Broker использует Python stdlib и существующий Control `y
 
 ## Конкретный host runbook: dwl / UID1000
 
-На текущем хосте владелец Control — `dwl`, UID1000, HOME `/home/dwl`; registry `/home/dwl/.ai-control/agents`, trusted bin `/home/dwl/.local/bin`. Административные действия не выполнены: в текущей среде нет `sudo` доступа. Следующие команды выполняет администратор локально, после проверки финального immutable SHA и выбора HTTPS origin.
+На текущем хосте владелец Control — `dwl`, UID1000, HOME `/home/dwl`; registry `/home/dwl/.ai-control/agents`, trusted bin `/home/dwl/.local/bin`. Administrative шаги выполняет назначенный оператор локально после accepted immutable SHA; origin этого хоста закреплён: `https://llm-web.dewil.ru:18443`. Установка и retained-state acceptance проверяются отдельно от code review.
 
 ### Пакет из принятого commit
 
 Задайте полный SHA, который прошёл независимый review, и путь к git репозиторию. Archive использует только этот commit; изменения рабочего дерева не входят в пакет.
 
 ```bash
-CONTROL_WEB_REPO=/data/git/ai-control-web-tasks
+CONTROL_WEB_REPO=/data/git/claude-control
 CONTROL_WEB_SHA=REPLACE_WITH_REVIEWED_FULL_40_HEX_SHA
-CONTROL_WEB_ORIGIN=https://REPLACE_WITH_CONFIRMED_HTTPS_HOST
+CONTROL_WEB_ORIGIN=https://llm-web.dewil.ru:18443
 [[ "$CONTROL_WEB_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
 [ "$(git -C "$CONTROL_WEB_REPO" rev-parse --verify "$CONTROL_WEB_SHA^{commit}")" = "$CONTROL_WEB_SHA" ] || exit 1
 [ "$(id -u dwl)" = 1000 ] || exit 1
 [ "$(getent passwd dwl | cut -d: -f6)" = /home/dwl ] || exit 1
+# Полный read-only state/package preflight ДО первого install/account/move.
+sudo test ! -L /var/lib/claude-control-web || exit 1
+sudo test ! -L /var/lib/ai-control-web || exit 1
+if sudo test -e /var/lib/claude-control-web; then
+  sudo test ! -e /var/lib/ai-control-web || exit 1
+  [ "$(sudo stat -c %d /var/lib/claude-control-web)" = "$(sudo stat -c %d /var/lib)" ] || exit 1
+fi
+sudo test ! -e /opt/ai-control-web || exit 1
 sudo test ! -L /opt/ai-control-web || exit 1
 sudo install -d -o root -g root -m 0755 /opt/ai-control-web
 git -C "$CONTROL_WEB_REPO" archive "$CONTROL_WEB_SHA" \
@@ -52,8 +60,19 @@ id ai-panel >/dev/null 2>&1 || sudo useradd --system --gid ai-panel \
 CONTROL_WEB_UID=$(id -u ai-panel)
 [ "$CONTROL_WEB_UID" != 1000 ] && [ "$CONTROL_WEB_UID" != 0 ] || exit 1
 [ "$(id -gn ai-panel)" = ai-panel ] || exit 1
+# Полный source/target preflight выполнить ДО account/package/state mutation.
+# Нельзя заранее создавать target при существующем legacy state.
+sudo test ! -L /var/lib/claude-control-web || exit 1
 sudo test ! -L /var/lib/ai-control-web || exit 1
-sudo install -d -o ai-panel -g ai-panel -m 0700 /var/lib/ai-control-web
+if sudo test -e /var/lib/claude-control-web; then
+  sudo test ! -e /var/lib/ai-control-web || exit 1
+  [ "$(sudo stat -c %d /var/lib/claude-control-web)" = "$(sudo stat -c %d /var/lib)" ] || exit 1
+  sudo mv -T /var/lib/claude-control-web /var/lib/ai-control-web
+  sudo chown -R ai-panel:ai-panel /var/lib/ai-control-web
+  # Не менять bytes и существующие modes; проверить directory700/files600 локально.
+else
+  sudo test -e /var/lib/ai-control-web || sudo install -d -o ai-panel -g ai-panel -m 0700 /var/lib/ai-control-web
+fi
 ```
 
 Если учётная запись уже существует, проверьте, что это выделенный service account, а не человек или сторонний сервис. Owner не добавляется в web-процесс; broker остаётся владельцем Control, его shared primary group используется только для socket.
@@ -99,7 +118,7 @@ sudo systemctl daemon-reload
 
 ## Локальный enrollment
 
-Сначала выберите точный HTTPS origin без path/trailing slash. Enrollment выполняется локально от `ai-panel`, до включения сервисов:
+Сначала выберите точный HTTPS origin без path/trailing slash. Enrollment выполняется локально от `ai-panel`, до включения сервисов **только когда auth.json и totp-state.json оба отсутствуют**. Если оба уже сохранены, этот блок пропустить и проверить сохранность bytes/modes/origin локально; ровно один файл или mismatched origin блокирует start, нельзя перезаписывать enrollment:
 
 ```bash
 sudo -u ai-panel /opt/ai-control-web/venv/bin/python /opt/ai-control-web/bin/ai-control-web init-auth \
@@ -121,6 +140,39 @@ sudo systemctl enable --now ai-control-web-broker.service ai-control-web.service
 ## HTTPS и приёмка установленной системы
 
 Frontend слушает только loopback127.0.0.1:8787. HTTPS reverse proxy на точном enrollment origin перенаправляет этот loopback. Установите сертификат и обычное сохранение Host/Origin; приложение не доверяет `X-Forwarded-*` для авторизации. Reverse proxy ограничивает body128KiB и timeout, не кэширует ответы. Web не открывает firewall и не создаёт tunnel автоматически.
+
+TLS terminate выполняет существующий nginx: `/etc/nginx/sites-available/control-web` уже включён symlink в sites-enabled, nginx active, TLS renewal dry-run проверен. До правки сохранить этот exact config в private root checkpoint, не создавать второй conflicting server. Для `llm-web.dewil.ru:18443` действующие certificate paths ниже; содержимое private key не читать/не выводить. Upstream только127.0.0.1:8787. Exact server directives:
+
+```nginx
+server {
+    listen 18443 ssl;
+    server_name llm-web.dewil.ru;
+    ssl_certificate /etc/letsencrypt/live/llm-web.dewil.ru/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/llm-web.dewil.ru/privkey.pem;
+    access_log off;
+    client_max_body_size 128k;
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_set_header Host $http_host;
+        proxy_set_header Origin $http_origin;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 65s;
+        proxy_send_timeout 65s;
+        proxy_no_cache 1;
+        proxy_cache_bypass 1;
+    }
+}
+```
+
+`$http_host` сохраняет `:18443`; нельзя заменять его на `$host`, теряющий port. `Origin` сохраняется из браузерного запроса; приложение проверяет его exact equality с auth origin и не доверяет X-Forwarded-* для допуска. Не создавать новый certificate или SSH tunnel вместо действующей topology. До start: `sudo nginx -t`, systemd-analyze units и проверка no old enabled units. После новых services: `sudo systemctl reload nginx` и read-only public проверки:
+
+```sh
+curl --fail --silent --show-error https://llm-web.dewil.ru:18443/ >/dev/null
+[ "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' https://llm-web.dewil.ru:18443/api/tasks)" = 401 ]
+[ "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' -H 'Host: llm-web.dewil.ru' https://llm-web.dewil.ru:18443/api/tasks)" = 403 ]
+```
+
+Отсутствие port в Host возвращает403 по exact origin contract. Browser phone login/reject использует origin `https://llm-web.dewil.ru:18443`, cookie Secure/HttpOnly/SameSite=Strict и preserved replay state.
 
 Production готов только после проверки публичного адреса, сертификата и следующих сценариев:
 
