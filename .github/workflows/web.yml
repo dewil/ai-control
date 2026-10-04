@@ -1,0 +1,31 @@
+name: web-contract
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned web dependencies
+        run: |
+          python -m pip install -r requirements-web.lock
+          python -m pip install httpx==0.28.1
+      - name: Existing trusted writer prerequisite
+        run: |
+          curl -fsSL -o yq https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64
+          echo 'fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4  yq' | sha256sum -c -
+          sudo install -m 0755 yq /usr/local/bin/yq
+      - name: Web boundary contracts and writer integration
+        run: |
+          python -m unittest discover -s tests -p 'test_control_web*.py'
+          python -m py_compile bin/_control_web.py bin/_control_web_broker.py bin/claude-control-web
+      - name: Installation regression
+        run: |
+          bash tests/test-install-completeness.sh
+          bash tests/test-install-idempotent.sh
+          bash tests/test-install-macos-legacy.sh
