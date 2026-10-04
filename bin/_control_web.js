@@ -1,13 +1,13 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let csrf = ''; // Session token remains HttpOnly; a reload requests a fresh login.
+let csrf = ''; // Session token remains HttpOnly; reload restores this CSRF from the server.
 let busy = false;
 const drafts = new Map();
 const messages = {invalid_code:'Код уже использован или неверен. Дождитесь нового кода.',unauthorized:'Сеанс завершён или код неверен. Войдите снова.',forbidden:'Запрос не подтверждён. Войдите снова.',rate_limited:'Слишком много попыток. Подождите минуту.',invalid_request:'Проверьте введённые данные.',invalid_or_stale:'Вопрос или результат изменился. Обновите задачи.',stale:'Эта карточка устарела. Обновите задачи.',saved_pending:'Ответ сохранён, доставка пока не завершена. Повторите позже.',unavailable:'Control временно недоступен. Попробуйте ещё раз.'};
 function node(tag,text,cls){const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;}
 function notice(text){$('notice').textContent=text;}
-async function api(path,body){let response;try{response=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',headers:body===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});}catch(_){throw new Error(messages.unavailable);}let data;try{data=await response.json();}catch(_){throw new Error(messages.unavailable);}if(!response.ok){if(response.status===401&&path!=='/api/login')signedOut();const error=new Error(messages[data.error]||messages.unavailable);error.code=data.error;throw error;}return data;}
-function signedOut(){csrf='';$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;}
+async function api(path,body){let response;try{response=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',headers:body===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});}catch(_){throw new Error(messages.unavailable);}let data;try{data=await response.json();}catch(_){throw new Error(messages.unavailable);}if(!response.ok){if(response.status===401&&path!=='/api/login')signedOut();const error=new Error(messages[data.error]||messages.unavailable);error.code=data.error;error.status=response.status;throw error;}return data;}
+function signedOut(){csrf='';$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;}
 function field(parent,key,label,kind='textarea'){const wrap=node('label',label);const input=node(kind);input.maxLength=16000;input.value=drafts.get(key)||'';input.addEventListener('input',()=>drafts.set(key,input.value));wrap.append(input);parent.append(wrap);return input;}
 function button(parent,label,action,cls){const b=node('button',label,cls);b.type='button';b.addEventListener('click',action);parent.append(b);return b;}
 async function mutate(card,path,body){if(busy)return;busy=true;const controls=[...document.querySelectorAll('button')];controls.forEach(b=>b.disabled=true);const status=card.querySelector('.message');status.textContent='Сохраняем…';try{const data=await api(path,body);status.textContent=data.status==='already'?'Решение уже было принято.':'Решение принято.';await refresh();}catch(err){status.textContent=err.message;if(err.code==='saved_pending'){await refresh();notice(err.message);}}finally{busy=false;controls.forEach(b=>b.disabled=false);}}
@@ -48,3 +48,26 @@ async function refresh(){const b=$('refresh');b.disabled=true;notice('Загру
 $('login-form').addEventListener('submit',async event=>{event.preventDefault();if(busy)return;busy=true;const b=event.target.querySelector('button');b.disabled=true;notice('Входим…');try{const data=await api('/api/login',{password:$('password').value,totp:$('login-totp').value});csrf=data.csrf;$('password').value='';$('login-totp').value='';$('login').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;await refresh();}catch(err){notice(err.message);}finally{busy=false;b.disabled=false;}});
 $('refresh').addEventListener('click',refresh);
 $('logout').addEventListener('click',async()=>{try{await api('/api/logout',{});signedOut();drafts.clear();$('cards').replaceChildren();notice('Вы вышли из Control.');}catch(err){notice(err.message);}});
+
+async function restoreSession(){
+  if(busy)return;
+  busy=true;
+  const retry=$('session-retry');
+  retry.hidden=true;retry.disabled=true;
+  $('session-loading').hidden=false;
+  $('login').hidden=true;$('workspace').hidden=true;$('logout').hidden=true;
+  notice('Восстанавливаем сессию…');
+  try{
+    const data=await api('/api/session');
+    if(typeof data.csrf!=='string'||!data.csrf)throw new Error(messages.unavailable);
+    csrf=data.csrf;
+    $('session-loading').hidden=true;
+    $('workspace').hidden=false;$('logout').hidden=false;
+    await refresh();
+  }catch(err){
+    if(err.status===401){signedOut();notice('');}
+    else{notice(err.message+' Повторите восстановление сессии.');retry.hidden=false;}
+  }finally{busy=false;retry.disabled=false;}
+}
+$('session-retry').addEventListener('click',restoreSession);
+restoreSession();
