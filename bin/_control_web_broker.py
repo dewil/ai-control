@@ -15,6 +15,49 @@ NAME = re.compile(r'[a-z][a-z0-9-]{0,30}[a-z0-9]\Z')
 GEN = re.compile(r'[0-9a-f]{8}\Z')
 
 
+# Intentional per-binary copy of the existing Control export policy
+# (claude-agent-tgbot SECRET_RE/redact), without importing bot initialization.
+SECRET_RE = re.compile(
+    r'(?i)((?:api[_-]?key|token|secret|password|authorization)"?\s*[=:]\s*"?'
+    r'(?:bearer\s+)?)[^\s&"]+'
+    r'|(\bbearer\s+)\S+'
+    r'|\b(?:sk|xox[a-z]|ghp|gho|github_pat)-[A-Za-z0-9_-]{8,}'
+    r'|\b[A-Za-z0-9+/_-]{40,}\b')
+_SESSION_LINK_RE = re.compile(r"https://claude\.ai/code/session_[A-Za-z0-9]+")
+_LINK_SLOT = "\x00SL%d\x00"
+
+
+def redact(value):
+    links = []
+    def hold(match):
+        links.append(match.group(0))
+        return _LINK_SLOT % (len(links) - 1)
+    held = _SESSION_LINK_RE.sub(hold, value)
+    result = SECRET_RE.sub(lambda match: (match.group(1) or match.group(2) or "") + "***", held)
+    for index, link in enumerate(links):
+        result = result.replace(_LINK_SLOT % index, link)
+    return result
+
+
+def canonical_callback(callback, saved):
+    if type(callback) is not dict:
+        return False
+    return (
+        all(type(callback.get(key)) is str and callback[key]
+            for key in ('attempt_id', 'thread_id', 'turn_id', 'item_id'))
+        and valid_qid(callback.get('operation_id'))
+        and type(callback.get('task_incarnation')) is str
+        and bool(re.fullmatch(r'[0-9a-f]{32}', callback['task_incarnation']))
+        and type(callback.get('generation')) is int and callback['generation'] > 0
+        and (type(callback.get('request_id')) is int or
+             (type(callback.get('request_id')) is str and bool(callback['request_id'])))
+        and callback.get('method') == 'item/fileChange/requestApproval'
+        and callback.get('status') in (('pending', 'answered') if saved else ('pending',))
+        and all(type(callback.get(key)) is str and re.fullmatch(r'[0-9a-f]{64}', callback[key])
+                for key in ('payload_fingerprint', 'changes_digest'))
+        and callback.get('allowed_decisions') in (['reject'], ['approve', 'reject']))
+
+
 def valid_agent(value):
     return type(value) is str and bool(NAME.fullmatch(value))
 
@@ -88,20 +131,54 @@ class RegistryBackend:
     def _root(self):
         return os.open(self.registry, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 
+    def _raw_question(self, agent, qid):
+        root = self._root()
+        try:
+            fd = _dir(root, agent)
+            try:
+                qfd = _dir(fd, 'questions')
+                try:
+                    return _read(qfd, qid + '.json')
+                finally:
+                    os.close(qfd)
+            finally:
+                os.close(fd)
+        finally:
+            os.close(root)
+
     def _question(self, fd, qid, engine):
         doc = _read(fd, qid + '.json')
         if doc.get('qid') != qid or doc.get('kind') not in ('info', 'permission') or doc.get('status') not in ('open', 'closed'):
             raise ValueError('invalid question')
-        allowed = []
+        saved = doc.get('answered_at') is not None
+        published = doc.get('event_published_at') is not None
+        if saved and (not valid_text(doc['answered_at'], True) or not valid_text(doc.get('answered_by'), True)):
+            raise ValueError('invalid saved answer')
+        if published and not valid_text(doc['event_published_at'], True):
+            raise ValueError('invalid publication')
+        allowed, saved_answer, saved_decision = [], '', None
         if doc['kind'] == 'permission':
             allowed = ['approve', 'reject']
+            if saved:
+                saved_decision = doc.get('decision')
+                if saved_decision not in allowed:
+                    raise ValueError('invalid saved decision')
             if engine == 'codex' or doc.get('native_callback') is not None:
                 callback = doc.get('native_callback')
-                if type(callback) is not dict or callback.get('allowed_decisions') not in (['reject'], ['approve', 'reject']):
+                if engine != 'codex' or doc.get('engine') != 'codex' or not canonical_callback(callback, saved):
                     raise ValueError('invalid callback')
                 allowed = callback['allowed_decisions']
+                if saved and saved_decision not in allowed:
+                    raise ValueError('invalid saved native decision')
+        elif doc.get('native_callback') is not None:
+            raise ValueError('invalid callback kind')
+        elif saved:
+            saved_answer = redact(_field(doc, 'answer'))
         return {'qid': qid, 'kind': doc['kind'], 'status': doc['status'],
-                'question': _field(doc, 'question'), 'allowed_decisions': allowed}
+                'question': redact(_field(doc, 'question')),
+                'allowed_decisions': [] if saved or doc['status'] != 'open' else allowed,
+                'answered': saved, 'pending_delivery': saved and not published,
+                'saved_answer': saved_answer, 'saved_decision': saved_decision}
 
     def _task(self, root, name):
         fd = _dir(root, name)
@@ -144,11 +221,13 @@ class RegistryBackend:
             if done is not None:
                 key = _field(done, 'envelope_key')
                 commit = _field(done, 'commit_sha') if done.get('commit_sha') is not None else ''
+                if commit and not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', commit):
+                    raise ValueError('invalid commit')
                 result = {'generation': hashlib.sha256(('done-gen:' + key + ':' + commit).encode()).hexdigest()[:8],
-                          'state': _field(done, 'state'), 'summary': _field(done, 'summary'),
+                          'state': redact(_field(done, 'state')), 'summary': redact(_field(done, 'summary')),
                           'commit_sha': commit, 'finalized': done.get('finalized') is True}
-            return {'agent': name, 'name': _field(spec, 'name', name), 'engine': engine,
-                    'state': _field(state, 'phase', 'unknown'), 'summary': _field(state, 'status_line'),
+            return {'agent': name, 'name': redact(_field(spec, 'name', name)), 'engine': engine,
+                    'state': redact(_field(state, 'phase', 'unknown')), 'summary': redact(_field(state, 'status_line')),
                     'questions': questions, 'result': result}
         finally:
             os.close(fd)
@@ -198,18 +277,35 @@ class RegistryBackend:
         return self.runner(argv, shell=False, capture_output=True, text=True, timeout=60)
 
     def answer(self, agent, qid, decision, text):
-        if not valid_agent(agent) or not valid_qid(qid) or decision not in ('text', 'approve', 'reject') or not valid_text(text, decision == 'text'):
+        if not valid_agent(agent) or not valid_qid(qid) or decision not in ('text', 'approve', 'reject', 'recover') or not valid_text(text, decision == 'text') or (decision == 'recover' and text != ''):
             return {'error': 'invalid_or_stale'}
         try:
             task = self._checked_task(agent)
             q = next((q for q in task['questions'] if q['qid'] == qid), None)
-            if q is None or q['status'] != 'open' or (decision == 'text' and q['kind'] != 'info') or (decision != 'text' and decision not in q['allowed_decisions']):
+            if q is None or q['status'] != 'open':
+                return {'error': 'invalid_or_stale'}
+            if decision == 'recover':
+                if not q['answered']:
+                    return {'error': 'invalid_or_stale'}
+            elif (decision == 'text' and q['kind'] != 'info') or (decision != 'text' and q['kind'] != 'permission'):
+                return {'error': 'invalid_or_stale'}
+            elif not q['answered'] and decision != 'text' and decision not in q['allowed_decisions']:
                 return {'error': 'invalid_or_stale'}
             args = [os.path.join(self.bin_dir, 'claude-agent-answer'), os.path.join(self.registry, agent), '--qid', qid]
             args += ['--text', text] if decision == 'text' else ['--' + decision]
             args += ['--by', 'web']
             result = self._run(args)
-            return {0: {'status': 'applied'}, 1: {'error': 'invalid_or_stale'}, 2: {'error': 'invalid_or_stale'}, 7: {'error': 'saved_pending'}}.get(result.returncode, {'error': 'unavailable'})
+            if result.returncode != 0:
+                return {1: {'error': 'invalid_or_stale'}, 2: {'error': 'invalid_or_stale'}, 7: {'error': 'saved_pending'}}.get(result.returncode, {'error': 'unavailable'})
+            # The writer owns the durable first answer, including a racing caller.
+            # A successful publication must not falsely confirm later client text.
+            original = self._raw_question(agent, qid)
+            if original.get('qid') != qid or original.get('kind') != q['kind'] or original.get('answered_at') is None:
+                return {'error': 'unavailable'}
+            if original.get('event_published_at') is None:
+                return {'error': 'saved_pending'}
+            matching = original.get('answer') == text if decision == 'text' else original.get('decision') == decision
+            return {'status': 'already' if q['answered'] or decision == 'recover' or not matching else 'applied'}
         except (OSError, ValueError, TypeError, subprocess.SubprocessError):
             return {'error': 'unavailable'}
 
