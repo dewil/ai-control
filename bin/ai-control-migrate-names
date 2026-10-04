@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 from _codex_task_store import CodexTaskOperationStore
+from _codex_task_bridge import CodexTaskBridge, TaskBinding
 
 ROOTS = (('.claude-control', '.ai-control'),
          ('.config/claude-control', '.config/ai-control'),
@@ -198,6 +199,7 @@ def metadata(home):
             agent = Path(before['agent_dir'])
             if not agent.is_relative_to(old / 'agents'):
                 raise MigrationError('TASK agent outside product registry')
+            bridges = []
             changed = json.loads(json.dumps(before))
             changed['agent_dir'] = relocate(changed['agent_dir'])
             for opid, op in before['operations'].items():
@@ -217,6 +219,14 @@ def metadata(home):
                 identity = json.loads(identity_path.read_bytes())
                 identity['directories'] = {relocate(key): value for key, value in identity['directories'].items()}
                 stage(identity_path, identity)
+                bridge_path = host.parent / 'bridge/journal.json'
+                if bridge_path.exists():
+                    binding = dict(task_incarnation=op['task_incarnation'], event_key=op['event_key'],
+                                   agent_dir=str(agent), thread_id=op['thread_id'], turn_id=op['turn_id'])
+                    bridge = validate_bridge(bridge_path, binding)
+                    bridge['binding']['agent_dir'] = relocate(str(agent))
+                    stage(bridge_path, bridge)
+                    bridges.append((relocate(str(bridge_path)), bridge['binding']))
                 changed['operations'][opid] = operation(op)
                 envelope_paths = [path for folder in ('inflight', 'done', 'pending', 'dlq')
                                   for path in (agent / 'inbox' / folder).glob('*.json')]
@@ -233,12 +243,19 @@ def metadata(home):
                 if not found:
                     raise MigrationError('TASK envelope not found')
             stage(directory / 'index.json', changed)
-            stores.append((relocate(str(agent)), relocate(str(state))))
+            stores.append((relocate(str(agent)), relocate(str(state)), bridges))
         return updates, stores
     except MigrationError:
         raise
     except Exception:
         raise MigrationError('TASK authoritative metadata validation refused') from None
+
+
+def validate_bridge(path, binding):
+    bridge = CodexTaskBridge(Path(path).parent, TaskBinding(**binding),
+                             guard=lambda *args, **kwargs: None,
+                             writer=lambda *args, **kwargs: None)
+    return bridge._read()
 
 
 def replace_private(path, payload, mode):
@@ -336,9 +353,11 @@ def apply(home, planned, updates, stores, retain_checkpoint=False):
             destination = home / '.ai-control' / path.relative_to(home / '.claude-control')
             replace_private(destination, payload, mode)
             changed.append((destination, original, mode))
-        for agent, state in stores:
+        for agent, state, bridges in stores:
             if CodexTaskOperationStore(agent, state_root=state).snapshot(deadline=time.monotonic() + 10)['reconciliation_required']:
                 raise MigrationError('relocated TASK authority refused')
+            for path, binding in bridges:
+                validate_bridge(path, binding)
         runtime = home / '.ai-control'
         if not runtime.exists():
             runtime.mkdir(mode=0o700)
@@ -373,11 +392,15 @@ def apply(home, planned, updates, stores, retain_checkpoint=False):
             for path, (original, _, mode) in updates.items():
                 if path.read_bytes() != original or stat.S_IMODE(path.stat().st_mode) != mode:
                     raise MigrationError('rollback metadata verification refused')
-            for agent, state in stores:
+            for agent, state, bridges in stores:
                 old_agent = str(home / '.claude-control') + agent[len(str(home / '.ai-control')):]
                 old_state = str(home / '.claude-control') + state[len(str(home / '.ai-control')):]
                 if CodexTaskOperationStore(old_agent, state_root=old_state).snapshot(deadline=time.monotonic() + 10)['reconciliation_required']:
                     raise MigrationError('rollback TASK authority refused')
+                for path, binding in bridges:
+                    restored = dict(binding, agent_dir=old_agent)
+                    old_path = str(home / '.claude-control') + path[len(str(home / '.ai-control')):]
+                    validate_bridge(old_path, restored)
             clear_checkpoint(recovery)
         except Exception:
             raise MigrationError('migration failed; recovery checkpoint retained, local review required') from None
