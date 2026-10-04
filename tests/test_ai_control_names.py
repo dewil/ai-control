@@ -62,7 +62,9 @@ class NamingContract(unittest.TestCase):
             texts.append(text)
             for legacy in ('.claude-control', '.config/claude-control',
                            '.local/share/claude-control', 'CLAUDE_CONTROL_',
-                           'CLAUDE_RC_', 'CLAUDE_AGENTS_DIR'):
+                           'CLAUDE_RC_', 'CLAUDE_AGENTS_', 'CLAUDE_AGENT_',
+                           'CLAUDE_RECONCILER_', 'CLAUDE_TGBOT_', 'CLAUDE_HARVEST_',
+                           'CLAUDE_EVENT_', 'CLAUDE_BACKUP_ENV'):
                 self.assertNotIn(legacy, text, f'legacy product default/env in {name}')
         combined = '\n'.join(texts)
         for canonical in ('.ai-control', '.config/ai-control',
@@ -76,7 +78,9 @@ class NamingContract(unittest.TestCase):
             with self.subTest(template=path.name):
                 text = path.read_text()
                 for old in ('claude-control', 'claude-agent', 'claude-rc',
-                            'CLAUDE_CONTROL_', 'CLAUDE_RC_', 'CLAUDE_AGENTS_DIR'):
+                            'CLAUDE_CONTROL_', 'CLAUDE_RC_', 'CLAUDE_AGENTS_', 'CLAUDE_AGENT_',
+                           'CLAUDE_RECONCILER_', 'CLAUDE_TGBOT_', 'CLAUDE_HARVEST_',
+                           'CLAUDE_EVENT_', 'CLAUDE_BACKUP_ENV'):
                     self.assertNotIn(old, path.name + '\n' + text)
         self.assertTrue((ROOT / 'systemd/ai-control-web.service.tmpl').is_file(), 'missing canonical web template')
         self.assertTrue((ROOT / 'systemd/ai-control-web-broker.service.tmpl').is_file(), 'missing canonical broker template')
