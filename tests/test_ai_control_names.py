@@ -227,11 +227,28 @@ if 'list-units' in sys.argv:
         self.assertEqual(json.loads(actual_path.read_text()), expected)
         self.assertEqual(stat.S_IMODE(actual_path.stat().st_mode), 0o600)
 
+    def test_generated_double_slash_read_scope_and_blanket_bash_are_preserved(self):
+        path, settings = self.saved_mission_settings()
+        old_agent = path.parent
+        settings['permissions']['allow'][0] = 'Read(//' + str(old_agent).strip('/') + '/**)'
+        settings['permissions']['allow'].append('Bash')
+        path.write_text(json.dumps(settings))
+        result = self.run_migration()
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+        new_agent = self.home / '.ai-control/agents/taskone'
+        expected = json.loads(json.dumps(settings))
+        expected['permissions']['allow'][:3] = ['Read(//' + str(new_agent).strip('/') + '/**)',
+                                               'Bash(ai-agent-ask:*)', 'Bash(ai-agent-done:*)']
+        self.assertEqual(json.loads((new_agent / 'agent-settings.json').read_text()), expected)
+
     def test_malformed_known_mission_settings_refuse_before_any_move(self):
-        path, _ = self.saved_mission_settings()
-        for malformed in ('{', '[]', '{"permissions":{"allow":"Read(*)","deny":[]}}',
-                          '{"permissions":{"allow":[true],"deny":[]}}'):
+        for number, malformed in enumerate(('{', '[]', '{"permissions":{"allow":"Read(*)","deny":[]}}',
+                                             '{"permissions":{"allow":[true],"deny":[]}}')):
             with self.subTest(malformed=malformed):
+                self.home = self.private / ('malformed-case-' + str(number))
+                self.home.mkdir(mode=0o700)
+                self.env['HOME'] = str(self.home)
+                path, _ = self.saved_mission_settings()
                 path.write_text(malformed)
                 before = snapshot(self.home)
                 self.assertNotEqual(self.run_migration().returncode, 0)
