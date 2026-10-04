@@ -29,3 +29,10 @@ Combined synthetic config pointer/convenience symlinks/private venv/Git worktree
 Дополнительный fault suite ещё выполняется; известен один S16 generation failure. Бounded synthetic reproduction: текущий и baseline b321374 isolated S16 проходят (6/0); baseline с задержкой до kill воспроизводит тот же failure (5/1), когда оба события завершились до kill и assertion проверяет generation до следующего recon pass. Runtime/reconciler совпадают с baseline после точного lexical naming normalization. Это исходный fixture timing gap; assertions и production алгоритм не изменялись. Полный fault результат пока не объявляется GREEN. До accepted review и public phone/retained TASK acceptance production deployment не считается подтверждённым этой проверкой.
 
 Итоговая code/spec/runbook acceptance: PASS на034a3cdeb23794e76d773b703562444b66ab7eb8, production651e5a9 неизменен. CI/merge и installed public acceptance следуют отдельно.
+
+
+## Operator topology follow-up after accepted naming PR
+
+Full-root deployment inventory corrected the earlier agent-only plan: there are five linked Git markers, three external-project agent worktrees and two dirty control-owned cache worktrees whose nonbare common repositories move inside canon/repos. The earlier three-entry proof did not cover that cache topology. The helper still refuses remaining markers; no production code change is required.
+
+A private five-entry synthetic proof validates the public plan generator and both forward/rollback flows with three external agent repositories plus two moving internal cache repositories. All five retain dirty tracked/untracked bytes and modes, branch/HEAD/status, work directory dev/inode and exact registration. The proof observes broken staged cache pointers after the root moves, repairs them from the canonical common repository before final moves, and repairs them again from the original repository after rollback. Both modes pass; an independent follow-up review of this docs-only correction remains pending. The existing 28 naming contracts/84 regression groups are not rerun for documentation changes.
