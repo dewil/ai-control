@@ -1,7 +1,7 @@
 # Canonical naming ai-control
 
 ## Границы
-Пользователь04.10 требует новые команды и пути сразу правильно. Repo dewil/claude-control остаётся до отдельного решения; транспорт SSH и TLS18443 не меняются. Продукт runtime/install/templates/config/doc теперь ai-control. Исторические документы не переписывать; актуальные runbooks и README обновляются. CLI провайдеров claude/codex, их OAuth/config dirs .claude/.codex и model ids не переименовывать.
+Пользователь04.10 требует новые команды и пути сразу правильно. Продукт runtime/install/templates/config/doc теперь ai-control. Исторические документы не переписывать; актуальные runbooks и README обновляются. CLI провайдеров claude/codex, их OAuth/config dirs .claude/.codex и model ids не переименовывать.
 
 ## Инварианты
 INV-NAME-01: canonical исполняемые имена bin/claude-control*→ai-control*, bin/claude-agent*→ai-agent*, bin/claude-rc*→ai-rc*. Codex CLI/voice-report/helpers остаются. Internal references, templates, manifest, CI/test fixtures используют новые имена; старые wrapper/symlink aliases не устанавливаются. Регрессии существующих алгоритмов сохраняются, mechanical fixture updates допускаются с указанием причины.
@@ -15,7 +15,9 @@ INV-NAME-06: действующие TASK data не переписываются 
 scripts.manifest перечисляет только canonical installed files. install/uninstall согласованы с new templates/dirs/env names. Новый migration helper установлен через manifest. Старые installation artifacts очищаются по reviewable runbook после receipt/new version validation, не blanket rm. Existing tests updated mechanically for canonical names and public env selectors; assertions не ослабляются. Existing test groups all run; independent naming tests cover CLI/manifest/template consistency, default paths, inert migration preflight/conflict/symlink/repeat/mode-preservation/dryrun/active-runtime, provider dirs unchanged, web paths and origin port.
 
 ## Решения
-04.10 repository rename позже; code/client-folder naming migration сейчас. Исторические public docs/PR/source references to dewil/claude-control остаются фактическими. Клиентский project identity/source .AI не reinitialize; folder rename делается с учётом sync/workspace ссылок отдельно root/operator шагом и сохранением ID/memory.
+04.10 repository rename отложен до отдельного решения; code/client-folder naming migration выполняется отдельно. Исторические public docs/PR/source references to dewil/claude-control сохраняются как исторические факты. Клиентский project identity/source .AI не reinitialize; переименование клиентской папки `/data/sync/obs/dewil/Work/claude-control` выполняется отдельным root/operator шагом с учётом sync/workspace ссылок и сохранением ID/memory.
+
+Позднее пользователь явно решил переименовать GitHub repository; rename в `dewil/ai-control` завершён 04.10.2026. Каталог кода `/data/git/claude-control` и клиентская папка `/data/sync/obs/dewil/Work/claude-control` пока сохранены под прежними путями.
 
 ## Известные дыры
 Canonical names и offline migration реализованы и приняты review034a3cd; unsupported retained native evidence явно блокирует перенос до mutation. Public deployment ожидает новый SHA, enrollment и installed acceptance. Нет обещания hot migration активной сессии.
