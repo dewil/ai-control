@@ -22,7 +22,21 @@ function markdownHref(raw){
   if(!absolute&&(/^[^/?#]*:/.test(raw)||/^[^/?#]*:/.test(decoded)))return null;
   try{const url=new URL(raw,location.href);if(!['http:','https:'].includes(url.protocol)||url.username||url.password||(!absolute&&url.origin!==location.origin))return null;return url.href;}catch(_){return null;}
 }
+function markdownHasRawHtml(text){
+  for(let i=0;i<text.length;i++){
+    if(text[i]==='`'){
+      if(text[i+1]==='`'){while(text[i+1]==='`')i++;continue;}
+      const end=text.indexOf('`',i+1);if(end>i+1){i=end;continue;}
+    }
+    if(text[i]==='<'&&/^<\/?[a-zA-Z!]/.test(text.slice(i,i+3)))return true;
+  }
+  return false;
+}
 function markdownInline(parent,text,depth=0,budget={left:text.length*24+1}){
+  // Conservative subset fallback: an entire prose block with raw HTML stays
+  // literal, including attributes, body markers, comments and quoted '>' chars.
+  // Single-backtick code is skipped by detection, and ordinary '<3' is prose.
+  if(markdownHasRawHtml(text)){parent.append(document.createTextNode(text));return;}
   if(depth>=8){parent.append(document.createTextNode(text));return;}
   let plain='',i=0;
   const flush=()=>{if(plain){parent.append(document.createTextNode(plain));plain='';}};
@@ -84,6 +98,10 @@ function renderMarkdown(text){
       if(end===lines.length){box.append(node('p',lines.slice(i).join('\n')));break;}
       const language=fence[2].trim();if(language)box.append(node('span',language,'code-language'));
       const pre=node('pre');pre.append(node('code',lines.slice(i+1,end).join('\n')+(end>i+1?'\n':'')));box.append(pre);i=end+1;continue;
+    }
+    if(markdownHasRawHtml(line)){
+      const literal=[line];i++;while(i<lines.length&&lines[i].trim())literal.push(lines[i++]);
+      box.append(node('p',literal.join('\n')));continue;
     }
     const heading=/^ {0,3}(#{1,6})[ \t]+(.+)$/.exec(line);
     if(heading){box.append(inline(node('h'+heading[1].length),heading[2]));i++;continue;}
@@ -172,8 +190,41 @@ function mergeHistory(key,data,olderAnchor){const state=normalizeHistoryState(ke
 function scrollScopeMatches(project,sid,generation){return activeSelection(project,sid,generation)&&document.visibilityState==='visible';}
 function scrollToDocumentBottom(){clearHistoryScrollSlack();const root=document.documentElement;const body=document.body;const height=Math.max(root?root.scrollHeight:0,body?body.scrollHeight:0);window.scrollTo(0,Math.max(0,height-window.innerHeight));}
 function documentMaxScroll(){const root=document.documentElement;const body=document.body;return Math.max(0,Math.max(root?root.scrollHeight:0,body?body.scrollHeight:0)-window.innerHeight);}
-function captureHistoryScroll(project,sid,generation,older){if(!scrollScopeMatches(project,sid,generation))return null;const initial=initialScrollTarget&&initialScrollTarget.project===project&&initialScrollTarget.sid===sid&&initialScrollTarget.generation===generation;if(initial&&!older)return {kind:'bottom',initial:true};const distance=documentMaxScroll()-window.scrollY;const pinned=pinnedHistoryScope&&pinnedHistoryScope.project===project&&pinnedHistoryScope.sid===sid&&pinnedHistoryScope.generation===generation&&historyScrollSlack>0;if(!older&&(!pinned&&distance<=80||pinned&&historyScrollIntent&&distance<=80)){historyScrollIntent=false;return {kind:'bottom'};}historyScrollIntent=false;for(const article of $('chat-items').querySelectorAll('article.chat-message')){const rect=article.getBoundingClientRect();if(rect.bottom>0&&rect.top<window.innerHeight)return {kind:'anchor',turnId:article.dataset.turnId,itemId:article.dataset.itemId,top:rect.top,y:window.scrollY};}return {kind:'position',y:window.scrollY};}
-function restoreHistoryScroll(decision,project,sid,generation){if(!decision||!scrollScopeMatches(project,sid,generation))return;if(decision.kind==='bottom'){scrollToDocumentBottom();if(decision.initial)initialScrollTarget=null;return;}const findAnchor=()=>decision.kind==='anchor'?[...$('chat-items').querySelectorAll('article.chat-message')].find(article=>article.dataset.turnId===decision.turnId&&article.dataset.itemId===decision.itemId):null;const anchor=findAnchor();let target=anchor?Math.max(0,window.scrollY+anchor.getBoundingClientRect().top-decision.top):Math.max(0,decision.y);const root=document.documentElement;const body=document.body;let maxHeight=Math.max(root?root.scrollHeight:0,body?body.scrollHeight:0);let naturalMax=Math.max(0,maxHeight-window.innerHeight-historyScrollSlack);setHistoryScrollSlack(Math.max(0,target-naturalMax));window.scrollTo(0,target);for(let i=0;i<3&&anchor;i++){const difference=anchor.getBoundingClientRect().top-decision.top;if(Math.abs(difference)<=0.5)break;target=Math.max(0,window.scrollY+difference);maxHeight=Math.max(root?root.scrollHeight:0,body?body.scrollHeight:0);const maxScroll=Math.max(0,maxHeight-window.innerHeight);if(target>maxScroll&&historyScrollSlack<window.innerHeight)setHistoryScrollSlack(historyScrollSlack+Math.min(window.innerHeight-historyScrollSlack,target-maxScroll+1));window.scrollTo(0,target);}if(historyScrollSlack){pinnedHistoryScope={project,sid,generation};historyScrollIntent=false;}else pinnedHistoryScope=null;}
+function markdownTextNodes(article){
+  const content=article.querySelector('.markdown');if(!content)return null;
+  const walker=document.createTreeWalker(content,NodeFilter.SHOW_TEXT),entries=[];let text='',part;
+  while((part=walker.nextNode())){if(text.length+part.length>8000)return null;entries.push({node:part,start:text.length});text+=part.textContent;}
+  return {entries,text};
+}
+function markdownCharRange(part,offset){const range=document.createRange();range.setStart(part,offset);range.setEnd(part,offset+1);return range;}
+function captureMarkdownAnchor(article){
+  const content=markdownTextNodes(article);if(!content)return null;
+  for(const entry of content.entries){
+    const part=entry.node;if(!part.length||!part.textContent.trim())continue;
+    const whole=document.createRange();whole.selectNodeContents(part);const rect=whole.getBoundingClientRect();
+    if(rect.bottom<=0||rect.top>=window.innerHeight)continue;
+    // Text-node character positions follow their rendered lines. Find the first
+    // visible line without measuring every character of a long paragraph/code.
+    let low=0,high=part.length-1;
+    while(low<high){const mid=Math.floor((low+high)/2);if(markdownCharRange(part,mid).getBoundingClientRect().bottom<=0)low=mid+1;else high=mid;}
+    for(let offset=low;offset<Math.min(part.length,low+64);offset++){
+      if(/\s/.test(part.textContent[offset]))continue;
+      const point=markdownCharRange(part,offset).getBoundingClientRect();if(point.bottom<=0||point.top>=window.innerHeight)continue;
+      const index=entry.start+offset,context=content.text.slice(index,index+48);let occurrence=0,previous=-1;
+      while((previous=content.text.indexOf(context,previous+1))>=0&&previous<index)occurrence++;
+      return {context,occurrence,top:point.top};
+    }
+  }
+  return null;
+}
+function resolveMarkdownAnchor(article,anchor){
+  if(!anchor)return null;const content=markdownTextNodes(article);if(!content)return null;
+  let index=-1;for(let i=0;i<=anchor.occurrence;i++){index=content.text.indexOf(anchor.context,index+1);if(index<0)return null;}
+  const entry=content.entries.find(entry=>index>=entry.start&&index<entry.start+entry.node.length);
+  return entry?markdownCharRange(entry.node,index-entry.start):null;
+}
+function captureHistoryScroll(project,sid,generation,older){if(!scrollScopeMatches(project,sid,generation))return null;const initial=initialScrollTarget&&initialScrollTarget.project===project&&initialScrollTarget.sid===sid&&initialScrollTarget.generation===generation;if(initial&&!older)return {kind:'bottom',initial:true};const distance=documentMaxScroll()-window.scrollY;const pinned=pinnedHistoryScope&&pinnedHistoryScope.project===project&&pinnedHistoryScope.sid===sid&&pinnedHistoryScope.generation===generation&&historyScrollSlack>0;if(!older&&(!pinned&&distance<=80||pinned&&historyScrollIntent&&distance<=80)){historyScrollIntent=false;return {kind:'bottom'};}historyScrollIntent=false;for(const article of $('chat-items').querySelectorAll('article.chat-message')){const rect=article.getBoundingClientRect();if(rect.bottom>0&&rect.top<window.innerHeight)return {kind:'anchor',turnId:article.dataset.turnId,itemId:article.dataset.itemId,top:rect.top,y:window.scrollY,inner:captureMarkdownAnchor(article)};}return {kind:'position',y:window.scrollY};}
+function restoreHistoryScroll(decision,project,sid,generation){if(!decision||!scrollScopeMatches(project,sid,generation))return;if(decision.kind==='bottom'){scrollToDocumentBottom();if(decision.initial)initialScrollTarget=null;return;}const findAnchor=()=>decision.kind==='anchor'?[...$('chat-items').querySelectorAll('article.chat-message')].find(article=>article.dataset.turnId===decision.turnId&&article.dataset.itemId===decision.itemId):null;const article=findAnchor();const inner=article&&resolveMarkdownAnchor(article,decision.inner);const anchor=inner||article;const anchorTop=inner?decision.inner.top:decision.top;let target=anchor?Math.max(0,window.scrollY+anchor.getBoundingClientRect().top-anchorTop):Math.max(0,decision.y);const root=document.documentElement;const body=document.body;let maxHeight=Math.max(root?root.scrollHeight:0,body?body.scrollHeight:0);let naturalMax=Math.max(0,maxHeight-window.innerHeight-historyScrollSlack);setHistoryScrollSlack(Math.max(0,target-naturalMax));window.scrollTo(0,target);for(let i=0;i<3&&anchor;i++){const difference=anchor.getBoundingClientRect().top-anchorTop;if(Math.abs(difference)<=0.5)break;target=Math.max(0,window.scrollY+difference);maxHeight=Math.max(root?root.scrollHeight:0,body?body.scrollHeight:0);const maxScroll=Math.max(0,maxHeight-window.innerHeight);if(target>maxScroll&&historyScrollSlack<window.innerHeight)setHistoryScrollSlack(historyScrollSlack+Math.min(window.innerHeight-historyScrollSlack,target-maxScroll+1));window.scrollTo(0,target);}if(historyScrollSlack){pinnedHistoryScope={project,sid,generation};historyScrollIntent=false;}else pinnedHistoryScope=null;}
 async function loadHistory(older=false){if(!selectedSession||!selectedProject)return;const project=selectedProject,sid=selectedSession.sid,key=chatKey(project,sid),generation=selectionGeneration;const existing=historyFlights.get(key);if(existing){if(existing.generation===generation)return existing.promise;await existing.promise;if(activeSelection(project,sid,generation))return loadHistory(older);return;}const state=normalizeHistoryState(key);const anchor=older?[...state.olderAnchors].reverse().find(candidate=>!candidate.error):null;if(older&&!anchor)return;const cursor=anchor?anchor.cursor:null;const path=queryPath('/api/session-history',{project,sid,cursor});$('chat-refresh').disabled=true;if(older)$('history-older').disabled=true;const promise=(async()=>{try{const data=await api(path);if(!activeSelection(project,sid,generation))return;const scrollDecision=captureHistoryScroll(project,sid,generation,older);mergeHistory(key,data,anchor);renderHistory(key);$('history-status').textContent=state.paginationError;historyFlights.delete(key);syncCurrentSessionControls();restoreHistoryScroll(scrollDecision,project,sid,generation);}catch(err){if(activeSelection(project,sid,generation))$('history-status').textContent=chatError(err)+' История и черновик сохранены.';}finally{historyFlights.delete(key);syncCurrentSessionControls();}})();historyFlights.set(key,{generation,promise});syncCurrentSessionControls();return promise;}
 function renderHistory(key){const state=normalizeHistoryState(key);const list=$('chat-items');const frag=document.createDocumentFragment();let visible=0;for(const id of state.order){const turn=state.turns.get(id);if(!turn)continue;const group=node('li',undefined,'turn');const heading=node('p','Ход: '+statusLabel(turn.status),'turn-status');group.append(heading);for(const item of turn.items||[]){if(!item||typeof item.text!=='string'||!['user','assistant'].includes(item.role))continue;const article=node('article',undefined,'chat-message '+(item.role==='user'?'from-user':'from-assistant'));article.dataset.turnId=id;article.dataset.itemId=item.id;article.append(node('h3',item.role==='user'?'Вы':'Codex'));article.append(renderMarkdown(item.text));if(item.truncated===true)article.append(node('span','Сообщение сокращено','meta'));group.append(article);visible++;}frag.append(group);}if(!visible)frag.append(node('li','Пока нет отображаемых текстовых сообщений.','meta'));list.replaceChildren(frag);if(historyScrollSlack)setHistoryScrollSlack(historyScrollSlack);$('history-truncated').hidden=!(state.truncated||[...state.turns.values()].some(turn=>(turn.items||[]).some(item=>item.truncated===true)));$('history-older').hidden=!state.olderAnchors.length;$('history-older').disabled=!state.olderAnchors.some(anchor=>!anchor.error);$('native-attention').hidden=!(state.attention||(selectedSession&&selectedSession.needs));renderReceipts(key);}
 function statusText(status){return status==='accepted'?'Сообщение принято Codex; работа может продолжаться.':status==='rejected'?'Codex отклонил сообщение; черновик сохранён.':status==='delivery_unknown'?'Доставка неизвестна. Проверьте статус вручную; отправка не повторяется автоматически.':status==='sending'?'Отправляем сообщение…':'Статус сообщения недоступен.';}
