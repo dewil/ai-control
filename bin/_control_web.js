@@ -321,12 +321,12 @@ async function loadHistory(older=false,manual=false){
   const existing=historyFlights.get(key);
   if(existing){if(existing.generation===generation)return existing.promise;existing.controller.abort();}
   const state=normalizeHistoryState(key);
-  if(state.historyError&&!manual)return;
   if(older&&hasEarlierHistory(state)){
-    const decision=captureHistoryScroll(project,sid,generation,true);
-    openOlderHistory(state,decision);renderHistory(key);syncCurrentSessionControls();
+    let decision=captureHistoryScroll(project,sid,generation,true);
+    decision=openOlderHistory(state,decision);renderHistory(key);syncCurrentSessionControls();
     restoreHistoryScroll(decision,project,sid,generation);return;
   }
+  if(state.historyError&&!manual)return;
   const anchor=older?[...state.olderAnchors].reverse().find(candidate=>!candidate.error):null;
   if(older&&!anchor)return;
   if(manual)state.historyError='';
@@ -347,7 +347,7 @@ async function loadHistory(older=false,manual=false){
       const hold=state.windowIds!==null&&(state.windowOlder||focusedHistoryBubble()||scrollDecision&&scrollDecision.kind!=='bottom');
       if(hold&&scrollDecision&&scrollDecision.kind==='bottom')scrollDecision=captureHistoryScroll(project,sid,generation,true);
       mergeHistory(key,data,anchor);state.historyError='';
-      if(older)openOlderHistory(state,scrollDecision);
+      if(older)scrollDecision=openOlderHistory(state,scrollDecision);
       else if(!hold){state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;}
       else if(historyItems(state).some(entry=>!known.has(entry.key)))state.pendingLatest=true;
       renderHistory(key);
@@ -418,9 +418,10 @@ function hasEarlierHistory(state){
 function openOlderHistory(state,decision){
   const entries=historyItems(state),first=state.windowIds&&state.windowIds[0];
   state.windowOlder=true;
-  if(entries.length<=HISTORY_WINDOW_LIMIT){state.windowIds=entries.map(entry=>entry.key);return;}
+  if(entries.length<=HISTORY_WINDOW_LIMIT){state.windowIds=entries.map(entry=>entry.key);return decision;}
+  const firstIndex=entries.findIndex(entry=>entry.key===first);
   // Empty/repeated pages must leave the readable window intact.
-  if(first&&entries.findIndex(entry=>entry.key===first)<=0)return;
+  if(first&&firstIndex<=0)return decision;
   const anchor=decision&&decision.kind==='anchor'?JSON.stringify([decision.turnId,decision.itemId]):first;
   let end=entries.findIndex(entry=>entry.key===anchor);
   if(end<0)end=entries.findIndex(entry=>entry.key===first);
@@ -432,7 +433,16 @@ function openOlderHistory(state,decision){
     const next=readable&&entries.findIndex(entry=>entry.key===JSON.stringify([readable.dataset.turnId,readable.dataset.itemId]));
     if(next===end+1)end=next;
   }
+  // Explicit Older must progress even when the reader is at the window's end.
+  // Use the oldest previous boundary as overlap, keeping chronology continuous.
+  if(firstIndex>0&&Math.max(0,end-HISTORY_WINDOW_LIMIT+1)>=firstIndex){
+    end=firstIndex;
+    const boundary=entries[end];
+    decision={...(decision||{top:0,y:window.scrollY}),kind:'anchor',
+      turnId:boundary.turnId,itemId:boundary.item.id,inner:null};
+  }
   state.windowIds=entries.slice(Math.max(0,end-HISTORY_WINDOW_LIMIT+1),end+1).map(entry=>entry.key);
+  return decision;
 }
 function focusedHistoryBubble(){
   const article=document.activeElement&&document.activeElement.closest('article.chat-message');
