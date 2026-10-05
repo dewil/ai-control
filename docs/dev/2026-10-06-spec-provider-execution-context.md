@@ -197,6 +197,16 @@ ExecutionContext public attributes: `reference` (immutable mapping), `native_hom
 (immutable mapping); mutable containers/metadata aliasing недопустимы. Trusted
 constructors доступны Python fixtures; production CLI не выбирает test adapter.
 
+Типы `native_home` и `child_home` — абсолютные `pathlib.Path`.
+Для metadata-only resolver `native_home` указывает на fixed profile `codex/`,
+`child_home` — на соседний `native-home/`; frozen `child_env` содержит
+`CODEX_HOME=str(native_home)` и `HOME=str(child_home)`. Это derived metadata
+и шаблон окружения, а не разрешение запуска по mutable host pathname.
+Production owned host обязан сначала построить kernel-bound private view
+и перенести HOME/CODEX_HOME внутрь этого view; при отсутствии доказательства
+остаётся `profile_view_unproven`, native access/activation запрещены.
+
+
 ## TASK reference и единая authority
 
 Новая explicit bound create при наличии регистрации сохраняет до publication:
