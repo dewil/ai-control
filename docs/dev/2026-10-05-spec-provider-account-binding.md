@@ -246,3 +246,11 @@ paths по-прежнему не разрешают ancestor symlinks. Pointer d
 Broken/wrongowner/unsafe target отказывает, не fallback на config рядом.
 Public CLI fixture с fixed private pointer должна работать; separate swapped
 pointer fixture — fail closed. Никаких credentials/login/config env routing.
+
+Direct `codex-task-runtime execute/preflight` — тоже production admission:
+проверить authoritative binding до ensure_native_python/runtime_for/native
+config/locks/hosts. Нельзя обойти внешний ai-agent-run gate прямой командой.
+barrier/revoke/drain остаются доступными для ownedcleanup независимо от
+accountavailable; reconcile cleanup не должен скрыто запускать operation.
+Предварительная проверка execution в reusable lower runtime entry сохраняет
+те же binding/catalogpermissions, legacy validcontrol допускается безbinding.
