@@ -201,6 +201,14 @@ ProviderAccounts reader. `register(provider_id, account_id, project, metadata_pa
 возвращает safe success DTO выше; `status(provider_id, account_id, project)` тоже.
 `resolve(binding, context_ref, project)` возвращает frozen ExecutionContext после
 fresh structural/catalog/profile validation, но НЕ native verification.
+Для production task create нужен metadata-only `capture_reference(binding, project)`:
+новый exact mutable dict reference, построенный из одной проверенной no-follow
+registration leaf (fstat identity + exact bytes SHA256) после fresh catalog/grant,
+owner/profile/record validation. Никаких native вызовов/credential reads/effects;
+нет регистрации — profile_unconfigured. Caller сохраняет копию только в private
+TASK metadata и перед publication вызывает `resolve(binding, captured_ref, project)`
+для final snapshot compare вместе с прежними catalog/directory/control fences.
+Capture не даёт native admission и не обновляет уже записанную TASK reference.
 `validate_context_ref(value)` возвращает новый exact dict либо AccountError(code
 context_invalid). Вложенный registration_snapshot имеет ровно dev/ino/ctime_ns/
 sha256: первые три nonnegative exact integers (bool запрещен), sha256 — ровно
