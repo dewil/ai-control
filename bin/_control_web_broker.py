@@ -18,6 +18,7 @@ GEN = re.compile(r'[0-9a-f]{8}\Z')
 PROJECT = re.compile(r'[a-zA-Z0-9_-]{1,32}\Z')
 SESSION_FIELDS = {
     'session_projects': {'op'},
+    'session_project_summary': {'op'},
     'session_list': {'op', 'project', 'page'},
     'session_history': {'op', 'project', 'sid', 'cursor'},
     'session_send': {'op', 'project', 'sid', 'message_id', 'text'},
@@ -159,6 +160,8 @@ class RegistryBackend:
             op = request['op']
             if op == 'session_projects':
                 result = self.sessions.projects()
+            elif op == 'session_project_summary':
+                result = self.sessions.project_summary()
             elif op == 'session_list':
                 result = self.sessions.list_sessions(request['project'], request['page'])
             elif op == 'session_history':
@@ -173,6 +176,9 @@ class RegistryBackend:
 
     def session_projects(self):
         return self._session({'op': 'session_projects'})
+
+    def session_project_summary(self):
+        return self._session({'op': 'session_project_summary'})
 
     def session_list(self, project, page):
         return self._session(dict(op='session_list', project=project, page=page))
@@ -454,6 +460,8 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = backend.verdict(request['agent'], request['generation'], request['decision'], request['comment'])
                     elif op == 'session_projects':
                         result = backend.session_projects()
+                    elif op == 'session_project_summary':
+                        result = backend.session_project_summary()
                     elif op == 'session_list':
                         result = backend.session_list(request['project'], request['page'])
                     elif op == 'session_history':
@@ -492,7 +500,7 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                     request = _receive(conn)
                     if (type(request) is not dict or type(request.get('op')) is not str
                             or request['op'] not in fields or set(request) != fields[request['op']]):
-                        result = {'error': 'invalid_or_stale'}
+                        result = {'error': 'invalid_request' if type(request) is dict and request.get('op') == 'session_project_summary' else 'invalid_or_stale'}
                     elif request['op'] in SESSION_FIELDS and not _valid_session(request):
                         result = {'error': 'invalid_request'}
                     elif slots.acquire(blocking=False):
@@ -555,6 +563,9 @@ class SocketBackend:
 
     def session_projects(self):
         return self._session({'op': 'session_projects'})
+
+    def session_project_summary(self):
+        return self._session({'op': 'session_project_summary'})
 
     def session_list(self, project, page):
         return self._session(dict(op='session_list', project=project, page=page))
