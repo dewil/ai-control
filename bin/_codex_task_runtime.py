@@ -28,6 +28,7 @@ from _codex_task_lifecycle import CodexTaskLifecycle, TaskThread
 from _agent_question_io import strict_json, durable_json, create_question_locked, fsync_dir
 from _agent_done_io import request_done_locked
 from _agent_worktree import git_run
+from _control_provider_accounts import AccountError, execution_gate
 
 
 class RuntimeError(Exception):
@@ -395,6 +396,7 @@ class CodexTaskRuntime:
 
     def static_preflight(self, *, deadline):
         try:
+            execution_gate(self.agent_dir)
             spec = self._spec(deadline)
             sealed_overrides(self.cwd, [])
             require(type(self.companion_paths) is dict and set(self.companion_paths) == {'code_mode_host','bwrap','rg'})
@@ -642,6 +644,7 @@ class CodexTaskRuntime:
         self.current_op=None
         op=None; transport=None; thread_id=None; turn_id=None
         try:
+            execution_gate(self.agent_dir)
             self._deadline(deadline)
             self._executor_owner()
             self.static_preflight(deadline=deadline)
@@ -1485,6 +1488,10 @@ def main(argv=None):
     require(all(raw.count(flag)<=1 for flag in ('--reason','--event','--generation','--attempt')))
     args=parser.parse_args(raw)
     try:
+        # Admission precedes native interpreter/profile construction. Cleanup
+        # remains available even when the account cannot execute operations.
+        if args.command in ('execute', 'preflight'):
+            execution_gate(args.agent)
         ensure_native_python()
         controller=runtime_for(args.agent); deadline=time.monotonic()+30
         if args.command=='preflight':result=controller.static_preflight(deadline=deadline)
@@ -1507,6 +1514,9 @@ def main(argv=None):
             finally:os.close(fd)
         print(json.dumps(result,ensure_ascii=False))
         return 2 if result.get('outcome') in ('blocked','unknown') else 0
+    except AccountError as exc:
+        print(json.dumps(dict(outcome='blocked',reason=exc.code)))
+        return 2
     except Exception:
         print(json.dumps(dict(outcome='blocked',reason='native_dependencies_or_evidence_unconfirmed')))
         return 2
