@@ -331,6 +331,7 @@ class ProviderProfileCLI(unittest.TestCase):
         control = json.loads(control_bytes)
         self.assertEqual(control['provider_binding'],
                          {'schema': 1, 'provider_id': 'codex', 'account_id': 'profile-a'})
+        self.assertIn('provider_context', control)
         reference = control['provider_context']
         self.assertEqual(set(reference), {'schema', 'provider_id', 'account_id',
                                           'profile_instance_id', 'adapter_revision',
