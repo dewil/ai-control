@@ -240,7 +240,28 @@ legacy namespace сохраняет прежнее root+sid имя. Aliases од
 New private record schema2 exact keys: `schema,context_id,root,sid,message_id,digest,
 selection,status,turn_id,created`. Schema integer2; existing status/turn_id/created
 правила неизменны. Context_id — opaque safe stable context token, не credentials,
-account email или connection generation. Selection null либо exact
+account email или connection generation.
+
+Receipt context не зависит от доступности model catalog. Trusted
+`InteractiveRPC.receipt_context()` возвращает exact owner-private snapshot
+`{schema:1,vendor:"codex",context_kind:"legacy_unbound",context_id:<64lowerhex>}`
+и не делает RPC. Token детерминирован из фиксированных owner UID и absolute
+socket alias (не target PID, connection generation, случайное значение или native
+version); model_context использует тот же token. Snapshot остаётся доступен после
+disconnect, но сам не разрешает IO: обычные fresh grants/root/thread/peer proofs
+остаются обязательными. Unsupported model capability не запрещает ordinary inherit.
+
+Для существующего trusted plain callable RPC, не имеющего ни model_context, ни
+receipt_context, и без explicit constructor model_context разрешён только legacy
+compatibility token: SHA256 UTF-8 canonical JSON
+`{schema:1,vendor:"codex",context_kind:"legacy_unbound",owner_uid:<int>,receipt_root:<absolute ReceiptStore.path>}`
+с теми же sort_keys/ensure_ascii/separators/finite правилами ниже. Это server-owned
+store identity, не adapter/account proof; browser не задаёт его поля. Если trusted
+model_context передан явно, stable token берётся из его валидной context metadata.
+Malformed или unverified_bound контекст не получает legacy fallback. Receipt namespace
+и token не включают repr/object identity callback, text, sid или timestamp.
+
+Selection null либо exact
 `{catalog_id,model_id,wire_model,effort}`; effort required nonempty supported string. Record ≤4096bytes,
 без исходного text/raw native errors; слишком большой reserve запрещает отправку.
 Unknown schema/corruption не считается отсутствием записи. No bulk migration.
