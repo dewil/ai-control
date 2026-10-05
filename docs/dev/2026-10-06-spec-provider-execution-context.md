@@ -250,6 +250,11 @@ leaf и fstat identity открытой no-follow leaf; пример выше sy
 credential content. Final create CAS повторно сравнивает leaf dev/ino/ctime_ns
 и SHA256 с captured snapshot плюс прежние directory/catalog/control fences;
 нельзя публиковать reference к новой leaf со старой expectation.
+Если capture зафиксировал отсутствие регистрации, final create также проверяет
+её отсутствие в свежем разрешённом контексте. Появление регистрации между capture
+и publication — context_drift: отказ без durable TASK/spool/worktree и без
+автоматического присоединения новой reference. Это относится к new create,
+не изменяет старые contextless TASK.
 
 Каждый будущий resolve/admission/replay/resume/native status/history/registry/
 collector/recovery сравнивает и identity leaf, и exact byte commitment с TASK
