@@ -295,8 +295,8 @@ class SessionModelsModule(unittest.TestCase):
 
     def test_generation_change_between_pages_discards_partial_catalog_and_cache(self):
         self.rpc.pages = {
-            None: {"data": [native_model("first")], "nextCursor": "next"},
-            "next": {"data": [native_model("second")], "nextCursor": None},
+            None: {"data": [native_model("first", "wire-first")], "nextCursor": "next"},
+            "next": {"data": [native_model("second", "wire-second")], "nextCursor": None},
         }
         changed = [False]
         def change_after_first_page(method, params, transport_generation, context_generation):
