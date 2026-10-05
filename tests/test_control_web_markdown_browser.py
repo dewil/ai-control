@@ -168,7 +168,7 @@ class MarkdownBrowserContract(unittest.TestCase):
     def test_lists_and_blockquote_have_semantic_containers(self):
         self.render('- MD bullet alpha\n- MD bullet beta\n\n1. MD order first\n2. MD order second\n\n> MD quoted line\n> MD quoted continuation')
         self.assertEqual(self.page.locator('ul li').filter(has_text='MD bullet').count(), 2)
-        self.assertEqual(self.page.locator('ol li').filter(has_text='MD order').count(), 2)
+        self.assertEqual(self.page.locator('ol > li').filter(has_text=re.compile(r'^MD order (?:first|second)$')).count(), 2)
         quote = self.page.locator('blockquote').filter(has_text='MD quoted line')
         self.assertIn('MD quoted continuation', quote.inner_text())
 
