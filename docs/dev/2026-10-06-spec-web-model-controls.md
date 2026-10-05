@@ -103,6 +103,25 @@ Warm cache и pre-reserve send повторно читают getter и proof; st
 переносится. Existing four-argument sends и summary clocks не меняются.
 `InteractiveRPC.model_context()` snapshot читает только live generation/current
 validated initialize compatibility signal; не делает RPC и не читает auth/config.
+Дополнительный fixed seam `rpc.call_in_generation(method, params, *,
+transport_generation, context_generation, timeout=None)` обязателен для available
+explicit capability. InteractiveRPC использует только уже live socket именно этой
+пары generations; не вызывает _connect и не reconnect/fallback. Unknown/closed/
+changed scope отказывается до dispatch. Request привязан к captured socket/receive
+generation; существующие deadline/callback guards сохраняются. Trusted fake RPC
+в fixture реализует такой же named method; обычный callable без него не получает
+available capability, even if getter возвращает похожие metadata.
+
+Catalog capture берёт getter snapshot после fresh root/thread proof. Все model/list
+pages выполняются через call_in_generation с одной captured pair; после каждого
+результата и перед cache publication сравнивается fresh getter. Reconnect/context
+смена между страницами — catalog_unavailable без partial DTO/cache.
+Explicit send проверяет эту же pair перед reserve; после reserve thread/resume и
+turn/start также используют call_in_generation. Generation смена до reserve — stale;
+после reserve отказ/uncertainty остаётся delivery_unknown без нового dispatch на
+другом socket и без automatic retry. Existing inherit путь сохраняет прежний RPC
+behavior, receipt replay не получает новые эффекты или live catalog requirement.
+
 Наблюдённые account/config change notices инвалидируют context generation/catalog;
 lost connection очищает signal. Не утверждать обнаружение всех внешних login edits
 по тишине: model catalog/capability не доказывает account identity или entitlement.
