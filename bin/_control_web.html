@@ -21,8 +21,8 @@
       <button id="history-older" type="button" class="secondary" hidden>Загрузить более старые сообщения</button>
       <ol id="chat-items" class="chat-items" aria-label="История переписки"></ol>
       <p id="history-truncated" class="truncation" hidden>История показана не полностью. Некоторые сообщения могут отсутствовать или быть сокращены.</p>
-      <div id="receipt-list" class="receipt-list" aria-live="polite"></div>
-      <form id="chat-form"><label for="chat-draft">Сообщение</label><textarea id="chat-draft" maxlength="16000" autocomplete="off"></textarea><div class="chat-actions"><button id="chat-send" type="submit">Отправить</button><span id="send-status" role="status" aria-live="polite"></span></div></form>
+      <div id="receipt-list" class="receipt-list"></div>
+      <form id="chat-form"><label for="chat-draft">Сообщение</label><textarea id="chat-draft" maxlength="16000" autocomplete="off"></textarea><div class="chat-actions"><button id="chat-send" type="submit">Отправить</button><button id="send-check" type="button" class="secondary" hidden>Проверить доставку</button><span id="send-status" role="status" aria-live="polite"></span></div></form>
     </section>
     <div class="page-navigation"><button type="button" class="secondary" data-page-scroll="up">↑ В начало</button><button type="button" class="secondary" data-page-scroll="down">↓ В конец</button></div>
   </section>
