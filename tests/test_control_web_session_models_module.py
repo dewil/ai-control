@@ -110,7 +110,7 @@ class SessionModelsModule(unittest.TestCase):
         self.assertEqual(result["rows"], [])
 
     def test_available_catalog_is_exact_safe_projection_and_fixed_first_page_params(self):
-        self.rpc.pages = {None: {"data": [native_model(), native_model("hidden", hidden=True)], "nextCursor": None}}
+        self.rpc.pages = {None: {"data": [native_model(), native_model("hidden", "hidden-wire", hidden=True)], "nextCursor": None}}
         result = self.chat().models("demo", SID)
         self.assertEqual(set(result), {"schema", "vendor", "context_kind", "selection_support", "reason", "catalog_id", "expires_in_ms", "rows"})
         self.assertEqual((result["schema"], result["vendor"], result["context_kind"]), (1, "codex", "legacy_unbound"))
@@ -130,9 +130,10 @@ class SessionModelsModule(unittest.TestCase):
         self.assertIn(("thread/read", {"threadId": SID, "includeTurns": False}), self.rpc.calls)
         self.assertLess(self.rpc.methods().index("thread/read"), self.rpc.methods().index("model/list"))
         before = len(self.rpc.model_calls())
-        for bad_sid in (SID[:8], SID.upper()):
+        for bad_sid in (SID[:8], "ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF"):
             self.assertEqual(chat.models("demo", bad_sid), {"error": "invalid_request"})
         self.assertEqual(len(self.rpc.model_calls()), before)
+        self.rpc.calls.clear()
         self.rpc.thread_id = "44444444-4444-4444-8444-444444444444"
         result = self.chat().models("demo", SID)
         self.assertEqual(result, {"error": "stale"})
@@ -165,7 +166,7 @@ class SessionModelsModule(unittest.TestCase):
             {**CONTEXT, "context_id": "not-a-digest"},
             {**CONTEXT, "transport_generation": True},
             {**CONTEXT, "context_generation": -1},
-            {**CONTEXT, "vendor": "codex", "context_kind": "legacy_unbound", "native_version": "0.160.0", "transport_generation": 1},
+            {**CONTEXT, "vendor": "codex", "context_kind": "legacy_unbound", "native_version": "0.160.0", "transport_generation": "1"},
         ]
         for bad in bad_contexts:
             with self.subTest(bad=bad):
@@ -193,20 +194,20 @@ class SessionModelsModule(unittest.TestCase):
         self.assertNotIn("wire-two", json.dumps(result))
 
     def test_page_loop_returns_unavailable_without_partial_rows(self):
-        self.rpc.pages = {None: {"data": [native_model()], "nextCursor": "same"}, "same": {"data": [native_model("two")], "nextCursor": "same"}}
+        self.rpc.pages = {None: {"data": [native_model("one", "wire-one")], "nextCursor": "same"}, "same": {"data": [native_model("two", "wire-two")], "nextCursor": "same"}}
         self.unavailable("catalog_unavailable")
         self.assertLessEqual(len(self.rpc.model_calls()), 3)
 
     def test_page_limit_is_sixteen_and_never_returns_partial_catalog(self):
         self.rpc.pages = {None: {"data": [], "nextCursor": "c0"}}
         for i in range(16):
-            self.rpc.pages[f"c{i}"] = {"data": [native_model(f"row-{i}")], "nextCursor": f"c{i+1}"}
+            self.rpc.pages[f"c{i}"] = {"data": [native_model(f"row-{i}", f"wire-{i}")], "nextCursor": f"c{i+1}"}
         self.unavailable("catalog_unavailable")
         self.assertEqual(len(self.rpc.model_calls()), 16)
         self.assertTrue(all(call["limit"] == 64 and call["includeHidden"] is False for call in self.rpc.model_calls()))
 
     def test_total_native_row_limit_is_checked_before_hidden_filtering(self):
-        self.rpc.pages = {None: {"data": [native_model(f"row-{i}", hidden=True) for i in range(257)], "nextCursor": None}}
+        self.rpc.pages = {None: {"data": [native_model(f"row-{i}", f"wire-{i}", hidden=True) for i in range(257)], "nextCursor": None}}
         self.unavailable("catalog_unavailable")
         self.assertEqual(len(self.rpc.model_calls()), 1)
 
