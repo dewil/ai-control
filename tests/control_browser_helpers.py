@@ -10,3 +10,10 @@ def choose_project(page, name):
         tile.click()
     else:
         legacy.select_option(name)
+
+def project_is_selected(page, name):
+    # Assert the same selected-project contract for cloud and legacy controls.
+    tile = page.get_by_role('button', name=re.compile(r'^' + re.escape(name) + r'(?:\b|\s)'))
+    if tile.count():
+        return tile.get_attribute('aria-pressed') == 'true'
+    return page.get_by_label('Проект', exact=True).input_value() == name
