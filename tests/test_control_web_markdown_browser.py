@@ -54,10 +54,13 @@ def serve(root, evidence):
         def session_list(self, project, page):
             return {'rows': [{'sid': SID, 'title': 'Markdown synthetic session', 'status': 'idle'}], 'has_more': False}
         def session_history(self, project, sid, cursor):
-            text = json.loads((evidence / 'control.json').read_text())['text']
-            return {'turns': [{'id': 'synthetic-markdown-turn', 'status': 'completed', 'items': [
-                {'id': 'synthetic-markdown-item', 'role': 'assistant', 'text': text, 'truncated': False}]}],
-                'next_cursor': None, 'recent_sends': []}
+            data = json.loads((evidence / 'control.json').read_text())
+            older = cursor is not None
+            text = data['older_text'] if older else data['text']
+            identity = 'synthetic-markdown-older' if older else 'synthetic-markdown'
+            return {'turns': [{'id': identity + '-turn', 'status': 'completed', 'items': [
+                {'id': identity + '-item', 'role': 'assistant', 'text': text, 'truncated': False}]}],
+                'next_cursor': 'markdown-older-page' if not older and 'older_text' in data else None, 'recent_sends': []}
         def session_send(self, *args): return {'error': 'unavailable'}
         def session_send_status(self, *args): return {'error': 'stale'}
 
@@ -134,8 +137,8 @@ class MarkdownBrowserContract(unittest.TestCase):
         self.assertFalse(any(urlsplit(url).netloc != urlsplit(self.url).netloc for url in self.network),
                          'Rendering synthetic Markdown must not contact another origin')
 
-    def render(self, text):
-        private_json(self.evidence / 'control.json', {'text': text + '\n\n' + SENTINEL})
+    def render(self, text, **history):
+        private_json(self.evidence / 'control.json', {'text': text + '\n\n' + SENTINEL, **history})
         self.page.goto(self.url)
         self.page.get_by_role('button', name=re.compile('^Сессии$', re.I)).or_(self.page.get_by_role('tab', name=re.compile('^Сессии$', re.I))).click()
         self.page.get_by_label('Проект', exact=True).select_option('demo')
