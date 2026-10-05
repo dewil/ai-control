@@ -9,8 +9,8 @@
 - INV-WSESS-01: Только действующая web authentication получает проекты, sessions, history и receipts. Send дополнительно требует текущие CSRF и exact Origin. Strict HTTP и broker fields; дубликаты query/JSON keys, неизвестные поля и произвольные RPC/path/settings не принимаются. ai-panel не читает owner OAuth/config/history/receipts напрямую; fixed owner broker проверяет SO_PEERCRED. GET не отправляет и не resume thread.
 - INV-WSESS-02: Authority — registered project alias, заново разрешённый canonical absolute root и полный canonical thread UUID. Каждый thread read/history/send/status проверяет thread/read(includeTurns:false) с совпадением UUID и canonical cwd; send повторяет proof по thread/resume result. Список не экспортирует чужие cwd/threads. Prefix, title, browser state и текст не являются authority. Ошибка proof не превращается в успех или достоверный пустой список.
 - INV-WSESS-03: История запрашивается thread/turns/list с explicit full itemsView, descending order: latest безcursor limit4/24textitems, Older limit8/128textitems (INV-WSESS-10). Возвращаются только turn id/status и текстовые userMessage/agentMessage items. Все экспортируемые тексты, включая title, проходят установленный SECRET_RE/redact; raw reasoning/tools/hooks/errors/credentials и структурированные metadata paths не экспортируются. Пути внутри allowlisted текста сохраняются как часть авторизованной переписки. Поле текста ≤8000 символов, encoded UTF-8 JSON history ≤96KiB; усечение видно через truncated. Неизвестный item игнорируется как unsupported, не преобразуется в assistant text. Обязательный recent_sends содержит последние максимум8 safe receipt status/message_id/turn_id только выбранного project/thread, с bounded private namespace lookup; без text/digest/paths. Pagination сохраняет честный next_cursor; ошибки не выдаются за конец истории.
-- INV-WSESS-04: Send имеет один явный пользовательский текст, client canonical UUID и тот же thread. thread/resume получает только threadId и observational excludeTurns:true; turn/start только threadId/input/clientUserMessageId. Model, effort, approval, sandbox, cwd, collaboration, environments и прочие sticky настройки не переопределяются. Remote Control connected не является gate для local AppServer chat. Accepted означает принятие сообщения, не завершение работы и не обязательно новый turn: native steering того же активного thread допустим. Busy/rejection не запускает автоматические queue/interrupt/retry.
-- INV-WSESS-05: До любой возможной отправки turn/start durable private digest-only receipt закрепляет canonical root/thread/message UUID; aliases одного root делят dedup и digest исходного текста. Повтор того же ID/текста не отправляет RPC повторно, включая rejected/unknown; новый текст под тем же ID invalid_request. Restart и неоднозначная запись/ответ дают delivery_unknown, а не ложный rejected/accepted. clientUserMessageId — correlation, server dedup не предполагается. send_status может повысить unknown до accepted только по UserMessage.clientId в bounded authoritative history; отсутствие совпадения не доказывает недоставку.
+- INV-WSESS-04: Send имеет один явный пользовательский текст, client canonical UUID и тот же thread. thread/resume получает только threadId и observational excludeTurns:true; turn/start только threadId/input/clientUserMessageId. В baseline model/effort не переопределяются; будущий explicit выбор ограничен INV-WSESS-24..27. Approval, sandbox, cwd, collaboration, environments и прочие security/sticky настройки этим срезом не переопределяются. Remote Control connected не является gate для local AppServer chat. Accepted означает принятие сообщения, не завершение работы и не обязательно новый turn: native steering того же активного thread допустим. Busy/rejection не запускает автоматические queue/interrupt/retry.
+- INV-WSESS-05: До любой возможной отправки turn/start durable private digest-only receipt закрепляет canonical root/thread/message UUID; aliases одного root делят dedup и digest исходного текста в baseline; schema2 selection digest определён INV-WSESS-26. Повтор того же ID/текста не отправляет RPC повторно, включая rejected/unknown; новый текст под тем же ID invalid_request. Restart и неоднозначная запись/ответ дают delivery_unknown, а не ложный rejected/accepted. clientUserMessageId — correlation, server dedup не предполагается. send_status может повысить unknown до accepted только по UserMessage.clientId в bounded authoritative history; отсутствие совпадения не доказывает недоставку.
 - INV-WSESS-06: Receipt directory owner-only700 вне /data и git, файлы600, no symlink; Git ancestors также запрещены, namespace scan считает все записи (предел10002) и проверяет deadline; locks обеспечивают first receipt между экземплярами. Durable write/fsync выполняется до turn/start. Receipt не содержит текст, credentials или raw server errors. Невозможность durable reserve запрещает отправку. Tombstones сохраняют защиту от повтора; автоматическое удаление, после которого старый message UUID снова отправится, запрещено. Неизвестная/повреждённая запись не считается новой.
 - INV-WSESS-07: Persistent interactive RPC имеет отдельный receive loop и reconnect generation; observer _codex_rc.WebSocketRPC остаётся observer. Этот срез ни на одном соединении не отвечает на server requests, включая unknown/error replies: web не consumes callback; native client availability требует version-specific installed proof, статически не обещается. Owner socket alias разрешается только после target identity/ownership и kernel peer UID proof до initialize; broker PrivateTmp сохраняется с узким read-only native-directory bind. Известное ожидание native interaction показывается в UI честно, без approve controls. Disconnect делает старую runtime информацию stale; повторная отправка сообщения по reconnect запрещена.
 - INV-WSESS-08: Телефонный UI даёт project/session selection, history/older page, draft/send и delivery status. Есть loading/empty/unavailable/stale/unknown и ручная проверка доставки; ошибка сохраняет draft. Двойной submit использует тот же message ID; switch session не перепривязывает draft/receipt к чужому thread. Render через textContent/escaping; Reload восстанавливает последние receipt IDs через history.recent_sends и ручную status проверку без повторного send; browser persistent storage не хранит переписку, draft, receipts или owner data. Появление новой непересекающейся latest страницы не скрывает пропущенные промежуточные ходы, а поздние ответы не понижают terminal receipt status. Public readiness требует отдельной установленной phone acceptance.
@@ -49,3 +49,42 @@ INV-WSESS-16/17: один polite current send status; новые локальн�
 INV-WSESS-20/21: validated nullable native Turn.startedAt only as explicitly labelled turn-start age/date per text item; unknown never guessed, local minute labels no network or reader/focus movement. Feature ../dev/done/2026-10-06-spec-web-message-times.md.
 
 Feature INV-WSESS-18/19: ../dev/done/2026-10-05-spec-web-project-cloud.md.
+
+
+## Следующий срез: модель и reasoning effort (спецификация)
+
+INV-WSESS-22/23 зарезервированы отдельным срезом окна истории; настоящая спека
+не определяет их и не заявляет их реализацию. INV-WSESS-24..27 ещё не реализованы,
+RED/GREEN/installed acceptance не выполнены.
+Feature: [выбор модели](../dev/2026-10-06-spec-web-model-controls.md).
+
+- INV-WSESS-24: Metadata-only `session_models`/GETsession-models получает bounded
+  native catalog через immutable session vendor/context, с fresh root/full UUID/grants
+  и owner transport proof. Только verified bound scope или явно legacy_unbound;
+  unverified profile/account isolation не объявляется поддержанной. Cache TTL60s,
+  ≤32 contexts, ≤16pages/256rows/1MiB, generation/account isolation. Safe schema1
+  projection; unknown capability/vendor, malformed/empty catalog честно unavailable.
+- INV-WSESS-25: Existing send принимает optional exact selection catalog_id/model_id/effort;
+  owner проверяет fresh catalog и exact supported model-effort pair перед reserve/resume/turn.
+  UI Model.id переводится в native Model.model. Inherit опускает model/effort keys;
+  arbitrary settings/account/mode запрещены. Codex0.160 overrides sticky для subsequent
+  turns; восстановления прежнего default после сообщения не обещается. Конфликт mode
+  без version/context proof запрещает explicit выбор, не обычную legacy inherit отправку.
+- INV-WSESS-26: Durable schema2 digest закрепляет context/root/fullsid/text/selection
+  и private wire mapping за message UUID. Exact replay использует receipt без нового
+  catalog/resume/turn; другой payload отвергается. Legacy textdigest только inherit
+  в legacy namespace; corrupted/unknown schema fail closed. Existing locks/fsync/
+  tombstones/delivery_unknown/manual correlation и account namespace isolation сохраняются.
+- INV-WSESS-27: Draft-local accessible model/effort controls показывают native supported
+  values, explicit sticky подсказку, unavailable/stale и видимый несовместимый effort reset.
+  Late generation responses не меняют другой session; pending send snapshot immutable,
+  unresolved receipt не допускает resend или identity смену. Нет hardcoded model list,
+  скрытого fallback/default/reset, browser durable draft storage или auth/config writes.
+
+Объявленное основным агентом 06.10 рабочее допущение: native sticky с видимым
+«Выбор сохраняется для следующих сообщений; перед отправкой можно изменить».
+Пользователь может скорректировать scope; strict per-message-only пока unavailable
+до доказанного effective-settings/reset protocol.
+Offline pinned schemas не доказывают entitlement, effective resume/reconnect settings,
+steering enforcement или будущую profile isolation. Независимые synthetic contracts,
+browser checks и отдельный native installed proof необходимы до production claim.
