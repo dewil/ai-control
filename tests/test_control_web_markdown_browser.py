@@ -5,6 +5,7 @@ CONTROL_MARKDOWN_QA_SERVER_PYTHON and CONTROL_MARKDOWN_QA_BROWSER_EXECUTABLE.
 Only public create_app executes application code; source bodies are never read.
 Synthetic evidence stays in a private /var/tmp directory, never the repository.
 """
+from control_browser_helpers import choose_project
 import base64
 import hashlib
 import hmac
@@ -141,7 +142,7 @@ class MarkdownBrowserContract(unittest.TestCase):
         private_json(self.evidence / 'control.json', {'text': text + '\n\n' + SENTINEL, **history})
         self.page.goto(self.url)
         self.page.get_by_role('button', name=re.compile('^Сессии$', re.I)).or_(self.page.get_by_role('tab', name=re.compile('^Сессии$', re.I))).click()
-        self.page.get_by_label('Проект', exact=True).select_option('demo')
+        choose_project(self.page, 'demo')
         self.page.get_by_role('button', name=re.compile('Markdown synthetic session')).click()
         self.page.get_by_text(SENTINEL, exact=False).first.wait_for(state='attached')
 

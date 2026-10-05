@@ -314,10 +314,17 @@ class _Receipts:
 
 
 class SessionChat:
-    def __init__(self, rpc, project_path, project_names, receipt_dir):
+    def __init__(self, rpc, project_path, project_names, receipt_dir, *,
+                 summary_clock=None, summary_wall_clock=None, summary_generation=None):
         self.rpc, self.project_path, self.project_names = rpc, project_path, project_names
         self.receipts = _Receipts(receipt_dir)
         self._local = threading.local()
+        self._summary_clock = summary_clock or time.monotonic
+        self._summary_wall_clock = summary_wall_clock or time.time
+        self._summary_generation = summary_generation or (lambda: rpc.generation if isinstance(rpc, InteractiveRPC) else 0)
+        self._summary_lock = threading.Lock()
+        self._summary_cache = None
+        self._summary_revision = 0
 
     def _remaining(self):
         value = self._local.deadline - time.monotonic()
@@ -425,6 +432,116 @@ class SessionChat:
                 projects.append({'name': name})
         self._remaining()
         return {'projects': projects}
+
+    @_operation
+    def project_summary(self):
+        # INV-WSESS-18: only complete allowlisted metadata scans enter cache.
+        self._local.deadline = time.monotonic() + 15
+        deadline = self._summary_clock() + 15
+        def budget():
+            _need(self._summary_clock() < deadline)
+            self._remaining()
+        budget()
+        names, roots = self._names(), {}
+        for name in names:
+            try:
+                budget()
+                root = self._provider(self.project_path, name)
+                _need(type(root) is str and os.path.isabs(root))
+                root = canonical(root)
+                _need(os.path.isdir(root))
+                budget()
+                roots[name] = root
+            except Exception:
+                budget()
+        allowed = tuple(sorted(set(roots.values())))
+        def export(cache, state):
+            return {'projects': [dict(name=name,
+                session_count=cache['values'][roots[name]][0] if cache and name in roots else None,
+                last_activity=cache['values'][roots[name]][1] if cache and name in roots else None,
+                summary_state=state if name in roots else 'unavailable',
+                as_of=cache['as_of'] if cache and name in roots else None) for name in names]}
+        _need(self._summary_lock.acquire(timeout=self._remaining()))
+        try:
+            budget()
+            generation = self._summary_generation()
+            cached = self._summary_cache
+            if cached and cached['key'] != (allowed, generation):
+                cached = None
+                self._summary_cache = None
+            if not allowed:
+                return export(None, 'unknown')
+            revision = self._summary_revision
+            if cached and cached['revision'] == revision and self._summary_clock() - cached['at'] < 30:
+                return export(cached, 'fresh')
+            try:
+                values = {root: [0, None] for root in allowed}
+                identities, cursors = {}, set()
+                cursor, scan_generation = None, None
+                for _ in range(100):
+                    budget()
+                    params = dict(cwd=list(allowed), limit=100, sourceKinds=['cli', 'vscode', 'appServer'],
+                                  archived=False, sortKey='updated_at', sortDirection='desc')
+                    if cursor is not None:
+                        params['cursor'] = cursor
+                    page = self._rpc('thread/list', params)
+                    budget()
+                    current_generation = self._summary_generation()
+                    # The first call may establish the initial native connection.
+                    if scan_generation is None:
+                        _need(current_generation == generation or isinstance(self.rpc, InteractiveRPC))
+                        if current_generation != generation:
+                            cached = None
+                        scan_generation = current_generation
+                    _need(current_generation == scan_generation)
+                    _need(type(page.get('data')) is list and len(page['data']) <= 100
+                          and 'nextCursor' in page and valid_cursor(page['nextCursor']))
+                    for thread in page['data']:
+                        budget()
+                        _need(type(thread) is dict and valid_uuid(thread.get('id'))
+                              and type(thread.get('cwd')) is str and os.path.isabs(thread['cwd']))
+                        root = canonical(thread['cwd'])
+                        if root not in values:
+                            continue
+                        source = thread.get('source')
+                        # Native Thread has no archived field; archived:false is
+                        # authoritative on the list request. Validate it if supplied.
+                        archived = thread.get('archived', False)
+                        _need(type(source) in (str, dict) and type(archived) is bool
+                              and type(thread.get('status')) is dict
+                              and _identity(thread['status'].get('type')))
+                        if source not in ('cli', 'vscode', 'appServer') or archived:
+                            continue
+                        updated = thread.get('updatedAt')
+                        _need(type(updated) in (int, float) and math.isfinite(updated) and updated >= 0)
+                        metadata = (root, updated)
+                        previous = identities.get(thread['id'])
+                        if previous is not None:
+                            _need(previous == metadata)
+                            continue
+                        identities[thread['id']] = metadata
+                        values[root][0] += 1
+                        values[root][1] = updated if values[root][1] is None else max(values[root][1], updated)
+                    cursor = page['nextCursor']
+                    if cursor is None:
+                        break
+                    _need(cursor not in cursors)
+                    cursors.add(cursor)
+                else:
+                    raise _DomainError('unavailable')
+                budget()
+                _need(self._summary_generation() == scan_generation and self._summary_revision == revision)
+                good = dict(key=(allowed, scan_generation), values=values,
+                            at=self._summary_clock(), as_of=self._summary_wall_clock(), revision=revision)
+                self._summary_cache = good
+                return export(good, 'fresh')
+            except Exception:
+                if self._summary_generation() != generation:
+                    cached = None
+                    self._summary_cache = None
+                return export(cached, 'stale' if cached else 'unknown')
+        finally:
+            self._summary_lock.release()
 
     @_operation
     def list_sessions(self, project, page=0):
@@ -585,6 +702,7 @@ class SessionChat:
                 turn = response.get('turn')
                 _need(type(turn) is dict and _identity(turn.get('id')))
                 record.update(status='accepted', turn_id=turn['id'])
+                self._summary_revision += 1
                 self.receipts.write(ns, record, self._local.deadline)
             except Exception:
                 # Reserve remains durable. Server errors, timeout and failed ACK
@@ -611,6 +729,7 @@ class SessionChat:
                     if any(item['type'] == 'userMessage' and item.get('clientId') == message_id
                            for item in turn['items']):
                         record.update(status='accepted', turn_id=turn['id'])
+                        self._summary_revision += 1
                         self.receipts.write(ns, record, self._local.deadline)
                         return self.receipts.result(record)
                 cursor = page['nextCursor']
@@ -636,6 +755,11 @@ class InteractiveRPC:
         self._generation = 0
         self._pending = {}
         self._closed = False
+
+    @property
+    def generation(self):
+        with self._lock:
+            return self._generation
 
     def _fail(self, ws, generation):
         with self._lock:

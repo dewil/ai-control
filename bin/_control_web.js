@@ -126,7 +126,7 @@ function renderMarkdown(text){
 }
 function notice(text){$('notice').textContent=text;}
 async function api(path,body,signal,isCurrent=()=>true){let response;try{response=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',signal,headers:body===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});}catch(_){throw new Error(messages.unavailable);}let data;try{data=await response.json();}catch(_){throw new Error(messages.unavailable);}if(signal&&signal.aborted)throw new Error(messages.unavailable);if(!response.ok){if(response.status===401&&path!=='/api/login'&&isCurrent())signedOut();const error=new Error(messages[data.error]||messages.unavailable);error.code=data.error;error.status=response.status;error.data=data;throw error;}return data;}
-function signedOut(){if(acceptedStatusTimer!==null){clearTimeout(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
+function signedOut(){if(acceptedStatusTimer!==null){clearTimeout(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
 function field(parent,key,label,kind='textarea'){const wrap=node('label',label);const input=node(kind);input.maxLength=16000;input.value=drafts.get(key)||'';input.addEventListener('input',()=>drafts.set(key,input.value));wrap.append(input);parent.append(wrap);return input;}
 function button(parent,label,action,cls){const b=node('button',label,cls);b.type='button';b.addEventListener('click',action);parent.append(b);return b;}
 async function mutate(card,path,body){if(busy)return;busy=true;const controls=[...document.querySelectorAll('#tasks-panel button')];controls.forEach(b=>b.disabled=true);const status=card.querySelector('.message');status.textContent='Сохраняем…';try{const data=await api(path,body);status.textContent=data.status==='already'?'Решение уже было принято.':'Решение принято.';await refresh();}catch(err){status.textContent=err.message;if(err.code==='saved_pending'){await refresh();notice(err.message);}}finally{busy=false;controls.forEach(b=>b.disabled=false);}}
@@ -158,6 +158,12 @@ let sessionsHaveMore=false;
 let sessionRows=[];
 let projectNames=[];
 let availableProjects=new Set();
+let projectEntries=[];
+let projectSummaries=new Map();
+let projectsGeneration=0;
+let projectSort='count';
+try{if(localStorage.getItem('project-sort')==='activity')projectSort='activity';}catch(_){}
+$('project-sort').value=projectSort;
 let pollTimer=null;
 const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function chatKey(project,sid){return project+'\u0000'+sid;}
@@ -172,9 +178,77 @@ function currentSessionKey(){return selectedProject&&selectedSession?chatKey(sel
 function syncCurrentSessionControls(){const key=currentSessionKey();const historyBusy=Boolean(key&&historyFlights.has(key));const state=key&&historyData.get(key);const hasOlder=Boolean(state&&state.olderAnchors.some(anchor=>!anchor.error));$('chat-send').disabled=!csrf||currentTab!=='sessions'||!key||sendsInFlight.has(key);$('chat-refresh').disabled=!key||historyBusy;$('history-older').disabled=!key||historyBusy||!hasOlder;$('history-retry').hidden=!(state&&state.historyError);$('history-retry').disabled=!key||historyBusy;renderCurrentSendStatus();}
 function showTab(tab,load=true){currentTab=tab;const tasks=tab==='tasks';if(tasks)clearHistoryScrollSlack();$('tab-tasks').setAttribute('aria-selected',String(tasks));$('tab-sessions').setAttribute('aria-selected',String(!tasks));$('tasks-panel').hidden=!tasks;$('sessions-panel').hidden=tasks;syncCurrentSessionControls();if(tasks){stopPolling();if(load&&!taskLoaded)refresh();}else{if(load&&!projectNames.length)loadProjects();else if(load&&!selectedProject)loadSessionList(0,false);startPolling();}}
 function setSessionStatus(text){$('session-list-status').textContent=text;}
-function clearUnavailableProject(name,select){stopPolling();selectionGeneration++;initialScrollTarget=null;selectedProject=name||'';selectedSession=null;sessionRows=[];sessionPage=0;sessionsHaveMore=false;clearHistoryView();$('session-list').replaceChildren();$('sessions-more').hidden=true;if(select)select.value=name||'';updateUrl();syncCurrentSessionControls();}
-function projectChanged(){const select=$('project-select');selectedProject=select.value;if(selectedProject&&!availableProjects.has(selectedProject)){clearUnavailableProject(selectedProject,select);setSessionStatus('Проект недоступен. Выберите другой проект.');return;}sessionPage=0;sessionRows=[];selectedSession=null;selectionGeneration++;initialScrollTarget=null;clearHistoryView();$('session-list').replaceChildren();updateUrl();stopPolling();if(selectedProject)loadSessionList(0,false);else setSessionStatus('Выберите проект, чтобы увидеть сессии.');}
-async function loadProjects(){if(!csrf)return;const generation=selectionGeneration;setSessionStatus('Загружаем проекты…');$('project-select').disabled=true;$('projects-refresh').disabled=true;try{const data=await api('/api/session-projects');if(!csrf||generation!==selectionGeneration)return;const entries=Array.isArray(data.projects)?data.projects.filter(x=>x&&typeof x.name==='string'):[];projectNames=entries.map(x=>x.name);availableProjects=new Set(entries.filter(x=>x.unavailable!==true).map(x=>x.name));const select=$('project-select');select.replaceChildren(node('option','Выберите проект'));select.firstElementChild.value='';for(const entry of entries){const unavailable=entry.unavailable===true;const option=node('option',unavailable?entry.name+' — недоступен':entry.name);option.value=entry.name;option.disabled=unavailable;select.append(option);}select.disabled=false;const link=parseDeepLink();if(link){const linked=entries.find(entry=>entry.name===link.project);if(!linked){clearUnavailableProject('',select);setSessionStatus('Проект из ссылки недоступен. Выберите доступный проект.');return;}selectedProject=link.project;select.value=selectedProject;if(linked.unavailable===true){clearUnavailableProject(link.project,select);setSessionStatus('Проект недоступен. Выберите другой проект.');return;}await loadSessionList(0,false,link.sid);updateUrl();return;}const selected=entries.find(entry=>entry.name===selectedProject);if(selected){select.value=selected.name;if(selected.unavailable===true){clearUnavailableProject(selected.name,select);setSessionStatus('Проект недоступен. Выберите другой проект.');return;}await loadSessionList(0,false);}else{const hadSelection=Boolean(selectedProject||selectedSession);clearUnavailableProject('',select);setSessionStatus(hadSelection?'Выбранный проект больше недоступен. Выберите доступный проект.':projectNames.length?'Выберите проект, чтобы увидеть сессии.':'Нет доступных проектов.');}updateUrl();}catch(_){if(generation===selectionGeneration)setSessionStatus('Список проектов недоступен. Нажмите «Обновить проекты», чтобы повторить.');$('project-select').disabled=false;}finally{$('projects-refresh').disabled=false;}}
+function renderProjects(){
+  const cloud=$('project-cloud'),focused=document.activeElement,y=window.scrollY;
+  const existing=new Map([...cloud.children].map(button=>[button.dataset.project,button]));
+  const known=entry=>{const value=projectSummaries.get(entry.name);return value&&['fresh','stale'].includes(value.summary_state)&&Number.isSafeInteger(value.session_count)&&value.session_count>=0?value:null;};
+  const aliasCompare=(a,b)=>{const x=a.name.toLowerCase(),z=b.name.toLowerCase();return x<z?-1:x>z?1:a.name<b.name?-1:a.name>b.name?1:0;};
+  const activityGroup=value=>!value?3:value.last_activity===null?2:value.summary_state==='fresh'?0:1;
+  const ordered=projectEntries.slice().sort((a,b)=>{
+    const x=known(a),z=known(b);
+    if(projectSort==='count'){if(Boolean(x)!==Boolean(z))return x?-1:1;if(x&&x.session_count!==z.session_count)return z.session_count-x.session_count;}
+    else{const gx=activityGroup(x),gz=activityGroup(z);if(gx!==gz)return gx-gz;if(gx<2&&x.last_activity!==z.last_activity)return z.last_activity-x.last_activity;}
+    return aliasCompare(a,b);
+  });
+  const retained=new Set();
+  for(const entry of ordered){
+    let button=existing.get(entry.name);
+    if(!button){button=node('button',undefined,'project-tile');button.type='button';button.dataset.project=entry.name;button.addEventListener('click',()=>projectChanged(entry.name));}
+    retained.add(button);
+    const value=known(entry),unavailable=!availableProjects.has(entry.name);
+    button.disabled=unavailable;button.setAttribute('aria-pressed',String(!unavailable&&selectedProject===entry.name));
+    const bucket=value?Math.min(5,Math.floor(Math.log2(value.session_count+1))):0;
+    button.style.setProperty('--tile-width',(112+12*bucket)+'px');button.style.setProperty('--tile-height',(64+8*bucket)+'px');
+    const details=unavailable?'Недоступен':value?value.session_count+' сессий'+(value.summary_state==='stale'?' · устарело':''):'Число сессий неизвестно';
+    button.replaceChildren(node('span',entry.name,'project-name'),node('span',details,'meta'));
+    button.title=value?'Сводка: '+new Date(value.as_of*1000).toLocaleString()+(value.last_activity===null?' · нет активности':' · последняя активность: '+new Date(value.last_activity*1000).toLocaleString()):details;
+    cloud.append(button);
+  }
+  for(const button of existing.values())if(!retained.has(button))button.remove();
+  if(retained.has(focused)&&!focused.disabled)focused.focus({preventScroll:true});
+  if(window.scrollY!==y)window.scrollTo(0,y);
+}
+function clearUnavailableProject(){stopPolling();selectionGeneration++;initialScrollTarget=null;selectedProject='';selectedSession=null;sessionRows=[];sessionPage=0;sessionsHaveMore=false;clearHistoryView();$('session-list').replaceChildren();$('sessions-more').hidden=true;updateUrl();syncCurrentSessionControls();renderProjects();}
+function projectChanged(name){
+  if(!availableProjects.has(name))return;
+  selectedProject=name;sessionPage=0;sessionRows=[];selectedSession=null;selectionGeneration++;initialScrollTarget=null;clearHistoryView();$('session-list').replaceChildren();$('sessions-more').hidden=true;updateUrl();stopPolling();renderProjects();loadSessionList(0,false);
+}
+async function loadProjects(){
+  if(!csrf)return;
+  const generation=++projectsGeneration,auth=csrf,selection=selectionGeneration,hadNames=projectEntries.length>0;
+  const current=()=>csrf===auth&&generation===projectsGeneration;
+  if(!hadNames)setSessionStatus('Загружаем проекты…');
+  $('projects-refresh').disabled=true;
+  try{
+    const data=await api('/api/session-projects');if(!current())return;
+    if(!Array.isArray(data.projects))throw new Error('invalid projects');
+    projectEntries=data.projects.filter(x=>x&&typeof x.name==='string');
+    projectNames=projectEntries.map(x=>x.name);
+    availableProjects=new Set(projectEntries.filter(x=>x.unavailable!==true).map(x=>x.name));
+    if(selectedProject&&!availableProjects.has(selectedProject)){clearUnavailableProject();setSessionStatus('Выбранный проект недоступен. Выберите другой проект.');}
+    renderProjects();
+    let summaryFailed=false;
+    try{
+      const summary=await api('/api/session-project-summary');if(!current())return;
+      if(!Array.isArray(summary.projects))throw new Error('invalid summary');
+      projectSummaries=new Map(summary.projects.filter(x=>x&&projectNames.includes(x.name)).map(x=>[x.name,x]));
+      for(const [name,value] of projectSummaries)if(value.summary_state==='unavailable')availableProjects.delete(name);
+      if(selectedProject&&!availableProjects.has(selectedProject)){clearUnavailableProject();setSessionStatus('Выбранный проект недоступен. Выберите другой проект.');}
+    }catch(_){if(!current())return;projectSummaries.clear();summaryFailed=true;}
+    $('project-summary-status').textContent=summaryFailed?'Сводка недоступна. Число сессий и активность неизвестны.':'';
+    renderProjects();
+    // A refresh never reopens history or overrides a newer user selection.
+    if(selection!==selectionGeneration)return;
+    const link=!hadNames&&parseDeepLink();
+    if(link){
+      if(!availableProjects.has(link.project)){clearUnavailableProject();setSessionStatus('Проект из ссылки недоступен. Выберите доступный проект.');return;}
+      selectedProject=link.project;renderProjects();await loadSessionList(0,false,link.sid);return;
+    }
+    if(selectedProject){if(!selectedSession)await loadSessionList(0,false);}
+    else setSessionStatus(projectNames.length?'Выберите проект, чтобы увидеть сессии.':'Нет доступных проектов.');
+  }catch(_){if(current())setSessionStatus('Список проектов недоступен. Нажмите «Обновить проекты», чтобы повторить.');}
+  finally{if(current())$('projects-refresh').disabled=false;}
+}
 async function loadSessionList(page=0,append=false,deepSid=null){const project=selectedProject;if(!project||!availableProjects.has(project))return;const generation=selectionGeneration;setSessionStatus(deepSid?'Ищем выбранную сессию…':'Загружаем сессии…');$('sessions-more').disabled=true;try{const data=await api(queryPath('/api/sessions',{project,page}));if(project!==selectedProject||generation!==selectionGeneration)return;const rows=Array.isArray(data.rows)?data.rows:[];sessionPage=page;sessionsHaveMore=data.has_more===true;sessionRows=append?sessionRows.concat(rows):rows;renderSessions();$('sessions-more').hidden=!sessionsHaveMore;if(deepSid){const found=rows.find(row=>row&&row.sid===deepSid);if(found){openChat(found);return;}if(sessionsHaveMore&&page<99)return loadSessionList(page+1,false,deepSid);setSessionStatus('Сессия из ссылки не найдена среди доступных сессий. Выберите другую из списка.');}else setSessionStatus(sessionRows.length?'Выберите сессию для переписки.':'В этом проекте пока нет доступных сессий.');}catch(_){if(project===selectedProject&&generation===selectionGeneration)setSessionStatus('Список сессий недоступен. Попробуйте ещё раз.');}finally{$('sessions-more').disabled=false;}}
 function renderSessions(){const list=$('session-list');const frag=document.createDocumentFragment();for(const row of sessionRows){if(!row||typeof row.sid!=='string'||!UUID_RE.test(row.sid))continue;const b=node('button',undefined,'session-choice'+(selectedSession&&selectedSession.sid===row.sid?' selected':''));b.type='button';b.setAttribute('aria-pressed',String(Boolean(selectedSession&&selectedSession.sid===row.sid)));b.append(node('span',row.title||'Codex','session-title'));b.append(node('span',statusLabel(row.status),'meta'));if(row.needs_native_attention===true)b.append(node('span','Нужно действие в клиенте Codex; ответы из панели пока недоступны.','attention-inline'));b.addEventListener('click',()=>openChat(row));frag.append(b);}list.replaceChildren(frag);}
 function statusLabel(status){const labels={active:'Работает',idle:'Готова',notLoaded:'Недоступна',systemError:'Ошибка',completed:'Завершён',interrupted:'Прерван',failed:'Ошибка',inProgress:'Выполняется'};return labels[status]||'Состояние неизвестно';}
@@ -300,8 +374,8 @@ $('refresh').addEventListener('click',refresh);
 $('logout').addEventListener('click',async()=>{try{await api('/api/logout',{});signedOut();drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();sessionRows=[];$('cards').replaceChildren();$('session-list').replaceChildren();clearHistoryView();updateUrl();notice('Вы вышли из Control.');}catch(err){notice(err.message);}});
 $('tab-tasks').addEventListener('click',()=>showTab('tasks'));
 $('tab-sessions').addEventListener('click',()=>showTab('sessions'));
-$('project-select').addEventListener('change',projectChanged);
-$('projects-refresh').addEventListener('click',()=>{projectNames=[];loadProjects();});
+$('project-sort').addEventListener('change',()=>{projectSort=$('project-sort').value==='activity'?'activity':'count';try{localStorage.setItem('project-sort',projectSort);}catch(_){}renderProjects();});
+$('projects-refresh').addEventListener('click',loadProjects);
 $('sessions-more').addEventListener('click',()=>{if(sessionsHaveMore)loadSessionList(sessionPage+1,true);});
 $('chat-refresh').addEventListener('click',()=>loadHistory(false,true));
 $('history-retry').addEventListener('click',()=>loadHistory(false,true));

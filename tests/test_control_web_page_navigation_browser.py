@@ -1,4 +1,5 @@
 """INV-WSESS-14/15: source-blind document navigation, synthetic backend only."""
+from control_browser_helpers import project_is_selected
 import importlib
 import json
 import os
@@ -151,7 +152,7 @@ class PageNavigationBrowserContract(unittest.TestCase):
                 self.activate(direction, index)
                 self.assertEqual(self.network[before:], [], 'Navigation is local: zero click-caused requests')
                 self.assertEqual(self.page.locator('textarea').input_value(), draft)
-                self.assertEqual(self.page.get_by_label('Проект', exact=True).input_value(), 'demo')
+                self.assertTrue(project_is_selected(self.page, 'demo'))
                 self.assertEqual(self.session.get_attribute('aria-pressed'), before_selection)
                 self.assertEqual(self.page.get_by_text('LATEST message 23', exact=True).count(), 1)
                 self.assertEqual(self.page.get_by_text('SECOND message 23', exact=True).count(), 0)
