@@ -103,3 +103,12 @@ Receipt root исключает любой Git ancestor, включая .git dir
 GET send-status — observational receipt reconciliation: может durable повысить только собственный receipt unknown→accepted по authoritative persisted UserMessage.clientId. GET никогда не вызывает turn/start/resume/ответ native/смену policy; auth/Origin boundary сохраняется. Это явно разрешённое уточнение read status, не новая instruction mutation.
 
 UI older-page cursor живёт отдельно от latest polling: fresh latest response не отматывает уже пройденную older chain; смена thread создаёт/выбирает его собственный bounded history state. Управление кнопками выводится из текущей selected project/thread state, поздний ACK не оставляет другой thread заблокированным и не подменяет его draft/history.
+
+
+## Installed correction: недоступный зарегистрированный проект
+
+Installed995ca50 показал: отсутствующий каталог одного registeredalias обрушает весь GETsession-projects. Контракт уточняется без изменения реестра чужого проекта. Provider names failure, invalid/duplicate aliases и превышение общего deadline по-прежнему дают честную глобальную unavailable, не пустой список. После validated names проверка каждого root независима: доступный элемент ровно{name}; failed root resolution/nonexistent directory экспортируется{name,unavailable:true} без пути/rawerror. Общий deadline проверяется до/после каждой проверки, истечение не превращается в частичный успех. Missing project не блокирует доступные, но не скрывается и не становится selectable.
+
+UI показывает disabled option «<name> — недоступен», selectable names только available entries. Deep link в unavailable alias не запускает list/history/send и не выбирает другой проект автоматически. Если выбранный проект стал unavailable при refresh, selectedthread/visiblehistory/controls очищаются и generation инвалидирует поздние ответы; per-thread memory/drafts остаются привязаны к прежнему ключу. История/отправка/status сохраняют прежний freshrootproof: недоступный root никогда не получает nativeRPC. Реестр не исправляется автоматически. INV-WSESS-02/08.
+
+Критерии: смешанный valid/missingroot список явно показывает обаaliases; control history/send работают при постороннемmissingroot; unavailable alias cannotselect/deeplink; refresh выбранногоalias вunavailable очищает thread и latehistory не возвращается; globalregistryfailure/deadline остаются unavailable. Независимые provider tests RED до реализации, synthetic browser QA mixedaliases/latehistory, focused distinctmodel review/CI и immutable installed acceptance обязательны.
