@@ -50,6 +50,7 @@ def serve(root, evidence):
             elif sid==OTHER:
                 items=history_items(0,2,'OTHER'); next_cursor=None
             elif cursor is None:
+                if data.get('latest_mode')=='error': return {'error':'unavailable'}
                 items=history_items(data.get('first',0),data.get('count',101)); next_cursor=CURSOR
             else:
                 if cursor!=CURSOR: return {'error':'unavailable'}
@@ -317,6 +318,38 @@ class HistoryWindowBrowser(unittest.TestCase):
         self.assertEqual(self.cap(),prior)
         self.assertRegex(self.page.locator('body').inner_text(),r'(?i)ошиб|не удалось|недоступ|повтор')
         self.assertTrue(self.older().is_enabled(),'A failed continuation is not native end')
+
+    def test_failed_latest_refresh_keeps_cached_older_navigation_available(self):
+        self.configure(count=1000); self.open(); self.assertEqual(self.cap(),list(range(900,1000)))
+        self.configure(count=1000,latest_mode='error')
+        before=list(self.requests())
+        self.page.wait_for_timeout(6500)
+        self.assertGreater(len(self.requests()),len(before),'Fixture must observe the failed latest refresh')
+        self.assertRegex(self.page.locator('body').inner_text(),r'(?i)ошиб|не удалось|недоступ|повтор')
+        before=list(self.requests()); prior=self.ids()
+        self.activate_older()
+        current=self.cap()
+        self.assertLess(min(current),min(prior),'Cached Older navigation must progress after refresh failure')
+        self.assertTrue(set(prior)&set(current),'Cached Older keeps an overlap with the readable window')
+        self.assertEqual(self.requests(),before,'Cached Older navigation must not retry the failed request')
+        self.assertRegex(self.page.locator('body').inner_text(),r'(?i)ошиб|не удалось|недоступ|повтор')
+
+    def test_extreme_reader_anchor_yields_contiguous_progressing_older_windows(self):
+        self.configure(count=1000); self.open(); self.assertEqual(self.cap(),list(range(900,1000)))
+        anchor_node=self.page.get_by_text('MAIN item 0999 turn-124 MAIN-item-999',exact=True)
+        anchor_node.evaluate("el=>el.scrollIntoView({block:'end'})")
+        self.page.wait_for_timeout(100)
+        anchor={'text':anchor_node.inner_text(),'top':anchor_node.bounding_box()['y']}
+        before=list(self.requests())
+        self.activate_older()
+        first=self.cap()
+        self.assertEqual(first,list(range(801,901)),'When preserving the extreme anchor blocks progress, Older must use boundary overlap')
+        self.assert_anchor(anchor)
+        self.assertEqual(self.requests(),before,'Both older windows are already cached')
+        self.activate_older()
+        second=self.cap()
+        self.assertEqual(second,list(range(701,801)),'A repeated Older action must continue to earlier contiguous history')
+        self.assertEqual(self.requests(),before,'Cached Older must not fabricate a cursor or fetch a cached gap')
 
     def test_cycle_or_empty_continuation_does_not_erase_readable_window_or_loop(self):
         for mode in ('cycle','empty'):
