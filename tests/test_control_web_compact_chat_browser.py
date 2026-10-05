@@ -127,7 +127,8 @@ class CompactChatBrowserContract(unittest.TestCase):
             sidebar = self.session.evaluate('''el => {const project=document.querySelector('select');let n=el;while(n.parentElement&&!n.contains(project)) n=n.parentElement;const r=n.getBoundingClientRect();return {width:r.width,right:r.right,containsChat:n.contains(document.querySelector('.chat-items'))};}''')
             chat = self.page.locator('.chat-items').bounding_box()
             page = self.page.evaluate('''() => ({width:innerWidth,overflow:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),targets:[...document.querySelectorAll('button,select,textarea')].filter(el=>el.getBoundingClientRect().width&&el.getBoundingClientRect().height).map(el=>({text:el.textContent.slice(0,50),height:el.getBoundingClientRect().height}))})''')
-            typography = self.page.locator('.chat-items p').first.evaluate('''el=>{const s=getComputedStyle(el);return {size:parseFloat(s.fontSize),line:parseFloat(s.lineHeight)/parseFloat(s.fontSize),font:s.fontFamily,overflow:s.overflowX,textOverflow:s.textOverflow};}''')
+            # Body typography applies to the synthetic message paragraph, not compact turn metadata.
+            typography = self.page.get_by_text('LATEST message 0', exact=True).evaluate('''el=>{const s=getComputedStyle(el);return {size:parseFloat(s.fontSize),line:parseFloat(s.lineHeight)/parseFloat(s.fontSize),font:s.fontFamily,overflow:s.overflowX,textOverflow:s.textOverflow};}''')
             observations.append({'typography': typography, 'menu': menu, 'sidebar': sidebar, 'chat': chat, **page})
         private_json(self.evidence / 'layout.json', observations)
         failures = []
