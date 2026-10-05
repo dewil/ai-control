@@ -16,6 +16,9 @@ PROJECTS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
 usage() {
   cat <<EOF
 Usage:
+  ai-rc accounts profile register --provider codex --account ID --project NAME --metadata FILE --json
+  ai-rc accounts profile status --provider codex --account ID --project NAME --json
+                                 Register or inspect private metadata; runtime remains unverified.
   ai-rc list                 List configured projects.
   ai-rc sessions <p> [--porcelain]
                                  A project's resumable sessions: age, origin and the
@@ -54,6 +57,10 @@ EOF
 # Owner-local catalog dispatch precedes session/native runtime setup.
 if [[ "${1:-}" == "accounts" ]]; then
   shift
+  if [[ "${1:-}" == "profile" ]]; then
+    shift
+    exec python3 "$(cd "$(dirname "$0")" && pwd)/_control_provider_profile_cli.py" "$@"
+  fi
   [[ "${1:-}" == "list" ]] || { echo "usage: ai-rc accounts list --project NAME [--json]" >&2; exit 2; }
   shift
   exec python3 "$(cd "$(dirname "$0")" && pwd)/_control_provider_accounts.py" list "$@"
