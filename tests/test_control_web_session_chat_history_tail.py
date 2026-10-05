@@ -187,7 +187,7 @@ class HistoryTailContract(unittest.TestCase):
         cursor = 'opaque-input/"界'
         self.page([native_turn(0, [agent(0, 'small answer')], TURN)], 'opaque-output', cursor)
         expected = {'turns': [{'id': TURN, 'status': 'completed', 'items': [
-            {'id': 'item-0', 'role': 'assistant', 'text': 'small answer', 'truncated': False}]}],
+            {'id': 'item-0', 'role': 'assistant', 'text': 'small answer', 'truncated': False, 'timestamp': None, 'time_precision': 'unknown'}]}],
             'next_cursor': 'opaque-output', 'truncated': False, 'recent_sends': []}
         for _ in range(2):
             self.assertEqual(self.bounded_history(cursor), expected)
