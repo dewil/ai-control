@@ -51,6 +51,7 @@ ai-agent-waiting-hook
 
 # Помощники: их не запускают напрямую, их зовет соседний скрипт по $(dirname $0)
 _rc_projects.sh
+_control_provider_accounts.py
 _proxy_env.sh
 _rc_ctx.py
 _rc_meta.py
