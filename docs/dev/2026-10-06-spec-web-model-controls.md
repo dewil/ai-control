@@ -45,12 +45,23 @@ ACK подтверждает приём, не effective provider/model/effort, �
 
 `selection_support:available` требует approved pinned capability
 `codex-turn-start-sticky-v0.160.0`: fresh owner transport/context proof, initialize
-version ровно0.160.0, fixed sender без collaborationMode, source contract выше и
+compatibility version ровно0.160.0, fixed sender без collaborationMode, source contract выше и
 прошедшие synthetic mapping/steering tests. Model/list самостоятельно не даёт proof.
 Неизвестная версия/sender/capability — unsupported_capability, rows пустые.
 Reconnect/native version/config/account/binding generation change инвалидирует
 capability и catalog; до fresh proof explicit send отвергается до reserve. Proof
 не означает entitlement, live effective state или подтверждённую identity bound account.
+Initialize не имеет serverInfo/version: typed fields userAgent/codexHome/platformFamily/
+platformOs. За уже доверенной owner transport boundary допускается только version
+compatibility signal из compile-time package version в начале userAgent; это НЕ
+artifact integrity, executable или account attestation. Caller version suffix/terminal
+metadata не используется. Exact anchored shape `originator/0.160.0 (…` проверяется
+с bounded printable originator без slash/control; substring version в suffix не proof.
+Raw userAgent/codexHome не сохраняются и не передаются в DTO/логи. Signal из
+неизвестной generation/closed transport отсутствует. Primary source:
+[default_client](https://github.com/openai/codex/blob/a956835d020762cb2b570053af06f643a11c0ecc/codex-rs/login/src/auth/default_client.rs#L1403-L1452).
+Этот compatibility signal не меняет kernel peer/grants/native permissions proof gates.
+
 В данном срезе честно поддержан narrower sticky/request contract: active turn может
 принять текст по прежнему steering, выбор применяется к последующим новым turns.
 UI всегда сообщает этот предел; новая native settings/update операция не добавляется.
@@ -76,6 +87,26 @@ UI не выбирает default effort молча и не подставляе�
 Новая owner operation `SessionChat.models(project, sid)`; backend
 `session_models(project, sid)`; broker exact object
 `{"op":"session_models","project":"<alias>","sid":"<full UUID>"}`.
+Source-blind unit seam: SessionChat constructor добавляет optional trusted
+`model_context=None`, `model_clock=None` keyword callables. Clock default monotonic.
+Context default — `rpc.model_context` для InteractiveRPC, иначе unavailable; fixture
+getter является trusted dependency injection, не production/body flag. После fresh
+root/full UUID/native thread proof getter возвращает owner-private exact dict:
+`{schema:1,vendor:"codex",context_kind:"legacy_unbound",context_id:64lowerhex,
+transport_generation:int,context_generation:int,native_version:"0.160.0"}`.
+Generations nonnegative exact ints (bool forbidden), ID stable for the selected
+owner/vendor/legacy scope, not connection generation. Future verified_bound factory
+требует independent provider runtime proof; metadata registration сама его не даёт.
+Current production InteractiveRPC factory выдаёт только explicit legacy scope.
+Unknown/malformed/unsupported context capability -> unavailable, no catalog/turn RPC.
+Warm cache и pre-reserve send повторно читают getter и proof; stale generation не
+переносится. Existing four-argument sends и summary clocks не меняются.
+`InteractiveRPC.model_context()` snapshot читает только live generation/current
+validated initialize compatibility signal; не делает RPC и не читает auth/config.
+Наблюдённые account/config change notices инвалидируют context generation/catalog;
+lost connection очищает signal. Не утверждать обнаружение всех внешних login edits
+по тишине: model catalog/capability не доказывает account identity или entitlement.
+
 HTTP `GET /api/session-models?project=<alias>&sid=<full UUID>` принимает ровно эти
 query keys, без повторов. Authentication, Origin-if-present, project view grants,
 fresh canonical root/full UUID/thread cwd proof и owner socket/SO_PEERCRED такие же,
@@ -298,3 +329,7 @@ Thread/history/turn/account/auth запросы не выполнялись. Liv
 доказывает current entitlement/effective overrides/collaborationMode/sticky semantics.
 Первый запуск без websocket dependency завершился до RPC; успешный повтор использовал
 существующий web test venv, runtime dependencies не менялись.
+
+06.10 metadata-only owner probe подтвердил diagnostic compiled prefix0.160.0;
+передача thread/history/turn/account/auth requests исключена. Diagnostic version
+за existing trusted-owner boundary — compatibility hint, не attested artifact.
