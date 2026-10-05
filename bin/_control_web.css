@@ -19,3 +19,5 @@ label{display:block;margin:12px 0;font-weight:500}input,textarea,select{display:
 .from-user{width:92%}
 
 #send-status{display:block;min-height:4.5em;width:100%}.receipt-list:empty{display:none}.receipt-list summary{cursor:pointer;min-height:44px;padding:9px 0}
+
+.project-cloud{display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px;margin-top:12px;overflow-anchor:none}.project-tile{width:var(--tile-width);min-height:var(--tile-height);max-width:100%;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;text-align:left;gap:4px;padding:8px;font-size:14px;font-weight:400;overflow-wrap:anywhere;background:#252529;border:1px solid #414148}.project-tile[aria-pressed=true]{background:#353541;border-color:#a5afff;box-shadow:inset 3px 0 #a5afff}.project-name{font-weight:500}.project-tile .meta{font-size:12px;line-height:1.3}.project-picker label{flex:1;min-width:0}.project-picker select{width:100%}

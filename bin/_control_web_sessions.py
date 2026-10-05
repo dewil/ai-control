@@ -504,10 +504,13 @@ class SessionChat:
                         if root not in values:
                             continue
                         source = thread.get('source')
-                        _need(type(source) in (str, dict) and type(thread.get('archived')) is bool
+                        # Native Thread has no archived field; archived:false is
+                        # authoritative on the list request. Validate it if supplied.
+                        archived = thread.get('archived', False)
+                        _need(type(source) in (str, dict) and type(archived) is bool
                               and type(thread.get('status')) is dict
                               and _identity(thread['status'].get('type')))
-                        if source not in ('cli', 'vscode', 'appServer') or thread['archived']:
+                        if source not in ('cli', 'vscode', 'appServer') or archived:
                             continue
                         updated = thread.get('updatedAt')
                         _need(type(updated) in (int, float) and math.isfinite(updated) and updated >= 0)
