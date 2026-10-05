@@ -201,6 +201,15 @@ class MarkdownBrowserContract(unittest.TestCase):
         self.assertEqual(self.page.locator('img[src*="md-image-probe"],svg#md-svg-probe,iframe[src*="md-iframe-probe"],[onerror],[onload],[onclick]').count(), 0)
         self.assertTrue(self.page.evaluate('typeof window.mdProbe === "undefined"'))
 
+    def test_raw_html_attributes_with_markdown_are_wholly_literal(self):
+        raw = '<span title="[MD RAW LINK](https://example.invalid/path)" data-bold="**MD RAW STRONG**" data-code="`MD RAW CODE`">MD raw body</span>'
+        self.render(raw)
+        self.assertEqual(self.page.locator('a').filter(has_text='MD RAW LINK').count(), 0,
+                         'Markdown inside a raw HTML attribute must remain literal')
+        self.assertEqual(self.page.locator('strong').filter(has_text='MD RAW STRONG').count(), 0)
+        self.assertEqual(self.page.locator('code').filter(has_text='MD RAW CODE').count(), 0)
+        self.assertIn(raw, self.page.locator('body').inner_text())
+
     def test_dangerous_url_forms_remain_text_without_active_anchors(self):
         targets = ['javascript:alert(1)', 'data:text/html,probe', 'vbscript:probe', 'file:///private-probe',
                    '//md-untrusted.invalid/x', '\\\\md-untrusted.invalid/x', 'java&#x73;cript:alert(1)',
