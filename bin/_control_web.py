@@ -346,6 +346,10 @@ def create_app(config, backend, clock=None):
     async def session_projects(request: Request):
         return await chat_read(request, (), (), lambda data: backend.session_projects())
 
+    @app.get('/api/session-project-summary')
+    async def session_project_summary(request: Request):
+        return await chat_read(request, (), (), lambda data: backend.session_project_summary())
+
     @app.get('/api/sessions')
     async def session_list(request: Request):
         return await chat_read(request, ('project',), ('page',), lambda data: backend.session_list(data['project'], data.get('page', 0)))

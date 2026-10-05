@@ -38,3 +38,12 @@ INV-WSESS-04 resume-size: thread/resume uses excludeTurns:true to retain metadat
 INV-WSESS-09 historyprojection: ≤24newesteligibletextitems per full/desc/4latestpage; ≤128 per full/desc/8Olderpage, ≤96KiBencodedJSON, ≤8000charredactedprefixtext; newestpriority/chronologicalitems/exactnativecursor/mandatorymetadata+receipts/attention/freshproof/truncatedhonest. Validatewholeupstreampage, even discardeditems. Work bounded byinput+selectedoutput, ≤4whole-exportserializations/deadlinechecks, no quadraticwholepackageclipping. Feature ../dev/2026-10-05-spec-web-history-tail.md; independent publicprojection/tail/UTF8/escaping/deadline tests + controlledbenchmark +existingbrowserregressions.
 
 INV-WSESS-10..13: compact latest4/24 and Older8/128, explicit top jump-to-latest, bounded15s history GET/retry without automatic error loop, accessible compact sans-serif navigation/layout. Feature ../dev/done/2026-10-05-spec-web-compact-chat.md; source-blind contract/browser tests and installed own-fixture acceptance.
+
+INV-WSESS-14/15: две пары локальных кнопок document top/bottom в разделе Сессии; top прекращает initial/follow, bottom возобновляет follow; draft/receipt/auth/native без изменений. Feature ../dev/done/2026-10-05-spec-web-page-navigation.md; независимые browser проверки.
+
+INV-WSESS-16/17: один polite current send status; новые локальные accepted transitions показываются5сек без повторного таймера/announcement, history seed и полныйreload accepted скрыты. Все известные unresolved receipts остаются в compact count/disclosure с exactUUID manual status check; accepted pile отсутствует, dedup/draft/backend/native/scroll invariants неизменны. Feature ../dev/done/2026-10-05-spec-web-transient-send-status.md; independent synthetic browser timer/reload/olderunknown/race/accessibility checks.
+
+- INV-WSESS-18: Project summary counts complete picker-visible metadata by allowed canonical roots, never loaded-page counts or histories. Bounded shared scan, explicit unknown/stale, generation/root keyed cache; no unauthorized metadata projection.
+- INV-WSESS-19: Responsive project cloud uses true selected buttons, count/activity sorting with stable ties and bounded sizes; preserves focus, deeplinks, auth and selection fences. Only sort enum may persist in browser storage.
+
+Feature INV-WSESS-18/19: ../dev/done/2026-10-05-spec-web-project-cloud.md; complete countcache metadata and cloudsort implementation independentlychecked, installedacceptance separate.

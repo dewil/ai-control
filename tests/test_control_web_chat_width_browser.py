@@ -1,4 +1,5 @@
 """Source blind browser regression for chat width (INV-WIDTH-01/02)."""
+from control_browser_helpers import choose_project
 import base64
 import hashlib
 import hmac
@@ -133,7 +134,7 @@ class ChatWidthBrowserContract(unittest.TestCase):
         self.page.on('request', self.request_listener)
         self.page.goto(self.url)
         self.page.get_by_role('button', name=re.compile('^Сессии$', re.I)).or_(self.page.get_by_role('tab', name=re.compile('^Сессии$', re.I))).click()
-        self.page.get_by_label('Проект', exact=True).select_option('demo')
+        choose_project(self.page, 'demo')
         self.page.get_by_role('button', name=re.compile('Width synthetic session')).click()
         self.page.get_by_text(SENTINEL, exact=False).wait_for(state='attached')
 
