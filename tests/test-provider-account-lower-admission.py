@@ -135,4 +135,21 @@ class LowerAdmission(unittest.TestCase):
         self.assertEqual(self.context_snapshot(),before)
         self.no_launch()
 
+    def test_direct_reconcile_admission_precedes_recovery_for_unverified_removed_and_disabled_binding(self):
+        variants=(('unverified',self.rows,'runtime_unverified'),
+                  ('removed',[],'account_unknown'),
+                  ('disabled',[dict(provider_id='codex',account_id='codex-alpha',label='Safe native account',
+                                    enabled=False,projects=['fixture'])],'account_disabled'))
+        for variant,rows,code in variants:
+            with self.subTest(variant=variant):
+                self.rows=rows; self.catalog_write()
+                before=self.context_snapshot()
+                value=self.probe('reconcile')
+                self.assertEqual(value['calls'],[],'Reconcile crossed native setup before admission: '+repr(value))
+                self.assertNotEqual(value['code'],0,'Denied reconcile reported success: '+repr(value))
+                self.assertIsNone(value['exception'],'Reconcile denial escaped public outcome: '+repr(value))
+                self.assertIn(code,value['stdout']+value['stderr'],'Reconcile did not report admission refusal: '+repr(value))
+                self.assertEqual(self.context_snapshot(),before,'Denied reconcile wrote recovery or runtime state')
+                self.no_launch()
+
 if __name__=='__main__': unittest.main()

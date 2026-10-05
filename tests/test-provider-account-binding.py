@@ -241,6 +241,25 @@ class BindingCLI(unittest.TestCase):
         result=self.run_cmd('ai-agent-io','control-cas',old,'--set','provider_binding='+json.dumps(control['provider_binding']))
         self.assertNotEqual(result.returncode,0); self.assertEqual((old/'control.json').read_bytes(),oldbytes)
 
+    def test_same_binding_control_cas_cannot_change_project_or_incarnation(self):
+        changes=(('project_name',json.dumps('other-fixture')),
+                 ('incarnation',json.dumps('99999999-9999-4999-8999-999999999999')))
+        for field,value in changes:
+            with self.subTest(field=field):
+                path,control=self.require_created('cas-'+field.replace('_','-'))
+                control_bytes=(path/'control.json').read_bytes()
+                same_binding=json.dumps(control['provider_binding'])
+                warm=self.run_cmd('ai-agent-io','control-cas',path,'--set',
+                                  'provider_binding='+json.dumps(dict(schema=1,provider_id='claude',account_id='beta')))
+                self.assertNotEqual(warm.returncode,0)
+                self.assertEqual((path/'control.json').read_bytes(),control_bytes)
+                before=self.snapshot()
+                result=self.run_cmd('ai-agent-io','control-cas',path,'--set','provider_binding='+same_binding,
+                                    '--set',field+'='+value)
+                self.assertNotEqual(result.returncode,0,'Same-binding CAS changed authoritative '+field)
+                self.assertEqual(self.snapshot(),before,'Denied same-binding CAS had filesystem side effects')
+        self.no_launch()
+
     def test_start_denied_before_desired_change_and_catalog_drift_leaves_other_account(self):
         path,a=self.require_created(); other,b=self.require_created('bound-beta','beta')
         before=(path/'control.json').read_bytes(); other_before=(other/'control.json').read_bytes()
