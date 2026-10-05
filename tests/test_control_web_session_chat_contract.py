@@ -242,8 +242,9 @@ class SessionChatContract(unittest.TestCase):
     def test_INV_WSESS_04_exact_send_without_settings_and_unmodified_text(self):
         text = '  token=synthetic-user-instruction \n'
         self.assertEqual(self.send(text), self.receipt('accepted', tid=TURN))
+        # Resume keeps the root/UUID proof but requests metadata without full turns.
         self.assertEqual(self.rpc.calls, [('thread/read', {'threadId': SID, 'includeTurns': False}),
-            ('thread/resume', {'threadId': SID}), ('turn/start', {'threadId': SID,
+            ('thread/resume', {'threadId': SID, 'excludeTurns': True}), ('turn/start', {'threadId': SID,
             'input': [{'type': 'text', 'text': text}], 'clientUserMessageId': MID})])
 
     def test_INV_WSESS_05_repeat_restart_and_changed_text_never_resend(self):
