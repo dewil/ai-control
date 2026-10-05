@@ -46,6 +46,10 @@ class ModelRPC:
         self.pages = {None: {"data": [native_model()], "nextCursor": None}}
         self.thread_id = SID
         self.thread_root = root
+        self.active_transport_generation = CONTEXT["transport_generation"]
+        self.active_context_generation = CONTEXT["context_generation"]
+        self.fenced_calls = []
+        self.after_fenced_response = None
     def __call__(self, method, params):
         self.calls.append((method, dict(params)))
         if method in ("thread/read", "thread/resume"):
@@ -53,6 +57,14 @@ class ModelRPC:
         if method == "model/list":
             return self.pages[params.get("cursor")]
         raise AssertionError("Unexpected synthetic RPC: " + method)
+    def call_in_generation(self, method, params, *, transport_generation, context_generation, timeout=None):
+        self.fenced_calls.append((method, dict(params), transport_generation, context_generation, timeout))
+        if (transport_generation, context_generation) != (self.active_transport_generation, self.active_context_generation):
+            raise RuntimeError("synthetic captured generation is no longer live")
+        result = self(method, params)
+        if self.after_fenced_response:
+            self.after_fenced_response(method, params, transport_generation, context_generation)
+        return result
     def methods(self):
         return [method for method, _ in self.calls]
     def model_calls(self):
@@ -73,7 +85,7 @@ class SessionModelsModule(unittest.TestCase):
         self.context = dict(CONTEXT)
         self.get_context = lambda: dict(self.context)
 
-    def chat(self):
+    def chat(self, rpc=None, context_getter=None):
         cls = self.module.SessionChat
         self.assertTrue(callable(getattr(cls, "models", None)),
                         "SessionChat.models(project, sid) is required by INV-WSESS-24")
@@ -86,8 +98,8 @@ class SessionModelsModule(unittest.TestCase):
             if alias != "demo":
                 raise ValueError("synthetic invalid project")
             return str(self.root)
-        return cls(self.rpc, resolve, lambda: ["demo"], str(self.base / "receipts"),
-                   model_context=self.get_context, model_clock=lambda: self.now[0])
+        return cls(rpc or self.rpc, resolve, lambda: ["demo"], str(self.base / "receipts"),
+                   model_context=context_getter or self.get_context, model_clock=lambda: self.now[0])
 
     def unavailable(self, reason):
         result = self.chat().models("demo", SID)
@@ -173,6 +185,10 @@ class SessionModelsModule(unittest.TestCase):
             {"limit": 64, "includeHidden": False},
             {"limit": 64, "includeHidden": False, "cursor": "opaque-next"},
         ])
+        self.assertEqual([(method, params, transport, context) for method, params, transport, context, _timeout in self.rpc.fenced_calls], [
+            ("model/list", {"limit": 64, "includeHidden": False}, 3, 7),
+            ("model/list", {"limit": 64, "includeHidden": False, "cursor": "opaque-next"}, 3, 7),
+        ])
         self.assertNotIn("wire-one", json.dumps(result))
         self.assertNotIn("wire-two", json.dumps(result))
 
@@ -235,12 +251,15 @@ class SessionModelsModule(unittest.TestCase):
         refreshed = chat.models("demo", SID)
         self.assertNotEqual(refreshed["catalog_id"], first["catalog_id"])
         self.context["context_generation"] += 1
+        self.rpc.active_context_generation = self.context["context_generation"]
         changed = chat.models("demo", SID)
         self.assertNotEqual(changed["catalog_id"], refreshed["catalog_id"])
         for index in range(1, 34):
             self.context.update(context_id=f"{index:064x}", context_generation=index)
+            self.rpc.active_context_generation = index
             self.assertEqual(chat.models("demo", SID)["selection_support"], "available")
         self.context.update(context_id=CONTEXT["context_id"], context_generation=CONTEXT["context_generation"] + 1)
+        self.rpc.active_context_generation = self.context["context_generation"]
         evicted = chat.models("demo", SID)
         self.assertNotEqual(evicted["catalog_id"], changed["catalog_id"])
         self.assertEqual(len(self.rpc.model_calls()), calls + 36)
@@ -253,6 +272,76 @@ class SessionModelsModule(unittest.TestCase):
         self.assertEqual(chat.models("demo", SID), {"error": "stale"})
         self.assertEqual(len(self.rpc.model_calls()), before)
         self.assertGreaterEqual(self.rpc.methods().count("thread/read"), 2)
+
+    def test_bare_callable_without_generation_fence_is_unavailable_without_catalog_rpc(self):
+        native_rpc = getattr(self.module, "InteractiveRPC", None)
+        self.assertTrue(callable(getattr(native_rpc, "call_in_generation", None)),
+                        "InteractiveRPC must implement the documented generation-fenced call seam")
+        class BareRPC:
+            def __init__(self, target):
+                self.target = target
+            def __call__(self, method, params):
+                return self.target(method, params)
+        bare = BareRPC(self.rpc)
+        self.assertFalse(callable(getattr(bare, "call_in_generation", None)))
+        result = self.chat(rpc=bare).models("demo", SID)
+        self.assertEqual(result, {
+            "schema": 1, "vendor": "codex", "context_kind": "legacy_unbound",
+            "selection_support": "unavailable", "reason": "unsupported_capability",
+            "catalog_id": None, "expires_in_ms": 0, "rows": [],
+        })
+        self.assertNotIn("model/list", self.rpc.methods())
+
+    def test_generation_change_between_pages_discards_partial_catalog_and_cache(self):
+        self.rpc.pages = {
+            None: {"data": [native_model("first")], "nextCursor": "next"},
+            "next": {"data": [native_model("second")], "nextCursor": None},
+        }
+        changed = [False]
+        def change_after_first_page(method, params, transport_generation, context_generation):
+            if method == "model/list" and not changed[0]:
+                changed[0] = True
+                self.context["transport_generation"] += 1
+                self.rpc.active_transport_generation += 1
+        self.rpc.after_fenced_response = change_after_first_page
+        chat = self.chat()
+        first = chat.models("demo", SID)
+        self.assertEqual(first["selection_support"], "unavailable")
+        self.assertEqual(first["reason"], "catalog_unavailable")
+        self.assertEqual(first["rows"], [])
+        self.assertEqual(len(self.rpc.model_calls()), 1)
+        self.rpc.after_fenced_response = None
+        self.context["transport_generation"] = self.rpc.active_transport_generation
+        refreshed = chat.models("demo", SID)
+        self.assertEqual(refreshed["selection_support"], "available")
+        self.assertEqual([row["id"] for row in refreshed["rows"]], ["first", "second"])
+        self.assertEqual(self.rpc.fenced_calls[0][2:4], (3, 7))
+        self.assertEqual(self.rpc.fenced_calls[1][2:4], (4, 7))
+
+    def test_context_change_before_cache_publication_returns_no_partial_or_cached_catalog(self):
+        armed = [False]
+        reads = [0]
+        def changing_getter():
+            if armed[0]:
+                reads[0] += 1
+                if reads[0] >= 2:
+                    snapshot = dict(self.context)
+                    snapshot["context_generation"] += 1
+                    return snapshot
+            return dict(self.context)
+        self.rpc.after_fenced_response = lambda *args: armed.__setitem__(0, True)
+        chat = self.chat(context_getter=changing_getter)
+        failed = chat.models("demo", SID)
+        self.assertEqual(failed["selection_support"], "unavailable")
+        self.assertEqual(failed["reason"], "catalog_unavailable")
+        self.assertEqual(failed["rows"], [])
+        self.rpc.after_fenced_response = None
+        armed[0] = False
+        before = len(self.rpc.model_calls())
+        published = chat.models("demo", SID)
+        self.assertEqual(published["selection_support"], "available")
+        self.assertEqual(len(self.rpc.model_calls()), before + 1,
+                         "failed generation snapshot must not have populated cache")
 
 
 if __name__ == "__main__":
