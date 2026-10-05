@@ -334,6 +334,58 @@ class HistoryWindowBrowser(unittest.TestCase):
         self.assertEqual(self.requests(),before,'Cached Older navigation must not retry the failed request')
         self.assertRegex(self.page.locator('body').inner_text(),r'(?i)ошиб|не удалось|недоступ|повтор')
 
+    def test_failed_latest_refresh_still_allows_explicit_opaque_older_continuation(self):
+        from urllib.parse import parse_qs,urlsplit
+        self.configure(count=101); self.open()
+        self.assertEqual(self.cap(),list(range(1,101)))
+        self.configure(count=101,latest_mode='error')
+        before=list(self.requests())
+        self.page.wait_for_timeout(6500)
+        after_failure=list(self.requests())
+        self.assertGreater(len(after_failure),len(before),'Fixture must observe an actual failed latest GET')
+        self.assertEqual([parse_qs(urlsplit(url).query).get('cursor',[None])[0]
+                          for _,url in after_failure[len(before):]],[None],
+                         'The failed latest refresh uses the existing null cursor')
+        error_pattern=r'(?i)ошиб|не удалось|недоступ|повтор'
+        self.assertRegex(self.page.locator('body').inner_text(),error_pattern)
+
+        # The hidden item0 is still cached: explicit Older must reveal it locally.
+        before_local=list(self.requests())
+        self.activate_older()
+        local=self.cap()
+        self.assertLess(min(local),1)
+        self.assertEqual(self.requests(),before_local,'Cached Older must not call the backend')
+        self.assertRegex(self.page.locator('body').inner_text(),error_pattern,
+                         'The latest endpoint failure remains visible after local navigation')
+
+        # At the cache boundary, another explicit Older may use only CURSOR.
+        before_cursor=list(self.requests())
+        self.activate_older()
+        deadline=time.monotonic()+3
+        while len(self.requests())==len(before_cursor) and time.monotonic()<deadline:
+            self.page.wait_for_timeout(50)
+        current=self.cap()
+        cursor_requests=self.requests()[len(before_cursor):]
+        self.assertEqual([parse_qs(urlsplit(url).query).get('cursor',[None])[0]
+                          for _,url in cursor_requests],[CURSOR],
+                         'Older must send the exact opaque continuation once it reaches the cache boundary')
+        negatives=[value for value in current if value<0]
+        self.assertTrue(negatives,'Successful continuation must expose earlier native items')
+        self.assertTrue(all(value<1 for value in negatives))
+        self.assertEqual(negatives,list(range(min(negatives),1)),
+                         'Earlier items form one contiguous chronological window')
+        self.assertLessEqual(len(current),100)
+        self.assertEqual(current,sorted(set(current)))
+        self.assertRegex(self.page.locator('body').inner_text(),error_pattern,
+                         'Older success does not clear the latest endpoint failure')
+
+        # Allow more than one poll interval: no implicit latest retry follows Older success.
+        after_older=list(self.requests())
+        self.page.wait_for_timeout(5600)
+        self.assertEqual(self.requests(),after_older,
+                         'Latest failure cannot trigger an automatic retry after Older succeeds')
+        self.assertRegex(self.page.locator('body').inner_text(),error_pattern)
+
     def test_extreme_reader_anchor_yields_contiguous_progressing_older_windows(self):
         self.configure(count=1000); self.open(); self.assertEqual(self.cap(),list(range(900,1000)))
         anchor_text='MAIN item 0999 turn-124 MAIN-item-999'
