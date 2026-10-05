@@ -225,6 +225,18 @@ def _snapshot(data, info):
             'sha256': hashlib.sha256(data).hexdigest()}
 
 
+def _unlink_owned(directory, name, info):
+    """Under the account-root lock, remove only our held-FD inode's name."""
+    try:
+        current = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    if _identity(current) != _identity(info):
+        return False
+    os.unlink(name, dir_fd=directory)
+    return True
+
+
 class ProviderProfiles:
     def __init__(self, owner_home, accounts, *, owner_uid=None):
         self.home = Path(os.path.abspath(owner_home))
@@ -370,20 +382,42 @@ class ProviderProfiles:
                                 follow_symlinks=False)
                     except FileExistsError:
                         raise AccountError('profile_conflict') from None
-                    os.unlink(temp, dir_fd=root)
+                    if not _unlink_owned(root, temp, os.fstat(fd)):
+                        raise AccountError('profile_unsafe')
                     published_info = os.fstat(fd)
+                    os.fsync(root)
+                    # Publication itself may race a grant, source or directory
+                    # change. Success requires a fresh fence after the link.
+                    self._recheck_grant(provider_id, account_id, project, catalog)
+                    source.check(changed_directory=root)
+                    directories.check(changed_directory=root)
+                    if _snapshot(*_read_leaf(parent, path.name, self.uid)) != _snapshot(data, info):
+                        raise AccountError('profile_unsafe')
+                    published, published_snapshot = self._registration(root, provider_id, account_id)
+                    if published != doc or published_snapshot != _snapshot(payload, published_info):
+                        raise AccountError('profile_unsafe')
+                    return self._dto(doc)
+                except BaseException:
+                    # Keep the FD open through rollback: UUID/parsed JSON is not
+                    # ownership proof. Preserve a foreign replacement leaf.
+                    rollback_failed = False
+                    owned = os.fstat(fd)
+                    for name in ('registration.json', temp):
+                        try:
+                            _unlink_owned(root, name, owned)
+                        except OSError:
+                            rollback_failed = True
+                    try:
+                        os.fsync(root)
+                    except OSError:
+                        rollback_failed = True
+                    if rollback_failed:
+                        # Persistent IO failure leaves unknown commit state; no
+                        # success, automatic retry or durable-absence assertion.
+                        raise AccountError('profile_unsafe') from None
+                    raise
                 finally:
                     os.close(fd)
-                    try:
-                        os.unlink(temp, dir_fd=root)
-                    except FileNotFoundError:
-                        pass
-                os.fsync(root)
-                directories.check(changed_directory=root)
-                published, published_snapshot = self._registration(root, provider_id, account_id)
-                if published != doc or published_snapshot != _snapshot(payload, published_info):
-                    raise AccountError('profile_unsafe')
-                return self._dto(doc)
         except FileNotFoundError:
             raise AccountError('profile_unconfigured') from None
         except OSError:
