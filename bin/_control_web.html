@@ -7,6 +7,7 @@
   <nav class="tabs" role="tablist" aria-label="Раздел Control"><button id="tab-tasks" type="button" role="tab" aria-selected="true" aria-controls="tasks-panel">Задачи</button><button id="tab-sessions" type="button" role="tab" aria-selected="false" aria-controls="sessions-panel">Сессии</button></nav>
   <section id="tasks-panel" role="tabpanel" aria-labelledby="tab-tasks"><div class="toolbar"><p id="count"></p><button id="refresh">Обновить</button></div><div id="cards"></div></section>
   <section id="sessions-panel" role="tabpanel" aria-labelledby="tab-sessions" hidden>
+    <div class="page-navigation"><button type="button" class="secondary" data-page-scroll="up">↑ В начало</button><button type="button" class="secondary" data-page-scroll="down">↓ В конец</button></div>
     <aside class="session-navigation" aria-label="Проекты и сессии">
     <label for="project-select">Проект</label><div class="project-picker"><select id="project-select" aria-label="Проект"><option value="">Выберите проект</option></select><button id="projects-refresh" type="button" class="secondary">Обновить проекты</button></div>
     <div id="session-list-status" class="message" role="status" aria-live="polite"></div><div id="session-list" class="session-list"></div>
@@ -23,6 +24,7 @@
       <div id="receipt-list" class="receipt-list" aria-live="polite"></div>
       <form id="chat-form"><label for="chat-draft">Сообщение</label><textarea id="chat-draft" maxlength="16000" autocomplete="off"></textarea><div class="chat-actions"><button id="chat-send" type="submit">Отправить</button><span id="send-status" role="status" aria-live="polite"></span></div></form>
     </section>
+    <div class="page-navigation"><button type="button" class="secondary" data-page-scroll="up">↑ В начало</button><button type="button" class="secondary" data-page-scroll="down">↓ В конец</button></div>
   </section>
 </section>
 </main></body></html>
