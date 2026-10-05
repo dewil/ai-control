@@ -101,6 +101,26 @@ class FaviconContract(unittest.TestCase):
         self.assertTrue(manifest.is_file())
         self.assertIn('_control_web.svg', manifest.read_text().split())
 
+    def test_root_and_svg_csp_allow_only_same_origin_images_without_other_relaxations(self):
+        expected = {
+            'default-src': ["'none'"], 'script-src': ["'self'"],
+            'style-src': ["'self'"], 'connect-src': ["'self'"],
+            'base-uri': ["'none'"], 'frame-ancestors': ["'none'"],
+            'form-action': ["'self'"], 'img-src': ["'self'"],
+        }
+        for path in ('/', '/favicon.svg'):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+                directives = [part.strip().split() for part in
+                              response.headers.get('content-security-policy', '').split(';')
+                              if part.strip()]
+                names = [parts[0] for parts in directives]
+                self.assertEqual(len(names), len(set(names)), 'No duplicate ambiguous CSP directives')
+                self.assertEqual({parts[0]: parts[1:] for parts in directives}, expected,
+                                 'Icon loading adds only img-src self to the existing strict policy')
+        self.assertEqual(self.backend.calls, [])
+
     def test_favicon_path_is_not_an_owner_file_reader(self):
         for path in ('/favicon.svg/%2e%2e/owner-config', '/favicon.svg/private-owner-file'):
             response = self.client.get(path)
