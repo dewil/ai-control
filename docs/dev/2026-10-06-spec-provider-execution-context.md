@@ -153,7 +153,11 @@ unsafe writable ancestry или cross-account inode aliases. Anchored FD walk и
 before/after pathname checks не закрывают same-owner rename/symlink TOCTOU:
 передача проверенного pathname в HOME/CODEX_HOME еще не связывает native open
 с проверенным profile object. Это отдельная обязательная kernel boundary ниже. Sticky system-root temp
-ancestor допускается ровно как в first-slice fixture contract. Fixed catalog
+ancestor допускается ровно как в first-slice fixture contract. Для root-owned sticky
+system ancestor before/after сравниваются dev/ino/mode/uid, но не directory
+mtime/ctime: создание чужого sibling не меняет безопасность выбранного пути.
+Для private-owned ancestors временные before/after fences сохраняются; смена
+владельца, режима, inode, pathname или symlink запрещена и для sticky ancestor. Fixed catalog
 symlink exception не распространяется на runtime profiles.
 
 Exact persisted registration:
