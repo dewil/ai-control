@@ -24,6 +24,7 @@ transition; 5 lock busy; 6 registry invalid; 7 ENOSPC/EIO (disk).
 import copy
 import fcntl
 from _control_provider_accounts import AccountError, validate_binding, check_binding_unchanged
+from _control_provider_context import validate_context_ref, check_context_unchanged
 import json
 import os
 import re
@@ -162,6 +163,14 @@ def validate_control(doc):
             validate_binding(doc["provider_binding"])
         except AccountError as exc:
             _err(e, exc.code)
+    if "provider_context" in doc:
+        try:
+            reference = validate_context_ref(doc["provider_context"])
+            binding = validate_binding(doc.get("provider_binding"))
+            if any(reference[k] != binding[k] for k in ("provider_id", "account_id")):
+                raise AccountError("context_invalid")
+        except AccountError:
+            _err(e, "context_invalid")
     return e
 
 
@@ -254,6 +263,8 @@ def parse_kv(arg):
     try:
         return path, json.loads(raw)
     except ValueError:
+        if path.split('.')[0] == 'provider_context':
+            die(2, "context_invalid")
         die(2, "value for %s is not valid JSON: %r" % (path, raw))
 
 
@@ -262,7 +273,28 @@ def parse_kv(arg):
 def cmd_durable_write(argv):
     if len(argv) != 1:
         die(2, "usage: durable-write <path>")
-    durable_write(argv[0], sys.stdin.buffer.read())
+    data = sys.stdin.buffer.read()
+    if os.path.basename(argv[0]) == "control.json":
+        with Lock(os.path.dirname(os.path.abspath(argv[0]))):
+            try:
+                candidate = json.loads(data)
+                errs = validate_control(candidate)
+                if errs:
+                    die(6, "; ".join(errs))
+                if os.path.exists(argv[0]):
+                    previous = load_json(argv[0])
+                    errs = validate_control(previous)
+                    if errs:
+                        die(6, "; ".join(errs))
+                    check_binding_unchanged(previous, candidate)
+                    check_context_unchanged(previous, candidate)
+            except AccountError as exc:
+                die(4, exc.code)
+            except ValueError:
+                die(6, "control invalid")
+            durable_write(argv[0], data)
+    else:
+        durable_write(argv[0], data)
 
 
 def cmd_control_init(argv):
@@ -354,6 +386,8 @@ def cmd_control_cas(argv):
         for p, want in expects:
             got, found = get_path(doc, p)
             if not found or got != want:
+                if p.split('.')[0] == 'provider_context':
+                    die(4, "context_immutable")
                 die(4, "CAS conflict: %s is %s, expected %s"
                     % (p, json.dumps(got, ensure_ascii=False),
                        json.dumps(want, ensure_ascii=False)))
@@ -366,6 +400,7 @@ def cmd_control_cas(argv):
             set_path(doc, p, got + 1)
         try:
             check_binding_unchanged(previous, doc)
+            check_context_unchanged(previous, doc)
         except AccountError as exc:
             die(4, exc.code)
         doc["seq"] = int(doc.get("seq", 0)) + 1

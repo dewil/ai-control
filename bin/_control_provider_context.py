@@ -462,3 +462,21 @@ class ProviderProfiles:
                                     {'HOME': str(child_home), 'CODEX_HOME': str(native_home),
                                      'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'},
                                     doc['expected_native_principal'])
+
+    def capture_reference(self, binding, project):
+        """Capture metadata authority for a new paused TASK, without native IO."""
+        binding = validate_binding(binding)
+        provider, account = binding['provider_id'], binding['account_id']
+        catalog = self._grant(provider, account, project)
+        with self._profile(account) as (directories, root, objects):
+            doc, snapshot = self._registration(root, provider, account)
+            if doc['profile_objects'] != objects:
+                raise AccountError('profile_conflict')
+            self._recheck_grant(provider, account, project, catalog)
+            directories.check()
+            self._check_leaf(root, provider, account, snapshot)
+            return validate_context_ref({'schema': 1, 'provider_id': provider,
+                                         'account_id': account,
+                                         'profile_instance_id': doc['profile_instance_id'],
+                                         'adapter_revision': doc['adapter_revision'],
+                                         'registration_snapshot': snapshot})
