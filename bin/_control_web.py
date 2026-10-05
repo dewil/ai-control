@@ -290,13 +290,15 @@ def create_app(config, backend, clock=None):
     def chat_cursor(value):
         return value is None or (type(value) is str and 0 < len(value) <= 4096)
 
-    def chat_result(call, sending=False):
+    def chat_result(call, sending=False, preserve_forbidden=False):
         try:
             result = call()
             if type(result) is not dict:
                 return error('unavailable', 503)
             code = result.get('error')
             if code is not None:
+                if preserve_forbidden and code == 'forbidden':
+                    return error('forbidden', 403)
                 return error(code if code in ('invalid_request', 'stale') else 'unavailable',
                              {'invalid_request': 422, 'stale': 409}.get(code, 503))
             if 'status' in result:
@@ -330,7 +332,7 @@ def create_app(config, backend, clock=None):
             data['page'] = int(data['page'])
         return data
 
-    async def chat_read(request, required, optional, call):
+    async def chat_read(request, required, optional, call, preserve_forbidden=False):
         _, failure = session(request)
         if failure:
             return failure
@@ -340,7 +342,7 @@ def create_app(config, backend, clock=None):
         data = chat_query(request, required, optional)
         if data is None:
             return error('invalid_request', 422)
-        return await run_in_threadpool(chat_result, lambda: call(data))
+        return await run_in_threadpool(chat_result, lambda: call(data), preserve_forbidden=preserve_forbidden)
 
     @app.get('/api/session-projects')
     async def session_projects(request: Request):
@@ -357,6 +359,10 @@ def create_app(config, backend, clock=None):
     @app.get('/api/session-history')
     async def session_history(request: Request):
         return await chat_read(request, ('project', 'sid'), ('cursor',), lambda data: backend.session_history(data['project'], data['sid'], data.get('cursor')))
+
+    @app.get('/api/session-models')
+    async def session_models(request: Request):
+        return await chat_read(request, ('project', 'sid'), (), lambda data: backend.session_models(data['project'], data['sid']), preserve_forbidden=True)
 
     @app.get('/api/session-send-status')
     async def session_send_status(request: Request):
