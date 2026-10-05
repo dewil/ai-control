@@ -76,3 +76,7 @@ Independent RED synthetic browser до кода:
 - existing navigation/compact/history/Markdown/receipt race suites GREEN.
 
 Distinct-model review и exactCI до merge/deploy. Installed acceptance отдельно.
+
+## Завершение (2026-10-06)
+
+Реализация принята по INV-WSESS-16/17. Независимый focused synthetic browser прогон на HEAD `7b1df07` прошёл **13/13**: 9 status-кейсов и 4 regression-кейса, включая поздний status-error после history-confirmed accepted. Независимый review (`gpt6-sol/medium`, session `01a10db7-ed95-70d0-8e7c-8bace0b16598`) завершился **PASS** без новых блокеров. Merge и deploy остаются отдельными следующими шагами.

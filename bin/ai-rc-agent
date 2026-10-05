@@ -68,9 +68,12 @@ cmd_create() {
   check_name "$name"
   local spec="" mission="" role="" reviewer_role="" base_commit=""
   local h_sid="" h_pid="" h_pid_start="" h_cwd="" h_expires_min=10
+  local provider="" account="" provider_seen=0 account_seen=0 binding_check=""
   local handoff_seen=0   # любой --handoff-* (вкл. -expires-min, у него дефолт)
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --provider) [[ $provider_seen -eq 0 && $# -ge 2 && -n "$2" && "$2" != --* ]] || fail "duplicate/missing provider"; provider="$2"; provider_seen=1; shift 2 ;;
+      --account) [[ $account_seen -eq 0 && $# -ge 2 && -n "$2" && "$2" != --* ]] || fail "duplicate/missing account"; account="$2"; account_seen=1; shift 2 ;;
       --spec)    spec="$2"; shift 2 ;;
       --mission) mission="$2"; shift 2 ;;
       --role)    role="$2"; shift 2 ;;
@@ -84,9 +87,20 @@ cmd_create() {
       *) fail "unknown arg: $1" ;;
     esac
   done
+  [[ $provider_seen -eq $account_seen ]] || fail "provider/account must be paired"
   [[ -f "$spec" ]]    || fail "--spec file not found: $spec"
   [[ -e "$AGENTS_DIR/$name" ]] && fail "agent '$name' already exists" 4
   command -v yq >/dev/null || fail "yq v4 required"
+
+  [[ "$(yq -r 'has("provider_binding") or has("provider_id") or has("account_id") or has("account") or has("provider")' "$spec")" == "false" ]] \
+    || fail "reserved provider binding fields in spec"
+  if [[ $provider_seen -eq 1 ]]; then
+    [[ $handoff_seen -eq 0 && "$(yq -r '.type' "$spec")" == event \
+       && "$(yq -r '.runtime' "$spec")" == drain && "$(yq -r '.workspace' "$spec")" == worktree ]] \
+      || fail "bound TASK requires event/drain/worktree without handoff"
+    binding_check=$(python3 "$BIN_DIR/_control_provider_accounts.py" create-check "$provider" "$account" "$(yq -r '.project // ""' "$spec")") || return 2
+    [[ "$(yq -r '.engine // "claude"' "$spec")" == "$(jget "$binding_check" 'd["engine"]')" ]] || fail "provider engine mismatch"
+  fi
 
   # --base-commit (этап 5) ⊥ handoff (§9): нельзя адоптировать транскрипт этапа 2
   # в worktree от произвольного commit - рассинхрон (codex-code-15).
@@ -312,6 +326,18 @@ sys.exit(0 if ok else 1)
     done
   fi
 
+  if [[ $provider_seen -eq 1 ]]; then
+    s_project_name=$(jget "$binding_check" 'd["project_name"]')
+    # Same name fence as new-task/start; bound create is never called by
+    # auto-start new-task, so this cannot recursively acquire that lock.
+    mkdir -p "$AGENTS_DIR/.locks"
+    local binding_lockfd
+    exec {binding_lockfd}>"$AGENTS_DIR/.locks/new-task-$name.lock"
+    flock -x "$binding_lockfd"
+    [[ ! -e "$AGENTS_DIR/$name" ]] || fail "agent '$name' already exists" 4
+    [[ "$(python3 "$BIN_DIR/_control_provider_accounts.py" create-check "$provider" "$account" "$s_project")" == "$binding_check" ]] || fail "catalog_invalid"
+  fi
+
   # --- atomic registry: fill tmp dir, single rename (§4.2) ---
   mkdir -p "$AGENTS_DIR"
   local tmp="$AGENTS_DIR/.new-$name.$$"
@@ -363,7 +389,7 @@ sys.exit(0 if ok else 1)
     cp -R "$reviewer_role" "$tmp/reviewer-role"
   fi
   python3 - "$mission_base" "$mission_base_branch" "$h_sid" "$h_pid" "$h_pid_start" "$h_cwd" \
-      "$h_expires_min" "${AI_AGENT_TEST_INCARNATION:-}" "$s_project_name" \
+      "$h_expires_min" "${AI_AGENT_TEST_INCARNATION:-}" "$s_project_name" "$provider" "$account" \
       <<'PY' | "$IO" durable-write "$tmp/control.json"
 import json, sys, time, secrets
 from datetime import datetime, timedelta, timezone
@@ -379,6 +405,7 @@ if sid:
 # incarnation ТОЛЬКО для проверки коллизии ветки task/<name>-<inc8>; в проде
 # переменная не выставляется.
 print(json.dumps({
+  **({"provider_binding": {"schema": 1, "provider_id": sys.argv[10], "account_id": sys.argv[11]}} if sys.argv[10] else {}),
   "schema": 1, "seq": 0, "desired": "paused", "generation": 0,
   "incarnation": test_inc or secrets.token_hex(16),
   "session_id": sid or None, "started_at": None, "deadline_extension_h": 0,
@@ -513,6 +540,9 @@ PY
   local rcdir="${AI_RECONCILER_DIR:-$HOME/.ai-control/reconciler}"
   mkdir -p "$rcdir/cache"
   rm -f "$rcdir/cache/$name.flags"
+  if [[ $provider_seen -eq 1 ]]; then
+    [[ "$(python3 "$BIN_DIR/_control_provider_accounts.py" create-check "$provider" "$account" "$s_project")" == "$binding_check" ]] || fail "catalog_invalid"
+  fi
   # alerts-state - под общим с reconciler fcntl-локом (bash flock Linux-only)
   python3 - "$rcdir/cache/alerts-state.json" "$rcdir/cache/alerts.lock" "$name" <<'PY'
 import json, os, sys, fcntl
@@ -585,6 +615,9 @@ PYMARKER
     mv "$tmp/codex_state_id.control.json" "$tmp/control.json" || fail "Codex marker publication refused" 2
   fi
 
+  if [[ $provider_seen -eq 1 ]]; then
+    [[ "$(python3 "$BIN_DIR/_control_provider_accounts.py" create-check "$provider" "$account" "$s_project")" == "$binding_check" ]] || fail "catalog_invalid"
+  fi
   # --- атомарная публикация: единый mv (реестр + worktree вместе) ---
   mv "$tmp" "$AGENTS_DIR/$name"
   trap - EXIT   # опубликовано - staging больше не откатывается
@@ -604,6 +637,7 @@ PYMARKER
   "$IO" event-append "$AGENTS_DIR/$name" agent_created operator \
     "{\"mission_base\":\"${mission_base:-}\"}"
 
+  [[ $provider_seen -eq 0 ]] || echo "binding=$provider/$account status=runtime_unverified"
   if [[ "$s_type" == "mission" ]]; then
     echo "created: $name (desired=paused, mission_base=${mission_base:0:12})"
   else
@@ -624,8 +658,11 @@ PYMARKER
 
 cmd_new_task() {
   local name="" project="" text="" engine="claude" engine_seen=0
+  local provider="" account="" provider_seen=0 account_seen=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --provider) [[ $provider_seen -eq 0 && $# -ge 2 && -n "$2" && "$2" != --* ]] || fail "duplicate/missing provider"; provider="$2"; provider_seen=1; shift 2 ;;
+      --account) [[ $account_seen -eq 0 && $# -ge 2 && -n "$2" && "$2" != --* ]] || fail "duplicate/missing account"; account="$2"; account_seen=1; shift 2 ;;
       --name)    name="$2"; shift 2 ;;
       --project) project="$2"; shift 2 ;;
       --text)    text="$2"; shift 2 ;;
@@ -635,6 +672,13 @@ cmd_new_task() {
   done
   [[ -n "$name" && -n "$project" && -n "$text" ]] \
     || fail "new-task требует --name/--project/--text" 2
+  [[ $provider_seen -eq $account_seen ]] || fail "provider/account must be paired"
+  if [[ $provider_seen -eq 1 ]]; then
+    local bound_path
+    bound_path=$(project_path "$project") || fail "project_unknown"
+    python3 "$BIN_DIR/_control_provider_accounts.py" create-check "$provider" "$account" "$bound_path" >/dev/null || return 2
+    fail "runtime_unverified"
+  fi
   case "$engine" in claude|codex) : ;; *) fail "unsupported engine" 2 ;; esac
   check_name "$name"
   command -v yq >/dev/null || fail "yq v4 required"
@@ -739,6 +783,7 @@ PY
       rm -f "$specfile"
       fail "агент '$name' уже существует с другим engine/type/project/workspace - не та же задача, отказ" 4
     fi
+    python3 "$BIN_DIR/_control_provider_accounts.py" legacy-check "$AGENTS_DIR/$name" || { rm -f "$specfile"; fail "binding_immutable" 4; }
     created="existing"
   elif [[ "$crc" != 0 ]]; then
     rm -f "$specfile"
@@ -798,6 +843,7 @@ cmd_start() (
   c=$(read_control "$dir") || return 3
   [[ "$(jget "$c" 'd.get("incarnation")')" == "$incarnation" ]] \
     || fail "agent incarnation changed before start" 4
+  python3 "$BIN_DIR/_control_provider_accounts.py" gate "$dir" || return 2
   # Concurrent /new publishers can both observe paused before entering this
   # lock. Only that internal idempotent path accepts an already-running task.
   if [[ "${2:-}" == "idempotent" && "$(jget "$c" 'd["desired"]')" == "running" ]]; then
@@ -1000,6 +1046,7 @@ cmd_status() {
   local dir; dir=$(agent_dir "$1")
   local c s
   c=$(read_control "$dir")
+  python3 "$BIN_DIR/_control_provider_accounts.py" status "$dir" || return 2
   if [[ "$(yq -r '.engine // "claude"' "$dir/spec.yaml")" == "codex" ]]; then echo "engine=codex USD=неизвестно"; fi
   s=$("$IO" state-read "$dir")
   # event: сводка inbox под общей таблицей

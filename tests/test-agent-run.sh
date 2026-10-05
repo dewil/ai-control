@@ -4,6 +4,8 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=fixtures/init-legacy-control.sh
+. "$HERE/fixtures/init-legacy-control.sh"
 RUN="$HERE/../bin/ai-agent-run"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -54,6 +56,8 @@ memory_max_mb: 100
 limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 EOF
+# Authoritative admission requires a valid legacy control, even for spec-only unit fixtures.
+init_legacy_control "$AG"
 export AI_AGENT_GENERATION=1 AI_AGENT_ATTEMPT=test-attempt
 
 # mock claude: исход управляется файлом $TMP/mock-mode
@@ -293,6 +297,7 @@ AG2="$AI_AGENTS_DIR/evt2"; IB2="$AG2/inbox"
 mkdir -p "$AG2" "$AI_AGENT_SPOOL_BASE/evt2"
 chmod 0700 "$AI_AGENT_SPOOL_BASE/evt2"
 sed 's/name: evt/name: evt2/' "$AG/spec.yaml" > "$AG2/spec.yaml"
+init_legacy_control "$AG2"
 export AI_AGENT_INBOX_MAX_EVENTS=2
 for i in 1 2 3; do "$RUN" spool-put evt2 --text "событие $i" >/dev/null; done
 assert "intake wedged" 0 "$RUN" intake "$AG2"

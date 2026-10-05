@@ -6,6 +6,8 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=fixtures/init-legacy-control.sh
+. "$HERE/fixtures/init-legacy-control.sh"
 RC="$HERE/../bin/ai-rc"
 RUN="$HERE/../bin/ai-agent-run"
 REVIEW="$HERE/../bin/ai-agent-review"
@@ -110,6 +112,8 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 $extra
 EOF
+  # Preserve the fixture runtime while exercising strict authoritative admission.
+  init_legacy_control "$ag"
   echo "$ag"
 }
 

@@ -8,6 +8,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Signed deploy bootstrap fixtures read the immutable accepted Git snapshot.
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -15,6 +18,10 @@ jobs:
         run: |
           python -m pip install -r requirements-web.lock
           python -m pip install httpx==0.28.1
+      - name: Install pinned browser test tooling
+        run: |
+          python -m pip install playwright==1.63.0
+          python -m playwright install --with-deps chromium
       - name: Existing trusted writer prerequisite
         run: |
           curl -fsSL -o yq https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64
@@ -25,6 +32,17 @@ jobs:
           python -m unittest discover -s tests -p 'test_control_web*.py'
           python -m unittest discover -s tests -p 'test_ai_control_names.py'
           python -m py_compile bin/_control_web.py bin/_control_web_broker.py bin/_control_web_sessions.py bin/_codex_rc.py bin/ai-control-web
+      - name: Provider account binding and runtime admission
+        run: |
+          python tests/test-provider-accounts.py
+          python tests/test-provider-account-binding.py
+          python tests/test-provider-account-config-pointer.py
+          python tests/test-provider-account-lower-admission.py
+          python tests/test-codex-task-runtime.py
+      - name: Signed deployment boundary and recovery
+        run: |
+          python tests/test-web-universal-deploy.py
+          python -m py_compile deployment/ai-control-web-deploy.py
       - name: Installation regression
         run: |
           # These install tests mock launchd; they need an inert CLI prerequisite,

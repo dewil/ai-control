@@ -139,6 +139,24 @@ class ProjectSummaryContract(unittest.TestCase):
         calls = len(self.rpc.calls); self.rpc.generation += 1; self.summary()
         self.assertGreater(len(self.rpc.calls), calls, 'New native connection generation must not reuse old summary')
 
+    def test_INV_WSESS_18_empty_root_set_does_not_preserve_reusable_fresh_cache(self):
+        self.names = ['alpha']
+        self.rpc.pages[None] = {'data': [self.thread(1, updated=100)], 'nextCursor': None}
+        first = self.rows(self.summary())['alpha']
+        self.assertEqual((first['session_count'], first['summary_state']), (1, 'fresh'))
+        self.assertEqual(len(self.rpc.calls), 1)
+
+        self.names = []
+        self.assertEqual(self.summary(), {'projects': []})
+        self.assertEqual(len(self.rpc.calls), 1, 'An empty allowed-root set needs no native scan')
+
+        self.rpc.pages[None] = {'data': [self.thread(2, updated=200), self.thread(3, updated=300)], 'nextCursor': None}
+        self.names = ['alpha']
+        restored = self.rows(self.summary())['alpha']
+        self.assertEqual(len(self.rpc.calls), 2, 'Restoring roots after an empty set must rescan within TTL')
+        self.assertEqual((restored['session_count'], restored['last_activity'], restored['summary_state']),
+                         (2, 300, 'fresh'))
+
     def test_INV_WSESS_18_incomplete_pages_do_not_export_partial_counts_or_replace_good(self):
         cases = {'repeat': {'data': [self.thread(2)], 'nextCursor': 'again'},
                  'malformed': {'data': [{'id': SID, 'cwd': str(self.roots['alpha'])}], 'nextCursor': None},

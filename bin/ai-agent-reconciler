@@ -446,6 +446,7 @@ acquire_agent() { # <dir> <name>; вызывается под admission
   local dir="${1%/}" name="$2" unit identity; unit=$(unit_of "$name")
   identity="${3:-$(agent_identity "$dir")}"
   [[ -n "$identity" && "$(agent_identity "$dir")" == "$identity" ]] || return 2
+  python3 "$BIN_DIR/_control_provider_accounts.py" gate "$dir" || return 2
   local atype; atype=$(spec_get "$dir" .type); atype="${atype:-mission}"
   local engine; engine=$(task_engine_of "$dir") || return 2
   if [[ "$engine" == "codex" ]]; then
@@ -472,6 +473,7 @@ acquire_agent_locked() ( # name lock covers Gate A and ACTUAL systemd-run.
   flock -x "$lockfd"
   [[ "$(agent_identity "$dir")" == "$identity" ]] || return 2
   [[ ! -f "$(dirname "$AGENTS_DIR")/tombstones/$name.json" ]] || return 2
+  python3 "$BIN_DIR/_control_provider_accounts.py" gate "$dir" || return 2
   local atype; atype=$(spec_get "$dir" .type); atype="${atype:-mission}"
   # PRE-FLIGHT (1): реестр валиден (проверено раньше), маунт, worktree.
   # event-агент по умолчанию живет целиком на корне (Д2/Д3: inbox, spool,

@@ -21,3 +21,7 @@ Backend существующий SessionChat.history() сохраняет спи
 Browser synthetic harness проверяет thresholds включая59/60s,59m59/60m,23h59/24h; обе роли, known/unknown/malformed DTO defensively, datetime Moscow year/dayboundary; hover/focus/tap. Таймер under frozenDate/controlled clock: zero extra network, stop/resume visibility/chat/logout, selected bubble readeranchor andfocus unchanged. Existing navigation9/status13/width1/Markdown13/compact5 зелёные. Реальные auth/history/native calls не нужны. Независимые tests committed RED до автора; другая модель compliance, exact CI передmerge. Installed acceptance после deploy.
 
 Не входит: native per-item time invention, SSE, смена политики истории, fullaccount runtime. Timestamp поля не должны попадать в native send/receipt UUID identity.
+
+## Проверки06.10
+
+Author6.1-sol/medium fe47fc4: new13 +backend105+UI41=159PASS, independentfrozen13PASS same3sourcehashes/clean. Differentmodelgpt6-sol/medium actualruntimeSID01a10df5-eaf6-7831-9643-cad11e6ea2c8 sourcelevelINV20/21PASS; header/rolloutmetadataauthoritative ratherthanreportedSID. Independentcompatibility3oldDTO expectations additivefields only. Sourceunchangedthroughmainmerge. Installedacceptanceawaitdeployment.
