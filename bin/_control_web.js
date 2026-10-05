@@ -176,7 +176,7 @@ function parseDeepLink(){const params=new URLSearchParams(location.search);if(pa
 function stopPolling(){stopMessageAges();if(pollTimer!==null){clearInterval(pollTimer);pollTimer=null;}}
 function startPolling(){stopPolling();syncMessageAges();if(currentTab==='sessions'&&selectedSession&&document.visibilityState==='visible'&&csrf)pollTimer=setInterval(()=>{if(document.visibilityState==='visible'&&selectedSession&&!normalizeHistoryState(currentSessionKey()).historyError)loadHistory(false);},5000);}
 function currentSessionKey(){return selectedProject&&selectedSession?chatKey(selectedProject,selectedSession.sid):null;}
-function syncCurrentSessionControls(){const key=currentSessionKey();const historyBusy=Boolean(key&&historyFlights.has(key));const state=key&&historyData.get(key);const hasOlder=Boolean(state&&state.olderAnchors.some(anchor=>!anchor.error));$('chat-send').disabled=!csrf||currentTab!=='sessions'||!key||sendsInFlight.has(key);$('chat-refresh').disabled=!key||historyBusy;$('history-older').disabled=!key||historyBusy||!hasOlder;$('history-retry').hidden=!(state&&state.historyError);$('history-retry').disabled=!key||historyBusy;renderCurrentSendStatus();}
+function syncCurrentSessionControls(){const key=currentSessionKey();const historyBusy=Boolean(key&&historyFlights.has(key));const state=key&&historyData.get(key);const hasOlder=Boolean(state&&(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error)));$('chat-send').disabled=!csrf||currentTab!=='sessions'||!key||sendsInFlight.has(key);$('chat-refresh').disabled=!key||historyBusy;$('history-older').disabled=!key||historyBusy||!hasOlder;$('history-retry').hidden=!(state&&state.historyError);$('history-retry').disabled=!key||historyBusy;renderCurrentSendStatus();}
 function showTab(tab,load=true){currentTab=tab;const tasks=tab==='tasks';if(tasks)clearHistoryScrollSlack();$('tab-tasks').setAttribute('aria-selected',String(tasks));$('tab-sessions').setAttribute('aria-selected',String(!tasks));$('tasks-panel').hidden=!tasks;$('sessions-panel').hidden=tasks;syncCurrentSessionControls();if(tasks){stopPolling();if(load&&!taskLoaded)refresh();}else{if(load&&!projectNames.length)loadProjects();else if(load&&!selectedProject)loadSessionList(0,false);startPolling();}}
 function setSessionStatus(text){$('session-list-status').textContent=text;}
 function renderProjects(){
@@ -256,16 +256,16 @@ function statusLabel(status){const labels={active:'Работает',idle:'Го�
 function chatError(err){if(err&&err.code==='stale')return 'Сессия устарела или изменилась. Обновите список и выберите её снова.';return err&&err.message||messages.unavailable;}
 function clearHistoryScrollSlack(){historyScrollSlack=0;pinnedHistoryScope=null;historyScrollIntent=false;historyTouchY=null;historyScrollbarStartY=null;if(historyScrollSpacer){historyScrollSpacer.remove();historyScrollSpacer=null;}}
 function setHistoryScrollSlack(height){const bounded=Math.max(0,Math.min(window.innerHeight,Math.ceil(height)));historyScrollSlack=bounded;if(!bounded){clearHistoryScrollSlack();return;}if(!historyScrollSpacer){historyScrollSpacer=node('li',undefined,'history-scroll-slack');historyScrollSpacer.setAttribute('aria-hidden','true');historyScrollSpacer.append(document.createElementNS('http://www.w3.org/2000/svg','svg'));}const svg=historyScrollSpacer.firstElementChild;svg.setAttribute('width','0');svg.setAttribute('height',String(bounded));svg.setAttribute('focusable','false');const list=$('chat-items');if(historyScrollSpacer.parentNode!==list)list.append(historyScrollSpacer);}
-function clearHistoryView(){stopMessageAges();clearHistoryScrollSlack();historyData.delete(chatKey(selectedProject,selectedSession&&selectedSession.sid||''));$('chat-panel').hidden=true;$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-status').textContent='';$('history-retry').hidden=true;$('send-status').textContent='';$('history-truncated').hidden=true;$('native-attention').hidden=true;$('chat-draft').value='';}
-function openChat(row){if(!row||!UUID_RE.test(row.sid))return;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;selectedSession={sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=state.historyError;syncCurrentSessionControls();loadHistory(false);startPolling();}
-function normalizeHistoryState(key){if(!historyData.has(key))historyData.set(key,{turns:new Map(),order:[],olderAnchors:[],initialized:false,truncated:false,attention:false,paginationError:'',historyError:''});return historyData.get(key);}
+function clearHistoryView(){stopMessageAges();clearHistoryScrollSlack();historyData.delete(chatKey(selectedProject,selectedSession&&selectedSession.sid||''));$('chat-panel').hidden=true;$('history-new').hidden=true;$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-status').textContent='';$('history-retry').hidden=true;$('send-status').textContent='';$('history-truncated').hidden=true;$('native-attention').hidden=true;$('chat-draft').value='';}
+function openChat(row){if(!row||!UUID_RE.test(row.sid))return;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;selectedSession={sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;$('history-new').hidden=true;if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=state.historyError;syncCurrentSessionControls();loadHistory(false);startPolling();}
+function normalizeHistoryState(key){if(!historyData.has(key))historyData.set(key,{turns:new Map(),order:[],olderAnchors:[],initialized:false,truncated:false,attention:false,paginationError:'',historyError:'',windowIds:null,windowOlder:false,pendingLatest:false});return historyData.get(key);}
 function validHistoryId(value){return typeof value==='string'&&value.length>0&&value.length<=500;}
 function mergeHistory(key,data,olderAnchor){const state=normalizeHistoryState(key);const incoming=Array.isArray(data.turns)?data.turns:[];const chronological=incoming.slice().reverse().filter(turn=>turn&&validHistoryId(turn.id));const incomingIds=new Set(chronological.map(turn=>turn.id));const existingIds=new Set(state.order);const hadOverlap=chronological.some(turn=>existingIds.has(turn.id));for(const turn of chronological){const previous=state.turns.get(turn.id);const itemMap=new Map();for(const item of (previous&&previous.items)||[])if(validHistoryId(item&&item.id))itemMap.set(item.id,item);for(const item of (Array.isArray(turn.items)?turn.items:[])){if(item&&validHistoryId(item.id))itemMap.set(item.id,item);}state.turns.set(turn.id,{...turn,items:[...itemMap.values()]});}
   const ids=chronological.map(turn=>turn.id).filter((id,i,a)=>a.indexOf(id)===i);if(olderAnchor){const anchorIndex=state.olderAnchors.indexOf(olderAnchor);const originalOrder=state.order;const overlapId=ids.find(id=>existingIds.has(id));const boundaryId=overlapId||olderAnchor.afterId;const boundaryIndex=boundaryId===null?-1:originalOrder.indexOf(boundaryId);const insertAt=boundaryIndex<0?0:originalOrder.slice(0,boundaryIndex).filter(id=>!incomingIds.has(id)).length;state.order=originalOrder.filter(id=>!incomingIds.has(id));state.order.splice(insertAt,0,...ids.filter(id=>!state.order.includes(id)));if(anchorIndex>=0){if(data.next_cursor){if(olderAnchor.seen.has(data.next_cursor)){olderAnchor.error=true;state.paginationError='Продолжение истории недоступно: сервер повторил cursor.';}else{state.olderAnchors[anchorIndex]={cursor:data.next_cursor,afterId:ids[0]||olderAnchor.afterId,seen:new Set([...olderAnchor.seen,data.next_cursor]),error:false};}}else state.olderAnchors.splice(anchorIndex,1);}}else{state.order=[...state.order.filter(id=>!incomingIds.has(id)),...ids];if(!state.initialized){state.olderAnchors=[];if(data.next_cursor)state.olderAnchors.push({cursor:data.next_cursor,afterId:ids[0]||state.order[0]||null,seen:new Set([data.next_cursor]),error:false});state.initialized=true;}else if(data.next_cursor&&!hadOverlap&&!state.olderAnchors.some(anchor=>anchor.cursor===data.next_cursor)){state.olderAnchors.push({cursor:data.next_cursor,afterId:ids[0]||state.order[0]||null,seen:new Set([data.next_cursor]),error:false});}}
   state.paginationError=state.olderAnchors.some(anchor=>anchor.error)?'Продолжение истории недоступно: сервер повторил cursor.':'';
   state.truncated=state.truncated||data.truncated===true;state.attention=data.needs_native_attention===true;for(const receipt of Array.isArray(data.recent_sends)?data.recent_sends:[])applyReceipt(key,receipt);return state;}
 function scrollScopeMatches(project,sid,generation){return activeSelection(project,sid,generation)&&document.visibilityState==='visible';}
-function scrollToDocumentBottom(){pageReaderScope=null;clearHistoryScrollSlack();const root=document.documentElement;const body=document.body;const height=Math.max(root?root.scrollHeight:0,body?body.scrollHeight:0);window.scrollTo(0,Math.max(0,height-window.innerHeight));}
+function scrollToDocumentBottom(){showLatestHistory();pageReaderScope=null;clearHistoryScrollSlack();const root=document.documentElement;const body=document.body;const height=Math.max(root?root.scrollHeight:0,body?body.scrollHeight:0);window.scrollTo(0,Math.max(0,height-window.innerHeight));}
 function documentMaxScroll(){const root=document.documentElement;const body=document.body;return Math.max(0,Math.max(root?root.scrollHeight:0,body?body.scrollHeight:0)-window.innerHeight);}
 function markdownTextNodes(article){
   const content=article.querySelector('.markdown');if(!content)return null;
@@ -322,6 +322,11 @@ async function loadHistory(older=false,manual=false){
   if(existing){if(existing.generation===generation)return existing.promise;existing.controller.abort();}
   const state=normalizeHistoryState(key);
   if(state.historyError&&!manual)return;
+  if(older&&hasEarlierHistory(state)){
+    const decision=captureHistoryScroll(project,sid,generation,true);
+    openOlderHistory(state,decision);renderHistory(key);syncCurrentSessionControls();
+    restoreHistoryScroll(decision,project,sid,generation);return;
+  }
   const anchor=older?[...state.olderAnchors].reverse().find(candidate=>!candidate.error):null;
   if(older&&!anchor)return;
   if(manual)state.historyError='';
@@ -337,8 +342,15 @@ async function loadHistory(older=false,manual=false){
       // The deadline includes JSON consumption, and only cancels this browser GET.
       const data=await Promise.race([api(path,undefined,controller.signal,()=>activeSelection(project,sid,generation)),deadline]);
       if(!activeSelection(project,sid,generation)||historyFlights.get(key)!==flight)return;
-      const scrollDecision=captureHistoryScroll(project,sid,generation,older);
-      mergeHistory(key,data,anchor);state.historyError='';renderHistory(key);
+      let scrollDecision=captureHistoryScroll(project,sid,generation,older);
+      const known=new Set(historyItems(state).map(entry=>entry.key));
+      const hold=state.windowIds!==null&&(state.windowOlder||focusedHistoryBubble()||scrollDecision&&scrollDecision.kind!=='bottom');
+      if(hold&&scrollDecision&&scrollDecision.kind==='bottom')scrollDecision=captureHistoryScroll(project,sid,generation,true);
+      mergeHistory(key,data,anchor);state.historyError='';
+      if(older)openOlderHistory(state,scrollDecision);
+      else if(!hold){state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;}
+      else if(historyItems(state).some(entry=>!known.has(entry.key)))state.pendingLatest=true;
+      renderHistory(key);
       $('history-status').textContent=state.paginationError;
       if(historyFlights.get(key)===flight){historyFlights.delete(key);syncCurrentSessionControls();restoreHistoryScroll(scrollDecision,project,sid,generation);}
     }catch(err){
@@ -388,7 +400,103 @@ function syncMessageAges(){
   stopMessageAges();
   if(messageAgesActive()){updateMessageAges();messageAgeTimer=setInterval(updateMessageAges,60000);}
 }
-function renderHistory(key){const state=normalizeHistoryState(key);const list=$('chat-items');const frag=document.createDocumentFragment();let visible=0;for(const id of state.order){const turn=state.turns.get(id);if(!turn)continue;const group=node('li',undefined,'turn');const heading=node('p','Ход: '+statusLabel(turn.status),'turn-status');group.append(heading);for(const item of turn.items||[]){if(!item||typeof item.text!=='string'||!['user','assistant'].includes(item.role))continue;const article=node('article',undefined,'chat-message '+(item.role==='user'?'from-user':'from-assistant'));article.dataset.turnId=id;article.dataset.itemId=item.id;const heading=node('div',undefined,'message-heading');heading.append(node('h3',item.role==='user'?'Вы':'Codex'),messageTime(item));article.append(heading);article.append(renderMarkdown(item.text));if(item.truncated===true)article.append(node('span','Сообщение сокращено','meta'));group.append(article);visible++;}frag.append(group);}if(!visible)frag.append(node('li','Пока нет отображаемых текстовых сообщений.','meta'));list.replaceChildren(frag);syncMessageAges();if(historyScrollSlack)setHistoryScrollSlack(historyScrollSlack);$('history-truncated').hidden=!(state.truncated||[...state.turns.values()].some(turn=>(turn.items||[]).some(item=>item.truncated===true)));$('history-older').hidden=!state.olderAnchors.length;$('history-older').disabled=!state.olderAnchors.some(anchor=>!anchor.error);$('native-attention').hidden=!(state.attention||(selectedSession&&selectedSession.needs));renderReceipts(key);}
+// INV-WSESS-22/23: bound DOM only; keep loaded cache and opaque gap cursors intact.
+const HISTORY_WINDOW_LIMIT=100;
+function historyItems(state){
+  const entries=[];
+  for(const turnId of state.order){
+    const turn=state.turns.get(turnId);if(!turn)continue;
+    for(const item of turn.items||[])if(item&&typeof item.text==='string'&&['user','assistant'].includes(item.role))
+      entries.push({key:JSON.stringify([turnId,item.id]),turnId,turn,item});
+  }
+  return entries;
+}
+function hasEarlierHistory(state){
+  if(!state.windowIds||!state.windowIds.length)return false;
+  return historyItems(state).findIndex(entry=>entry.key===state.windowIds[0])>0;
+}
+function openOlderHistory(state,decision){
+  const entries=historyItems(state),first=state.windowIds&&state.windowIds[0];
+  state.windowOlder=true;
+  if(entries.length<=HISTORY_WINDOW_LIMIT){state.windowIds=entries.map(entry=>entry.key);return;}
+  // Empty/repeated pages must leave the readable window intact.
+  if(first&&entries.findIndex(entry=>entry.key===first)<=0)return;
+  const anchor=decision&&decision.kind==='anchor'?JSON.stringify([decision.turnId,decision.itemId]):first;
+  let end=entries.findIndex(entry=>entry.key===anchor);
+  if(end<0)end=entries.findIndex(entry=>entry.key===first);
+  if(end<0)end=entries.length-1;
+  // Keep the first fully readable neighbor when the captured bubble is clipped
+  // above the viewport; both reader anchors overlap, never the whole old window.
+  if(decision&&decision.kind==='anchor'&&decision.top<0){
+    const readable=[...$('chat-items').querySelectorAll('article.chat-message')].find(article=>{const rect=article.getBoundingClientRect();return rect.top>=0&&rect.top<window.innerHeight;});
+    const next=readable&&entries.findIndex(entry=>entry.key===JSON.stringify([readable.dataset.turnId,readable.dataset.itemId]));
+    if(next===end+1)end=next;
+  }
+  state.windowIds=entries.slice(Math.max(0,end-HISTORY_WINDOW_LIMIT+1),end+1).map(entry=>entry.key);
+}
+function focusedHistoryBubble(){
+  const article=document.activeElement&&document.activeElement.closest('article.chat-message');
+  if(article&&$('chat-items').contains(article))return article;
+  const selection=window.getSelection();
+  if(selection&&!selection.isCollapsed){const parent=selection.anchorNode&&selection.anchorNode.parentElement;const selected=parent&&parent.closest('article.chat-message');if(selected&&$('chat-items').contains(selected))return selected;}
+  return null;
+}
+function showLatestHistory(){
+  const key=currentSessionKey();if(!key||!activeSelection())return;
+  const state=normalizeHistoryState(key),ids=historyItems(state).slice(-HISTORY_WINDOW_LIMIT).map(entry=>entry.key);
+  const changed=state.pendingLatest||!state.windowIds||ids.length!==state.windowIds.length||ids.some((id,index)=>id!==state.windowIds[index]);
+  state.windowIds=ids;state.windowOlder=false;state.pendingLatest=false;
+  if(changed)renderHistory(key,true);else $('history-new').hidden=true;
+  syncCurrentSessionControls();
+}
+function reconcileHistoryChildren(parent,children){
+  const keep=new Set(children);
+  for(const child of [...parent.childNodes])if(!keep.has(child))child.remove();
+  children.forEach((child,index)=>{if(parent.childNodes[index]!==child)parent.insertBefore(child,parent.childNodes[index]||null);});
+}
+function historyArticle(entry,existing,force){
+  const article=existing||node('article',undefined,'chat-message '+(entry.item.role==='user'?'from-user':'from-assistant'));
+  const item=entry.item,old=article.historyItem;
+  const changed=!old||['role','text','truncated','timestamp','time_precision'].some(field=>old[field]!==item[field]);
+  if(changed){
+    if(existing&&!force&&focusedHistoryBubble()===article){normalizeHistoryState(currentSessionKey()).pendingLatest=true;return article;}
+    article.dataset.turnId=entry.turnId;article.dataset.itemId=item.id;
+    const heading=node('div',undefined,'message-heading');heading.append(node('h3',item.role==='user'?'Вы':'Codex'),messageTime(item));
+    const children=[heading,renderMarkdown(item.text)];
+    if(item.truncated===true)children.push(node('span','Сообщение сокращено','meta'));
+    article.replaceChildren(...children);article.historyItem=item;
+  }
+  return article;
+}
+function renderHistory(key,force=false){
+  const state=normalizeHistoryState(key),list=$('chat-items'),all=historyItems(state);
+  if(state.windowIds===null)state.windowIds=all.slice(-HISTORY_WINDOW_LIMIT).map(entry=>entry.key);
+  const wanted=new Set(state.windowIds),visible=all.filter(entry=>wanted.has(entry.key)).slice(-HISTORY_WINDOW_LIMIT);
+  const articles=new Map([...list.querySelectorAll('article.chat-message')].map(article=>[JSON.stringify([article.dataset.turnId,article.dataset.itemId]),article]));
+  const groups=new Map([...list.querySelectorAll('li.turn')].map(group=>[group.dataset.turnId,group]));
+  const children=[],contents=new Map();
+  for(const entry of visible){
+    let group=contents.get(entry.turnId);
+    if(!group){
+      const element=groups.get(entry.turnId)||node('li',undefined,'turn');element.dataset.turnId=entry.turnId;
+      const heading=element.querySelector('.turn-status')||node('p',undefined,'turn-status');
+      const text='Ход: '+statusLabel(entry.turn.status);if(heading.textContent!==text)heading.textContent=text;
+      group={element,children:[heading]};contents.set(entry.turnId,group);children.push(element);
+    }
+    group.children.push(historyArticle(entry,articles.get(entry.key),force));
+  }
+  for(const group of contents.values())reconcileHistoryChildren(group.element,group.children);
+  if(!visible.length)children.push(node('li','Пока нет отображаемых текстовых сообщений.','meta'));
+  if(historyScrollSlack&&historyScrollSpacer)children.push(historyScrollSpacer);
+  reconcileHistoryChildren(list,children);syncMessageAges();
+  if(historyScrollSlack)setHistoryScrollSlack(historyScrollSlack);
+  $('history-truncated').hidden=!(state.truncated||all.some(entry=>entry.item.truncated===true));
+  $('history-older').hidden=!state.initialized;
+  $('history-older').disabled=!(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error));
+  $('history-new').hidden=!state.pendingLatest;
+  $('native-attention').hidden=!(state.attention||(selectedSession&&selectedSession.needs));renderReceipts(key);
+}
+
 function statusText(status){return status==='accepted'?'Сообщение принято Codex; работа может продолжаться.':status==='rejected'?'Codex отклонил сообщение; черновик сохранён.':status==='delivery_unknown'?'Доставка неизвестна. Проверьте статус вручную; отправка не повторяется автоматически.':status==='sending'?'Отправляем сообщение…':'Статус сообщения недоступен.';}
 function renderCurrentSendStatus(){if(acceptedStatusTimer!==null){clearTimeout(acceptedStatusTimer);acceptedStatusTimer=null;}const key=currentSessionKey(),attempt=key&&latestAttempts.get(key);let slot=$('send-status');if(attempt&&attempt.statusNode&&attempt.statusNode!==slot){attempt.statusNode.setAttribute('aria-live',attempt.status==='accepted'?'off':'polite');slot.replaceWith(attempt.statusNode);slot=attempt.statusNode;}else if(attempt&&!attempt.statusNode){attempt.statusNode=slot;slot.setAttribute('aria-live','polite');}else if(!attempt&&slot.textContent){const empty=slot.cloneNode(false);empty.setAttribute('aria-live','polite');slot.replaceWith(empty);slot=empty;}$('send-check').hidden=!(attempt&&attempt.status==='delivery_unknown');$('send-check').disabled=Boolean(attempt&&statusChecks.has(key+'\u0000'+attempt.id));let text=attempt?(attempt.localError||statusText(attempt.status)):'';if(attempt&&attempt.status==='accepted'){const remaining=(attempt.acceptedUntil||0)-Date.now();if(remaining<=0)text='';else{const project=selectedProject,sid=selectedSession.sid,generation=selectionGeneration,id=attempt.id;acceptedStatusTimer=setTimeout(()=>{acceptedStatusTimer=null;if(currentSessionKey()===key&&selectionGeneration===generation&&selectedSession&&selectedSession.sid===sid&&selectedProject===project&&latestAttempts.get(key)?.id===id)renderCurrentSendStatus();},remaining);}}if($('send-status').textContent!==text)$('send-status').textContent=text;}
 function renderReceipts(key=currentSessionKey()){const list=$('receipt-list');if(!list||!selectedSession||key!==currentSessionKey())return;const open=list.querySelector('details')?.open||false;const records=[...ensureReceipts(key).entries()].filter(([,record])=>['sending','delivery_unknown','rejected'].includes(record.status));list.replaceChildren();if(!records.length)return;const details=node('details');details.open=open;details.append(node('summary','Проблемы доставки ('+records.length+')'));for(const [id,record] of records.reverse()){const row=node('div',undefined,'receipt-row');row.append(node('span',record.checkError||statusText(record.status),'receipt-label'));if(record.status==='delivery_unknown'){const check=node('button','Проверить доставку','secondary');check.type='button';check.disabled=statusChecks.has(key+'\u0000'+id);check.addEventListener('click',()=>checkDelivery(key,id));row.append(check);}details.append(row);}list.append(details);}
@@ -415,6 +523,7 @@ $('projects-refresh').addEventListener('click',loadProjects);
 $('sessions-more').addEventListener('click',()=>{if(sessionsHaveMore)loadSessionList(sessionPage+1,true);});
 $('chat-refresh').addEventListener('click',()=>loadHistory(false,true));
 $('history-retry').addEventListener('click',()=>loadHistory(false,true));
+$('history-new').addEventListener('click',()=>{if(activeSelection()){initialScrollTarget=null;scrollToDocumentBottom();}});
 $('chat-latest').addEventListener('click',()=>{const project=selectedProject,sid=selectedSession&&selectedSession.sid,generation=selectionGeneration;if(scrollScopeMatches(project,sid,generation)){initialScrollTarget=null;scrollToDocumentBottom();}});
 document.querySelectorAll('[data-page-scroll]').forEach(button=>button.addEventListener('click',()=>{initialScrollTarget=null;clearHistoryScrollSlack();if(button.dataset.pageScroll==='up'){pageReaderScope={project:selectedProject,sid:selectedSession&&selectedSession.sid,generation:selectionGeneration};window.scrollTo(0,0);}else scrollToDocumentBottom();}));
 $('history-older').addEventListener('click',()=>loadHistory(true));
