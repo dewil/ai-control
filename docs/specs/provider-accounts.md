@@ -38,13 +38,18 @@ identity. Эта спецификация фиксирует решение по
 - INV-ACCOUNT-10: private owner-controlled profile registration фиксирует instance,
   adapter/auth-source/store expectation и native principal expectation без secret
   reads/copies. Registration и filesystem identity не подтверждают login identity;
-  замена profile/metadata не переназначает существующие TASK.
+  замена profile/metadata не переназначает существующие TASK. Native file access
+  связан kernel-bound view с validated directory objects; same-owner pathname
+  rename/symlink между проверкой и open не дает чтения другого аккаунта.
 - INV-ACCOUNT-11: равные native IDs разных аккаунтов никогда не объединяют state,
   историю, receipt или replay. Context сравнивается до lookup/чтения, а не после
   успешного использования чужих данных. Distinct profiles могут работать параллельно.
 - INV-ACCOUNT-12: bound native exec имеет closed environment после реальной service
   startup boundary, включая inherited systemd manager env. Нет ambient HOME/auth/
-  socket/profile/endpoint fallback; parent environment не изменяется.
+  socket/profile/endpoint fallback; parent environment не изменяется. HOME,
+  native home и effective credential-store paths внутри owned host адресуют
+  pinned kernel profile view; недоказанная view/file-access semantics блокирует
+  host до native access, pathname pre/post checks не заменяют этот гейт.
 - INV-ACCOUNT-13: supported auth source/effective store и стабильный native principal
   проверяются на том же owned host до claim/thread/turn; invocation restart и auth
   notification инвалидируют admission. Missing/unproven/changed identity явно denies,

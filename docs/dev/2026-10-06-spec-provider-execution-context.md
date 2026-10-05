@@ -134,7 +134,10 @@ trusted owner_home для temp fixtures; production не имеет path/env ove
 Регистрация требует existing root/codex/native-home, не создаёт native login или
 config. Только registration leaf атомарно публикуется после final CAS/recheck.
 Директории0700 expected UID; metadata0600/nlink1; no profile ancestor symlinks,
-unsafe writable ancestry или cross-account inode aliases. Sticky system-root temp
+unsafe writable ancestry или cross-account inode aliases. Anchored FD walk и
+before/after pathname checks не закрывают same-owner rename/symlink TOCTOU:
+передача проверенного pathname в HOME/CODEX_HOME еще не связывает native open
+с проверенным profile object. Это отдельная обязательная kernel boundary ниже. Sticky system-root temp
 ancestor допускается ровно как в first-slice fixture contract. Fixed catalog
 symlink exception не распространяется на runtime profiles.
 
@@ -165,7 +168,7 @@ Vocabulary first-slice AccountError плюс `profile_unconfigured`, `profile_in
 `context_missing`, `context_drift`, `native_identity_unproven`,
 `native_identity_missing`, `native_identity_mismatch`, `auth_source_unsupported`,
 `credential_store_unproven`, `credential_store_unsupported`, `account_changed`,
-`admission_stale`. Native/raw paths/email/principal/exception/env не выводятся.
+`admission_stale`, `profile_view_unproven`. Native/raw paths/email/principal/exception/env не выводятся.
 First structural/binding error, затем catalog/grant, затем profile/context,
 затем evidence/admission error; эта precedence одинакова у callers.
 Lower runtime использует прежнюю форму blocked/reason и exit2 с тем же CODE.
@@ -214,6 +217,30 @@ exact context_ref и сравнивают его до native UUID/path/history l
 ownership+context association; отдельный cleanup допускается без resolve account.
 
 ## Closed environment и owned pre-admission state
+
+До любого native access owned host получает kernel-bound profile view,
+связанный с открытыми validated directory objects выбранного profile instance,
+а не с их повторно разрешаемыми host pathnames. HOME/CODEX_HOME внутри host
+обозначают только это представление. Effective credential-store paths и все
+native account/config/history lookups обязаны оставаться в нем; mount/view
+lifetime связан с owned invocation и journal context_ref. Rename A/codex и
+подмена прежнего pathname ссылкой на B после validation не может перенаправить
+native open в B. Cross-account aliases, включая alias самого store path,
+отказывают до credential access. Native managed refresh может писать только
+в выбранный pinned store; legitimate credential replacement не переключает view.
+
+Механизм не объявлен доказанным: отдельно проверить fixed FD-backed mount view
+в owned private namespace и trusted launcher, либо другой эквивалентный kernel
+binding. Он должен сохранить selected directory identity через native opens,
+не следовать новым host aliases и не позволять native child переназначить view.
+Нельзя считать строковый /proc/self/fd path доказательством без проверки FD
+lifetime/native canonicalization/descendant symlink semantics. Если namespace,
+file access или effective store semantics не доказаны, возвращать
+`profile_view_unproven` до native process/access; без pathname-only fallback.
+Это blocker executable host boundary даже при synthetic matching account/read.
+Public registration/status по-прежнему metadata-only; native protocol fields или
+native RPC для kernel proof не изобретаются. Ownership journal хранит private
+Control view association/proof вместе с invocation; native account JSON неизменен.
 
 Bound native process запускается фиксированным installed launcher, который перед
 native exec использует execve с новым env, без inherited manager env. Он не
@@ -295,6 +322,13 @@ owner-local profile host-use lock; разные account profiles работаю�
    socket, endpoint, LD/Python injection не достигают fake final native child.
    Global/shared socket trap не contacted. Проверять launcher exec boundary, не
    только argv --setenv и Python env dictionary. Installed manifest включает helper.
+   INV-ACCOUNT-10/12: deterministic synthetic barrier после final directory check,
+   до первого native file access: rename A/codex, заменить прежний путь symlink B;
+   повторить для ancestor/HOME и effective credential-store alias. Fake native
+   child получает A pinned view либо admission refuses BEFORE auth/config/history/
+   thread/turn; B read trap остается zero. Проверка не ограничивается финальным
+   account mismatch после уже состоявшегося credential read. Прежний pathname
+   и valid same-UID owner не считаются доказательством, profile B неизменен.
 4. INV-ACCOUNT-13: public synthetic native replies используют observed schema;
    absent/null workspaceRouting, missing/mismatch principal, wrong auth/keyring/auto,
    unsupported/unproven store, stale invocation/account update/refreshed principal
@@ -331,4 +365,6 @@ Interactive/web/Claude отдельные features; никакого completion 
 Вопросы к пользователю: отсутствуют; инженерные choices bounded выше. Открытые
 вопросы к evidence: stable native principal, managed source/effective file-store
 attestation в0.160.0, actual origin/routing semantics, refresh/switch consistency.
-Это blocker native activation и native implementation, не разрешение его угадать.
+Kernel-bound profile view/native file-access semantics также не доказаны.
+Это blockers native activation и executable host boundary, не разрешение угадать
+identity или заменить kernel binding pathname pre/post checks.
