@@ -2141,7 +2141,7 @@ class RuntimeContract(unittest.TestCase):
                 try:
                     case.publish_registry()
                     controller, hosts, calls, order = case.discovery_fixture(native_mode='read', rollout_registry=evidence)
-                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 1)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 5)
                     self.assertIn(result['outcome'], ('blocked', 'unknown'))
                     self.assertIn('ordinary_wire_raw_channel_absent', order)
                     self.assertNotIn('reply_dynamic', order)

@@ -3432,6 +3432,11 @@ def cmd_loop(argv, mode="loop"):
     drain (v2 §2: крутит 'ran' подряд, на первом не-'ran' - финал + exit 0)."""
     agent_dir, name = check_dir(
         argv[0] if argv else os.environ.get("AI_AGENT_DIR", ""))
+    from _control_provider_accounts import AccountError, execution_gate
+    try:
+        execution_gate(agent_dir)
+    except AccountError as exc:
+        die(2, exc.code)
     engine = task_engine(agent_dir)
     if engine == 'codex':
         codex_python()  # Reexec before any non-inherited flock or inbox mutation.

@@ -48,6 +48,8 @@ set -u
 shopt -s nullglob
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=fixtures/init-legacy-control.sh
+. "$HERE/fixtures/init-legacy-control.sh"
 RC="$HERE/../bin/ai-rc"
 RUN="$HERE/../bin/ai-agent-run"
 DONE="$HERE/../bin/ai-agent-done"
@@ -203,6 +205,8 @@ limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 $extra
 EOF
+  # Preserve the fixture runtime while exercising strict authoritative admission.
+  init_legacy_control "$ag"
   echo "$ag"
 }
 mk_isolated_agent() { # <base-dir> <name> -> печатает agent-dir; spec.yaml (workspace:none) под base_dir/name
@@ -224,6 +228,7 @@ memory_max_mb: 100
 limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 EOF
+  init_legacy_control "$ag"
   echo "$ag"
 }
 write_done_json() { # <agent-dir> <key> <summary> -> done.json requested/workspace:none/pushed_at:null
