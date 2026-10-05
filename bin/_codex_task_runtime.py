@@ -1386,6 +1386,7 @@ class CodexTaskRuntime:
 
     def reconcile(self,*,deadline):
         try:
+            execution_gate(self.agent_dir)
             self._deadline(deadline); self._executor_owner(); snapshot=self.store.snapshot(deadline=deadline)
             if not snapshot['operations']: return dict(outcome='idle',operations=[],reason=None)
             self.revoke_and_drain('recovery',deadline=deadline)
@@ -1425,6 +1426,8 @@ class CodexTaskRuntime:
                 self._archive_ordinary(op,deadline)
                 recovered=True
             return dict(outcome='recovered' if recovered else 'idle',operations=list(snapshot['operations']),reason=None)
+        except AccountError as exc:
+            return dict(outcome='blocked',operations=[],reason=exc.code)
         except Exception:
             return dict(outcome='blocked',operations=[],reason='native_evidence_unconfirmed')
 
@@ -1490,7 +1493,7 @@ def main(argv=None):
     try:
         # Admission precedes native interpreter/profile construction. Cleanup
         # remains available even when the account cannot execute operations.
-        if args.command in ('execute', 'preflight'):
+        if args.command in ('execute', 'preflight', 'reconcile'):
             execution_gate(args.agent)
         ensure_native_python()
         controller=runtime_for(args.agent); deadline=time.monotonic()+30

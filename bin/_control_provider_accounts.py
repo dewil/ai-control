@@ -43,6 +43,11 @@ def check_binding_unchanged(previous, candidate):
     new = validate_binding(candidate['provider_binding']) if 'provider_binding' in candidate else None
     if old != new:
         raise AccountError('binding_immutable')
+    # The account grant is scoped to this TASK identity and project. Keeping
+    # the IDs while changing that scope would reroute an existing binding.
+    if old is not None and any(previous.get(key) != candidate.get(key)
+                               for key in ('incarnation', 'project_name')):
+        raise AccountError('binding_immutable')
 
 
 def _pairs(pairs):
