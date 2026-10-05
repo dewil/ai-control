@@ -208,6 +208,43 @@ class PageNavigationBrowserContract(unittest.TestCase):
         self.assertLessEqual(result['max']-result['y'], 80, 'INV-WSESS-15: down restores newest-message follow')
 
 
+    def assert_manual_return_follows_update(self, input_kind):
+        self.open_history()
+        self.activate('up')
+        # Browser-delivered wheel/End is trusted user input. Keep focus on the
+        # navigation button so End scrolls the document rather than a textarea.
+        events = []
+        self.page.expose_function('navigationInputEvidence', lambda kind, trusted: events.append((kind, trusted)))
+        self.page.evaluate("""() => {
+            for (const kind of ['keydown','wheel']) document.addEventListener(kind,
+                event => window.navigationInputEvidence(kind,event.isTrusted), {capture:true});
+        }""")
+        if input_kind == 'End':
+            self.buttons('up').first.focus()
+            self.page.keyboard.press('End')
+        else:
+            self.page.mouse.move(1100, 500)
+            self.page.mouse.wheel(0, self.metrics()['max'] + 900)
+        self.assert_extreme('down')
+        self.assertIn(('keydown' if input_kind == 'End' else 'wheel', True), events,
+                      'Manual return must use trusted browser input')
+        before_requests = len(self.history_requests())
+        private_json(self.evidence / 'control.json', {'delay': 0, 'count': 28})
+        self.page.get_by_text('LATEST message 27', exact=True).wait_for(state='attached', timeout=8500)
+        self.page.wait_for_timeout(250)
+        self.assertGreater(len(self.history_requests()), before_requests, 'Must observe a real polling update')
+        result = self.metrics()
+        private_json(self.evidence / ('manual-return-' + input_kind + '.json'), {'input': input_kind, 'events': events, **result})
+        self.assertLessEqual(result['max']-result['y'], 80,
+                             'INV-WSESS-15: trusted manual return restores follow without explicit down: ' + repr(result))
+
+    def test_INV_WSESS_15_manual_End_after_up_restores_follow(self):
+        self.assert_manual_return_follows_update('End')
+
+    def test_INV_WSESS_15_manual_wheel_after_up_restores_follow(self):
+        self.assert_manual_return_follows_update('wheel')
+
+
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] == '--serve': serve(Path(sys.argv[2]), Path(sys.argv[3]))
     else: unittest.main(verbosity=2)
