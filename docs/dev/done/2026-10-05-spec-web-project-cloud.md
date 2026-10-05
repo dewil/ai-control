@@ -92,3 +92,7 @@ Stale retains complete oldcount/max/as_of visibly; changedroots/generation never
 reuse previouscontext lastgood. Single native scan params cwd exactrootarray,
 sourceKinds cli/vscode/appServer, archivedfalse, limit100,cursor wherepresent,
 sortKeyupdated_at,sortDirectiondesc. ID dedup acrosspages beforerootaggregation.
+
+## Проверки реализации06.10
+
+Автор actualgpt6.1-sol/medium; frozen8ea32d9 independent66 testsPASS. Independent cache regressionAemptyA RED до authorfix008ad04; focused26 иexistingbackend105 PASS. Sameactualdifferentmodel gpt6-sol/medium reviewer01a10de6-5bf5-7e60-a851-c19136cb9354 finalPASS поcachefix/arraywire. Root live read-onlyCodex0.160 thread/list twoexactownemptyroots array returnedemptydata/nextCursor:null без realhistory/turns. Это wirecapability, не полная installedUI acceptance. Merge/deploy acceptance pending.
