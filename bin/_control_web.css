@@ -17,3 +17,5 @@ label{display:block;margin:12px 0;font-weight:500}input,textarea,select{display:
 .turn,.chat-message,.chat-message .content{min-width:0}
 .chat-message{width:95%}
 .from-user{width:92%}
+
+#send-status{display:block;min-height:4.5em;width:100%}.receipt-list:empty{display:none}.receipt-list summary{cursor:pointer;min-height:44px;padding:9px 0}
