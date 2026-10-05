@@ -6,6 +6,6 @@
 - INV-DEPLOY-04: Journal/checkpoint/fsync/rollback/recovery preserve lastaccepted tree; unknownneverclaims success or blindrepeat.
 - INV-DEPLOY-05: Healthy exactsame release is idempotent; twofuture releases neednohelperchange withinfixedscope.
 
-Feature ../dev/2026-10-05-spec-web-universal-deploy.md; signing provestrustedissuer,
+Feature ../dev/done/2026-10-05-spec-web-universal-deploy.md; signing provestrustedissuer,
 not reviewquality. CI/review required beforeissuer signing. Tests syntheticonly;
 realrootbootstrap and installation not yet performed.

@@ -112,3 +112,7 @@ returninstalled. Samecommitted unchangedstate returnsalready_installed.
 HigherIDsignedsamebytes returnsadvanced withoutstop/start. Acceptedstate/journal
 corruption cannotbe silentlyreinitialized. Existingtarget additionalvenvfiles
 areoutside13payload anduntouched; extras prohibited in stageonly.
+
+## Проверки реализации06.10
+
+Автор gpt-6.1-sol/medium e147013; независимые29 boundary/recovery/realEd25519 tests PASS direct a5e5552. Bootstrapfixtures читают pinnedpublicGitda0, не изменяютhash/assertions. Freshdifferentmodel gpt-6-sol/high actual01a10de7-3608-7f23-813a-bc270f4ed626 staticsecurityPASS, installedroot/key/state/unit/liveacceptance остаётся отдельным deploymentgate. CI содержит29tests и полныйGitfixture. Roothelper/selfupdate/keygeneration/install пока не выполнялись.
