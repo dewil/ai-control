@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
 SOURCE=ROOT/'deployment/ai-control-web-deploy.py'
+BOOTSTRAP_COMMIT='da0ed863509641c249a1ffa05d54369867c4da9f'
 MODES={'bin/ai-control-web':0o755,'bin/_control_web.py':0o644,'bin/_control_web_broker.py':0o644,
  'bin/_control_web_sessions.py':0o644,'bin/_codex_rc.py':0o644,'bin/_rc_projects.sh':0o755,
  'bin/_control_web.html':0o644,'bin/_control_web.css':0o644,'bin/_control_web.js':0o644,
@@ -42,7 +43,11 @@ class SignedDeploy(unittest.TestCase):
   for path in (self.target,self.stage,self.checkpoints,self.state.parent,self.key.parent):path.mkdir(mode=0o700)
   self.base={}
   for relative,mode in MODES.items():
-   data=(ROOT/relative).read_bytes();self.assertEqual(sha(data),self.api.BOOTSTRAP_BASE[relative],relative)
+   baseline=subprocess.run(['/usr/bin/git','-C',str(ROOT),'show',BOOTSTRAP_COMMIT+':'+relative],
+    stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+    env={'PATH':'/usr/bin:/bin','LANG':'C','GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':os.devnull},timeout=10)
+   self.assertEqual(baseline.returncode,0,'Pinned public bootstrap Git fixture unavailable: '+relative)
+   data=baseline.stdout;self.assertEqual(sha(data),self.api.BOOTSTRAP_BASE[relative],relative)
    self.base[relative]=data;self.write(self.target/relative,data,mode)
   self.crypto('genpkey','-algorithm','ED25519','-out',str(self.private));self.private.chmod(0o600)
   self.crypto('pkey','-in',str(self.private),'-pubout','-out',str(self.key));self.key.chmod(0o644)
