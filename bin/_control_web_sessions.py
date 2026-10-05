@@ -360,6 +360,8 @@ class SessionChat:
         params = {'threadId': sid}
         if method == 'thread/read':
             params['includeTurns'] = False
+        elif method == 'thread/resume':
+            params['excludeTurns'] = True
         thread = self._rpc(method, params).get('thread')
         _need(type(thread) is dict and valid_uuid(thread.get('id'))
               and type(thread.get('cwd')) is str and os.path.isabs(thread['cwd']))
