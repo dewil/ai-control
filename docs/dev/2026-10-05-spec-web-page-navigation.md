@@ -26,3 +26,14 @@ distinct model review и exactCI передmerge/deploy.
 
 Не входит: SSE, ограничение100DOM сообщений, fileupload/nativeattachments,
 новыеdependencies, auth/nativeprotocol/backend/units. Это следующие срезы.
+
+## Уточнение после независимой сверки05.10
+
+INV-WSESS-15 сохраняет прежний естественный follow: если после ↑ пользователь
+сам прокрутил длинную страницу обратно вниз (колесо/scrollbar/End), очередные
+новые сообщения сноваfollow≤80px безобязательногонажатия↓. Программная
+прокрутка↑/перерисовка/кламп короткой страницы не считается ручнымвозвратом
+вниз; pendinginitial отменяется и typingdraft не возобновляетfollow.
+Выбранные taskstab/hiddenbackground не меняютviewport отстарогоhistoryGET;
+readerintent применяется толькок соответствующемуproject/sid/generation.
+Независимый browsercase: ↑→ручнойEnd/колесо доbottom→реальныйupdatefollow.
