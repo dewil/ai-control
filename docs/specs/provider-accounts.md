@@ -41,9 +41,9 @@ session/task/history/receipt ключи включают accountidentity. Native
 
 ## Известные дыры и трассируемость
 
-Реализация provider/accountregistry, immutablebinding и isolated runtime
-ещё не сделана. Владелец клиентского бэклога CONTROL-PROVIDER-ACCOUNTS.
-Read-only карта текущих adapter/runtime возможностей выполняется доfeature
-spec и independent RED; этоткоммит не меняет runtime и не доказываетподдержку
-какого-либо нового вендора/аккаунта. Гарантии изоляции должны быть проверены
-на уровне adapter/runtime, не только отображения labels вUI.
+Каталог аккаунтов и immutable paused TASK binding реализованы первым срезом:
+`docs/dev/done/2026-10-05-spec-provider-account-binding.md`. Bound execution
+остаётся запрещённым до проверенного native execution context. Реальная
+изоляция runtime и account-specific интерактивных сессий ещё не выполнена;
+гарантии должны быть проверены в adapter/runtime и native acceptance.
+Полный владелец клиентского бэклога CONTROL-PROVIDER-ACCOUNTS остаётся открытым.
