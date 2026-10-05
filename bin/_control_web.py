@@ -193,12 +193,22 @@ def create_app(config, backend, clock=None):
         response.headers['Cache-Control'] = 'no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
-        response.headers['Content-Security-Policy'] = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        response.headers['Content-Security-Policy'] = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
         return response
 
     @app.get('/')
     def index():
         return HTMLResponse(Path(__file__).with_name('_control_web.html').read_text())
+
+    @app.get('/favicon.svg')
+    def favicon_svg():
+        from fastapi.responses import Response
+        return Response(Path(__file__).with_name('_control_web.svg').read_bytes(), media_type='image/svg+xml')
+
+    @app.get('/favicon.ico')
+    def favicon_ico():
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse('/favicon.svg', status_code=307)
 
     @app.get('/web.js')
     def javascript():

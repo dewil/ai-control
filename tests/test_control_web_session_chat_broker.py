@@ -112,11 +112,20 @@ class BrokerContract(unittest.TestCase):
         self.worker.start()
         self.addCleanup(self.shutdown)
         deadline = time.monotonic() + 2
-        while not Path(self.socket_path).exists() and time.monotonic() < deadline:
+        ready = False
+        while time.monotonic() < deadline:
             if self.errors:
                 break
-            time.sleep(0.01)
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                    probe.settimeout(min(0.1, max(0.001, deadline - time.monotonic())))
+                    probe.connect(self.socket_path)
+                ready = True
+                break
+            except (FileNotFoundError, ConnectionRefusedError):
+                time.sleep(0.01)
         self.assertEqual(self.errors, [])
+        self.assertTrue(ready, 'Public broker socket did not become connectable')
         self.assertTrue(Path(self.socket_path).exists(), 'Public broker must bind its private socket')
     def shutdown(self):
         self.backend.gate.set()

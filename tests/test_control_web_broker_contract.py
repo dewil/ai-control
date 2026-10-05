@@ -155,9 +155,18 @@ class BrokerContract(unittest.TestCase):
             self.assertFalse(thread.is_alive(), 'broker did not honor stop_event')
         self.addCleanup(cleanup)
         deadline = time.monotonic()+2
-        while not path.exists() and not errors and time.monotonic()<deadline:
-            time.sleep(0.01)
+        ready = False
+        while not errors and time.monotonic()<deadline:
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                    probe.settimeout(min(0.1, max(0.001, deadline-time.monotonic())))
+                    probe.connect(str(path))
+                ready = True
+                break
+            except (FileNotFoundError, ConnectionRefusedError):
+                time.sleep(0.01)
         self.assertFalse(errors, str(errors))
+        self.assertTrue(ready, 'broker socket did not become connectable')
         self.assertTrue(path.exists(), 'broker socket not created')
         self.assertEqual(path.stat().st_mode & 0o777, 0o660)
         return path

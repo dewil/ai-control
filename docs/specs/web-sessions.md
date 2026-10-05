@@ -26,3 +26,7 @@ Native command/file approvals и request_user_input ещё нельзя отве
 05.10 domain adversarial уточнил canonical-root dedup, delivery_unknown для post-send JSON-RPC errors, ≤55s operation deadline и максимум4 broker requests, structured-path versus text privacy и отдельный gate proof native callback availability.
 
 INV-WSESS-01..07 → tests/test_control_web_session_chat_contract.py и tests/test_control_web_session_chat_broker.py; INV-WSESS-08 → independent synthetic phone QA с delayed ACK/switch/reload/older-cursor checks. Installed acceptance отдельно.
+
+Installed correction INV-WSESS-02/08: GETsession-projects экспортирует {name} для доступного root и {name,unavailable:true} для missing/failedroot безpath/rawerror; сбой одногоroot не обрушает остальные и не скрывается. Невалидныйреестр/общийdeadline по-прежнему globalunavailable. UIdisabledoption, unavailabledeeplink/refresh не запускает nativeопераций; freshperrequestrootproofнеизменён. Трассируемость: независимые missing-project provider tests и synthetic browser QA.
+
+INV-WSESS-08 scroll: documentviewport followsinitial/explicituserSend andlatestupdatesonlywhenalready≤80pxfrombottom; чтениевыше иOlderprepend сохраняютvisibleanchor±8px. Currentproject/thread/generation/visibleSessionstab fence preventslate/hidden/task/logout viewportmovement. Memoryonly/no newnativeactions. Трассируемость независимаяsyntheticbrowser longhistory/follow/upreader/olderanchor/send-race/switch/hidden checks.
