@@ -64,7 +64,9 @@ def serve(root, evidence):
             groups=[]
             for offset in range(0,len(items),8):
                 groups.append({'id':items[offset]['text'].split()[3],'status':'completed','items':items[offset:offset+8]})
-            return {'turns':groups,'next_cursor':next_cursor,'truncated':False,
+            # Public history API retains descending native turn order;
+            # each turn's items stay chronological (FR-WSESS-01).
+            return {'turns':list(reversed(groups)),'next_cursor':next_cursor,'truncated':False,
                     'recent_sends':[{'status':'accepted','message_id':'22222222-2222-4222-8222-222222222222','turn_id':SID},
                                     {'status':'delivery_unknown','message_id':'55555555-5555-4555-8555-000000000001','turn_id':None}]}
         def session_send(self, *args): return {'error': 'unavailable'}
