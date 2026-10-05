@@ -155,13 +155,20 @@ def create_app(config, backend, clock=None):
                 os.close(lock_fd)
 
     async def body(request):
+        def unique_object(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError('duplicate field')
+                value[key] = item
+            return value
         try:
             data = bytearray()
             async for chunk in request.stream():
                 if len(data) + len(chunk) > 128 * 1024:
                     return None
                 data.extend(chunk)
-            value = json.loads(data)
+            value = json.loads(data, object_pairs_hook=unique_object)
             return value if type(value) is dict else None
         except (ValueError, UnicodeError):
             return None
@@ -266,6 +273,94 @@ def create_app(config, backend, clock=None):
 
     def text(value, required=False):
         return type(value) is str and len(value) <= 16000 and (not required or bool(value.strip()))
+
+    def chat_project(value):
+        return type(value) is str and bool(re.fullmatch(r'[a-zA-Z0-9_-]{1,32}', value))
+
+    def chat_cursor(value):
+        return value is None or (type(value) is str and 0 < len(value) <= 4096)
+
+    def chat_result(call, sending=False):
+        try:
+            result = call()
+            if type(result) is not dict:
+                return error('unavailable', 503)
+            code = result.get('error')
+            if code is not None:
+                return error(code if code in ('invalid_request', 'stale') else 'unavailable',
+                             {'invalid_request': 422, 'stale': 409}.get(code, 503))
+            if 'status' in result:
+                if result['status'] not in ('accepted', 'delivery_unknown', 'rejected'):
+                    return error('unavailable', 503)
+                if not valid_uuid(result.get('message_id')) or result.get('turn_id') is not None and (type(result['turn_id']) is not str or not 0 < len(result['turn_id']) <= 500):
+                    return error('unavailable', 503)
+                result = {key: result.get(key) for key in ('status', 'message_id', 'turn_id')}
+                status = {'delivery_unknown': 503, 'rejected': 409}.get(result['status'], 200) if sending else 200
+                return JSONResponse(result, status_code=status)
+            if sending:
+                return error('unavailable', 503)
+            return JSONResponse(result)
+        except Exception:
+            return error('unavailable', 503)
+
+    def chat_query(request, required, optional=()):
+        pairs = list(request.query_params.multi_items())
+        data = dict(pairs)
+        if len(pairs) != len(data) or not set(required).issubset(data) or set(data) - set(required) - set(optional):
+            return None
+        if 'project' in data and not chat_project(data['project']):
+            return None
+        if any(not valid_uuid(data[key]) for key in ('sid', 'message_id') if key in data):
+            return None
+        if 'cursor' in data and not chat_cursor(data['cursor']):
+            return None
+        if 'page' in data:
+            if not re.fullmatch(r'[0-9]{1,32}', data['page']):
+                return None
+            data['page'] = int(data['page'])
+        return data
+
+    async def chat_read(request, required, optional, call):
+        _, failure = session(request)
+        if failure:
+            return failure
+        supplied_origin = request.headers.get('origin')
+        if supplied_origin is not None and supplied_origin != origin:
+            return error('forbidden', 403)
+        data = chat_query(request, required, optional)
+        if data is None:
+            return error('invalid_request', 422)
+        return await run_in_threadpool(chat_result, lambda: call(data))
+
+    @app.get('/api/session-projects')
+    async def session_projects(request: Request):
+        return await chat_read(request, (), (), lambda data: backend.session_projects())
+
+    @app.get('/api/sessions')
+    async def session_list(request: Request):
+        return await chat_read(request, ('project',), ('page',), lambda data: backend.session_list(data['project'], data.get('page', 0)))
+
+    @app.get('/api/session-history')
+    async def session_history(request: Request):
+        return await chat_read(request, ('project', 'sid'), ('cursor',), lambda data: backend.session_history(data['project'], data['sid'], data.get('cursor')))
+
+    @app.get('/api/session-send-status')
+    async def session_send_status(request: Request):
+        return await chat_read(request, ('project', 'sid', 'message_id'), (), lambda data: backend.session_send_status(data['project'], data['sid'], data['message_id']))
+
+    @app.post('/api/session-send')
+    async def session_send(request: Request):
+        _, failure = session(request, True)
+        if failure:
+            return failure
+        data = await body(request)
+        if data is None or set(data) != {'project', 'sid', 'message_id', 'text'} or not chat_project(data['project']) or not valid_uuid(data['sid']) or not valid_uuid(data['message_id']) or not text(data['text'], True):
+            return error('invalid_request', 422)
+        try:
+            data['text'].encode('utf-8')
+        except UnicodeError:
+            return error('invalid_request', 422)
+        return await run_in_threadpool(chat_result, lambda: backend.session_send(data['project'], data['sid'], data['message_id'], data['text']), True)
 
     @app.post('/api/answer')
     async def answer(request: Request):

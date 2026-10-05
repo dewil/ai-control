@@ -1,5 +1,5 @@
 [Unit]
-Description=Control owner task broker
+Description=Control owner task and session broker
 After=network.target
 
 [Service]
@@ -11,7 +11,7 @@ Environment=HOME=@OWNER_HOME@
 Environment=PATH=@BIN_DIR@:/usr/local/bin:/usr/bin:/bin
 Environment=XDG_RUNTIME_DIR=/run/user/@OWNER_UID@
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@OWNER_UID@/bus
-ExecStart=/usr/bin/python3 /opt/ai-control-web/bin/ai-control-web broker --registry @REGISTRY@ --bin-dir @BIN_DIR@ --socket /run/ai-control-web/broker.sock --allowed-uid @WEB_UID@
+ExecStart=/opt/ai-control-web/venv/bin/python /opt/ai-control-web/bin/ai-control-web broker --registry @REGISTRY@ --bin-dir @BIN_DIR@ --socket /run/ai-control-web/broker.sock --allowed-uid @WEB_UID@
 RuntimeDirectory=ai-control-web
 RuntimeDirectoryMode=0750
 Restart=on-failure
@@ -19,6 +19,7 @@ RestartSec=3
 UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes
+BindReadOnlyPaths=-/tmp/codex-daemon-@OWNER_UID@
 # Writers retain owner runtime, cgroup barriers and existing TASK policy.
 # A read-only registry here would disable trusted writers.
 ProtectSystem=full

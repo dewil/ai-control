@@ -74,6 +74,7 @@ codex-task-runtime
 ai-control-web
 _control_web.py
 _control_web_access.py
+_control_web_sessions.py
 _control_web_broker.py
 _control_web.html
 _control_web.css

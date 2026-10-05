@@ -13,3 +13,4 @@ starlette==1.7.0
 typing-inspection==0.4.4
 typing_extensions==4.16.0
 uvicorn==0.54.0
+websockets==15.0.1

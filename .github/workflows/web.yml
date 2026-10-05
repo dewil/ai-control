@@ -24,7 +24,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_control_web*.py'
           python -m unittest discover -s tests -p 'test_ai_control_names.py'
-          python -m py_compile bin/_control_web.py bin/_control_web_broker.py bin/ai-control-web
+          python -m py_compile bin/_control_web.py bin/_control_web_broker.py bin/_control_web_sessions.py bin/_codex_rc.py bin/ai-control-web
       - name: Installation regression
         run: |
           # These install tests mock launchd; they need an inert CLI prerequisite,

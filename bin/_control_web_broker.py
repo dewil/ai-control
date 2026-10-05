@@ -7,12 +7,38 @@ import socket
 import stat
 import struct
 import subprocess
+import threading
+import time
 import uuid
 
 LIMIT = 128 * 1024
 FIELD_LIMIT = 16000
 NAME = re.compile(r'[a-z][a-z0-9-]{0,30}[a-z0-9]\Z')
 GEN = re.compile(r'[0-9a-f]{8}\Z')
+PROJECT = re.compile(r'[a-zA-Z0-9_-]{1,32}\Z')
+SESSION_FIELDS = {
+    'session_projects': {'op'},
+    'session_list': {'op', 'project', 'page'},
+    'session_history': {'op', 'project', 'sid', 'cursor'},
+    'session_send': {'op', 'project', 'sid', 'message_id', 'text'},
+    'session_send_status': {'op', 'project', 'sid', 'message_id'},
+}
+
+
+def _valid_session(request):
+    if (type(request) is not dict or type(request.get('op')) is not str
+            or request['op'] not in SESSION_FIELDS or set(request) != SESSION_FIELDS[request['op']]):
+        return False
+    if 'project' in request and (type(request['project']) is not str or not PROJECT.fullmatch(request['project'])):
+        return False
+    if any(not valid_qid(request[key]) for key in ('sid', 'message_id') if key in request):
+        return False
+    if 'page' in request and (type(request['page']) is not int or request['page'] < 0):
+        return False
+    if 'cursor' in request and request['cursor'] is not None and (
+            type(request['cursor']) is not str or not 0 < len(request['cursor']) <= 4096):
+        return False
+    return 'text' not in request or valid_text(request['text'], True)
 
 
 # Intentional per-binary copy of ai-agent-run's complete export policy.
@@ -118,10 +144,47 @@ def _field(doc, key, default=''):
 
 
 class RegistryBackend:
-    def __init__(self, registry, bin_dir, runner=None):
+    def __init__(self, registry, bin_dir, runner=None, sessions=None):
         self.registry = os.path.abspath(registry)
         self.bin_dir = os.path.abspath(bin_dir)
         self.runner = runner or subprocess.run
+        self.sessions = sessions
+
+    def _session(self, request):
+        if not _valid_session(request):
+            return {'error': 'invalid_request'}
+        if self.sessions is None:
+            return {'error': 'unavailable'}
+        try:
+            op = request['op']
+            if op == 'session_projects':
+                result = self.sessions.projects()
+            elif op == 'session_list':
+                result = self.sessions.list_sessions(request['project'], request['page'])
+            elif op == 'session_history':
+                result = self.sessions.history(request['project'], request['sid'], request['cursor'])
+            elif op == 'session_send':
+                result = self.sessions.send(request['project'], request['sid'], request['message_id'], request['text'])
+            else:
+                result = self.sessions.send_status(request['project'], request['sid'], request['message_id'])
+            return result if type(result) is dict else {'error': 'unavailable'}
+        except Exception:
+            return {'error': 'unavailable'}
+
+    def session_projects(self):
+        return self._session({'op': 'session_projects'})
+
+    def session_list(self, project, page):
+        return self._session(dict(op='session_list', project=project, page=page))
+
+    def session_history(self, project, sid, cursor):
+        return self._session(dict(op='session_history', project=project, sid=sid, cursor=cursor))
+
+    def session_send(self, project, sid, message_id, text):
+        return self._session(dict(op='session_send', project=project, sid=sid, message_id=message_id, text=text))
+
+    def session_send_status(self, project, sid, message_id):
+        return self._session(dict(op='session_send_status', project=project, sid=sid, message_id=message_id))
 
     def _root(self):
         return os.open(self.registry, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -338,7 +401,14 @@ def _receive(conn):
     line, rest = bytes(data).split(b'\n', 1)
     if rest:
         raise ValueError('multiple requests')
-    return json.loads(line)
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError('duplicate field')
+            result[key] = value
+        return result
+    return json.loads(line, object_pairs_hook=pairs)
 
 
 def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
@@ -359,6 +429,49 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
             else:
                 raise ValueError('broker already running')
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    slots = threading.BoundedSemaphore(4)
+    workers = set()
+    workers_lock = threading.Lock()
+    fields = {'snapshot': {'op'}, 'answer': {'op', 'agent', 'qid', 'decision', 'text'},
+              'verdict': {'op', 'agent', 'generation', 'decision', 'comment'}, **SESSION_FIELDS}
+
+    def reply(conn, result):
+        wire = json.dumps(result, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8') + b'\n'
+        if len(wire) > LIMIT:
+            wire = b'{"error":"unavailable"}\n'
+        conn.sendall(wire)
+
+    def execute(conn, request):
+        try:
+            with conn:
+                try:
+                    op = request['op']
+                    if op == 'snapshot':
+                        result = backend.snapshot()
+                    elif op == 'answer':
+                        result = backend.answer(request['agent'], request['qid'], request['decision'], request['text'])
+                    elif op == 'verdict':
+                        result = backend.verdict(request['agent'], request['generation'], request['decision'], request['comment'])
+                    elif op == 'session_projects':
+                        result = backend.session_projects()
+                    elif op == 'session_list':
+                        result = backend.session_list(request['project'], request['page'])
+                    elif op == 'session_history':
+                        result = backend.session_history(request['project'], request['sid'], request['cursor'])
+                    elif op == 'session_send':
+                        result = backend.session_send(request['project'], request['sid'], request['message_id'], request['text'])
+                    else:
+                        result = backend.session_send_status(request['project'], request['sid'], request['message_id'])
+                    reply(conn, result)
+                except Exception:
+                    try:
+                        reply(conn, {'error': 'unavailable'})
+                    except OSError:
+                        pass
+        finally:
+            slots.release()
+            with workers_lock:
+                workers.discard(threading.current_thread())
     try:
         server.bind(socket_path)
         os.chmod(socket_path, 0o660)
@@ -370,35 +483,42 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                 conn, _ = server.accept()
             except socket.timeout:
                 continue
-            with conn:
-                conn.settimeout(0.5)
-                result = {'error': 'unavailable'}
-                try:
-                    _, uid, _ = struct.unpack('3i', conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-                    if uid != allowed_uid:
-                        result = {'error': 'forbidden'}
+            conn.settimeout(0.5)
+            try:
+                _, uid, _ = struct.unpack('3i', conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                if uid != allowed_uid:
+                    result = {'error': 'forbidden'}
+                else:
+                    request = _receive(conn)
+                    if (type(request) is not dict or type(request.get('op')) is not str
+                            or request['op'] not in fields or set(request) != fields[request['op']]):
+                        result = {'error': 'invalid_or_stale'}
+                    elif request['op'] in SESSION_FIELDS and not _valid_session(request):
+                        result = {'error': 'invalid_request'}
+                    elif slots.acquire(blocking=False):
+                        worker = threading.Thread(target=execute, args=(conn, request), daemon=True)
+                        with workers_lock:
+                            workers.add(worker)
+                        worker.start()
+                        continue
                     else:
-                        request = _receive(conn)
-                        fields = {'snapshot': {'op'}, 'answer': {'op', 'agent', 'qid', 'decision', 'text'}, 'verdict': {'op', 'agent', 'generation', 'decision', 'comment'}}
-                        if type(request) is not dict or request.get('op') not in fields or set(request) != fields[request['op']]:
-                            result = {'error': 'invalid_or_stale'}
-                        elif request['op'] == 'snapshot':
-                            result = backend.snapshot()
-                        elif request['op'] == 'answer':
-                            result = backend.answer(request['agent'], request['qid'], request['decision'], request['text'])
-                        else:
-                            result = backend.verdict(request['agent'], request['generation'], request['decision'], request['comment'])
-                    wire = json.dumps(result).encode() + b'\n'
-                    if len(wire) > LIMIT:
-                        wire = b'{"error":"unavailable"}\n'
-                    conn.sendall(wire)
-                except Exception:
-                    try:
-                        conn.sendall(b'{"error":"unavailable"}\n')
-                    except OSError:
-                        pass
+                        result = {'error': 'unavailable'}
+                reply(conn, result)
+            except Exception:
+                try:
+                    conn.sendall(b'{"error":"unavailable"}\n')
+                except OSError:
+                    pass
+            conn.close()
     finally:
         server.close()
+        # Active calls are bounded: task writers retain their existing 60s
+        # deadline; session operations have one overall 55s deadline.
+        deadline = time.monotonic() + 61
+        with workers_lock:
+            active = list(workers)
+        for worker in active:
+            worker.join(max(0, deadline - time.monotonic()))
         if 'inode' in locals() and os.path.lexists(socket_path) and os.lstat(socket_path).st_ino == inode:
             os.unlink(socket_path)
 
@@ -409,7 +529,7 @@ class SocketBackend:
 
     def _call(self, request):
         try:
-            wire = json.dumps(request).encode() + b'\n'
+            wire = json.dumps(request, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8') + b'\n'
             if len(wire) > LIMIT:
                 return {'error': 'invalid_or_stale'}
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
@@ -429,3 +549,21 @@ class SocketBackend:
 
     def verdict(self, agent, generation, decision, comment):
         return self._call(dict(op='verdict', agent=agent, generation=generation, decision=decision, comment=comment))
+
+    def _session(self, request):
+        return self._call(request) if _valid_session(request) else {'error': 'invalid_request'}
+
+    def session_projects(self):
+        return self._session({'op': 'session_projects'})
+
+    def session_list(self, project, page):
+        return self._session(dict(op='session_list', project=project, page=page))
+
+    def session_history(self, project, sid, cursor):
+        return self._session(dict(op='session_history', project=project, sid=sid, cursor=cursor))
+
+    def session_send(self, project, sid, message_id, text):
+        return self._session(dict(op='session_send', project=project, sid=sid, message_id=message_id, text=text))
+
+    def session_send_status(self, project, sid, message_id):
+        return self._session(dict(op='session_send_status', project=project, sid=sid, message_id=message_id))

@@ -1,7 +1,25 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Control · Задачи</title><link rel="stylesheet" href="/web.css"><script src="/web.js" defer></script></head>
-<body><main><header><div><span class="eyebrow">CONTROL</span><h1>Ваши задачи</h1></div><button id="logout" hidden>Выйти</button></header><p id="notice" role="status" aria-live="polite"></p>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>Control</title><link rel="stylesheet" href="/web.css"><script src="/web.js" defer></script></head>
+<body><main><header><div><span class="eyebrow">CONTROL</span><h1>Control</h1></div><button id="logout" hidden>Выйти</button></header><p id="notice" role="status" aria-live="polite"></p>
 <section id="session-loading"><p>Восстанавливаем сессию…</p><button id="session-retry" hidden>Повторить</button></section>
 <section id="login" hidden><h2>Войти в Control</h2><p>Введите пароль и код из приложения аутентификации.</p><form id="login-form"><label>Пароль<input id="password" type="password" autocomplete="current-password" required maxlength="1024"></label><label>Код подтверждения<input id="login-totp" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required></label><button type="submit">Войти</button></form></section>
-<section id="workspace" hidden><div class="toolbar"><p id="count"></p><button id="refresh">Обновить</button></div><div id="cards"></div></section>
+<section id="workspace" hidden>
+  <nav class="tabs" role="tablist" aria-label="Раздел Control"><button id="tab-tasks" type="button" role="tab" aria-selected="true" aria-controls="tasks-panel">Задачи</button><button id="tab-sessions" type="button" role="tab" aria-selected="false" aria-controls="sessions-panel">Сессии</button></nav>
+  <section id="tasks-panel" role="tabpanel" aria-labelledby="tab-tasks"><div class="toolbar"><p id="count"></p><button id="refresh">Обновить</button></div><div id="cards"></div></section>
+  <section id="sessions-panel" role="tabpanel" aria-labelledby="tab-sessions" hidden>
+    <label for="project-select">Проект</label><div class="project-picker"><select id="project-select" aria-label="Проект"><option value="">Выберите проект</option></select><button id="projects-refresh" type="button" class="secondary">Обновить проекты</button></div>
+    <div id="session-list-status" class="message" role="status" aria-live="polite"></div><div id="session-list" class="session-list"></div>
+    <button id="sessions-more" type="button" class="secondary" hidden>Ещё сессии</button>
+    <section id="chat-panel" hidden aria-label="Переписка с Codex">
+      <header class="chat-heading"><h2 id="chat-title">Переписка</h2><button id="chat-refresh" type="button" class="secondary">Обновить переписку</button></header>
+      <p id="native-attention" class="attention" hidden>Нужно действие в клиенте Codex; ответы из панели пока недоступны.</p>
+      <p id="history-status" class="meta" role="status" aria-live="polite"></p>
+      <button id="history-older" type="button" class="secondary" hidden>Загрузить более старые сообщения</button>
+      <ol id="chat-items" class="chat-items" aria-label="История переписки"></ol>
+      <p id="history-truncated" class="truncation" hidden>История показана не полностью. Некоторые сообщения могут отсутствовать или быть сокращены.</p>
+      <div id="receipt-list" class="receipt-list" aria-live="polite"></div>
+      <form id="chat-form"><label for="chat-draft">Сообщение</label><textarea id="chat-draft" maxlength="16000" autocomplete="off"></textarea><div class="chat-actions"><button id="chat-send" type="submit">Отправить</button><span id="send-status" role="status" aria-live="polite"></span></div></form>
+    </section>
+  </section>
+</section>
 </main></body></html>
