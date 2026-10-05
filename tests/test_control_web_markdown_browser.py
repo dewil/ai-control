@@ -210,6 +210,21 @@ class MarkdownBrowserContract(unittest.TestCase):
         self.assertEqual(self.page.locator('code').filter(has_text='MD RAW CODE').count(), 0)
         self.assertIn(raw, self.page.locator('body').inner_text())
 
+    def test_raw_html_body_with_markdown_is_wholly_literal(self):
+        raw = '<span>**MD RAW BODY** [MD RAW BODY LINK](https://example.org)</span>'
+        self.render(raw)
+        self.assertEqual(self.page.locator('a').filter(has_text='MD RAW BODY LINK').count(), 0)
+        self.assertEqual(self.page.locator('strong').filter(has_text='MD RAW BODY').count(), 0)
+        self.assertIn(raw, self.page.locator('body').inner_text())
+
+    def test_multiline_html_comment_with_markdown_is_wholly_literal(self):
+        raw = '<!--\n**MD COMMENT BODY** [MD COMMENT LINK](https://example.org)\n`MD COMMENT CODE`\n-->'
+        self.render(raw)
+        self.assertEqual(self.page.locator('a').filter(has_text='MD COMMENT LINK').count(), 0)
+        self.assertEqual(self.page.locator('strong').filter(has_text='MD COMMENT BODY').count(), 0)
+        self.assertEqual(self.page.locator('code').filter(has_text='MD COMMENT CODE').count(), 0)
+        self.assertIn(raw, self.page.locator('body').inner_text())
+
     def test_dangerous_url_forms_remain_text_without_active_anchors(self):
         targets = ['javascript:alert(1)', 'data:text/html,probe', 'vbscript:probe', 'file:///private-probe',
                    '//md-untrusted.invalid/x', '\\\\md-untrusted.invalid/x', 'java&#x73;cript:alert(1)',
