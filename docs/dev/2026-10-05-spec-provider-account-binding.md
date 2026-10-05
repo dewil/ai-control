@@ -232,3 +232,17 @@ ancestor (например /tmp1777) как отдельный случай: к�
 остаётся private. Nonsticky writable ancestor либо sticky неsystemrootowned
 отклоняется catalog_unsafe. Это поддержка изолированных тестовых fixtures,
 не разрешение groupwrite аккаунтных каталогов или произвольных symlink.
+
+### Установленный fixed config directory pointer
+
+Установка Control использует owner-owned fixed `~/.config/ai-control` symlink
+к отдельному filesystem. Только production fixed-path constructor может
+разрешить этот directory pointer: lstat link UID ожидаемого owner, immutable
+snapshot dev/ino/ctime/readlink до и после чтения; canonical target directory
+принадлежит owner и проходит anchored no-follow/nonwritable ancestor walk.
+Catalog leaf остаётся private regular0600/nlink1/no-follow. Injected arbitrary
+paths по-прежнему не разрешают ancestor symlinks. Pointer drift во время read
+или публикации отказывает catalog_unsafe/catalog_invalid до TASK effects.
+Broken/wrongowner/unsafe target отказывает, не fallback на config рядом.
+Public CLI fixture с fixed private pointer должна работать; separate swapped
+pointer fixture — fail closed. Никаких credentials/login/config env routing.
