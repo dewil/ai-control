@@ -616,7 +616,13 @@ class SessionChat:
         for candidate_number, (turn_index, item_index) in enumerate(eligible):
             if candidate_number % 8 == 0:
                 self._remaining()
-            native_item = page['data'][turn_index]['items'][item_index]
+            native_turn = page['data'][turn_index]
+            native_item = native_turn['items'][item_index]
+            timestamp = native_turn.get('startedAt')
+            if type(timestamp) is not int or not 0 <= timestamp <= 253402300799:
+                timestamp = None
+            timing = {'timestamp': timestamp,
+                      'time_precision': 'turn' if timestamp is not None else 'unknown'}
             if native_item['type'] == 'userMessage':
                 raw_text = '\n'.join(part['text'] for part in native_item['content']
                                      if part['type'] == 'text')
@@ -630,7 +636,7 @@ class SessionChat:
                 mark_truncated()
             item_truncated = clipped_to_chars
             exported = {'id': native_item['id'], 'role': role,
-                        'text': text, 'truncated': item_truncated}
+                        'text': text, 'truncated': item_truncated, **timing}
             encoded_item_size = len(_json(exported))
             separator_size = 1 if selected_counts[turn_index] else 0
             if base_size + used_size + separator_size + encoded_item_size <= HISTORY_LIMIT:
@@ -654,7 +660,7 @@ class SessionChat:
                         self._remaining()
                     middle = (low + high) // 2
                     partial = {'id': native_item['id'], 'role': role,
-                               'text': text[:middle], 'truncated': True}
+                               'text': text[:middle], 'truncated': True, **timing}
                     if len(_json(partial)) <= remaining:
                         best = middle
                         low = middle + 1
@@ -662,7 +668,7 @@ class SessionChat:
                         high = middle - 1
                 if best >= 0:
                     partial = {'id': native_item['id'], 'role': role,
-                               'text': text[:best], 'truncated': True}
+                               'text': text[:best], 'truncated': True, **timing}
                     selected[turn_index].append((item_index, partial))
                     selected_counts[turn_index] += 1
                     used_size += comma_size + len(_json(partial))
