@@ -256,6 +256,27 @@ credential content. Final create CAS повторно сравнивает leaf 
 автоматического присоединения новой reference. Это относится к new create,
 не изменяет старые contextless TASK.
 
+Последний check и atomic TASK publication — одна сериализованная операция с
+cooperating register. Публичный metadata-only seam
+`ProviderProfiles.task_publication_guard(binding, context_ref, project)` — contextmanager:
+context_ref может быть None для захваченного отсутствия; внутри guard fresh grants
+и exact present/absent checks, затем lock удерживается до выхода из body.
+Каждый register использует тот же stable owner-only producer lock. Его фиксированный
+путь — `<home>/.local/share/ai-control/provider-profile-locks/publication.lock`;
+directory0700/file0600, expected UID, nlink1/no-follow, без replacement lock inode.
+Этот lock разрешено создавать только writer register или TASK publication; status,
+capture и resolve не получают новых filesystem write effects. Global producer lock
+сериализует metadata writers всех accounts; порядок global lock → profile lock
+един для register и publication. Unprovisioned profile может остаться unconfigured,
+но register не завершится между final absent check и TASK rename.
+
+Internal creator publisher проверяет staged control и captured reference, сохраняет
+existing task/name/incarnation/catalog/directory fences и делает atomic registry rename
+в body guard; browser не передаёт paths/guard flags. Линеаризация — rename под lock,
+а не возврат create: register после rename не присоединяет контекст к уже созданной
+contextless TASK. Отказ guard сохраняет cleanup TASK/spool/worktree; native host/credentials
+по-прежнему недоступны.
+
 Каждый будущий resolve/admission/replay/resume/native status/history/registry/
 collector/recovery сравнивает и identity leaf, и exact byte commitment с TASK
 reference ДО использования expectation, host admission или native IO. Leaf
