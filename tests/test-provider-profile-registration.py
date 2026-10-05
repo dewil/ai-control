@@ -341,11 +341,17 @@ class ProviderProfileContract(unittest.TestCase):
             ctx = self.profiles.resolve(binding, ref, 'fixture')
         self.assertEqual(dict(os.environ), environment)
         self.assertEqual(ctx.reference, ref)
-        # Exact native_home/child_home role assignment awaits contract clarification.
-        for attribute in ('native_home', 'child_home'):
-            self.assertTrue(Path(getattr(ctx, attribute)).is_relative_to(self.profile_root))
-        for variable in ('HOME', 'CODEX_HOME'):
-            self.assertTrue(Path(ctx.child_env[variable]).is_relative_to(self.profile_root))
+        # INV-ACCOUNT-09/10: metadata paths have fixed roles; they are not host admission.
+        self.assertIsInstance(ctx.native_home, Path)
+        self.assertIsInstance(ctx.child_home, Path)
+        self.assertTrue(ctx.native_home.is_absolute())
+        self.assertTrue(ctx.child_home.is_absolute())
+        self.assertEqual(ctx.native_home, self.profile_root / 'codex')
+        self.assertEqual(ctx.child_home, self.profile_root / 'native-home')
+        self.assertEqual(ctx.child_env['CODEX_HOME'], str(ctx.native_home))
+        self.assertEqual(ctx.child_env['HOME'], str(ctx.child_home))
+        self.assertIsInstance(ctx.child_env['CODEX_HOME'], str)
+        self.assertIsInstance(ctx.child_env['HOME'], str)
         self.assertEqual(dict(ctx.expected_native_principal), INPUT['expected_native_principal'])
         self.assertNotIn('synthetic-a', repr(ctx.reference))
         with self.assertRaises((TypeError, AttributeError)):
