@@ -19,6 +19,7 @@ RestartSec=3
 UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes
+BindReadOnlyPaths=-/tmp/codex-daemon-@OWNER_UID@
 # Writers retain owner runtime, cgroup barriers and existing TASK policy.
 # A read-only registry here would disable trusted writers.
 ProtectSystem=full

@@ -9,6 +9,7 @@ import os
 import re
 import socket
 import stat
+import struct
 import threading
 import time
 import uuid
@@ -636,6 +637,20 @@ class InteractiveRPC:
             with self._lock:
                 self._pending.pop(request_id, None)
 
+    def _socket_target(self, deadline):
+        _budget(deadline)
+        alias = os.lstat(self.socket_path)
+        _budget(deadline)
+        if alias.st_uid != os.getuid() or not (stat.S_ISSOCK(alias.st_mode) or stat.S_ISLNK(alias.st_mode)):
+            raise ValueError('RPC socket ownership refused')
+        target = os.path.realpath(self.socket_path, strict=True)
+        _budget(deadline)
+        info = os.lstat(target)
+        _budget(deadline)
+        if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+            raise ValueError('RPC socket ownership refused')
+        return (alias.st_dev, alias.st_ino), target, (info.st_dev, info.st_ino)
+
     def _connect(self, deadline):
         if not self._connect_lock.acquire(timeout=max(0, deadline - time.monotonic())):
             raise RuntimeError('RPC connection unavailable')
@@ -649,17 +664,28 @@ class InteractiveRPC:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise RuntimeError('RPC connection unavailable')
+            ws = None
             try:
-                before = os.lstat(self.socket_path)
-                if not stat.S_ISSOCK(before.st_mode) or before.st_uid != os.getuid():
-                    raise ValueError('RPC socket ownership refused')
-                ws = unix_connect(self.socket_path, uri='ws://localhost', open_timeout=remaining,
+                before = self._socket_target(deadline)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError('RPC deadline exceeded')
+                ws = unix_connect(before[1], uri='ws://localhost', open_timeout=remaining,
                                   close_timeout=1, max_size=4 * 1024 * 1024)
-                after = os.lstat(self.socket_path)
-                if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
-                    ws.close()
+                after = self._socket_target(deadline)
+                if before != after:
                     raise ValueError('RPC socket changed')
+                _budget(deadline)
+                _, peer_uid, _ = struct.unpack('3i', ws.socket.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                _budget(deadline)
+                if peer_uid != os.getuid():
+                    raise ValueError('RPC peer ownership refused')
             except Exception:
+                if ws is not None:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
                 raise RuntimeError('RPC connection unavailable') from None
             with self._lock:
                 if self._closed:
