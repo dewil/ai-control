@@ -45,3 +45,5 @@ INV-WSESS-16/17: один polite current send status; новые локальн�
 
 - INV-WSESS-18: Project summary counts complete picker-visible metadata by allowed canonical roots, never loaded-page counts or histories. Bounded shared scan, explicit unknown/stale, generation/root keyed cache; no unauthorized metadata projection.
 - INV-WSESS-19: Responsive project cloud uses true selected buttons, count/activity sorting with stable ties and bounded sizes; preserves focus, deeplinks, auth and selection fences. Only sort enum may persist in browser storage.
+
+Feature INV-WSESS-18/19: ../dev/done/2026-10-05-spec-web-project-cloud.md; complete countcache metadata and cloudsort implementation independentlychecked, installedacceptance separate.
