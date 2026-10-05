@@ -70,6 +70,48 @@ class ProviderProfileCLI(unittest.TestCase):
                             self.codex_spec(name, **changes), '--provider', 'codex',
                             '--account', account)
 
+    def valid_context_reference(self, account='profile-a'):
+        return {
+            'schema': 1,
+            'provider_id': 'codex',
+            'account_id': account,
+            'profile_instance_id': str(uuid.uuid4()),
+            'adapter_revision': 'codex-managed-chatgpt-file-v1',
+            'registration_snapshot': {
+                'dev': 1, 'ino': 2, 'ctime_ns': 3,
+                'sha256': '0' * 64,
+            },
+        }
+
+    def seed_context_fixture(self, name='context-task', account='profile-a'):
+        created = self.create_codex(name, account)
+        self.assertEqual(created.returncode, 0, created.stdout + created.stderr)
+        path = self.agents / name
+        control_path = path / 'control.json'
+        control = json.loads(control_path.read_text())
+        reference = self.valid_context_reference(account)
+        control['provider_context'] = reference
+        control_path.write_text(json.dumps(control, separators=(',', ':')))
+        control_path.chmod(0o600)
+        return path, control_path, reference
+
+    def persist_registration_fixture(self, account='profile-a'):
+        root, codex, native_home = self.profile_dirs(account)
+        metadata_path = self.metadata()
+        document = json.loads(metadata_path.read_text())
+        document.update(provider_id='codex', account_id=account,
+                        profile_instance_id=str(uuid.uuid4()),
+                        profile_objects={
+                            'root': {'dev': root.stat().st_dev, 'ino': root.stat().st_ino},
+                            'codex': {'dev': codex.stat().st_dev, 'ino': codex.stat().st_ino},
+                            'native_home': {'dev': native_home.stat().st_dev,
+                                            'ino': native_home.stat().st_ino},
+                        })
+        registration = root / 'registration.json'
+        registration.write_text(json.dumps(document, separators=(',', ':')))
+        registration.chmod(0o600)
+        return registration
+
     def public_document(self, result):
         raw = result.stdout.strip() or result.stderr.strip()
         try:
@@ -195,6 +237,9 @@ class ProviderProfileCLI(unittest.TestCase):
     def test_register_requires_fresh_enabled_project_grant_and_existing_profile_dirs(self):
         metadata = self.metadata()
         self.profile_dirs()
+        registry = json.loads((self.root / 'projects.yaml').read_text())
+        registry['other'] = str(self.project)
+        (self.root / 'projects.yaml').write_text(json.dumps(registry))
         for rows, account, expected in (
                 ([dict(self.rows[0], enabled=False)], 'profile-a', 'account_disabled'),
                 ([dict(self.rows[0], projects=['other'])], 'profile-a', 'account_forbidden'),
@@ -304,6 +349,123 @@ class ProviderProfileCLI(unittest.TestCase):
         self.assertEqual(control['desired'], 'paused')
         self.assertIn('runtime_unverified', created.stdout + created.stderr)
         self.assertEqual(control_path.read_bytes(), control_bytes)
+        self.assertFalse(self.effects.exists())
+        self.no_launch()
+
+    def test_reserved_context_fields_in_codex_spec_refuse_without_publication(self):
+        for field in ('provider_context', 'execution_context'):
+            with self.subTest(field=field):
+                before = self.snapshot()
+                result = self.create_codex('reserved-' + field.replace('_', '-'),
+                                           **{field: self.valid_context_reference()})
+                self.assertNotEqual(result.returncode, 0,
+                                    'Reserved context field accepted: ' + field)
+                self.assertEqual(self.snapshot(), before,
+                                 'Reserved field left agent/spool effects: ' + field)
+                self.assertFalse(self.effects.exists())
+
+    def test_context_cas_addition_is_refused_for_legacy_and_old_bound_without_autoupgrade(self):
+        legacy = self.run_cmd('ai-rc', 'agent', 'create', 'context-legacy', '--spec',
+                              self.spec('context-legacy'))
+        self.assertEqual(legacy.returncode, 0, legacy.stdout + legacy.stderr)
+        old_bound = self.create_codex('context-old-bound')
+        self.assertEqual(old_bound.returncode, 0, old_bound.stdout + old_bound.stderr)
+        reference = self.valid_context_reference()
+        for name in ('context-legacy', 'context-old-bound'):
+            with self.subTest(name=name):
+                path = self.agents / name
+                control_path = path / 'control.json'
+                before = control_path.read_bytes()
+                result = self.run_cmd('ai-agent-io', 'control-cas', path, '--set',
+                                      'provider_context=' + json.dumps(reference, separators=(',', ':')))
+                self.assertNotEqual(result.returncode, 0,
+                                    'CAS auto-added provider_context to ' + name)
+                self.assertEqual(control_path.read_bytes(), before,
+                                 'Refused context addition rewrote ' + name)
+                saved = json.loads(before)
+                self.assertNotIn('provider_context', saved)
+                if name == 'context-legacy':
+                    self.assertNotIn('provider_binding', saved)
+                else:
+                    self.assertEqual(saved['provider_binding'],
+                                     {'schema': 1, 'provider_id': 'codex', 'account_id': 'profile-a'})
+        self.assertFalse(self.effects.exists())
+
+    def test_context_cas_null_and_authority_change_are_refused_without_write(self):
+        path, control_path, reference = self.seed_context_fixture('context-mutations')
+        before = control_path.read_bytes()
+        candidates = [
+            # control-cas exposes --set but no public key-removal operator;
+            # null exercises the closest public attempt to removing authority.
+            ('null-context', 'null'),
+            ('change-account', json.dumps(dict(reference, account_id='profile-b'))),
+            ('change-profile-instance', json.dumps(dict(reference, profile_instance_id=str(uuid.uuid4())))),
+            ('change-snapshot-hash', json.dumps(dict(reference,
+                registration_snapshot=dict(reference['registration_snapshot'], sha256='1' * 64)))),
+        ]
+        for label, value in candidates:
+            with self.subTest(label=label):
+                control_path.write_bytes(before)
+                control_path.chmod(0o600)
+                result = self.run_cmd('ai-agent-io', 'control-cas', path, '--set',
+                                      'provider_context=' + value)
+                self.assertNotEqual(result.returncode, 0,
+                                    'CAS changed immutable context: ' + label)
+                self.assertEqual(control_path.read_bytes(), before,
+                                 'Refused context mutation rewrote control: ' + label)
+        self.assertFalse(self.effects.exists())
+
+    def test_malformed_context_cas_values_are_refused_without_write(self):
+        path, control_path, reference = self.seed_context_fixture('context-malformed')
+        before = control_path.read_bytes()
+        malformed = [
+            ('missing-snapshot', json.dumps({k: v for k, v in reference.items()
+                                             if k != 'registration_snapshot'})),
+            ('boolean-device', json.dumps(dict(reference, registration_snapshot={
+                'dev': True, 'ino': 2, 'ctime_ns': 3, 'sha256': '0' * 64}))),
+            ('bad-hash-grammar', json.dumps(dict(reference, registration_snapshot={
+                'dev': 1, 'ino': 2, 'ctime_ns': 3, 'sha256': 'A' * 64}))),
+            ('unknown-field', json.dumps(dict(reference, native_home='/private/path'))),
+        ]
+        for label, value in malformed:
+            with self.subTest(label=label):
+                control_path.write_bytes(before)
+                control_path.chmod(0o600)
+                result = self.run_cmd('ai-agent-io', 'control-cas', path, '--set',
+                                      'provider_context=' + value)
+                self.assertNotEqual(result.returncode, 0,
+                                    'CAS accepted malformed context: ' + label)
+                self.assertEqual(control_path.read_bytes(), before,
+                                 'Refused malformed context rewrote control: ' + label)
+        self.assertFalse(self.effects.exists())
+
+    def test_registration_leaf_swap_at_existing_git_worktree_hook_blocks_create_publication(self):
+        registration = self.persist_registration_fixture()
+        marker = self.root / 'registration-swap-observed'
+        genuine_git = shutil.which('git')
+        self.assertIsNotNone(genuine_git)
+        wrapper = self.mockbin / 'git'
+        wrapper.write_text(
+            '#!/usr/bin/env python3\nimport json,os,sys\n'
+            f'leaf={str(registration)!r}; marker={str(marker)!r}; real={genuine_git!r}\n'
+            'if "worktree" in sys.argv and "add" in sys.argv and not os.path.exists(marker):\n'
+            ' d=json.loads(open(leaf).read()); d["expected_native_principal"]["value"]="synthetic-b"\n'
+            ' open(leaf,"w").write(json.dumps(d,separators=(",",":"))); os.chmod(leaf,0o600)\n'
+            ' open(marker,"w").write("fixture swap")\n'
+            'os.execv(real,[real,*sys.argv[1:]])\n')
+        wrapper.chmod(0o700)
+        name = 'registration-race'
+        worktrees_before = self.git('-C', str(self.project), 'worktree', 'list', '--porcelain')
+        result = self.create_codex(name)
+        self.assertTrue(marker.exists(), 'Create did not reach the existing git worktree hook')
+        self.assertNotEqual(result.returncode, 0,
+                            'Create published a TASK after its registration leaf changed')
+        self.assertFalse((self.agents / name).exists(), 'Drifted registration left a control record')
+        self.assertFalse((self.root / 'spool' / name).exists(), 'Drifted registration left spool data')
+        self.assertEqual(self.git('-C', str(self.project), 'worktree', 'list', '--porcelain'),
+                         worktrees_before, 'Drifted registration left a worktree')
+        self.assertEqual(json.loads(registration.read_text())['expected_native_principal']['value'],
+                         'synthetic-b')
         self.assertFalse(self.effects.exists())
         self.no_launch()
 
