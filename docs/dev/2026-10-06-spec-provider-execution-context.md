@@ -150,6 +150,10 @@ input keys плюс `provider_id`, `account_id`, `profile_instance_id` (random U
 snapshots и открытые directory FDs защищают текущий resolve/publication.
 Повтор exact metadata+same pinned profile objects — idempotent тот же UUID;
 другой expectation/adapter/profile object — `profile_conflict`, без overwrite.
+Idempotent register читает и возвращает существующую leaf без rewrite/rename/
+chmod/touch: ее immutable bytes и dev/ino/ctime_ns сохраняются. Не нормализовать
+существующий JSON при replay регистрации. Если leaf drift во время операции,
+отказ, без восстановления старого UUID на новой leaf.
 Replacement/removal/re-enrollment вне CLI среза. Registration deletion/replacement
 делает старую TASK unavailable, never redirect. Reader snapshot включает root,
 codex/native-home identities и metadata dev/ino/ctime; binding UUID не filesystem
@@ -171,6 +175,9 @@ Vocabulary first-slice AccountError плюс `profile_unconfigured`, `profile_in
 `admission_stale`, `profile_view_unproven`. Native/raw paths/email/principal/exception/env не выводятся.
 First structural/binding error, затем catalog/grant, затем profile/context,
 затем evidence/admission error; эта precedence одинакова у callers.
+Invalid registration/context schema дает profile_invalid/context_invalid;
+структурно valid leaf, не совпавшая с captured TASK snapshot, дает context_drift
+до native identity ошибок, даже когда новый expectation мог бы native-match.
 Lower runtime использует прежнюю форму blocked/reason и exit2 с тем же CODE.
 
 Public stdlib seam `bin/_control_provider_context.py`:
@@ -180,7 +187,9 @@ ProviderAccounts reader. `register(provider_id, account_id, project, metadata_pa
 `resolve(binding, context_ref, project)` возвращает frozen ExecutionContext после
 fresh structural/catalog/profile validation, но НЕ native verification.
 `validate_context_ref(value)` возвращает новый exact dict либо AccountError(code
-context_invalid). `check_context_unchanged(previous, candidate)` принимает whole
+context_invalid). Вложенный registration_snapshot имеет ровно dev/ino/ctime_ns/
+sha256: первые три nonnegative exact integers (bool запрещен), sha256 — ровно
+64 lowercase hex characters. Snapshot является private authority, не safe DTO. `check_context_unchanged(previous, candidate)` принимает whole
 controls, успех None; addition/removal/change — context_immutable, malformed —
 context_invalid. Existing bound/legacy context addition запрещено через CAS.
 ExecutionContext public attributes: `reference` (immutable mapping), `native_home`,
@@ -193,11 +202,32 @@ constructors доступны Python fixtures; production CLI не выбира�
 Новая explicit bound create при наличии регистрации сохраняет до publication:
 
 ```json
-{"schema":1,"provider_id":"codex","account_id":"ID","profile_instance_id":"UUID","adapter_revision":"codex-managed-chatgpt-file-v1"}
+{"schema":1,"provider_id":"codex","account_id":"ID","profile_instance_id":"UUID","adapter_revision":"codex-managed-chatgpt-file-v1","registration_snapshot":{"dev":1,"ino":2,"ctime_ns":3,"sha256":"0000000000000000000000000000000000000000000000000000000000000000"}}
 ```
 
 Это exact `provider_context` рядом с прежним provider_binding в control.json.
-Он immutable внутри incarnation, IDs обязаны совпасть с binding. Reserved spec
+Он immutable внутри incarnation, IDs обязаны совпасть с binding. Snapshot
+фиксируется Control при create из bounded exact bytes validated registration
+leaf и fstat identity открытой no-follow leaf; пример выше synthetic. SHA256
+считает только registration metadata bytes, включая whitespace/newline, никогда
+credential content. Final create CAS повторно сравнивает leaf dev/ino/ctime_ns
+и SHA256 с captured snapshot плюс прежние directory/catalog/control fences;
+нельзя публиковать reference к новой leaf со старой expectation.
+
+Каждый будущий resolve/admission/replay/resume/native status/history/registry/
+collector/recovery сравнивает и identity leaf, и exact byte commitment с TASK
+reference ДО использования expectation, host admission или native IO. Leaf
+replacement/edit, даже same profile UUID/directory IDs/parsed JSON, дает
+`context_drift`; matching UUID не обновляет captured snapshot. Hash не является
+аутентификацией native principal: он лишь закрепляет trusted expectation.
+Private principal/path/snapshot/hash не добавляются в public register/status/
+accounts DTO, diagnostics или runtime public receipts. Internal context_ref в
+private journals/receipts сохраняет полный immutable snapshot для сравнения.
+Credential leaf inode/content по-прежнему не pin/hash/read; native refresh не
+меняет registration metadata. Old bound TASK без context остается unverified,
+context без required snapshot malformed и не мигрируется автоматически.
+
+Reserved spec
 fields provider_context/execution_context запрещены. Без регистрации прежний
 create сохраняет только paused binding; не угадывает profile. При регистрации
 create тоже paused/unverified до native readiness. Нет auto activation old TASK.
@@ -313,6 +343,14 @@ owner-local profile host-use lock; разные account profiles работаю�
    refused before publication/native reads. Production CLI register/status/create
    никогда не native-call и показывают unverified; fixture metadata не активирует
    capability. TASK reference immutable/body mismatch/spec spoofing/replay отказ.
+   Registration replacement/edit с теми же UUID/profile directory IDs, но другим
+   expected principal, дает context_drift во всех future resolve/admission/replay/
+   native IO callers до чтения history/auth/thread/turn; same parsed JSON на новой
+   leaf тоже drift. Exact snapshot integers запрещают bool, hash grammar strict.
+   Leaf edit/replacement между snapshot и create final CAS не публикует control/
+   spool/worktree. Idempotent registration не меняет leaf bytes/dev/ino/ctime_ns;
+   native credential replacement при refresh не влияет на registration snapshot.
+   Public DTO/output traps не получают principal/path/registration hash.
 2. INV-ACCOUNT-09/11: two synthetic profiles одного vendor, одинаковый native UUID,
    concurrent real create/start/execute/resume/status/reconcile; barriers в admission,
    final CAS/claim/thread/turn. Каждая операция обращается только к своему host,

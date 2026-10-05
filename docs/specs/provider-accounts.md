@@ -38,7 +38,11 @@ identity. Эта спецификация фиксирует решение по
 - INV-ACCOUNT-10: private owner-controlled profile registration фиксирует instance,
   adapter/auth-source/store expectation и native principal expectation без secret
   reads/copies. Registration и filesystem identity не подтверждают login identity;
-  замена profile/metadata не переназначает существующие TASK. Native file access
+  замена profile/metadata не переназначает существующие TASK. Immutable TASK
+  context фиксирует registration leaf dev/ino/ctime_ns и SHA256 exact metadata
+  bytes; future resolve/admission/replay/native IO сравнивают оба commitment до
+  использования expectation. Same UUID/dir IDs не обходят context_drift при
+  leaf edit/replacement; credential leaf/content не pin/hash/read. Native file access
   связан kernel-bound view с validated directory objects; same-owner pathname
   rename/symlink между проверкой и open не дает чтения другого аккаунта.
 - INV-ACCOUNT-11: равные native IDs разных аккаунтов никогда не объединяют state,
