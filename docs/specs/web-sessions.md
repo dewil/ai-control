@@ -64,12 +64,13 @@ Feature: [выбор модели](../dev/2026-10-06-spec-web-model-controls.md)
   unverified profile/account isolation не объявляется поддержанной. Cache TTL60s,
   ≤32 contexts, ≤16pages/256rows/1MiB, generation/account isolation. Safe schema1
   projection; unknown capability/vendor, malformed/empty catalog честно unavailable.
-- INV-WSESS-25: Existing send принимает optional exact selection catalog_id/model_id/effort;
+- INV-WSESS-25: Existing send принимает optional selection, содержащую exact required catalog_id/model_id/effort;
   owner проверяет fresh catalog и exact supported model-effort pair перед reserve/resume/turn.
   UI Model.id переводится в native Model.model. Inherit опускает model/effort keys;
   arbitrary settings/account/mode запрещены. Codex0.160 overrides sticky для subsequent
-  turns; восстановления прежнего default после сообщения не обещается. Конфликт mode
-  без version/context proof запрещает explicit выбор, не обычную legacy inherit отправку.
+  turns; восстановления прежнего default после сообщения не обещается. Approved version/context/sender proof обязателен для explicit выбора; stored mode
+  не перекрывает omission-collaborationMode edits. Steering активного turn сохраняет
+  его context и обновляет future settings; интерфейс явно сообщает этот предел.
 - INV-WSESS-26: Durable schema2 digest закрепляет context/root/fullsid/text/selection
   и private wire mapping за message UUID. Exact replay использует receipt без нового
   catalog/resume/turn; другой payload отвергается. Legacy textdigest только inherit

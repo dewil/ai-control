@@ -31,13 +31,29 @@ Offline schemas Codex 0.160.0: `v2/ModelListParams.json`, `ModelListResponse.jso
 `ReasoningEffort` — непустая строка, не глобальный enum. Возможности и default берутся
 из конкретного model row. Model catalog не доказывает entitlement или успех turn.
 
-Pinned `model` и `effort` описаны как overrides для текущего **и последующих** turns.
-Omission наследует текущие native настройки; `null`, строка default и дополнительный
-turn для reset не посылаются. `collaborationMode` имеет precedence над overrides;
-adapter не добавляет его. Если отсутствие конфликта selection с текущим режимом не
-доказано для данного context/version, explicit selection unavailable. ACK доказывает
-приём сообщения, не effective model/effort, завершение или отдельный новый turn:
-существующий native steering активного turn сохраняет исходную семантику.
+Pinned source различает новый turn и steering уже активного turn. При omission
+`collaborationMode` stored mode/developer instructions сохраняются, а явные model/effort
+заменяют corresponding settings. Для нового turn эти настройки входят в новый context.
+При successful steering активный turn сохраняет прежний context; новые настройки
+сохраняются для последующих turns. Это не ретроактивная смена модели работающего ответа.
+Native параметры и approved source semantics описаны в
+[StepSettings::apply](https://github.com/openai/codex/blob/a956835d020762cb2b570053af06f643a11c0ecc/codex-rs/core/src/session/step_settings.rs#L217-L270)
+и [apply_steered](https://github.com/openai/codex/blob/a956835d020762cb2b570053af06f643a11c0ecc/codex-rs/core/src/session/turn_input.rs#L193-L202).
+Omission всех selection keys наследует текущие native настройки; reset/default/null
+и дополнительный turn не посылаются. Adapter никогда не добавляет collaborationMode.
+ACK подтверждает приём, не effective provider/model/effort, завершение или новый turn.
+
+`selection_support:available` требует approved pinned capability
+`codex-turn-start-sticky-v0.160.0`: fresh owner transport/context proof, initialize
+version ровно0.160.0, fixed sender без collaborationMode, source contract выше и
+прошедшие synthetic mapping/steering tests. Model/list самостоятельно не даёт proof.
+Неизвестная версия/sender/capability — unsupported_capability, rows пустые.
+Reconnect/native version/config/account/binding generation change инвалидирует
+capability и catalog; до fresh proof explicit send отвергается до reserve. Proof
+не означает entitlement, live effective state или подтверждённую identity bound account.
+В данном срезе честно поддержан narrower sticky/request contract: active turn может
+принять текст по прежнему steering, выбор применяется к последующим новым turns.
+UI всегда сообщает этот предел; новая native settings/update операция не добавляется.
 
 06.10 после возможности ответить на уточнение основной агент объявил рабочее
 допущение: вариант1 (native sticky) — scope этого среза; пользователь может изменить
@@ -51,9 +67,9 @@ adapter не добавляет его. Если отсутствие конфл
    concurrency с другими native clients и resume/reconnect, затем изменить спеку.
 
 Объявленное допущение не разрешает скрытые config/credential/account изменения. Семантика
-«effort наследовать» при explicit model означает omission, а не default этой модели;
-если native отвергает сочетание с унаследованным effort, нет retry/fallback. Для
-гарантии supported pair пользователь выбирает explicit effort из выбранной строки.
+Explicit model требует explicit supported effort из этой строки; его omission
+invalid_request до reserve. Whole selection omission означает inherit обоих settings.
+UI не выбирает default effort молча и не подставляет прежний effort несовместимой модели.
 
 ## INV-WSESS-24: authoritative metadata catalog
 
@@ -131,9 +147,9 @@ Existing POST `/api/session-send` required keys `project,sid,message_id,text`;
 {"catalog_id":"<64 lowercase hex>","model_id":"ui-key","effort":"supported-value"}
 ```
 
-В selection required `catalog_id,model_id`, optional `effort`; null/arrays/extra keys,
+В selection required ровно `catalog_id,model_id,effort`; null/arrays/extra keys,
 empty/control strings и duplicate keys на любом уровне invalid_request. Omitted
-`effort` означает inherit effort; model inherit с effort-only не поддерживается.
+selection означает inherit обоих; effort-only или model без effort запрещены.
 Existing text/full canonical UUID limits сохраняются. Body никогда не содержит
 vendor/account/context/wire_model/cwd/settings/socket/provider paths.
 Broker `session_send` сохраняет required old keys и допускает только optional
@@ -144,12 +160,12 @@ selection с той же строгой формой; omission сохраняе�
 После fresh permission/root/thread/context proof сначала ищется existing receipt
 в context namespace. Exact replay обрабатывается до проверки live catalog. Для
 нового UUID explicit selection требует available capability, свежий совпавший
-catalog_id, model_id из entry, optional effort из именно этой строки, повторную
+catalog_id, model_id из entry, required effort из именно этой строки, повторную
 context generation/root proof перед effects. Ни reserve, ни thread/resume, ни
 turn/start не выполняются для заведомо invalid/stale/unavailable selection.
 Model_id переводится owner в сохранённый wire_model; browser string не становится
 RPC value. Native params existing `threadId,input,clientUserMessageId` плюс `model`
-при explicit selection и `effort` только если explicit effort присутствует.
+и `effort` вместе при explicit selection.
 Inherit не добавляет ни model, ни effort, даже null. Resume остаётся только
 `threadId,excludeTurns:true`; result root/thread/context proof сохраняется.
 Нет смены transport/thread/account/grants или изменения security settings.
@@ -175,7 +191,7 @@ New private record schema2 exact keys: `schema,context_id,root,sid,message_id,di
 selection,status,turn_id,created`. Schema integer2; existing status/turn_id/created
 правила неизменны. Context_id — opaque safe stable context token, не credentials,
 account email или connection generation. Selection null либо exact
-`{catalog_id,model_id,wire_model,effort}`; effort null для omission. Record ≤4096bytes,
+`{catalog_id,model_id,wire_model,effort}`; effort required nonempty supported string. Record ≤4096bytes,
 без исходного text/raw native errors; слишком большой reserve запрещает отправку.
 Unknown schema/corruption не считается отсутствием записи. No bulk migration.
 
@@ -184,10 +200,10 @@ Digest SHA256 UTF-8 canonical finite JSON: Python-compatible
 normalization; exact object
 `{context_id,root,sid,text,selection}`. Selection соответствует private record выше.
 Message_id хранится отдельно и задаёт file key. Inherit null отличается от explicit
-model/default; null effort отличается от explicit default_effort string.
+model/default; explicit default_effort string также фиксируется без inference.
 
 При replay mapping берётся из receipt, не из нового catalog. Сначала сравнить exact
-запрошенные catalog_id/model_id/effort (omission → null), затем пересчитать digest с
+запрошенные catalog_id/model_id/effort либо whole inherit null, затем пересчитать digest с
 сохранённым wire_model. Тот же UUID и payload возвращает сохранённый status без
 resume/turn/start, даже если catalog expired/disappeared. Изменение text/model/effort/
 catalog_id/inherit/context/root/sid отвергается; context/root/sid нельзя передать в
@@ -218,15 +234,17 @@ HTTP и broker обновляются согласованно: старый bro
 ## INV-WSESS-27: draft, гонки и честные controls
 
 Рядом с draft два accessible labelled controls: «Модель: наследовать текущую» или
-row.label; при explicit модели «Reasoning effort: наследовать текущий» либо exact
-supported effort. Default catalog metadata не является effective thread state.
+row.label; при explicit модели «Выберите уровень размышления» либо exact
+supported effort. Submit explicit выбора запрещён до выбора effort. Default catalog
+metadata не является effective thread state.
 Всегда видимая подсказка для доступного explicit выбора: «Выбор сохраняется для
-следующих сообщений; перед отправкой можно изменить». Native inherit означает
+следующих сообщений; перед отправкой можно изменить». Дополнительно: «Уже начатая
+работа сохраняет свои настройки; выбор действует при следующем запуске». Native inherit означает
 наследование текущего выбора, не восстановление исходных defaults. Вариант2
 не поддерживается до отдельного proof/reset контракта. Не отображать якобы verified account
 для legacy. Unsupported/stale/unavailable объясняются явно, без hardcoded списка.
 
-При смене модели несовместимый effort сбрасывается в inherit с видимым polite
+При смене модели несовместимый effort сбрасывается в «Выберите уровень» с видимым polite
 сообщением; совместимый сохраняется. Выбор inherit модели очищает effort. Не
 подставлять default/low молча. Model refresh не меняет выбранную pair автоматически:
 исчезнувшая row или stale catalog блокирует explicit submit, draft сохранён.
@@ -254,7 +272,8 @@ Source-blind synthetic tests идут через HTTP → broker → SessionChat
   unknown capabilities/vendor, native additive fields, safe projection и no history RPC.
 - 25: точный model.id → model.model mapping, explicit pair, omission keys; unknown
   fields/null/duplicates/cross-model effort/catalog drift до reserve/resume/turn;
-  no arbitrary settings/mode/account; unsupported mode proof unavailable.
+  no arbitrary settings/mode/account; unsupported version/capability proof unavailable; approved stored mode does not defeat
+  omitted-collaborationMode overrides; steering preserves active context, future settings updated.
 - 26: restart/concurrent exact replay once-only; изменение каждого digest dimension;
   replay без live catalog; schema1 inherit-only, unknown schema/corrupt fail closed;
   namespace isolation, reserve/ACK failures и delivery_unknown без resend.
@@ -265,7 +284,7 @@ Source-blind synthetic tests идут через HTTP → broker → SessionChat
 Existing web/task/auth/grant/broker/history/receipts/browser suites должны оставаться
 GREEN; distinct security/compliance review и exact CI перед merge. Installed proof
 отдельно потребует operator-existing verified context и явно разрешённого sample
-message. В этой работе не вызывались native model/list/turn, auth/account APIs,
+message. При подготовке исходной спецификации не вызывались native model/list/turn, auth/account APIs,
 user history, network или executable schema generation. Offline source/schema не
 доказывают current account entitlements, effective settings после resume/reconnect,
 sticky enforcement/steering, отсутствие collaboration conflict или profile isolation.
