@@ -228,6 +228,15 @@ class CompactChatBrowserContract(unittest.TestCase):
         self.assertEqual(observations['old_session_messages'], 0, 'Stale other-session history must not replace selected screen')
         self.assertFalse(any(method == 'POST' and '/api/session-send' in url for method, url in self.network))
 
+    def test_INV_WEB_SESSIONS_13_menu_selection_clears_obsolete_choose_session_hint(self):
+        # The initial hint is permitted. Choose through the real menu button;
+        # a successfully opened conversation must retire only that stale hint.
+        self.open_history()
+        hint = self.page.get_by_text('Выберите сессию для переписки.', exact=True)
+        visible_hints = sum(hint.nth(index).is_visible() for index in range(hint.count()))
+        self.assertEqual(visible_hints, 0,
+                         'Menu still asks to choose a session after its session button opened the conversation')
+
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] == '--serve': serve(Path(sys.argv[2]), Path(sys.argv[3]))
     else: unittest.main(verbosity=2)
