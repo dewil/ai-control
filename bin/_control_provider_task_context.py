@@ -9,6 +9,19 @@ from _control_provider_context import (ProviderProfiles, _Directories, _json, _r
                                        validate_context_ref)
 
 
+def _optional_reference(profiles, binding, project):
+    if binding['provider_id'] != 'codex':
+        return None
+    try:
+        return profiles.capture_reference(binding, project)
+    except AccountError as error:
+        leaf = (profiles.home / '.local/share/ai-control/provider-profiles/codex'
+                / binding['account_id'] / 'registration.json')
+        if error.code != 'profile_unconfigured' or os.path.lexists(leaf):
+            raise
+        return None
+
+
 def main():
     try:
         command, provider, account, project, *extra = sys.argv[1:]
@@ -19,14 +32,7 @@ def main():
         accounts.resolve(provider, account, project)
         profiles = ProviderProfiles(Path.home(), accounts)
         if command == 'capture':
-            reference = None
-            if provider == 'codex':
-                try:
-                    reference = profiles.capture_reference(binding, project)
-                except AccountError as error:
-                    leaf = profiles.home / '.local/share/ai-control/provider-profiles/codex' / account / 'registration.json'
-                    if error.code != 'profile_unconfigured' or os.path.lexists(leaf):
-                        raise
+            reference = _optional_reference(profiles, binding, project)
             print(json.dumps(reference, separators=(',', ':')))
         else:
             reference = json.loads(sys.stdin.buffer.read(16 * 1024 + 1))
@@ -42,6 +48,8 @@ def main():
                 if reference is None:
                     if 'provider_context' in control:
                         raise AccountError('context_invalid')
+                    if _optional_reference(profiles, binding, project) is not None:
+                        raise AccountError('context_drift')
                 else:
                     reference = validate_context_ref(reference)
                     if validate_context_ref(control.get('provider_context')) != reference:
@@ -51,10 +59,12 @@ def main():
             finally:
                 directories.close()
     except AccountError as error:
-        print(error.code, file=sys.stderr)
+        print(json.dumps({'schema': 1, 'error': {'code': error.code}}, separators=(',', ':')),
+              file=sys.stderr)
         return 2
     except (OSError, ValueError):
-        print('context_invalid', file=sys.stderr)
+        print(json.dumps({'schema': 1, 'error': {'code': 'context_invalid'}}, separators=(',', ':')),
+              file=sys.stderr)
         return 2
     return 0
 
