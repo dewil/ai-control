@@ -18,6 +18,10 @@ jobs:
         run: |
           python -m pip install -r requirements-web.lock
           python -m pip install httpx==0.28.1
+      - name: Install pinned browser test tooling
+        run: |
+          python -m pip install playwright==1.63.0
+          python -m playwright install --with-deps chromium
       - name: Existing trusted writer prerequisite
         run: |
           curl -fsSL -o yq https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64
