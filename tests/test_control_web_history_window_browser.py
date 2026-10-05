@@ -372,8 +372,10 @@ class HistoryWindowBrowser(unittest.TestCase):
         negatives=[value for value in current if value<0]
         self.assertTrue(negatives,'Successful continuation must expose earlier native items')
         self.assertTrue(all(value<1 for value in negatives))
-        self.assertEqual(negatives,list(range(min(negatives),1)),
-                         'Earlier items form one contiguous chronological window')
+        self.assertEqual(negatives,list(range(min(negatives),0)),
+                         'Negative earlier items remain contiguous before zero')
+        self.assertTrue(all(b-a==1 for a,b in zip(current,current[1:])),
+                        'The entire earlier window remains contiguous without a cached gap')
         self.assertLessEqual(len(current),100)
         self.assertEqual(current,sorted(set(current)))
         self.assertRegex(self.page.locator('body').inner_text(),error_pattern,
