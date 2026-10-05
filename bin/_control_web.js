@@ -242,7 +242,7 @@ async function loadHistory(older=false,manual=false){
   if(!selectedSession||!selectedProject)return;
   const project=selectedProject,sid=selectedSession.sid,key=chatKey(project,sid),generation=selectionGeneration;
   const existing=historyFlights.get(key);
-  if(existing){if(existing.generation===generation)return existing.promise;await existing.promise;if(activeSelection(project,sid,generation))return loadHistory(older,manual);return;}
+  if(existing){if(existing.generation===generation)return existing.promise;existing.controller.abort();}
   const state=normalizeHistoryState(key);
   if(state.historyError&&!manual)return;
   const anchor=older?[...state.olderAnchors].reverse().find(candidate=>!candidate.error):null;
@@ -253,27 +253,28 @@ async function loadHistory(older=false,manual=false){
   let timeout;
   const deadline=new Promise((_,reject)=>{timeout=setTimeout(()=>{controller.abort();reject(new Error('Время загрузки переписки истекло. Повторите загрузку.'));},15000);});
   if(!state.initialized||manual)$('history-status').textContent='Загружаем переписку…';
+  const flight={generation,controller,promise:null};
+  historyFlights.set(key,flight);
   const promise=(async()=>{
     try{
       // The deadline includes JSON consumption, and only cancels this browser GET.
       const data=await Promise.race([api(path,undefined,controller.signal,()=>activeSelection(project,sid,generation)),deadline]);
-      if(!activeSelection(project,sid,generation))return;
+      if(!activeSelection(project,sid,generation)||historyFlights.get(key)!==flight)return;
       const scrollDecision=captureHistoryScroll(project,sid,generation,older);
       mergeHistory(key,data,anchor);state.historyError='';renderHistory(key);
       $('history-status').textContent=state.paginationError;
-      historyFlights.delete(key);syncCurrentSessionControls();restoreHistoryScroll(scrollDecision,project,sid,generation);
+      if(historyFlights.get(key)===flight){historyFlights.delete(key);syncCurrentSessionControls();restoreHistoryScroll(scrollDecision,project,sid,generation);}
     }catch(err){
-      if(activeSelection(project,sid,generation)){
+      if(activeSelection(project,sid,generation)&&historyFlights.get(key)===flight){
         state.historyError=(controller.signal.aborted?'Время загрузки переписки истекло. Повторите загрузку.':chatError(err))+' История и черновик сохранены.';
         $('history-status').textContent=state.historyError;
       }
     }finally{
       clearTimeout(timeout);
-      if(historyFlights.get(key)?.generation===generation)historyFlights.delete(key);
-      if(activeSelection(project,sid,generation))syncCurrentSessionControls();
+      if(historyFlights.get(key)===flight){historyFlights.delete(key);if(activeSelection(project,sid,generation))syncCurrentSessionControls();}
     }
   })();
-  historyFlights.set(key,{generation,promise});syncCurrentSessionControls();return promise;
+  flight.promise=promise;syncCurrentSessionControls();return promise;
 }
 function renderHistory(key){const state=normalizeHistoryState(key);const list=$('chat-items');const frag=document.createDocumentFragment();let visible=0;for(const id of state.order){const turn=state.turns.get(id);if(!turn)continue;const group=node('li',undefined,'turn');const heading=node('p','Ход: '+statusLabel(turn.status),'turn-status');group.append(heading);for(const item of turn.items||[]){if(!item||typeof item.text!=='string'||!['user','assistant'].includes(item.role))continue;const article=node('article',undefined,'chat-message '+(item.role==='user'?'from-user':'from-assistant'));article.dataset.turnId=id;article.dataset.itemId=item.id;article.append(node('h3',item.role==='user'?'Вы':'Codex'));article.append(renderMarkdown(item.text));if(item.truncated===true)article.append(node('span','Сообщение сокращено','meta'));group.append(article);visible++;}frag.append(group);}if(!visible)frag.append(node('li','Пока нет отображаемых текстовых сообщений.','meta'));list.replaceChildren(frag);if(historyScrollSlack)setHistoryScrollSlack(historyScrollSlack);$('history-truncated').hidden=!(state.truncated||[...state.turns.values()].some(turn=>(turn.items||[]).some(item=>item.truncated===true)));$('history-older').hidden=!state.olderAnchors.length;$('history-older').disabled=!state.olderAnchors.some(anchor=>!anchor.error);$('native-attention').hidden=!(state.attention||(selectedSession&&selectedSession.needs));renderReceipts(key);}
 function statusText(status){return status==='accepted'?'Сообщение принято Codex; работа может продолжаться.':status==='rejected'?'Codex отклонил сообщение; черновик сохранён.':status==='delivery_unknown'?'Доставка неизвестна. Проверьте статус вручную; отправка не повторяется автоматически.':status==='sending'?'Отправляем сообщение…':'Статус сообщения недоступен.';}
