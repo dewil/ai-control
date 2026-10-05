@@ -99,7 +99,7 @@ class FaviconContract(unittest.TestCase):
     def test_asset_manifest_includes_canonical_svg(self):
         manifest = ROOT / 'scripts.manifest'
         self.assertTrue(manifest.is_file())
-        self.assertIn('bin/_control_web.svg', manifest.read_text().split())
+        self.assertIn('_control_web.svg', manifest.read_text().split())
 
     def test_favicon_path_is_not_an_owner_file_reader(self):
         for path in ('/favicon.svg/%2e%2e/owner-config', '/favicon.svg/private-owner-file'):
