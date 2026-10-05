@@ -244,6 +244,46 @@ class PageNavigationBrowserContract(unittest.TestCase):
     def test_INV_WSESS_15_manual_wheel_after_up_restores_follow(self):
         self.assert_manual_return_follows_update('wheel')
 
+    def test_INV_WSESS_15_wheel_inside_long_draft_near_bottom_keeps_reader_scope(self):
+        self.open_history()
+        self.activate('up')
+        draft = self.page.locator('textarea')
+        text = ('synthetic draft line that stays local\n' * 180)
+        draft.fill(text)
+        draft.focus()
+        self.assertGreater(draft.evaluate('el=>el.scrollHeight'), draft.evaluate('el=>el.clientHeight'),
+                           'Fixture needs a textarea with its own scroll range')
+
+        # Move the document programmatically near its natural bottom while the
+        # reader scope is active. This position alone is not a manual return.
+        self.page.evaluate('''() => window.scrollTo(0, Math.max(0,
+            document.scrollingElement.scrollHeight - innerHeight - 36))''')
+        self.page.wait_for_timeout(100)
+        before = self.metrics()
+        self.assertLessEqual(before['max'] - before['y'], 80, 'Document must be near bottom')
+        textarea_scroll = draft.evaluate('el=>el.scrollTop')
+        draft_box = draft.bounding_box()
+        self.assertIsNotNone(draft_box)
+        self.page.mouse.move(draft_box['x'] + draft_box['width'] / 2,
+                             draft_box['y'] + draft_box['height'] / 2)
+        self.page.mouse.wheel(0, 320)
+        self.page.wait_for_timeout(100)
+        after_wheel = self.metrics()
+        self.assertGreater(draft.evaluate('el=>el.scrollTop'), textarea_scroll,
+                           'Trusted wheel must scroll the draft textarea itself')
+        self.assertEqual(after_wheel['y'], before['y'], 'Draft wheel must not move the document')
+        self.assertEqual(draft.input_value(), text, 'Draft text must remain intact')
+
+        anchor = self.page.get_by_text('LATEST message 23', exact=True)
+        anchor_y = anchor.bounding_box()['y']
+        before_requests = len(self.history_requests())
+        private_json(self.evidence / 'control.json', {'delay': 0, 'count': 28})
+        self.page.get_by_text('LATEST message 27', exact=True).wait_for(state='attached', timeout=8500)
+        self.assertGreater(len(self.history_requests()), before_requests,
+                           'Must observe a real synthetic history update')
+        self.assertLessEqual(abs(anchor.bounding_box()['y'] - anchor_y), 8,
+                             'INV-WSESS-15: draft-only wheel must retain page reader anchor')
+
 
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] == '--serve': serve(Path(sys.argv[2]), Path(sys.argv[3]))
