@@ -216,3 +216,12 @@ regressions обязательны. Этот срез заканчивается
 Independent RED должен проверять production public entrypoints и legacy
 регрессии, а не только новую чистую библиотеку. До этих committed RED правки
 production/tests не являются частью данной docs-only стадии.
+
+## Уточнения до реализации
+
+CLI list JSON exact wrapper `{schema:1,accounts:[safeDTO...]}`. Несуществующий
+requested project даёт project_unknown; nonexistent grant alias в самом
+catalog делает его catalog_invalid. Reconciler при отказе может записать
+объясняющий hold/attention, но desired/incarnation/provider_binding не меняет;
+не claim/consume pending envelope и не создаёт lease/host/start effects.
+Отказ не требует byte-for-byte неизменности explanatory status полей.
