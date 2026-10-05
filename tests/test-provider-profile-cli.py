@@ -471,5 +471,45 @@ class ProviderProfileCLI(unittest.TestCase):
         self.no_launch()
 
 
+    def test_registration_appearing_during_create_staging_refuses_stale_unregistered_create(self):
+        # INV-ACCOUNT-10: a registration absent at capture cannot be auto-attached after staging.
+        self.profile_dirs()
+        metadata = self.metadata()
+        registration = self.profile_root / 'profile-a' / 'registration.json'
+        self.assertFalse(registration.exists())
+        marker = self.root / 'registration-appeared-during-staging'
+        real_git = shutil.which('git')
+        self.assertIsNotNone(real_git)
+        wrapper = self.mockbin / 'git'
+        cli = self.bin / 'ai-rc'
+        wrapper.write_text(
+            '#!/usr/bin/env python3\nimport os,subprocess,sys\n'
+            f'marker={str(marker)!r}; cli={str(cli)!r}; metadata={str(metadata)!r}\n'
+            f'if "worktree" in sys.argv and "add" in sys.argv and not os.path.exists(marker):\n'
+            ' result=subprocess.run([cli,"accounts","profile","register","--provider","codex",'
+            '"--account","profile-a","--project","fixture","--metadata",metadata,"--json"],'
+            'stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n'
+            ' open(marker,"w").write(str(result.returncode))\n'
+            f'os.execv({real_git!r},[{real_git!r},*sys.argv[1:]])\n')
+        wrapper.chmod(0o700)
+
+        name = 'registration-appeared-race'
+        worktrees_before = self.git('-C', str(self.project), 'worktree', 'list', '--porcelain')
+        result = self.create_codex(name)
+
+        self.assertTrue(marker.exists(), 'Create did not reach the existing git worktree staging hook')
+        self.assertEqual(marker.read_text(), '0', 'Synthetic profile registration did not succeed')
+        self.assertTrue(registration.is_file(), 'The staging hook did not publish its synthetic registration')
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(self.public_document(result),
+                         {'schema': 1, 'error': {'code': 'context_drift'}})
+        self.assertFalse((self.agents / name).exists(), 'Stale create left a durable TASK')
+        self.assertFalse((self.root / 'spool' / name).exists(), 'Stale create left spool data')
+        self.assertEqual(self.git('-C', str(self.project), 'worktree', 'list', '--porcelain'),
+                         worktrees_before, 'Stale create left a worktree')
+        self.assertFalse(self.effects.exists())
+        self.no_launch()
+
+
 if __name__ == '__main__':
     unittest.main()
