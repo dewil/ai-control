@@ -56,8 +56,10 @@ Feature INV-WSESS-18/19: ../dev/done/2026-10-05-spec-web-project-cloud.md.
 ## Следующий срез: модель и reasoning effort (спецификация)
 
 INV-WSESS-22/23 зарезервированы отдельным срезом окна истории; настоящая спека
-не определяет их и не заявляет их реализацию. INV-WSESS-24..27 ещё не реализованы,
-RED/GREEN/installed acceptance не выполнены.
+не определяет их и не заявляет их реализацию. Discovery-only часть INV-WSESS-24
+реализована: SessionChat.models и generation-fenced InteractiveRPC, 19 независимых
+тестов GREEN и отдельное source review PASS. HTTP/broker для каталога и INV-WSESS-25..27
+ещё не реализованы; installed acceptance не выполнена.
 Feature: [выбор модели](../dev/2026-10-06-spec-web-model-controls.md).
 
 - INV-WSESS-24: Metadata-only `session_models`/GETsession-models получает bounded
@@ -91,3 +93,7 @@ Feature: [выбор модели](../dev/2026-10-06-spec-web-model-controls.md)
 Offline pinned schemas не доказывают entitlement, effective resume/reconnect settings,
 steering enforcement или будущую profile isolation. Независимые synthetic contracts,
 browser checks и отдельный native installed proof необходимы до production claim.
+
+Discovery INV-WSESS-24: tests/test_control_web_session_models_module.py; existing
+chat/socket regressions. Source4b2f149 independent gpt-6-sol/medium compliance PASS.
+HTTP/send/receipt/UI acceptance остаётся открытой.
