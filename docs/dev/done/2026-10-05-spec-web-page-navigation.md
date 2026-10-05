@@ -37,3 +37,5 @@ INV-WSESS-15 сохраняет прежний естественный follow: 
 Выбранные taskstab/hiddenbackground не меняютviewport отстарогоhistoryGET;
 readerintent применяется толькок соответствующемуproject/sid/generation.
 Независимый browsercase: ↑→ручнойEnd/колесо доbottom→реальныйupdatefollow.
+
+Validation: frozen0c46618 independent9browserPASS; prior width/Markdown/anchor26PASS plusauthorcompact5PASS. Distinct-model gpt6solmedium sameSID01a10ccd re-reviewPASS closesmanualreturn andeditablewheel findings. ExacthostedCI remainsrequired beforemerge; installedacceptance separately.
