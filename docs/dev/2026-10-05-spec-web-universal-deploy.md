@@ -86,3 +86,29 @@ no newroothelper update; publicnewpaths requireexplicitnewbootstrap.
 ## Immutable maps
 
 {'SERVICES': ('ai-control-web.service', 'ai-control-web-broker.service'), 'ACCEPTED': {'bin/ai-control-web': '2dbe492440a9e01f73468f2220a4e8b8b908fab2ea8c6a13a55d79409730f4e7', 'bin/_control_web.py': 'a0724ec2c3a505fdc123b96c90a178657e835562ce6b018ea34b8214e6617e8a', 'bin/_control_web_broker.py': 'c4f6f69e0c9d258c07f0138c192e35e99b30254485e078e4403acf5c9bc994e6', 'bin/_control_web_sessions.py': '978847a34320fb381f4bad2848a8832274c4dc34d7f816b9173d4e39e4bc510a', 'bin/_codex_rc.py': '8113bff19a607e9d0dd84af387a4aa700bb2dbfcd3223dc01a6d7c6cd8b6c3e6', 'bin/_rc_projects.sh': '8576c2c5aa4d0c5c24b9efee6ceeb3a9c46882724d6796acbce4a20246a6b2e6', 'bin/_control_web.html': '210ea89cdf6724f0f920cc39fc279a66477d8f08cfa10be1d4dda31862ce5b7f', 'bin/_control_web.css': '5a59c6251dbd376a73f0814ec094747b0a3413cfe80c15e94bbf1cb6dcb170de', 'bin/_control_web.js': 'be0f799ff9ba72b5d22a602b24919c3360d693a4b43ad24e15b1204eb7a55e15', 'requirements-web.lock': 'c56ca5ea2670d01dac8c1d3daa8ee204323bacb29e8a347a749c987a6615d222', 'systemd/ai-control-web.service.tmpl': 'ae73cbaf5dc9c6f35d973573a1a18b0ce451b9142c0c22ab8cc4f87b4b80c641', 'systemd/ai-control-web-broker.service.tmpl': '1bd0ad1c78d98b22245ace274c9b96a59159f0b14f6669b4e09076f87cd53434', 'bin/_control_web.svg': '2a6b140eb1e60610f61aeb3941241bab9121cc4f6f5b31e42d7da8743a2c79e9'}, 'MODES': {'bin/ai-control-web': 493, 'bin/_control_web.py': 420, 'bin/_control_web_broker.py': 420, 'bin/_control_web_sessions.py': 420, 'bin/_codex_rc.py': 420, 'bin/_rc_projects.sh': 493, 'bin/_control_web.html': 420, 'bin/_control_web.css': 420, 'bin/_control_web.js': 420, 'requirements-web.lock': 420, 'systemd/ai-control-web.service.tmpl': 420, 'systemd/ai-control-web-broker.service.tmpl': 420, 'bin/_control_web.svg': 420}}
+
+## Уточнения public test port
+
+BOOTSTRAP_BASE equals the exact ACCEPTED13 map of priorinstalledda0 helper
+shown above. initialize_state verifies owner/modes/hashes but doesnotmutate
+services. runner(args) returnstr and show/is-active semantics identicalapproved
+helper. stagefile owner expected stage-directoryowner orroot; no group/other
+writable inputs. key/state/target controlledowner_uid default0. rootownedsticky
+systemtemp ancestor exception only for privateinjectedtestroots, neverwritable
+owned directories/key/state.
+
+Journal location checkpoints/pending.json exactschema
+`{schema:1,before:state,after:state,checkpoint:basename}`; checkpoint basename
+plain `[a-zA-Z0-9_-]+`, corresponding privatefolder retains previous13bytes
+and acceptedstate. Neverabsolute/untrustedpaths. Journal is createddurably
+beforefirstservicestop; clear onlyafterstate/tree/servicesverified. Recovery
+validatesallrootjournal/checkpoint owner/mode/nlink/keys/hashes. Eachcurrentfile
+must match authorizedold OR authorizednew bytes/mode; recognizedmixedtree can
+restoreold, arbitraryunknownbytes refuseswithoutstop/write. Rootacceptedstate
+must exactlybefore orafter; after+newcomplete+healthy committedcleanup/noop,
+otherwise restoresbefore exactly THEN considerscurrent signedstage in same
+invocation. Crash recovery may thus restoreold and installdesired newrelease,
+returninstalled. Samecommitted unchangedstate returnsalready_installed.
+HigherIDsignedsamebytes returnsadvanced withoutstop/start. Acceptedstate/journal
+corruption cannotbe silentlyreinitialized. Existingtarget additionalvenvfiles
+areoutside13payload anduntouched; extras prohibited in stageonly.
