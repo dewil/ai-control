@@ -225,3 +225,10 @@ catalog делает его catalog_invalid. Reconciler при отказе мо
 объясняющий hold/attention, но desired/incarnation/provider_binding не меняет;
 не claim/consume pending envelope и не создаёт lease/host/start effects.
 Отказ не требует byte-for-byte неизменности explanatory status полей.
+
+Проверка ancestors допускает только system-root-owned sticky shared temp
+ancestor (например /tmp1777) как отдельный случай: каждый нижний каталог
+принадлежит ожидаемому owner и не writable group/other; каталог с binding
+остаётся private. Nonsticky writable ancestor либо sticky неsystemrootowned
+отклоняется catalog_unsafe. Это поддержка изолированных тестовых fixtures,
+не разрешение groupwrite аккаунтных каталогов или произвольных symlink.
