@@ -461,8 +461,6 @@ class SessionChat:
                 last_activity=cache['values'][roots[name]][1] if cache and name in roots else None,
                 summary_state=state if name in roots else 'unavailable',
                 as_of=cache['as_of'] if cache and name in roots else None) for name in names]}
-        if not allowed:
-            return export(None, 'unknown')
         _need(self._summary_lock.acquire(timeout=self._remaining()))
         try:
             budget()
@@ -471,6 +469,8 @@ class SessionChat:
             if cached and cached['key'] != (allowed, generation):
                 cached = None
                 self._summary_cache = None
+            if not allowed:
+                return export(None, 'unknown')
             revision = self._summary_revision
             if cached and cached['revision'] == revision and self._summary_clock() - cached['at'] < 30:
                 return export(cached, 'fresh')
