@@ -201,8 +201,9 @@ class SessionChatContract(unittest.TestCase):
             {'id': 'u', 'role': 'user', 'text': 'first\nsecond', 'truncated': False},
             {'id': 'a', 'role': 'assistant', 'text': 'answer', 'truncated': False}]}],
             'next_cursor': 'opaque-next', 'truncated': False, 'recent_sends': []})
+        # 05.10 compact policy intentionally changes latest native limit8 to limit4.
         self.assertEqual(self.rpc.calls, [('thread/read', {'threadId': SID, 'includeTurns': False}),
-            ('thread/turns/list', {'threadId': SID, 'itemsView': 'full', 'sortDirection': 'desc', 'limit': 8})])
+            ('thread/turns/list', {'threadId': SID, 'itemsView': 'full', 'sortDirection': 'desc', 'limit': 4})])
 
     def test_INV_WSESS_03_pagination_preserves_server_order(self):
         self.rpc.pages['opaque'] = {'data': [turn(turn_id=OTHER), turn()], 'nextCursor': None}
@@ -224,9 +225,10 @@ class SessionChatContract(unittest.TestCase):
         json.dumps(result, ensure_ascii=False).encode('utf-8').decode('utf-8')
 
     def test_INV_WSESS_03_total_encoded_budget_is_honest(self):
-        self.rpc.pages[None] = {'data': [turn('界'*8000, turn_id=f'{i:08x}-1111-4111-8111-111111111111')
+        # 05.10 compact latest requests4 turns; Older retains this8-turn budget fixture.
+        self.rpc.pages['older-budget-fixture'] = {'data': [turn('界'*8000, turn_id=f'{i:08x}-1111-4111-8111-111111111111')
                                         for i in range(8)], 'nextCursor': 'older'}
-        result = self.chat.history('demo', SID)
+        result = self.chat.history('demo', SID, 'older-budget-fixture')
         self.assertLessEqual(len(json.dumps(result, ensure_ascii=False, separators=(',', ':')).encode('utf-8')), 96*1024)
         self.assertTrue(result['truncated'])
         self.assertEqual(result['next_cursor'], 'older')

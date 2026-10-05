@@ -75,7 +75,9 @@ class HistoryTailContract(unittest.TestCase):
         frame = {'data': [native_turn(0, items)], 'nextCursor': 'opaque-older'}
         self.assertLessEqual(len(encoded(frame)), 4 * 1024 * 1024)
         self.rpc.pages[None] = frame
-        result = self.bounded_history()
+        # Older retains the pre-05.10 128-item/work-budget contract.
+        self.rpc.pages['older-fixture'] = self.rpc.pages[None]
+        result = self.bounded_history(cursor='older-fixture')
         selected = result['turns'][0]['items']
         self.assertEqual([i['id'] for i in selected], [f'item-{i}' for i in range(3968, 4096)])
         self.assertTrue(all(i['text'] == safe_text and i['truncated'] is False for i in selected))
@@ -84,7 +86,9 @@ class HistoryTailContract(unittest.TestCase):
 
     def test_newest_turn_priority_and_chronological_items_preserve_all_metadata(self):
         self.page([native_turn(t, [agent(f'{t}-{i}') for i in range(24)]) for t in range(8)], 'native-next')
-        result = self.bounded_history()
+        # Older retains the pre-05.10 128-item/work-budget contract.
+        self.rpc.pages['older-fixture'] = self.rpc.pages[None]
+        result = self.bounded_history(cursor='older-fixture')
         self.assertEqual([t['id'] for t in result['turns']], [f'turn-{t}' for t in range(8)])
         self.assertTrue(all(t['status'] == 'completed' for t in result['turns']))
         self.assertEqual([[i['id'] for i in t['items']] for t in result['turns']],
@@ -100,7 +104,9 @@ class HistoryTailContract(unittest.TestCase):
                           agent(i)])
         items.append({'id': 'future', 'type': 'futureItem', 'text': 'not exported'})
         self.page([native_turn(0, items)])
-        result = self.bounded_history()
+        # Older retains the pre-05.10 128-item/work-budget contract.
+        self.rpc.pages['older-fixture'] = self.rpc.pages[None]
+        result = self.bounded_history(cursor='older-fixture')
         self.assertEqual([i['id'] for i in result['turns'][0]['items']], [f'item-{i}' for i in range(128)])
         self.assertIs(result['truncated'], False)
 
@@ -108,7 +114,9 @@ class HistoryTailContract(unittest.TestCase):
         items = [agent('oldest')]
         items += [{'id': f'empty-{i}', 'type': 'userMessage', 'content': [{'type': 'text', 'text': ''}]} for i in range(128)]
         self.page([native_turn(0, items)])
-        result = self.bounded_history()
+        # Older retains the pre-05.10 128-item/work-budget contract.
+        self.rpc.pages['older-fixture'] = self.rpc.pages[None]
+        result = self.bounded_history(cursor='older-fixture')
         self.assertEqual([i['id'] for i in result['turns'][0]['items']], [f'empty-{i}' for i in range(128)])
         self.assertTrue(all(i['text'] == '' and i['role'] == 'user' and i['truncated'] is False for i in result['turns'][0]['items']))
         self.assertIs(result['truncated'], True)
@@ -127,7 +135,9 @@ class HistoryTailContract(unittest.TestCase):
         self.rpc.metadata_status = {'type': 'active', 'activeFlags': ['waitingOnApproval']}
         self.page([native_turn(t, [agent(f'{t}-{i}', body, item_id='項' * 497 + f'{t}-{i}') for i in range(8)], ids[t])
                    for t in range(8)], cursor)
-        result = self.bounded_history()
+        # Older retains the pre-05.10 128-item/work-budget contract.
+        self.rpc.pages['older-fixture'] = self.rpc.pages[None]
+        result = self.bounded_history(cursor='older-fixture')
         self.assertEqual([t['id'] for t in result['turns']], ids)
         self.assertTrue(all(t['status'] == 'completed' for t in result['turns']))
         self.assertEqual(result['next_cursor'], cursor)
