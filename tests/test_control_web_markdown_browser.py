@@ -225,6 +225,12 @@ class MarkdownBrowserContract(unittest.TestCase):
         self.assertEqual(self.page.locator('code').filter(has_text='MD COMMENT CODE').count(), 0)
         self.assertIn(raw, self.page.locator('body').inner_text())
 
+    def test_raw_processing_instruction_with_markdown_is_wholly_literal(self):
+        raw = '<?pi title="[MD PI LINK](https://example.org)"?>'
+        self.render(raw)
+        self.assertEqual(self.page.locator('a').filter(has_text='MD PI LINK').count(), 0)
+        self.assertIn(raw, self.page.locator('body').inner_text())
+
     def test_dangerous_url_forms_remain_text_without_active_anchors(self):
         targets = ['javascript:alert(1)', 'data:text/html,probe', 'vbscript:probe', 'file:///private-probe',
                    '//md-untrusted.invalid/x', '\\\\md-untrusted.invalid/x', 'java&#x73;cript:alert(1)',
