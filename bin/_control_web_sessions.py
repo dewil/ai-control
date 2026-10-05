@@ -368,12 +368,12 @@ class SessionChat:
         _need(thread['id'] == sid and canonical(thread['cwd']) == root, 'stale')
         return thread
 
-    def _page(self, sid, cursor):
-        params = {'threadId': sid, 'itemsView': 'full', 'sortDirection': 'desc', 'limit': 8}
+    def _page(self, sid, cursor, limit=8):
+        params = {'threadId': sid, 'itemsView': 'full', 'sortDirection': 'desc', 'limit': limit}
         if cursor is not None:
             params['cursor'] = cursor
         response = self._rpc('thread/turns/list', params)
-        _need(type(response.get('data')) is list and len(response['data']) <= 8
+        _need(type(response.get('data')) is list and len(response['data']) <= limit
               and 'nextCursor' in response and valid_cursor(response['nextCursor']))
         _need(response['nextCursor'] is None or response['nextCursor'] != cursor)
         validated = 0
@@ -454,12 +454,13 @@ class SessionChat:
         _need(valid_uuid(sid) and valid_cursor(cursor), 'invalid_request')
         root = self._root(project)
         thread = self._proof(root, sid)
-        page = self._page(sid, cursor)
+        page = self._page(sid, cursor, limit=4 if cursor is None else 8)
         from _control_web_broker import redact
         with self.receipts.namespace(root, sid, self._local.deadline) as ns:
             recent = self.receipts.recent(ns, root, sid, self._local.deadline)
         turns = [{'id': turn['id'], 'status': turn['status'], 'items': []}
                  for turn in page['data']]
+        item_limit = 24 if cursor is None else 128
         eligible, eligible_count, scanned = [], 0, 0
         for turn_index, turn in enumerate(page['data']):
             for item_index in range(len(turn['items']) - 1, -1, -1):
@@ -469,14 +470,14 @@ class SessionChat:
                                and any(part['type'] == 'text' for part in item['content']))
                 if is_eligible:
                     eligible_count += 1
-                    if len(eligible) < 128:
+                    if len(eligible) < item_limit:
                         eligible.append((turn_index, item_index))
                 scanned += 1
                 if scanned % 256 == 0:
                     self._remaining()
         self._remaining()
         result = {'turns': turns, 'next_cursor': page['nextCursor'],
-                  'truncated': eligible_count > 128, 'recent_sends': recent}
+                  'truncated': eligible_count > item_limit, 'recent_sends': recent}
         if _attention(thread):
             result['needs_native_attention'] = True
         # The empty item arrays reserve exact metadata/cursor/receipt bytes.
