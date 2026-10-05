@@ -219,14 +219,18 @@ function captureMarkdownAnchor(article){
 }
 function resolveMarkdownAnchor(article,anchor){
   if(!anchor)return null;const content=markdownTextNodes(article);if(!content)return null;
-  // Preserve the original glyph in an unchanged suffix before looking up text
-  // context: inserted duplicate passages must not select their new first copy.
+  // A wholly unchanged prefix preserves offsets during append. Otherwise map
+  // the original glyph in the unchanged suffix before context lookup, so an
+  // inserted duplicate passage does not select its new first copy.
   const old=anchor.text,fresh=content.text;let suffix=0,prefix=0,index=-1;
-  while(suffix<Math.min(old.length,fresh.length)&&old[old.length-1-suffix]===fresh[fresh.length-1-suffix])suffix++;
-  if(anchor.index>=old.length-suffix)index=fresh.length-old.length+anchor.index;
+  if(fresh.startsWith(old))index=anchor.index;
   else{
-    while(prefix<Math.min(old.length,fresh.length)&&old[prefix]===fresh[prefix])prefix++;
-    if(anchor.index<prefix)index=anchor.index;
+    while(suffix<Math.min(old.length,fresh.length)&&old[old.length-1-suffix]===fresh[fresh.length-1-suffix])suffix++;
+    if(anchor.index>=old.length-suffix)index=fresh.length-old.length+anchor.index;
+    else{
+      while(prefix<Math.min(old.length,fresh.length)&&old[prefix]===fresh[prefix])prefix++;
+      if(anchor.index<prefix)index=anchor.index;
+    }
   }
   if(index<0)for(let i=0;i<=anchor.occurrence;i++){index=fresh.indexOf(anchor.context,index+1);if(index<0)return null;}
   const entry=content.entries.find(entry=>index>=entry.start&&index<entry.start+entry.node.length);
