@@ -77,3 +77,49 @@ class TransientStatusRegressionBrowserContract(unittest.TestCase):
         self.assertEqual(len(status_calls), 1, 'The test exercises one manual status GET')
         self.assertIn('Эта отправка больше недоступна для проверки.', self.slot().inner_text(),
                       'Manual status GET failure must remain visible after rendering settles')
+
+    def test_INV_WSESS_16_late_status_error_cannot_replace_history_accepted_same_uuid(self):
+        self.control(send_status='delivery_unknown')
+        self.open_history()
+        self.send('Synthetic current attempt becomes accepted through history')
+        draft_text = 'Synthetic unsent draft survives late status error'
+        self.page.locator('textarea').fill(draft_text)
+        sent = [row for row in self.calls() if row['method'] == 'send']
+        self.assertEqual(len(sent), 1)
+        message_id = sent[0]['message_id']
+
+        # The status request sleeps, then sees no server receipt and returns
+        # stale. In the meantime, history confirms accepted for this same UUID.
+        fixture.private_json(self.evidence / 'receipts.json', [])
+        self.control(seeds=[], status_delay=8)
+        responses = []
+        self.page.on('response', lambda response: responses.append(response)
+                     if '/api/session-send-status' in response.url else None)
+        status_started = time.monotonic()
+        check = self.page.get_by_role('button', name='Проверить доставку', exact=True)
+        self.assertGreater(check.count(), 0, 'Current unknown attempt exposes its exact manual check')
+        check.first.click()
+        self.page.wait_for_timeout(100)
+        status_calls = [row for row in self.calls() if row['method'] == 'status']
+        self.assertEqual([(row['sid'], row['message_id']) for row in status_calls],
+                         [(sent[0]['sid'], message_id)], 'Manual probe is bound to the current UUID')
+
+        self.control(seeds=[{'status': 'accepted', 'message_id': message_id, 'turn_id': fixture.SID}],
+                     status_delay=8)
+        self.page.wait_for_function(
+            "() => /принято/i.test(document.querySelector('#send-status').textContent)", timeout=6500)
+        accepted_at = time.monotonic()
+        self.control(seeds=[], status_delay=8)
+
+        deadline = status_started + 8.7
+        while not responses and time.monotonic() < deadline:
+            self.page.wait_for_timeout(50)
+        self.assertEqual(len(responses), 1, 'Delayed manual status GET must finish in the fixture window')
+        self.assertGreaterEqual(responses[0].status, 400, 'The delayed response is the synthetic stale error')
+        self.assertLess(time.monotonic() - accepted_at, 5,
+                        'The delayed error arrives inside the original accepted display window')
+        self.assertTrue(self.accepted(), 'A late error cannot replace confirmed accepted for the same UUID')
+        self.assertEqual(self.page.locator('textarea').input_value(), draft_text)
+        send_calls = [row for row in self.calls() if row['method'] == 'send']
+        self.assertEqual([row['message_id'] for row in send_calls], [message_id],
+                         'Status reconciliation/error cannot resend the message')
