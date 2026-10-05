@@ -69,14 +69,16 @@ class HistoryTailContract(unittest.TestCase):
         return result
 
     def test_4096_messages_newest128_with_at_most_four_whole_exports(self):
-        items = [agent(i, 'x' * 512) for i in range(4096)]
+        safe_text = 'safe word ' * 51 + 'ok'
+        self.assertEqual(len(safe_text), 512)
+        items = [agent(i, safe_text) for i in range(4096)]
         frame = {'data': [native_turn(0, items)], 'nextCursor': 'opaque-older'}
         self.assertLessEqual(len(encoded(frame)), 4 * 1024 * 1024)
         self.rpc.pages[None] = frame
         result = self.bounded_history()
         selected = result['turns'][0]['items']
         self.assertEqual([i['id'] for i in selected], [f'item-{i}' for i in range(3968, 4096)])
-        self.assertTrue(all(i['text'] == 'x' * 512 and i['truncated'] is False for i in selected))
+        self.assertTrue(all(i['text'] == safe_text and i['truncated'] is False for i in selected))
         self.assertIs(result['truncated'], True)
         self.assertEqual(result['next_cursor'], 'opaque-older')
 
