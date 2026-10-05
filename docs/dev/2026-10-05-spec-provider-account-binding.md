@@ -125,6 +125,34 @@ Native boundary перехватывается существующими synthe
 fixtures, не credentials/настоящими turns. Installed default path проверяется
 отдельно, чтобы tests не доказывали только injected reader.
 
+### Публичный Python seam первого среза
+
+Модуль `bin/_control_provider_accounts.py`, stdlib. `AccountError(ValueError)`
+имеет безопасный строковый `.code`; exception text не включает содержимое
+конфига/пути/credential. `ProviderAccounts(catalog_path, project_names, *,
+owner_uid=None)` принимает trusted pathlib/path string, iterable известных
+registry aliases и UID (None означает os.getuid); CLI сам выбирает fixed path
+и штатный registry. `list_accounts(project)` возвращает список safe DTO;
+`resolve(provider_id, account_id, project)` возвращает одну такую DTO или
+AccountError. Reader перечитывает и валидирует snapshot при каждой операции;
+список сортируется стабильно provider_id/account_id, wrapper schema1 делаетCLI.
+`validate_binding(value)` возвращает новый exact schema1/IDs dict либо
+AccountError(code="invalid_binding"); None не binding и тоже invalid.
+`check_binding_unchanged(previous, candidate)` принимает два whole control dict,
+сравнивает наличие и exact validated provider_binding; оба absent — успех,
+иначе addition/removal/change/malformed отказ invalid_binding/binding_immutable.
+Результат успеха None. Привязка читается только из control, не spec/env.
+
+AccountError codes: catalog_unconfigured, catalog_invalid, catalog_unsafe,
+unsupported_provider, account_unknown, account_disabled, account_forbidden,
+project_unknown, runtime_unverified, invalid_binding, binding_immutable.
+Project aliases предварительно получены успешным registry read; его failure
+обрабатывает production caller до создания reader. Disabled account включается
+в list с disabled, resolve запрещает. Capabilities DTO — mapping bool по
+vocabulary выше. Код тестирует public seam, CLI и обязательные реальные callers,
+не заменяет интеграцию unit-import проверками. CLI fixtures путь fixed root
+заполняют только своим synthetic config.
+
 Независимый RED до реализации включает:
 1. Два аккаунта одного provider: distinct immutable bindings на двух own paused
    TASK; labels mutable, binding IDs и incarnation неизменны; status scoped.
