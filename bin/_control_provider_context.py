@@ -186,9 +186,11 @@ class _Directories:
             live = os.stat(name, dir_fd=parent, follow_symlinks=False)
             current = os.fstat(fd)
             fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid')
-            # Creating/removing our publication temp legitimately changes only
-            # the account root's timestamps; all pathname/object fences remain.
-            if _identity(before) != changed:
+            # Shared root-owned sticky directories can receive unrelated sibling
+            # writes. Keep their object/mode/owner fences, not global timestamps.
+            # Our account-root publication also legitimately changes timestamps.
+            sticky_root = before.st_uid == 0 and before.st_mode & stat.S_ISVTX
+            if _identity(before) != changed and not sticky_root:
                 fields += ('st_mtime_ns', 'st_ctime_ns')
             if any(getattr(before, k) != getattr(info, k) for info in (live, current) for k in fields):
                 raise AccountError('profile_unsafe')
