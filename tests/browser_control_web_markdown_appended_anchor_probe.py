@@ -13,14 +13,17 @@ try:
  test=CLASS('test_partial_markdown_unicode_and_bounded_unmatched_input_are_readable');test.setUp()
  original=text(25)
  tail='\n\n'.join('MD after '+str(i)+' '+('plain reading words '*3) for i in range(20,30))
- grown=original+'\n\n'+tail
- assert grown.startswith(original) and grown!=original+original and len(grown+'\n\n'+SENTINEL)<=8000
+ old_item=original+'\n\n'+SENTINEL
+ grown=old_item+'\n\n'+tail+'\n\n'+SENTINEL
+ assert grown.startswith(old_item) and grown!=old_item+old_item and len(grown)<=8000
  test.render(original)
+ actual_old=json.loads((CLASS.evidence/'control.json').read_text())['text']
+ assert actual_old==old_item and grown.startswith(actual_old)
  before=read_at(CLASS.page,TOKEN)
  assert before['bottom']>80
  assert CLASS.page.locator('body').inner_text().count(TOKEN)==1
  CLASS.page.screenshot(path=str(CLASS.evidence/'append-before.png'))
- private_json(CLASS.evidence/'control.json',{'text':grown+'\n\n'+SENTINEL})
+ private_json(CLASS.evidence/'control.json',{'text':grown})
  deadline=time.monotonic()+7
  while CLASS.page.locator('body').inner_text().count(TOKEN)!=2 and time.monotonic()<deadline:CLASS.page.wait_for_timeout(50)
  assert CLASS.page.locator('body').inner_text().count(TOKEN)==2
@@ -30,7 +33,7 @@ try:
  after=geometry(CLASS.page,TOKEN)
  CLASS.page.screenshot(path=str(CLASS.evidence/'append-after.png'))
  delta=abs(after['top']-before['top'])
- result={'check':'appended repeated tail preserves original visible reading passage','status':'PASS' if delta<=8 else 'FAIL','delta_px':delta,'before':before,'after':after,'payload_characters':len(grown+'\n\n'+SENTINEL),'copy_count_before':1,'copy_count_after':2,'original_occurrence':'first in document order; unchanged original prefix','snapshot_ambiguity':False}
+ result={'check':'appended repeated tail preserves original visible reading passage','status':'PASS' if delta<=8 else 'FAIL','delta_px':delta,'before':before,'after':after,'payload_characters':len(grown),'copy_count_before':1,'copy_count_after':2,'original_occurrence':'first in document order; unchanged original prefix','snapshot_ambiguity':False,'actual_old_item_is_byte_identical_prefix':grown.startswith(actual_old)}
  private_json(CLASS.evidence/'append-anchor-report.json',result)
  test.tearDown()
  print(json.dumps({'status':result['status'],'delta_px':delta,'bottom_before':before['bottom'],'payload_characters':result['payload_characters']}))
