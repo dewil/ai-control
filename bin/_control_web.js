@@ -28,7 +28,7 @@ function markdownHasRawHtml(text){
       if(text[i+1]==='`'){while(text[i+1]==='`')i++;continue;}
       const end=text.indexOf('`',i+1);if(end>i+1){i=end;continue;}
     }
-    if(text[i]==='<'&&/^<\/?[a-zA-Z!]/.test(text.slice(i,i+3)))return true;
+    if(text[i]==='<'&&/^<\/?[a-zA-Z!?]/.test(text.slice(i,i+3)))return true;
   }
   return false;
 }
@@ -212,14 +212,23 @@ function captureMarkdownAnchor(article){
       const point=markdownCharRange(part,offset).getBoundingClientRect();if(point.bottom<=0||point.top>=window.innerHeight)continue;
       const index=entry.start+offset,context=content.text.slice(index,index+48);let occurrence=0,previous=-1;
       while((previous=content.text.indexOf(context,previous+1))>=0&&previous<index)occurrence++;
-      return {context,occurrence,top:point.top};
+      return {context,occurrence,top:point.top,text:content.text,index};
     }
   }
   return null;
 }
 function resolveMarkdownAnchor(article,anchor){
   if(!anchor)return null;const content=markdownTextNodes(article);if(!content)return null;
-  let index=-1;for(let i=0;i<=anchor.occurrence;i++){index=content.text.indexOf(anchor.context,index+1);if(index<0)return null;}
+  // Preserve the original glyph in an unchanged suffix before looking up text
+  // context: inserted duplicate passages must not select their new first copy.
+  const old=anchor.text,fresh=content.text;let suffix=0,prefix=0,index=-1;
+  while(suffix<Math.min(old.length,fresh.length)&&old[old.length-1-suffix]===fresh[fresh.length-1-suffix])suffix++;
+  if(anchor.index>=old.length-suffix)index=fresh.length-old.length+anchor.index;
+  else{
+    while(prefix<Math.min(old.length,fresh.length)&&old[prefix]===fresh[prefix])prefix++;
+    if(anchor.index<prefix)index=anchor.index;
+  }
+  if(index<0)for(let i=0;i<=anchor.occurrence;i++){index=fresh.indexOf(anchor.context,index+1);if(index<0)return null;}
   const entry=content.entries.find(entry=>index>=entry.start&&index<entry.start+entry.node.length);
   return entry?markdownCharRange(entry.node,index-entry.start):null;
 }
