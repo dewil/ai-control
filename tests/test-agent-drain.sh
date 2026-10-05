@@ -5,6 +5,8 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=fixtures/init-legacy-control.sh
+. "$HERE/fixtures/init-legacy-control.sh"
 RUN="$HERE/../bin/ai-agent-run"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -73,6 +75,8 @@ memory_max_mb: 100
 limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 EOF
+# Authoritative admission requires a valid legacy control, even for spec-only unit fixtures.
+init_legacy_control "$AG"
 export AI_AGENT_GENERATION=1 AI_AGENT_ATTEMPT=test-attempt
 
 MOCK="$TMP/mock-claude"

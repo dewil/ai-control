@@ -35,6 +35,8 @@ set -u
 shopt -s nullglob
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=fixtures/init-legacy-control.sh
+. "$HERE/fixtures/init-legacy-control.sh"
 RUN="$HERE/../bin/ai-agent-run"
 ASK="$HERE/../bin/ai-agent-ask"
 TGBOT="$HERE/../bin/ai-agent-tgbot"
@@ -90,6 +92,8 @@ memory_max_mb: 100
 limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 EOF
+  # Preserve the fixture runtime while exercising strict authoritative admission.
+  init_legacy_control "$ag"
   echo "$ag"
 }
 
@@ -132,6 +136,7 @@ permissions:
   allow: []
   ask: ["Bash(git push:*)"]
 EOF
+  init_legacy_control "$ag"
   echo "$ag"
 }
 stage_inflight() { # <agent-dir> <key> - envelope_key обязан быть в inflight (V2.4 §2b/major 6)

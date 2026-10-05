@@ -16,6 +16,8 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=fixtures/init-legacy-control.sh
+. "$HERE/fixtures/init-legacy-control.sh"
 RUN="$HERE/../bin/ai-agent-run"
 ASK="$HERE/../bin/ai-agent-ask"
 ANSWER="$HERE/../bin/ai-agent-answer"
@@ -109,6 +111,8 @@ memory_max_mb: 100
 limits: { runs_per_day: 100, run_timeout_s: 20 }
 source: { kind: spool, replay_window_h: 72 }
 EOF
+  # Preserve the fixture runtime while exercising strict authoritative admission.
+  init_legacy_control "$ag"
   echo "$ag"
 }
 
@@ -778,6 +782,7 @@ source: { kind: spool, replay_window_h: 72 }
 workspace: direct
 project: $PROJ20
 EOF
+init_legacy_control "$AGQ20"
 "$RUN" spool-put evtq20 --text "q20-event" >/dev/null
 "$RUN" intake "$AGQ20" >/dev/null
 KQ20=$(ls "$AGQ20/inbox/pending" | sed 's/.json//')
@@ -847,6 +852,7 @@ source: { kind: spool, replay_window_h: 72 }
 workspace: direct
 project: $PROJ22
 EOF
+init_legacy_control "$AGQ22"
 "$RUN" spool-put evtq22 --text "q22-event" >/dev/null
 "$RUN" intake "$AGQ22" >/dev/null
 KA22=$(ls "$AGQ22/inbox/pending" | sed 's/.json//')
@@ -889,6 +895,7 @@ AGQ23A="$AI_AGENTS_DIR/evtq23a"
 mkdir -p "$AGQ23A" "$AI_AGENT_SPOOL_BASE/evtq23a"
 chmod 0700 "$AI_AGENT_SPOOL_BASE/evtq23a"
 sed "s|evtq22|evtq23a|; s|$PROJ22|$PROJ23A|" "$AI_AGENTS_DIR/evtq22/spec.yaml" > "$AGQ23A/spec.yaml"
+init_legacy_control "$AGQ23A"
 "$RUN" spool-put evtq23a --text "q23a-event" >/dev/null
 "$RUN" intake "$AGQ23A" >/dev/null
 K23A=$(ls "$AGQ23A/inbox/pending" | sed 's/.json//')
@@ -925,6 +932,7 @@ AGQ23B="$AI_AGENTS_DIR/evtq23b"
 mkdir -p "$AGQ23B" "$AI_AGENT_SPOOL_BASE/evtq23b"
 chmod 0700 "$AI_AGENT_SPOOL_BASE/evtq23b"
 sed "s|evtq22|evtq23b|; s|$PROJ22|$PROJ23B|" "$AI_AGENTS_DIR/evtq22/spec.yaml" > "$AGQ23B/spec.yaml"
+init_legacy_control "$AGQ23B"
 "$RUN" spool-put evtq23b --text "q23b-event" >/dev/null
 "$RUN" intake "$AGQ23B" >/dev/null
 K23B=$(ls "$AGQ23B/inbox/pending" | sed 's/.json//')

@@ -21,7 +21,9 @@ Exit codes: 0 ok; 2 usage/input; 3 not found; 4 CAS conflict / invalid
 transition; 5 lock busy; 6 registry invalid; 7 ENOSPC/EIO (disk).
 """
 
+import copy
 import fcntl
+from _control_provider_accounts import AccountError, validate_binding, check_binding_unchanged
 import json
 import os
 import re
@@ -153,6 +155,13 @@ def validate_control(doc):
         inc = doc["incarnation"]
         if not (isinstance(inc, str) and INCARNATION_RE.match(inc)):
             _err(e, "control: bad incarnation (не hex32)")
+    if "provider_binding" in doc:
+        if "incarnation" not in doc:
+            _err(e, "invalid_binding")
+        try:
+            validate_binding(doc["provider_binding"])
+        except AccountError as exc:
+            _err(e, exc.code)
     return e
 
 
@@ -341,6 +350,7 @@ def cmd_control_cas(argv):
         errs = validate_control(doc)
         if errs:
             die(6, "; ".join(errs))
+        previous = copy.deepcopy(doc)
         for p, want in expects:
             got, found = get_path(doc, p)
             if not found or got != want:
@@ -354,6 +364,10 @@ def cmd_control_cas(argv):
             if not found or not isinstance(got, int):
                 die(4, "cannot --inc non-int %s" % p)
             set_path(doc, p, got + 1)
+        try:
+            check_binding_unchanged(previous, doc)
+        except AccountError as exc:
+            die(4, exc.code)
         doc["seq"] = int(doc.get("seq", 0)) + 1
         errs = validate_control(doc)
         if errs:
