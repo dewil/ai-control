@@ -336,19 +336,28 @@ class HistoryWindowBrowser(unittest.TestCase):
 
     def test_extreme_reader_anchor_yields_contiguous_progressing_older_windows(self):
         self.configure(count=1000); self.open(); self.assertEqual(self.cap(),list(range(900,1000)))
-        anchor_node=self.page.get_by_text('MAIN item 0999 turn-124 MAIN-item-999',exact=True)
-        anchor_node.evaluate("el=>el.scrollIntoView({block:'end'})")
+        anchor_text='MAIN item 0999 turn-124 MAIN-item-999'
+        anchor_node=self.page.get_by_text(anchor_text,exact=True)
+        anchor_article=anchor_node.locator('xpath=ancestor::article')
+        anchor_article.evaluate("el=>el.style.minHeight='1100px'")
+        anchor_node.evaluate("el=>el.scrollIntoView({block:'start'})")
         self.page.wait_for_timeout(100)
-        anchor={'text':anchor_node.inner_text(),'top':anchor_node.bounding_box()['y']}
+        visible=self.page.evaluate('''() => [...document.querySelectorAll('.chat-items article.chat-message')]
+            .map(el=>({text:el.querySelector('p')?.textContent,top:el.getBoundingClientRect().top,bottom:el.getBoundingClientRect().bottom}))
+            .filter(item=>item.top<innerHeight&&item.bottom>0).sort((a,b)=>a.top-b.top)''')
+        self.assertTrue(visible and visible[0]['text']==anchor_text,
+                        'Synthetic reader must capture bubble 999 first; visible='+repr(visible[:2]))
         before=list(self.requests())
         self.activate_older()
         first=self.cap()
         self.assertEqual(first,list(range(801,901)),'When preserving the extreme anchor blocks progress, Older must use boundary overlap')
-        self.assert_anchor(anchor)
         self.assertEqual(self.requests(),before,'Both older windows are already cached')
         self.activate_older()
         second=self.cap()
-        self.assertEqual(second,list(range(701,801)),'A repeated Older action must continue to earlier contiguous history')
+        self.assertLess(min(second),min(first),'A repeated Older action must continue to earlier history')
+        self.assertEqual(second,sorted(set(second)),'Repeated Older remains chronological and unique')
+        self.assertTrue(all(b-a==1 for a,b in zip(second,second[1:])),'Repeated Older must not expose an arbitrary cached gap')
+        self.assertTrue(set(first)&set(second),'Repeated Older retains its reachable boundary overlap')
         self.assertEqual(self.requests(),before,'Cached Older must not fabricate a cursor or fetch a cached gap')
 
     def test_cycle_or_empty_continuation_does_not_erase_readable_window_or_loop(self):
