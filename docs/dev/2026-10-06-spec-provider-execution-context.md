@@ -133,6 +133,21 @@ root resolution CLI; после validation authority фиксируется в c
 trusted owner_home для temp fixtures; production не имеет path/env override flag.
 Регистрация требует existing root/codex/native-home, не создаёт native login или
 config. Только registration leaf атомарно публикуется после final CAS/recheck.
+Final publication fence включает post-link fresh catalog/grant, source metadata
+snapshot и profile directory/leaf identity checks до success. Доступные cooperating
+registration writers сериализуются account-root lock; произвольный hostile процесс
+с полным доступом того же owner UID находится вне этой metadata-only trust boundary.
+
+Обычный post-publication validation/one-shot IO failure откатывает только собственную
+leaf, определённую по held FD dev/ino, и синхронизирует каталог. Чужая replacement
+leaf не удаляется и не перезаписывается. Если unlink/fsync rollback сам устойчиво
+отказывает, обычный filesystem API не доказывает durable отсутствие leaf: ответ
+`profile_unsafe`, success запрещён, commit state неизвестен. Не утверждать «ничего
+не записано», не повторять автоматически; требуется явная проверка/восстановление
+оператором. Даже оставшаяся валидная registration metadata означает лишь
+runtime_unverified, не native admission/activation. Status не подтверждает исход
+неизвестной операции; native proof gates сохраняются. Это отдельный narrow IO
+failure предел, а не разрешение успешной stale публикации или удаления чужой leaf.
 Директории0700 expected UID; metadata0600/nlink1; no profile ancestor symlinks,
 unsafe writable ancestry или cross-account inode aliases. Anchored FD walk и
 before/after pathname checks не закрывают same-owner rename/symlink TOCTOU:
