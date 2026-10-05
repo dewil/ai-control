@@ -25,3 +25,7 @@ Visibility/project/sessiongeneration/logout fences действуют; стар�
 ## Независимые проверки
 
 Synthetic ≥101,1000messages initial/poll renders≤100 latestIDs, chronologic, noemptygroups; Older openshiddenloaded thenexactopaque networkcursor atcacheboundary and canreachallparts128itempage, previous/currentoverlap сохраняетanchor. Gap/emptycursor/cycle/error remainshonest. Liveincoming whileupreader/focused/Older retainswindow/node/focus/anchor, latestactionexposes newest100 andrestoresfollow; bottom/top pairs/hide/logout/sessionrace/draftreceipt/timestamps unchanged. No extra fetch whenlocalwindownavigation sufficient, no nativehistorydelete calls. MeaningfulREDcommittedbeforeauthor; independentdifferentmodel review/exactCI. Existing UIhistory pagination/Markdown/nav/status/timestamps regressions обязательны.
+
+## Завершение реализации
+
+Проверенная реализация ca1534cf6cb36b60def070dfb60b80d226f3dd23. Независимые17 browser tests PASS; author54 regression tests PASS. Source-blind RED до каждой исправленной крайности, итоговый distinct-model compliance gpt-6-sol/medium PASS (actual SID01a10e17-323f-7233-ac89-beb81721ccba). Exact CI и установка учитываются отдельно в PR/клиентской задаче. Ограничен DOM100 bubbles; cache memory не ограничена, native история не удаляется.

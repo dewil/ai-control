@@ -48,6 +48,6 @@ INV-WSESS-16/17: один polite current send status; новые локальн�
 
 INV-WSESS-20/21: validated nullable native Turn.startedAt only as explicitly labelled turn-start age/date per text item; unknown never guessed, local minute labels no network or reader/focus movement. Feature ../dev/done/2026-10-06-spec-web-message-times.md.
 
-INV-WSESS-22/23: latest/Older visible window at most100 text bubbles, exact cache/nativecursor navigation, reader/focus preservation and explicit new-message action; DOMcaponly, no native deletion or bounded-memory claim. Feature ../dev/2026-10-06-spec-web-history-window.md.
+INV-WSESS-22/23: latest/Older visible window at most100 text bubbles, exact cache/nativecursor navigation, reader/focus preservation and explicit new-message action; DOMcaponly, no native deletion or bounded-memory claim. Feature ../dev/done/2026-10-06-spec-web-history-window.md.
 
 Feature INV-WSESS-18/19: ../dev/done/2026-10-05-spec-web-project-cloud.md.
