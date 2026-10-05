@@ -198,8 +198,8 @@ class SessionChatContract(unittest.TestCase):
             {'id': 'unknown', 'type': 'futureMessage', 'text': 'private unknown'}]}], 'nextCursor': 'opaque-next'}
         result = self.chat.history('demo', SID)
         self.assertEqual(result, {'turns': [{'id': TURN, 'status': 'completed', 'items': [
-            {'id': 'u', 'role': 'user', 'text': 'first\nsecond', 'truncated': False},
-            {'id': 'a', 'role': 'assistant', 'text': 'answer', 'truncated': False}]}],
+            {'id': 'u', 'role': 'user', 'text': 'first\nsecond', 'truncated': False, 'timestamp': None, 'time_precision': 'unknown'},
+            {'id': 'a', 'role': 'assistant', 'text': 'answer', 'truncated': False, 'timestamp': None, 'time_precision': 'unknown'}]}],
             'next_cursor': 'opaque-next', 'truncated': False, 'recent_sends': []})
         # 05.10 compact policy intentionally changes latest native limit8 to limit4.
         self.assertEqual(self.rpc.calls, [('thread/read', {'threadId': SID, 'includeTurns': False}),
