@@ -213,3 +213,5 @@ bash tests/test-install-macos-legacy.sh
 ```
 
 В тестах actual writers работают только на private fixtures; runtime/network команды запрещены synthetic mockbin. В CI используется реальный pinned `yq` для existing writers. Blind contract-файлы не изменяются реализацией.
+
+Browser icon package: include `bin/_control_web.svg` (root-owned0644) from the same accepted immutable archive; the web package now contains13files. The HTML declares `/favicon.svg`, publicGET returns image/svg+xml/no-store, `/favicon.ico` redirects307 to that known asset. No owner paths or dynamic SVG input are exposed. An inaccessible registered project is shown as an unavailable disabled entry; other valid projects remain selectable.
