@@ -8,6 +8,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Signed deploy bootstrap fixtures read the immutable accepted Git snapshot.
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -25,6 +28,10 @@ jobs:
           python -m unittest discover -s tests -p 'test_control_web*.py'
           python -m unittest discover -s tests -p 'test_ai_control_names.py'
           python -m py_compile bin/_control_web.py bin/_control_web_broker.py bin/_control_web_sessions.py bin/_codex_rc.py bin/ai-control-web
+      - name: Signed deployment boundary and recovery
+        run: |
+          python tests/test-web-universal-deploy.py
+          python -m py_compile deployment/ai-control-web-deploy.py
       - name: Installation regression
         run: |
           # These install tests mock launchd; they need an inert CLI prerequisite,
