@@ -28,7 +28,7 @@ Additive response contract:
 }
 ```
 
-`summary_state` — одно из `fresh|stale|unknown|unavailable`. `session_count:null` и `last_activity:null` не трактуются как ноль/no activity, если summary не fresh/stale complete; confirmed zero uses count 0 and activity `none`. DTO не содержит thread IDs, cwd, raw native metadata, unauthorized names, or receipt/session histories.
+`summary_state` — одно из `fresh|stale|unknown|unavailable`. `session_count:null` и `last_activity:null` не трактуются как ноль/no activity, если summary не fresh/stale complete; confirmed zero uses count 0 and `last_activity:null` (no-activity, never a fabricated timestamp). DTO не содержит thread IDs, cwd, raw native metadata, unauthorized names, or receipt/session histories.
 
 Installed Codex CLI 0.160.0 generated public protocol schema documents `thread/list` `cwd` as one path or an exact-match list, and `Thread.updatedAt` as required Unix seconds. Это подтверждает wire-shape только для этой версии. Schema не доказывает, что уже установленный App Server корректно агрегирует multi-cwd/pagination во всех случаях. Перед production нужен bounded installed proof на текущем native binary/сервере без history/send; пока он не пройден, API contract остаётся требованием, а не заявленной production-возможностью.
 
@@ -65,3 +65,30 @@ Installed Codex CLI 0.160.0 generated public protocol schema documents `thread/l
 - `docs/dev/2026-10-05-spec-web-session-chat.md:110-114,121`, `docs/specs/web-sessions.md:9-10`: unavailable project, deep-link, auth/root/thread authority constraints.
 
 Reconnaissance was read-only. No live sessions/history, auth/credentials, logs, provider state or real API were read/called. No production, native actions, or tests are included in this contract.
+
+## Точный public service seam
+
+Новый authenticated GET `/api/session-project-summary`, без параметров;
+фиксированная broker op `session_project_summary` с единственным ключом op,
+метод backend/client `session_project_summary()`, SessionChat
+`project_summary()`. Existing `/api/session-projects` и SessionChat.projects()
+сохраняют прежний контракт: cloud сначала получает aliases, затем summary,
+никакой browser path/scope input. project_names callback задаёт разрешённый
+server набор aliases. Existing callable rpc(method,params) synthetic seam.
+
+SessionChat constructor получает optional keyword-only `summary_clock=None`
+(monotonic, default time.monotonic), `summary_wall_clock=None` (default time.time),
+`summary_generation=None` (callable generation token, default0). Это trusted
+Python seams, не HTTP/env parameters. Summary deadline15s, каждаяRPC call
+получает remaining budget если native InteractiveRPC; syntheticcallable clock
+advance проверяет gate до/после каждойcall. TTL30seconds monotonic, as_of Unix
+seconds wall clock fixed at successful complete scan. Cache identity includes
+allowed canonical root set and generation token. TTL expiry/changedgeneration
+refresh implicit, button «Обновить проекты» calls sameGET; withinTTL допускается
+cache и это явно видно поas_of. Никаких unbounded forcerefresh/native calls.
+Emptyallowedrootset gives projects[] withoutnativecall. Disabledprojects DTO
+unavailable with count/activity/as_of null. Unknown no lastgood: all null.
+Stale retains complete oldcount/max/as_of visibly; changedroots/generation never
+reuse previouscontext lastgood. Single native scan params cwd exactrootarray,
+sourceKinds cli/vscode/appServer, archivedfalse, limit100,cursor wherepresent,
+sortKeyupdated_at,sortDirectiondesc. ID dedup acrosspages beforerootaggregation.
