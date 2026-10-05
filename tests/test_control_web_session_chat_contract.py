@@ -201,8 +201,9 @@ class SessionChatContract(unittest.TestCase):
             {'id': 'u', 'role': 'user', 'text': 'first\nsecond', 'truncated': False},
             {'id': 'a', 'role': 'assistant', 'text': 'answer', 'truncated': False}]}],
             'next_cursor': 'opaque-next', 'truncated': False, 'recent_sends': []})
+        # 05.10 compact policy intentionally changes latest native limit8 to limit4.
         self.assertEqual(self.rpc.calls, [('thread/read', {'threadId': SID, 'includeTurns': False}),
-            ('thread/turns/list', {'threadId': SID, 'itemsView': 'full', 'sortDirection': 'desc', 'limit': 8})])
+            ('thread/turns/list', {'threadId': SID, 'itemsView': 'full', 'sortDirection': 'desc', 'limit': 4})])
 
     def test_INV_WSESS_03_pagination_preserves_server_order(self):
         self.rpc.pages['opaque'] = {'data': [turn(turn_id=OTHER), turn()], 'nextCursor': None}
