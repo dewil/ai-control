@@ -229,6 +229,7 @@ class CompactChatBrowserContract(unittest.TestCase):
         self.assertFalse(any(method == 'POST' and '/api/session-send' in url for method, url in self.network))
 
     def test_INV_WEB_SESSIONS_13_menu_selection_clears_obsolete_choose_session_hint(self):
+        # INV-WSESS-13
         # The initial hint is permitted. Choose through the real menu button;
         # a successfully opened conversation must retire only that stale hint.
         self.open_history()
