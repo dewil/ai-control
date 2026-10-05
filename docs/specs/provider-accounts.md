@@ -31,6 +31,28 @@ identity. Эта спецификация фиксирует решение по
   миграции. Mapping допускается только с проверяемой принадлежностью или
   отдельным решениемоператора; unknownbindingнедоступен, не угадывается.
 
+- INV-ACCOUNT-09: bound runtime получает один frozen validated ExecutionContext
+  из authoritative immutable reference; catalog label, spec, env и native UUID
+  не могут заменить provider/account/profile instance identity. Каждая native
+  операция, history/registry/receipt/recovery scoped этой authority.
+- INV-ACCOUNT-10: private owner-controlled profile registration фиксирует instance,
+  adapter/auth-source/store expectation и native principal expectation без secret
+  reads/copies. Registration и filesystem identity не подтверждают login identity;
+  замена profile/metadata не переназначает существующие TASK.
+- INV-ACCOUNT-11: равные native IDs разных аккаунтов никогда не объединяют state,
+  историю, receipt или replay. Context сравнивается до lookup/чтения, а не после
+  успешного использования чужих данных. Distinct profiles могут работать параллельно.
+- INV-ACCOUNT-12: bound native exec имеет closed environment после реальной service
+  startup boundary, включая inherited systemd manager env. Нет ambient HOME/auth/
+  socket/profile/endpoint fallback; parent environment не изменяется.
+- INV-ACCOUNT-13: supported auth source/effective store и стабильный native principal
+  проверяются на том же owned host до claim/thread/turn; invocation restart и auth
+  notification инвалидируют admission. Missing/unproven/changed identity явно denies,
+  не угадывается из email/plan/path. Synthetic fixtures не дают production capability.
+- INV-ACCOUNT-14: owned cancel/revoke/drain не зависит от текущей доступности аккаунта
+  или native identity RPC; kernel ownership proofs остаются обязательными. Cleanup
+  не reconnect/launch writer и не воздействует на другой аккаунт.
+
 ## Контракты и границы
 
 Provider-specific native protocol/fileformats остаются вadapter. Общие
@@ -47,3 +69,11 @@ session/task/history/receipt ключи включают accountidentity. Native
 изоляция runtime и account-specific интерактивных сессий ещё не выполнена;
 гарантии должны быть проверены в adapter/runtime и native acceptance.
 Полный владелец клиентского бэклога CONTROL-PROVIDER-ACCOUNTS остаётся открытым.
+
+
+Новый spec-only срез: `docs/dev/2026-10-06-spec-provider-execution-context.md`.
+INV-ACCOUNT-09..14 пока не реализованы/не покрыты; независимые RED группы указаны
+в feature spec. Pinned0.160.0 schema содержит optional workspaceRouting account ID,
+но evidence стабильного principal и effective file-store attestation не получено.
+Production execution capability остается unverified до закрытия этого blocker;
+synthetic routing proof и реальная двухаккаунтная приемка — разные этапы.
