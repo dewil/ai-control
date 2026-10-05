@@ -129,5 +129,77 @@ class ProviderProfilePublicationTests(RegistrationFixtureHelpers, unittest.TestC
         self.assertTrue(failed, 'post-publication profile-root fsync was not reached')
         self.assert_not_activated()
 
+    def test_foreign_leaf_replacement_survives_postpublication_failure(self):
+        original_link = os.link
+        original_fsync = os.fsync
+        replaced = False
+        fsync_failed = False
+        published_identity = None
+        foreign_identity = None
+        foreign_bytes = b'synthetic foreign writer registration leaf\n'
+        leaf = self.profile_root / 'registration.json'
+        foreign_path = self.profile_root / 'foreign-writer-registration.json'
+
+        def link_then_replace(src, dst, *args, **kwargs):
+            nonlocal replaced, published_identity, foreign_identity
+            result = original_link(src, dst, *args, **kwargs)
+            if not replaced and self.targets_registration_leaf(dst, kwargs):
+                replaced = True
+                published = leaf.stat()
+                published_identity = (published.st_dev, published.st_ino)
+                foreign_path.write_bytes(foreign_bytes)
+                foreign_path.chmod(0o600)
+                os.replace(foreign_path, leaf)
+                foreign = leaf.stat()
+                foreign_identity = (foreign.st_dev, foreign.st_ino)
+            return result
+
+        def fail_postpublication_fsync(descriptor):
+            nonlocal fsync_failed
+            if not fsync_failed and self.is_profile_root_fd(descriptor) and leaf.exists():
+                fsync_failed = True
+                raise OSError(errno.EIO, 'synthetic one-shot post-publication failure')
+            return original_fsync(descriptor)
+
+        with self.no_native_reads():
+            with patch.object(os, 'link', side_effect=link_then_replace):
+                with patch.object(os, 'fsync', side_effect=fail_postpublication_fsync):
+                    self.assert_safe_account_error(self.registered)
+
+        self.assertTrue(replaced, 'registration leaf publication link was not reached')
+        self.assertTrue(fsync_failed, 'post-publication root fsync fault was not reached')
+        self.assertNotEqual(published_identity, foreign_identity)
+        self.assertTrue(leaf.exists())
+        self.assertEqual((leaf.stat().st_dev, leaf.stat().st_ino), foreign_identity)
+        self.assertEqual(leaf.read_bytes(), foreign_bytes)
+        self.assertEqual(list((self.profile_root / 'codex').iterdir()), [])
+        self.assertEqual(list((self.profile_root / 'native-home').iterdir()), [])
+
+    def test_persistent_postpublication_root_fsync_failure_is_unknown_unsafe(self):
+        original_fsync = os.fsync
+        armed = False
+        failures = 0
+        leaf = self.profile_root / 'registration.json'
+
+        def fail_root_fsyncs_after_publication(descriptor):
+            nonlocal armed, failures
+            if self.is_profile_root_fd(descriptor):
+                if leaf.exists():
+                    armed = True
+                if armed:
+                    failures += 1
+                    raise OSError(errno.EIO, 'synthetic persistent directory sync failure')
+            return original_fsync(descriptor)
+
+        with self.no_native_reads():
+            with patch.object(os, 'fsync', side_effect=fail_root_fsyncs_after_publication):
+                error = self.assert_safe_account_error(self.registered)
+
+        self.assertTrue(armed, 'post-publication profile-root fsync was not reached')
+        self.assertGreaterEqual(failures, 1)
+        self.assertEqual(error.code, 'profile_unsafe')
+        self.assertEqual(list((self.profile_root / 'codex').iterdir()), [])
+        self.assertEqual(list((self.profile_root / 'native-home').iterdir()), [])
+
 if __name__ == '__main__':
     unittest.main()
