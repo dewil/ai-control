@@ -1,5 +1,7 @@
 """Bounded owner-side session chat and interactive shared App Server transport."""
 from contextlib import contextmanager
+from collections import OrderedDict
+import copy
 import fcntl
 import functools
 import hashlib
@@ -315,7 +317,8 @@ class _Receipts:
 
 class SessionChat:
     def __init__(self, rpc, project_path, project_names, receipt_dir, *,
-                 summary_clock=None, summary_wall_clock=None, summary_generation=None):
+                 summary_clock=None, summary_wall_clock=None, summary_generation=None,
+                 model_context=None, model_clock=None):
         self.rpc, self.project_path, self.project_names = rpc, project_path, project_names
         self.receipts = _Receipts(receipt_dir)
         self._local = threading.local()
@@ -325,6 +328,10 @@ class SessionChat:
         self._summary_lock = threading.Lock()
         self._summary_cache = None
         self._summary_revision = 0
+        self._model_context = model_context or getattr(rpc, 'model_context', lambda: None)
+        self._model_clock = model_clock or time.monotonic
+        self._model_lock = threading.Lock()
+        self._model_cache = OrderedDict()
 
     def _remaining(self):
         value = self._local.deadline - time.monotonic()
@@ -374,6 +381,148 @@ class SessionChat:
               and type(thread.get('cwd')) is str and os.path.isabs(thread['cwd']))
         _need(thread['id'] == sid and canonical(thread['cwd']) == root, 'stale')
         return thread
+
+    def _catalog_context(self):
+        value = self._model_context()
+        self._remaining()
+        return copy.deepcopy(value)
+
+    @staticmethod
+    def _catalog_reason(context):
+        if (type(context) is not dict or set(context) != {
+                'schema', 'vendor', 'context_kind', 'context_id',
+                'transport_generation', 'context_generation', 'native_version'}
+                or type(context['schema']) is not int or context['schema'] != 1
+                or type(context['context_id']) is not str
+                or re.fullmatch('[0-9a-f]{64}', context['context_id']) is None
+                or any(type(context[key]) is not int or context[key] < 0
+                       for key in ('transport_generation', 'context_generation'))
+                or type(context['vendor']) is not str
+                or context['context_kind'] not in ('legacy_unbound', 'verified_bound', 'unverified_bound')):
+            return 'unverified_context'
+        if context['vendor'] != 'codex':
+            return 'unsupported_vendor'
+        # A metadata binding does not authorize shared legacy transport discovery.
+        if context['context_kind'] != 'legacy_unbound':
+            return 'unverified_context'
+        if context['native_version'] != '0.160.0':
+            return 'unsupported_capability'
+        return None
+
+    @staticmethod
+    def _catalog_unavailable(context, reason):
+        context = context if type(context) is dict else {}
+        vendor = context.get('vendor')
+        kind = context.get('context_kind')
+        return {'schema': 1, 'vendor': vendor if vendor in ('codex', 'claude') else None,
+                'context_kind': kind if kind in ('legacy_unbound', 'verified_bound', 'unverified_bound') else 'unverified_bound',
+                'selection_support': 'unavailable', 'reason': reason,
+                'catalog_id': None, 'expires_in_ms': 0, 'rows': []}
+
+    @staticmethod
+    def _catalog_row(row):
+        from _control_web_broker import SECRET_RE, redact
+        def key(value):
+            return (type(value) is str and 0 < len(value) <= 256
+                    and not any(ord(char) < 32 or 127 <= ord(char) <= 159
+                                or 0xd800 <= ord(char) <= 0xdfff for char in value)
+                    and SECRET_RE.search(value) is None)
+        _need(type(row) is dict and key(row.get('id')) and key(row.get('model')))
+        _need(type(row.get('displayName')) is str and len(row['displayName']) <= 500
+              and type(row.get('description')) is str
+              and type(row.get('isDefault')) is bool and type(row.get('hidden')) is bool)
+        supported = row.get('supportedReasoningEfforts')
+        _need(type(supported) is list and 0 < len(supported) <= 32)
+        efforts = []
+        for entry in supported:
+            _need(type(entry) is dict and key(entry.get('reasoningEffort'))
+                  and type(entry.get('description')) is str)
+            efforts.append(entry['reasoningEffort'])
+        _need(len(set(efforts)) == len(efforts) and key(row.get('defaultReasoningEffort'))
+              and row['defaultReasoningEffort'] in efforts)
+        return {'id': row['id'], 'label': redact(row['displayName']), 'efforts': efforts,
+                'default_effort': row['defaultReasoningEffort'], 'is_default': row['isDefault']}
+
+    @_operation
+    def models(self, project, sid):
+        # INV-WSESS-24: fresh root/thread proof also precedes warm-cache reads.
+        _need(valid_uuid(sid), 'invalid_request')
+        root = self._root(project)
+        self._proof(root, sid)
+        try:
+            context = self._catalog_context()
+        except Exception:
+            return self._catalog_unavailable(None, 'unverified_context')
+        reason = self._catalog_reason(context)
+        if reason:
+            return self._catalog_unavailable(context, reason)
+        fenced = getattr(self.rpc, 'call_in_generation', None)
+        if not callable(fenced):
+            return self._catalog_unavailable(context, 'unsupported_capability')
+        key = tuple(context[field] for field in ('vendor', 'context_kind', 'context_id',
+                                                'transport_generation', 'context_generation'))
+        with self._model_lock:
+            now = self._model_clock()
+            for expired in [cache_key for cache_key, entry in self._model_cache.items()
+                            if entry['expires'] <= now]:
+                del self._model_cache[expired]
+            cached = self._model_cache.get(key)
+            if cached:
+                self._model_cache.move_to_end(key)
+                result = copy.deepcopy(cached['dto'])
+                result['expires_in_ms'] = max(1, min(60000, int((cached['expires'] - now) * 1000)))
+                return result
+        try:
+            rows, wire_models, ids, wires, cursors = [], {}, set(), set(), set()
+            cursor, row_count, byte_count = None, 0, 0
+            for _ in range(16):
+                params = {'limit': 64, 'includeHidden': False}
+                if cursor is not None:
+                    params['cursor'] = cursor
+                page = fenced('model/list', params,
+                              transport_generation=context['transport_generation'],
+                              context_generation=context['context_generation'], timeout=self._remaining())
+                self._remaining()
+                _need(self._catalog_context() == context)
+                _need(type(page) is dict and type(page.get('data')) is list)
+                byte_count += len(_json(page))
+                row_count += len(page['data'])
+                _need(byte_count <= 1024 * 1024 and row_count <= 256)
+                for native in page['data']:
+                    self._remaining()
+                    row = self._catalog_row(native)
+                    _need(row['id'] not in ids and native['model'] not in wires)
+                    ids.add(row['id'])
+                    wires.add(native['model'])
+                    if not native['hidden']:
+                        rows.append(row)
+                        wire_models[row['id']] = native['model']
+                cursor = page.get('nextCursor')
+                _need(valid_cursor(cursor))
+                if cursor is None:
+                    break
+                _need(cursor not in cursors)
+                cursors.add(cursor)
+            else:
+                raise _DomainError('unavailable')
+            _need(self._catalog_context() == context)
+            if not rows:
+                return self._catalog_unavailable(context, 'empty_catalog')
+            nonce = uuid.uuid4().hex
+            catalog_id = hashlib.sha256(_json([context, rows, nonce])).hexdigest()
+            dto = {'schema': 1, 'vendor': context['vendor'], 'context_kind': context['context_kind'],
+                   'selection_support': 'available', 'reason': None, 'catalog_id': catalog_id,
+                   'expires_in_ms': 60000, 'rows': rows}
+            with self._model_lock:
+                _need(self._catalog_context() == context)
+                self._model_cache[key] = {'dto': copy.deepcopy(dto), 'wire_models': wire_models,
+                                          'expires': self._model_clock() + 60}
+                self._model_cache.move_to_end(key)
+                while len(self._model_cache) > 32:
+                    self._model_cache.popitem(last=False)
+            return dto
+        except Exception:
+            return self._catalog_unavailable(context, 'catalog_unavailable')
 
     def _page(self, sid, cursor, limit=8):
         params = {'threadId': sid, 'itemsView': 'full', 'sortDirection': 'desc', 'limit': limit}
@@ -748,7 +897,7 @@ class SessionChat:
 
 class InteractiveRPC:
     """One receiver per connection; never responds to native server requests."""
-    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/resume', 'turn/start'}
+    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/resume', 'turn/start', 'model/list'}
 
     def __init__(self, socket_path, timeout=25):
         if type(socket_path) is not str or type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 55:
@@ -759,6 +908,9 @@ class InteractiveRPC:
         self._send_lock = threading.Lock()
         self._ws = None
         self._generation = 0
+        self._context_generation = 0
+        self._native_version = None
+        self._model_context_id = os.urandom(32).hex()
         self._pending = {}
         self._closed = False
 
@@ -772,6 +924,7 @@ class InteractiveRPC:
             if self._ws is not ws or self._generation != generation:
                 return
             self._ws = None
+            self._native_version = None
             for waiter in self._pending.values():
                 waiter['error'] = RuntimeError('RPC connection unavailable')
                 waiter['event'].set()
@@ -782,11 +935,8 @@ class InteractiveRPC:
             pass
 
     def _expire(self, ws, generation):
-        with self._lock:
-            if self._ws is not ws or self._generation != generation:
-                return
-        # A peer that stops reading must not leave sync ws.send blocked past
-        # the operation deadline. Shutdown also wakes the independent receiver.
+        # Shutdown the captured owned socket even if dispatch holds _lock. This
+        # cannot close a newly connected socket, and wakes a blocked sync send.
         try:
             ws.socket.shutdown(socket.SHUT_RDWR)
         except OSError:
@@ -801,6 +951,11 @@ class InteractiveRPC:
                     raise ValueError('invalid response')
                 # Both callbacks and notifications are observational only.
                 if 'method' in value:
+                    if 'id' not in value and value['method'] in ('account/updated', 'config/updated'):
+                        with self._lock:
+                            if self._ws is not ws or self._generation != generation:
+                                return
+                            self._context_generation += 1
                     continue
                 if type(value.get('id')) is not str:
                     continue
@@ -823,11 +978,12 @@ class InteractiveRPC:
         except Exception:
             self._fail(ws, generation)
 
-    def _request(self, ws, generation, method, params, deadline):
+    def _request(self, ws, generation, method, params, deadline, *, context_generation=None):
         waiter = {'event': threading.Event()}
         request_id = str(uuid.uuid4())
         with self._lock:
-            if self._ws is not ws or self._generation != generation or len(self._pending) >= 64:
+            if (self._ws is not ws or self._generation != generation or len(self._pending) >= 64
+                    or (context_generation is not None and self._context_generation != context_generation)):
                 raise RuntimeError('RPC unavailable')
             self._pending[request_id] = waiter
         timer = threading.Timer(max(0, deadline - time.monotonic()), self._expire, args=(ws, generation))
@@ -840,7 +996,18 @@ class InteractiveRPC:
             try:
                 if time.monotonic() >= deadline:
                     raise TimeoutError('RPC deadline exceeded')
-                ws.send(_json({'id': request_id, 'method': method, 'params': params}).decode('utf-8'))
+                payload = _json({'id': request_id, 'method': method, 'params': params}).decode('utf-8')
+                if context_generation is None:
+                    ws.send(payload)
+                else:
+                    # Serialize dispatch with observed context invalidation. The
+                    # deadline timer shuts down this captured socket independently.
+                    with self._lock:
+                        if (self._closed or self._ws is not ws or self._generation != generation
+                                or self._context_generation != context_generation
+                                or self._native_version != '0.160.0'):
+                            raise RuntimeError('RPC generation unavailable')
+                        ws.send(payload)
             finally:
                 self._send_lock.release()
             if not waiter['event'].wait(max(0, deadline - time.monotonic())):
@@ -917,7 +1084,7 @@ class InteractiveRPC:
                 self._ws = ws
             threading.Thread(target=self._receive, args=(ws, generation), daemon=True).start()
             try:
-                self._request(ws, generation, 'initialize', {
+                initialized = self._request(ws, generation, 'initialize', {
                     'clientInfo': {'name': 'ai_control_web', 'version': '0.1'},
                     'capabilities': {'experimentalApi': True}}, deadline)
                 if not self._send_lock.acquire(timeout=max(0, deadline - time.monotonic())):
@@ -929,6 +1096,13 @@ class InteractiveRPC:
                     if time.monotonic() >= deadline:
                         raise RuntimeError('RPC deadline exceeded')
                     ws.send('{"method":"initialized"}')
+                    hint = initialized.get('userAgent')
+                    version = ('0.160.0' if type(hint) is str and len(hint) <= 4096
+                               and re.match(r'^[\x20-\x2e\x30-\x7e]{1,128}/0\.160\.0 \(', hint) else None)
+                    with self._lock:
+                        if self._ws is not ws or self._generation != generation:
+                            raise RuntimeError('RPC initialization unavailable')
+                        self._native_version = version
                 finally:
                     timer.cancel()
                     self._send_lock.release()
@@ -948,6 +1122,36 @@ class InteractiveRPC:
         deadline = time.monotonic() + duration
         ws, generation = self._connect(deadline)
         return self._request(ws, generation, method, params, deadline)
+
+    def model_context(self):
+        with self._lock:
+            if self._closed or self._ws is None:
+                return None
+            return {'schema': 1, 'vendor': 'codex', 'context_kind': 'legacy_unbound',
+                    'context_id': self._model_context_id,
+                    'transport_generation': self._generation,
+                    'context_generation': self._context_generation,
+                    'native_version': self._native_version}
+
+    def call_in_generation(self, method, params, *, transport_generation, context_generation, timeout=None):
+        if type(method) is not str or method not in self.METHODS or type(params) is not dict:
+            raise ValueError('RPC method refused')
+        duration = self.timeout if timeout is None else min(self.timeout, timeout)
+        if type(duration) not in (float, int) or not math.isfinite(duration) or duration <= 0:
+            raise ValueError('RPC deadline refused')
+        with self._lock:
+            if (type(transport_generation) is not int or type(context_generation) is not int
+                    or self._closed or self._ws is None or self._native_version != '0.160.0'
+                    or self._generation != transport_generation or self._context_generation != context_generation):
+                raise RuntimeError('RPC generation unavailable')
+            ws = self._ws
+        # No connect/reconnect: the captured socket cannot become a different scope.
+        result = self._request(ws, transport_generation, method, params, time.monotonic() + duration,
+                               context_generation=context_generation)
+        with self._lock:
+            if self._ws is not ws or self._generation != transport_generation or self._context_generation != context_generation:
+                raise RuntimeError('RPC generation unavailable')
+        return result
 
     def __call__(self, method, params):
         return self.call(method, params)
