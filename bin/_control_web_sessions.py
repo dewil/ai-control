@@ -395,9 +395,25 @@ class SessionChat:
     @_operation
     def projects(self):
         names = self._names()
+        projects = []
         for name in names:
-            self._root(name)
-        return {'projects': [{'name': name} for name in names]}
+            try:
+                self._remaining()
+                root = self._provider(self.project_path, name)
+                self._remaining()
+                _need(type(root) is str and os.path.isabs(root))
+                root = canonical(root)
+                _need(os.path.isdir(root))
+                self._remaining()
+            except Exception:
+                # A failing root is local only while the shared operation budget
+                # remains. Expiry after a slow resolver still fails globally.
+                self._remaining()
+                projects.append({'name': name, 'unavailable': True})
+            else:
+                projects.append({'name': name})
+        self._remaining()
+        return {'projects': projects}
 
     @_operation
     def list_sessions(self, project, page=0):
