@@ -269,3 +269,13 @@ message. В этой работе не вызывались native model/list/tu
 user history, network или executable schema generation. Offline source/schema не
 доказывают current account entitlements, effective settings после resume/reconnect,
 sticky enforcement/steering, отсутствие collaboration conflict или profile isolation.
+
+06.10 локальный metadata-only probe через проверенный owner alias/kernel peer подтвердил
+одну страницу `model/list` с `limit:1/includeHidden:false`: response keys data/nextCursor,
+row id/model/displayName — strings; supportedReasoningEfforts — list объектов
+reasoningEffort/description, defaultReasoningEffort — string, isDefault — bool.
+Проекция efforts использует validated entry.reasoningEffort, а не весь native object.
+Thread/history/turn/account/auth запросы не выполнялись. Live catalog shape не
+доказывает current entitlement/effective overrides/collaborationMode/sticky semantics.
+Первый запуск без websocket dependency завершился до RPC; успешный повтор использовал
+существующий web test venv, runtime dependencies не менялись.
