@@ -376,15 +376,23 @@ class SessionChat:
         _need(type(response.get('data')) is list and len(response['data']) <= 8
               and 'nextCursor' in response and valid_cursor(response['nextCursor']))
         _need(response['nextCursor'] is None or response['nextCursor'] != cursor)
+        validated = 0
         for turn in response['data']:
+            self._remaining()
             _need(type(turn) is dict and _identity(turn.get('id'))
                   and turn.get('status') in ('completed', 'interrupted', 'failed', 'inProgress')
                   and type(turn.get('items')) is list and len(turn['items']) <= 10000)
             for item in turn['items']:
+                validated += 1
+                if validated % 256 == 0:
+                    self._remaining()
                 _need(type(item) is dict and _identity(item.get('id')) and type(item.get('type')) is str)
                 if item['type'] == 'userMessage':
                     _need(type(item.get('content')) is list)
                     for content in item['content']:
+                        validated += 1
+                        if validated % 256 == 0:
+                            self._remaining()
                         _need(type(content) is dict and type(content.get('type')) is str)
                         if content['type'] == 'text':
                             _need(type(content.get('text')) is str)
@@ -392,6 +400,7 @@ class SessionChat:
                         _need(type(item['clientId']) is str)
                 elif item['type'] == 'agentMessage':
                     _need(type(item.get('text')) is str)
+        self._remaining()
         return response
 
     @_operation
@@ -447,44 +456,107 @@ class SessionChat:
         thread = self._proof(root, sid)
         page = self._page(sid, cursor)
         from _control_web_broker import redact
-        turns, clipped = [], False
-        for turn in page['data']:
-            items = []
-            for item in turn['items']:
-                if item['type'] == 'userMessage':
-                    parts = [part['text'] for part in item['content'] if part['type'] == 'text']
-                    if not parts:
-                        continue
-                    text, role = '\n'.join(parts), 'user'
-                elif item['type'] == 'agentMessage':
-                    text, role = item['text'], 'assistant'
-                else:
-                    continue
-                text = redact(text)
-                truncated = len(text) > 8000
-                clipped |= truncated
-                items.append({'id': item['id'], 'role': role, 'text': text[:8000], 'truncated': truncated})
-            turns.append({'id': turn['id'], 'status': turn['status'], 'items': items})
         with self.receipts.namespace(root, sid, self._local.deadline) as ns:
             recent = self.receipts.recent(ns, root, sid, self._local.deadline)
-        result = {'turns': turns, 'next_cursor': page['nextCursor'], 'truncated': clipped, 'recent_sends': recent}
+        turns = [{'id': turn['id'], 'status': turn['status'], 'items': []}
+                 for turn in page['data']]
+        eligible, eligible_count, scanned = [], 0, 0
+        for turn_index, turn in enumerate(page['data']):
+            for item_index in range(len(turn['items']) - 1, -1, -1):
+                item = turn['items'][item_index]
+                is_eligible = (item['type'] == 'agentMessage'
+                               or item['type'] == 'userMessage'
+                               and any(part['type'] == 'text' for part in item['content']))
+                if is_eligible:
+                    eligible_count += 1
+                    if len(eligible) < 128:
+                        eligible.append((turn_index, item_index))
+                scanned += 1
+                if scanned % 256 == 0:
+                    self._remaining()
+        self._remaining()
+        result = {'turns': turns, 'next_cursor': page['nextCursor'],
+                  'truncated': eligible_count > 128, 'recent_sends': recent}
         if _attention(thread):
             result['needs_native_attention'] = True
-        # Preserve visible prefixes, then omit tail items only when metadata
-        # alone cannot fit. The original cursor never promises omitted content.
-        while len(_json(result)) > HISTORY_LIMIT:
-            result['truncated'] = True
-            candidates = [item for turn in turns for item in turn['items'] if item['text']]
-            if candidates:
-                item = max(candidates, key=lambda value: len(value['text'].encode('utf-8')))
-                item['text'] = item['text'][:len(item['text']) // 2]
-                item['truncated'] = True
-            elif turns and turns[-1]['items']:
-                turns[-1]['items'].pop()
-            elif turns:
-                turns.pop()
+        # The empty item arrays reserve exact metadata/cursor/receipt bytes.
+        # Adding one item replaces [] with [item]; later items add a comma.
+        base_size = len(_json(result))
+        self._remaining()
+        _need(base_size <= HISTORY_LIMIT)
+        used_size = 0
+        selected_counts = [0] * len(turns)
+        selected = [[] for _ in turns]
+
+        def mark_truncated():
+            nonlocal base_size
+            if not result['truncated']:
+                # JSON false is one byte longer than true.
+                result['truncated'] = True
+                base_size -= 1
+
+        for candidate_number, (turn_index, item_index) in enumerate(eligible):
+            if candidate_number % 8 == 0:
+                self._remaining()
+            native_item = page['data'][turn_index]['items'][item_index]
+            if native_item['type'] == 'userMessage':
+                raw_text = '\n'.join(part['text'] for part in native_item['content']
+                                     if part['type'] == 'text')
+                role = 'user'
             else:
-                _need(False)
+                raw_text, role = native_item['text'], 'assistant'
+            text = redact(raw_text)
+            clipped_to_chars = len(text) > 8000
+            text = text[:8000]
+            if clipped_to_chars:
+                mark_truncated()
+            item_truncated = clipped_to_chars
+            exported = {'id': native_item['id'], 'role': role,
+                        'text': text, 'truncated': item_truncated}
+            encoded_item_size = len(_json(exported))
+            separator_size = 1 if selected_counts[turn_index] else 0
+            if base_size + used_size + separator_size + encoded_item_size <= HISTORY_LIMIT:
+                selected[turn_index].append((item_index, exported))
+                selected_counts[turn_index] += 1
+                used_size += separator_size + encoded_item_size
+                continue
+
+            mark_truncated()
+            # A partially budget-clipped message must lose at least one
+            # codepoint when its own text was not previously clipped.
+            max_prefix = len(text) - (0 if item_truncated else 1)
+            if max_prefix >= 0 and text:
+                comma_size = 1 if selected_counts[turn_index] else 0
+                remaining = HISTORY_LIMIT - base_size - used_size - comma_size
+                low, high, best = 0, max_prefix, -1
+                steps = 0
+                while low <= high:
+                    steps += 1
+                    if steps % 3 == 0:
+                        self._remaining()
+                    middle = (low + high) // 2
+                    partial = {'id': native_item['id'], 'role': role,
+                               'text': text[:middle], 'truncated': True}
+                    if len(_json(partial)) <= remaining:
+                        best = middle
+                        low = middle + 1
+                    else:
+                        high = middle - 1
+                if best >= 0:
+                    partial = {'id': native_item['id'], 'role': role,
+                               'text': text[:best], 'truncated': True}
+                    selected[turn_index].append((item_index, partial))
+                    selected_counts[turn_index] += 1
+                    used_size += comma_size + len(_json(partial))
+            # Older items have lower priority than a partially clipped one.
+            break
+
+        self._remaining()
+        for turn, turn_items in zip(turns, selected):
+            turn['items'] = [item for _, item in sorted(turn_items, key=lambda entry: entry[0])]
+        encoded_result = _json(result)
+        self._remaining()
+        _need(len(encoded_result) <= HISTORY_LIMIT)
         return result
 
     @_operation
