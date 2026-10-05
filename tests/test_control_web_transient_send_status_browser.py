@@ -1,4 +1,5 @@
 """INV-WSESS-16/17: source-blind transient send status, synthetic backend only."""
+from control_browser_helpers import choose_project
 import importlib
 import json
 import os
@@ -182,7 +183,7 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         self.send(); self.assertTrue(self.accepted())
         self.page.reload()
         self.page.get_by_role('button', name=re.compile('^Сессии$')).or_(self.page.get_by_role('tab', name=re.compile('^Сессии$'))).click()
-        self.page.get_by_label('Проект', exact=True).select_option('demo'); self.session.click()
+        choose_project(self.page, 'demo'); self.session.click()
         self.page.get_by_text('LATEST message 23', exact=True).wait_for(state='attached')
         self.assertEqual(self.page.get_by_text(re.compile('Сообщение принято')).count(), 0, 'Reload cannot restore accepted UI')
         self.assertEqual(len([r for r in self.calls() if r['method'] == 'send']), 1, 'Reload never resends')

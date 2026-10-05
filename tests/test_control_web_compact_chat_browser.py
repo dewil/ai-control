@@ -3,6 +3,7 @@
 No asset-source reads or native/user history. Runtime DOM and computed styles
 are observations. Fixture controls and screenshots stay private in /var/tmp.
 """
+from control_browser_helpers import choose_project
 import importlib
 import json
 import os
@@ -102,7 +103,7 @@ class CompactChatBrowserContract(unittest.TestCase):
         self.page.on('pageerror', lambda error: self.runtime_errors.append(type(error).__name__))
         self.page.goto(self.url)
         self.page.get_by_role('button', name=re.compile('^Сессии$', re.I)).or_(self.page.get_by_role('tab', name=re.compile('^Сессии$', re.I))).click()
-        self.page.get_by_label('Проект', exact=True).select_option('demo')
+        choose_project(self.page, 'demo')
         self.session = self.page.get_by_role('button', name=re.compile('Compact synthetic session'))
         self.session.wait_for()
 
