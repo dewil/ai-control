@@ -179,12 +179,26 @@ class PageNavigationBrowserContract(unittest.TestCase):
         self.page.wait_for_timeout(1200)
         self.assert_extreme('down')
 
+    def wait_for_buffered_history(self, count):
+        # INV-WSESS-23: incoming messages are cached while the reader stays
+        # above/focused. Observe the real response and accessible pending
+        # action instead of requiring those items to enter the frozen DOM.
+        with self.page.expect_response(lambda response:
+                '/api/session-history?' in response.url and response.status == 200,
+                timeout=8500) as observed:
+            pass
+        received = observed.value.json()
+        self.assertEqual(sum(len(turn['items']) for turn in received['turns']), count,
+                         'Must receive the real synthetic history update')
+        self.page.get_by_role('button', name=re.compile(
+            'Есть новые сообщения|Перейти к последним', re.I)).first.wait_for()
+
     def test_INV_WSESS_15_up_preserves_reader_anchor_on_real_new_data(self):
         self.page.set_viewport_size({'width': 360, 'height': 900})
         self.open_history()
         self.activate('up')
         private_json(self.evidence / 'control.json', {'delay': 0, 'count': 28})
-        self.page.get_by_text('LATEST message 27', exact=True).wait_for(state='attached', timeout=8500)
+        self.wait_for_buffered_history(28)
         self.assert_extreme('up')
         # Read a stable visible paragraph following explicit up; scrolling to it
         # is an ordinary reader action, not an internal app state override.
@@ -193,7 +207,7 @@ class PageNavigationBrowserContract(unittest.TestCase):
         before_y = anchor.bounding_box()['y']
         before_requests = len(self.history_requests())
         private_json(self.evidence / 'control.json', {'delay': 0, 'count': 32})
-        self.page.get_by_text('LATEST message 31', exact=True).wait_for(state='attached', timeout=8500)
+        self.wait_for_buffered_history(32)
         self.assertGreater(len(self.history_requests()), before_requests, 'Must observe a real polling update')
         self.assertLessEqual(abs(anchor.bounding_box()['y']-before_y), 8, 'INV-WSESS-15: update retains reader anchor')
 
@@ -279,7 +293,7 @@ class PageNavigationBrowserContract(unittest.TestCase):
         anchor_y = anchor.bounding_box()['y']
         before_requests = len(self.history_requests())
         private_json(self.evidence / 'control.json', {'delay': 0, 'count': 28})
-        self.page.get_by_text('LATEST message 27', exact=True).wait_for(state='attached', timeout=8500)
+        self.wait_for_buffered_history(28)
         self.assertGreater(len(self.history_requests()), before_requests,
                            'Must observe a real synthetic history update')
         self.assertLessEqual(abs(anchor.bounding_box()['y'] - anchor_y), 8,
