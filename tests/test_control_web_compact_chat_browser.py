@@ -63,7 +63,8 @@ class CompactChatBrowserContract(unittest.TestCase):
         cls.evidence = Path(tempfile.mkdtemp(prefix='control-compact-qa-', dir='/var/tmp'))
         private_json(cls.evidence / 'control.json', {'delay': 0})
         interpreter = os.environ.get('CONTROL_COMPACT_QA_SERVER_PYTHON', sys.executable)
-        cls.server = subprocess.Popen([interpreter, str(Path(__file__).resolve()), '--serve', str(ROOT), str(cls.evidence)],
+        cls.root = Path(os.environ.get('CONTROL_COMPACT_QA_REPO', str(ROOT)))
+        cls.server = subprocess.Popen([interpreter, str(Path(__file__).resolve()), '--serve', str(cls.root), str(cls.evidence)],
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         cls.addClassCleanup(cls.stop_server)
         deadline = time.monotonic() + 8
@@ -191,6 +192,41 @@ class CompactChatBrowserContract(unittest.TestCase):
         self.assertEqual(self.page.locator('textarea').input_value(), draft)
         self.assertFalse(any(method == 'POST' and '/api/session-send' in url for method, url in self.network))
 
+
+    def test_INV_WSESS_12_reopened_session_has_own_deadline_without_waiting_for_old_generation(self):
+        private_json(self.evidence / 'control.json', {'delay': 21})
+        timeline = []
+        start = time.monotonic()
+        self.page.on('request', lambda request: timeline.append(
+            {'elapsed': round(time.monotonic() - start, 3), 'method': request.method, 'url': request.url})
+            if '/api/session-history?' in request.url else None)
+        self.session.click()
+        self.page.get_by_role('button', name=re.compile('Second synthetic session')).click()
+        self.page.get_by_text('SECOND message 0', exact=True).wait_for(state='attached')
+        self.page.wait_for_timeout(max(0, 1000 - (time.monotonic() - start) * 1000))
+        self.session.click()
+        reopened = time.monotonic()
+        draft = 'Synthetic reopened session draft'
+        self.page.locator('textarea').fill(draft)
+        # The selected generation owns a15s deadline. Waiting for a previous
+        # generation first must not add another15s. Allow2s scheduling slack.
+        self.page.wait_for_timeout(max(0, 17000 - (time.monotonic() - reopened) * 1000))
+        retry = self.page.get_by_role('button', name='Повторить загрузку', exact=True)
+        body = self.page.locator('body').inner_text()
+        observations = {'reopened_at': round(reopened - start, 3),
+                        'elapsed_since_reopen': round(time.monotonic() - reopened, 3),
+                        'history_requests': timeline,
+                        'retry_visible': retry.count() == 1 and retry.is_visible(),
+                        'loading_visible': bool(re.search(r'(?i)загрузка|загружается', body)),
+                        'draft_retained': self.page.locator('textarea').input_value() == draft,
+                        'old_session_messages': self.page.get_by_text('SECOND message 0', exact=True).count()}
+        private_json(self.evidence / 'reopen-deadline.json', observations)
+        self.assertTrue(observations['retry_visible'],
+                        'Reopened selected session must show error/retry within17s; stale flight must not double its15s budget: ' + repr(observations))
+        self.assertFalse(observations['loading_visible'], 'Selected generation loading must end at its own deadline')
+        self.assertTrue(observations['draft_retained'])
+        self.assertEqual(observations['old_session_messages'], 0, 'Stale other-session history must not replace selected screen')
+        self.assertFalse(any(method == 'POST' and '/api/session-send' in url for method, url in self.network))
 
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] == '--serve': serve(Path(sys.argv[2]), Path(sys.argv[3]))
