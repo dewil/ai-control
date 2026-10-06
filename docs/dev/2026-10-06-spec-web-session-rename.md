@@ -122,7 +122,7 @@ operation и late result не меняет новый чат. Selection generati
 название», блокирует повтор mutation; manual status POST не делает. Ошибка до reserve
 сохраняет ввод и допускает исправление/явную новую попытку. Политика sameUUID меняемого
 payload не нарушается: исправленный title получает новыйUUID только после доказанного
-pre-reserve refusal. Нет автоматического пересоздания UUID после unknown.
+pre-reserve refusal. POST network/timeout/malformed reply/HTTP503, включая safe error unavailable, не доказывает отсутствие dispatch на owner broker: UI сохраняет UUID/draft как unknown и предлагает manual GET, без нового POST. Доказанные initial refusals invalid_request/forbidden/stale допускают явное исправление только если операция ранее не была unknown; status GET error не разрешает повтор mutation. Нет автоматического пересоздания UUID после unknown.
 
 Confirmed current title обновляет selected heading и ровно соответствующую list row;
 project cloud/count/activity инвалидируется после confirmation, не оптимистично.
