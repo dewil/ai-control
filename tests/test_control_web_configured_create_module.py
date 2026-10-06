@@ -461,6 +461,10 @@ class ConfiguredTransportContract(unittest.TestCase):
         while not os.path.exists(socket_path) and time.monotonic() < deadline:
             time.sleep(.01)
         self.assertTrue(os.path.exists(socket_path), 'synthetic Unix WebSocket listener did not start')
+        # unix_serve binds inside this process; set the owned test socket mode
+        # explicitly so transport coverage is independent of ambient umask.
+        os.chmod(socket_path, 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(socket_path).st_mode), 0o600)
         rpc = InteractiveRPC(socket_path, timeout=2)
         self.addCleanup(rpc.close)
         context = rpc.prepare_context(timeout=2)
