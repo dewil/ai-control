@@ -99,3 +99,4 @@ chat/socket regressions. Source4b2f149 independent gpt-6-sol/medium compliance P
 HTTP/send/receipt/UI acceptance остаётся открытой.
 
 INV-WSESS-28: список экспортирует trusted adapter vendor отдельно от account binding; текстовый badge использует exact allowlist, неизвестные/отсутствующие/prototype-key значения показываются как «Вендор неизвестен». Не выводить vendor из title/model/UUID, не добавлять native/account IO. Feature ../dev/2026-10-06-spec-web-session-management.md stage1; tests/test_control_web_session_vendor_badge.py. Create/rename INV29/30 остаются draft/capability HOLD.
+INV-WSESS-30 rename proposed contract: ../dev/2026-10-06-spec-web-session-rename.md. Confirmed native name/root/UUID, durable once-only Control dispatch, unknown manual read-only reconciliation, no seed/resume/account fallback. Design/RED/implementation/installed proof remain open.
