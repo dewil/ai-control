@@ -5,6 +5,7 @@
 Feature: [2026-10-06-spec-web-attention-pool.md](../dev/2026-10-06-spec-web-attention-pool.md).
 Foundation proof: [validation](../dev/2026-10-06-web-attention-foundation-validation.md).
 Первый owner-only TASK срез: [registry adapter draft](../dev/2026-10-06-spec-web-attention-registry-adapter.md).
+UI contract: [owner overview draft](../dev/2026-10-06-spec-web-attention-ui.md).
 Production adapters, UI и установленная приёмка не заявлены.
 
 - INV-WATTN-01: read-only общий пул показывает сначала «Сейчас работают», затем
@@ -51,3 +52,8 @@ Directories multiple-link count не запрещён; reader filesystem не м
 Nlink failure не является grant revocation: unchanged composer может оставить
 ранее validated TASK только stale при current project/root/grants/registry-epoch
 proof, без navigation/fresh claims; current authority refusal/revocation clears all.
+
+Первый UI сохраняет INV-WATTN01..03: global allowed-project overview, native status
+недоступен, unlinked TASK с различимыми reason badges; fulltask_key/qid/result
+переход только после current GET/tasks. Auth/scope/request generations и single
+inflight polling запрещают resurrect/downgrade после late response; никаких writers.
