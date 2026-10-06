@@ -71,3 +71,22 @@ concurrentA-held Bprogress; deadlinefinite/bool/expired; no IO constructor.
 Synthetic tests prove local authority ONLY; no native login, production account
 access or server capability is advertised by this module. Full callback/validator
 and Linux launcher/store remain separate slices.
+
+## SOURCE findings clarification before fault RED06.10
+
+Coordinator retains independent deep immutable primitive snapshot of fullreference
+and principal at firstcapture; caller's AuthScope instance never becomes mutable
+accountauthority by alias. Slots/remove__dict__ is defense in depth, not the only
+identity fence. Even simulated external alias replacement on retained scope must
+not rebind alreadycaptured account: every use compares fresh suppliedscope snapshot
+to the immutable accountcapture. Public Python introspection is not OS security,
+but code must not silently accept mutated fullref/principal as existing identity.
+
+Every plainfield type/key validated before equality/regex/hash can invoke foreign
+methods. Malformed mappings/values raise only safe AuthError authority_stale;
+no raw userobject exception texts. Trusted clock is allowed to reenter public
+coordinator methods (e.g. quarantine). Every state transition samples needed clocks
+and validates callback outcomes BEFORE final live/generation/quarantine checks;
+NO callbacks between final validation and begun/confirmed/publication mutation.
+Clock-triggered invalidation always wins over later stamp; no stamp on quarantined
+account. No test-only branch or weakened public scope/deadline invariant.
