@@ -54,9 +54,15 @@ class ProjectProviderContract(unittest.TestCase):
         if method in ('thread/read', 'thread/resume'):
             return {'thread': {'id': SID, 'cwd': str(self.root)}}
         if method == 'thread/turns/list':
-            return {'data': [{'id': TURN, 'status': 'completed', 'items': [
+            row = {'id': TURN, 'status': 'completed', 'items': [
                 {'id': 'synthetic-user-item', 'type': 'userMessage', 'clientId': None,
-                 'content': [{'type': 'text', 'text': 'Synthetic control history'}]}]}], 'nextCursor': None}
+                 'content': [{'type': 'text', 'text': 'Synthetic control history'}]}]}
+            if params.get('itemsView') == 'notLoaded':
+                self.project_history_items = row['items']
+                return {'data': [{'id': TURN, 'status': 'completed', 'items': []}], 'nextCursor': None}
+            return {'data': [row], 'nextCursor': None}
+        if method == 'thread/items/list':
+            return {'data': [{'turnId': TURN, 'item': self.project_history_items[0]}], 'nextCursor': None}
         if method == 'turn/start':
             return {'turn': {'id': TURN}}
         raise AssertionError('Unexpected RPC method: ' + method)
@@ -96,7 +102,7 @@ class ProjectProviderContract(unittest.TestCase):
         self.assertEqual(self.chat.send('control', SID, MID, 'Synthetic control instruction'),
                          {'status': 'accepted', 'message_id': MID, 'turn_id': TURN})
         self.assertEqual([method for method, _ in self.rpc_calls],
-                         ['thread/read', 'thread/turns/list', 'thread/read', 'thread/resume', 'turn/start'])
+                         ['thread/read', 'thread/turns/list', 'thread/items/list', 'thread/read', 'thread/resume', 'turn/start'])
 
     def test_INV_WSESS_02_selected_missing_root_never_gets_native_rpc(self):
         for invoke in (lambda: self.chat.history('missing', SID),
