@@ -3,7 +3,8 @@
 Owner: CONTROL-WEB-LOGIN-NAME в клиентском бэклоге. Источник: поручение
 пользователя06.10 добавить login к password для будущего multiuser;
 FR-AUTH-01/US-AUTH-001, принятая модель CONTROL-WEB-PROJECT-USERS.
-Статус: draft для независимого DESIGN, до тестов/реализации.
+Статус: принята после независимого DESIGN; реализована и проверена blind
+HTTP/config/CLI и browser тестами. Installed acceptance — отдельный этап.
 
 ## Наблюдаемое поведение
 
