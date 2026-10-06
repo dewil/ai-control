@@ -374,13 +374,25 @@ def create_app(config, backend, clock=None):
         if failure:
             return failure
         data = await body(request)
-        if data is None or set(data) != {'project', 'sid', 'message_id', 'text'} or not chat_project(data['project']) or not valid_uuid(data['sid']) or not valid_uuid(data['message_id']) or not text(data['text'], True):
+        fields = {'project', 'sid', 'message_id', 'text'}
+        if (data is None or set(data) not in (fields, fields | {'selection'})
+                or not chat_project(data['project']) or not valid_uuid(data['sid'])
+                or not valid_uuid(data['message_id']) or not text(data['text'], True)):
             return error('invalid_request', 422)
+        if 'selection' in data:
+            from _control_web_sessions import _valid_selection
+            if not _valid_selection(data['selection']):
+                return error('invalid_request', 422)
         try:
             data['text'].encode('utf-8')
         except UnicodeError:
             return error('invalid_request', 422)
-        return await run_in_threadpool(chat_result, lambda: backend.session_send(data['project'], data['sid'], data['message_id'], data['text']), True)
+        args = (data['project'], data['sid'], data['message_id'], data['text'])
+        def send():
+            if 'selection' in data:
+                return backend.session_send(*args, selection=data['selection'])
+            return backend.session_send(*args)
+        return await run_in_threadpool(chat_result, send, True)
 
     @app.post('/api/answer')
     async def answer(request: Request):
