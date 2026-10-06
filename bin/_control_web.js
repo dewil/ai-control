@@ -301,25 +301,28 @@ async function loadProjects(){
     availableProjects=new Set(projectEntries.filter(x=>x.unavailable!==true).map(x=>x.name));
     if(selectedProject&&!availableProjects.has(selectedProject)){clearUnavailableProject();setSessionStatus('Выбранный проект недоступен. Выберите другой проект.');}
     renderProjects();
+    let summarySelection=selectionGeneration;
+    const summaryCurrent=()=>current()&&summarySelection===selectionGeneration;
     let summaryFailed=false,summaryUnknown=false;
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
     const validSummary=data=>exactFields(data,['projects'])&&Array.isArray(data.projects)&&data.projects.length<=1000&&data.projects.length===projectNames.length&&new Set(data.projects.map(x=>x?.name)).size===data.projects.length&&data.projects.every(x=>exactFields(x,['name','session_count','last_activity','summary_state','as_of'])&&projectNames.includes(x.name)&&(['fresh','stale'].includes(x.summary_state)?Number.isSafeInteger(x.session_count)&&x.session_count>=0&&(x.last_activity===null||typeof x.last_activity==='number'&&Number.isFinite(x.last_activity)&&x.last_activity>=0)&&typeof x.as_of==='number'&&Number.isFinite(x.as_of)&&x.as_of>=0:['unknown','unavailable'].includes(x.summary_state)&&x.session_count===null&&x.last_activity===null&&x.as_of===null));
     const unknown=data=>data.projects.some(x=>availableProjects.has(x.name)&&x.summary_state==='unknown');
     try{
-      let summary=await api('/api/session-project-summary',undefined,controller.signal,current);if(!current())return;
+      let summary=await api('/api/session-project-summary',undefined,controller.signal,summaryCurrent);if(!summaryCurrent())return;
       if(!validSummary(summary))throw new Error('invalid summary');
       if(unknown(summary)){
         $('project-summary-status').textContent='Обновляем метаданные проектов…';
-        if(!current()||controller.signal.aborted)return;
-        summary=await api('/api/session-project-summary',undefined,controller.signal,current);if(!current())return;
+        if(!summaryCurrent()||controller.signal.aborted)return;
+        summary=await api('/api/session-project-summary',undefined,controller.signal,summaryCurrent);if(!summaryCurrent())return;
         if(!validSummary(summary))throw new Error('invalid summary');
       }
       summaryUnknown=unknown(summary);
       projectSummaries=new Map(summary.projects.filter(x=>x&&projectNames.includes(x.name)).map(x=>[x.name,x]));
       for(const [name,value] of projectSummaries)if(value.summary_state==='unavailable')availableProjects.delete(name);
-      if(selectedProject&&!availableProjects.has(selectedProject)){clearUnavailableProject();setSessionStatus('Выбранный проект недоступен. Выберите другой проект.');}
-    }catch(_){if(!current())return;projectSummaries.clear();summaryFailed=true;}
-    finally{clearTimeout(timer);}
+      if(selectedProject&&!availableProjects.has(selectedProject)){clearUnavailableProject();summarySelection=selectionGeneration;setSessionStatus('Выбранный проект недоступен. Выберите другой проект.');}
+    }catch(_){if(!summaryCurrent())return;projectSummaries.clear();summaryFailed=true;}
+    finally{clearTimeout(timer);if(current()&&!summaryCurrent())$('project-summary-status').textContent='';}
+    if(!summaryCurrent())return;
     $('project-summary-status').textContent=summaryFailed?'Сводка недоступна. Число сессий и активность неизвестны.':summaryUnknown?'Некоторые метаданные пока недоступны. Обновите проекты, чтобы повторить.':'';
     renderProjects();
     // A refresh never reopens history or overrides a newer user selection.
