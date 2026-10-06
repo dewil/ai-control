@@ -87,7 +87,7 @@ publish/clear boundary и не передаёт13 карту14-only validator.
 
 ## Публичные seams и совместимость
 
-Существующие `DeployController`, `initialize_state`, signing verifier и test
+Существующие `Deploy`, `initialize_state`, signing verifier и test
 fixtures сохраняются. `state_value` валидирует две точные версии; `tree` и
 `hashes` могут получить только внутреннюю разрешённую scope map, не browser/
 CLI arbitrary map. Контроллер выбирает scope из validated state/journal.
