@@ -901,8 +901,9 @@ class SessionChat:
             turns.append({key: turn[key] for key in ('id', 'status', 'items', 'startedAt')
                           if key in turn})
         used, truncated, stopped = 0, False, False
+        item_ids = set()
         for turn in turns:
-            item_cursor, cursors, item_ids, projected = None, set(), set(), []
+            item_cursor, cursors, projected = None, set(), []
             if stopped:
                 continue
             for _ in range(4):
@@ -1314,6 +1315,7 @@ class SessionChat:
         encoded_result = _json(result)
         self._remaining()
         _need(len(encoded_result) <= HISTORY_LIMIT)
+        _need(self._root(project) == root and self._receipt_context() == context, 'stale')
         return result
 
     @staticmethod
