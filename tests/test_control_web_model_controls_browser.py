@@ -66,9 +66,7 @@ def serve(root, evidence):
                 {'id': 'synthetic-assistant', 'role': 'assistant',
                  'text': f'{title} synthetic history', 'truncated': False}]}],
                 'next_cursor': None, 'truncated': False, 'recent_sends': []}
-        def session_send(self, *args):
-            project, sid, message_id, text = args[:4]
-            selection = args[4] if len(args) > 4 else None
+        def session_send(self, project, sid, message_id, text, selection=None):
             data = json.loads((evidence / 'control.json').read_text(encoding='utf-8'))
             record({'method': 'send', 'sid': sid, 'message_id': message_id,
                     'text': text, 'selection': selection})
@@ -264,7 +262,7 @@ class ModelControlsBrowserContract(unittest.TestCase):
         model.select_option(label='Model Alpha'); effort.select_option(label='high')
         draft = 'Synthetic draft after stale catalog'
         self.page.locator('textarea').fill(draft); self.send_button().click()
-        self.page.get_by_role('status').filter(has_text=re.compile(r'(?i)устар|обнов|ошиб|каталог')).wait_for()
+        self.page.get_by_role('status').filter(has_text=re.compile(r'устар|обнов|ошиб|каталог', re.I)).wait_for()
         self.assertEqual(self.page.locator('textarea').input_value(), draft)
         self.assertEqual(model.locator('option:checked').inner_text(), 'Model Alpha')
         self.assertEqual(effort.locator('option:checked').inner_text(), 'high')
