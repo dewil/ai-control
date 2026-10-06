@@ -111,3 +111,22 @@ Configured legacy CREATE INV-WSESS-34..37: [draft contract](../dev/2026-10-06-sp
 - INV-WSESS-35: immutable project/opUUID R/C/A plus accepted-origin I, correlated ACK SID only; fresh loaded-empty overlay/dedup, honest history-unavailable DTO backed by accepted live-origin proof and controlled-origin explicit first-send without resume. Unknown never retries or guesses SID; one validated clock sample precedes publication uncertainty, and only complete fresh loaded-list absence after typed read rejection permits overlay omission. Disappeared empty is not recreated.
 - INV-WSESS-36: exact create options/POST/status fields, current auth/Origin/CSRF/peer/root fences and safe bounded DTOs, no arbitrary flags or incapable-backend fallback.
 - INV-WSESS-37: explicit configured vendor option, selection-generation-fenced pending UUID/manual status and confirmed cache invalidation; no browser durable credentials/drafts or duplicate auto-create.
+
+Lifecycle INV-WSESS-38..41: [public draft](../dev/2026-10-06-spec-web-session-lifecycle.md).
+DESIGN/RED ещё впереди; source/installed capability не заявлены.
+
+- INV-WSESS-38: owner-only exact registered root/fullSID/current captured configured
+  Codex context, fixed proven native lifecycle method. Unsubscribe/unload/absence
+  не archive/delete. Unarchive не resume; нет vendor/account fallback.
+- INV-WSESS-39: archive/delete каскад не пересекает project/grant boundary.
+  Native descendant listing без atomic mutation fence недостаточен; default deny
+  до доказанного complete scope/confinement. Явная cascade/destructive confirmation
+  необходима, но не authority. Другие проекты не разрешаются owner-wide bool.
+- INV-WSESS-40: отдельный immutable private R/A receipt, opUUID до dispatch,
+  one-shot/restart/replay never resend; unknown не принимается по missing list,
+  not-found/notification или guessed outcome. Terminal accepted не downgrade.
+  Точный storage seam обязателен до blind RED; старые send/rename схемы сохраняются.
+- INV-WSESS-41: fixed options/POST/status auth/Origin/CSRF/peer/no-store и immutable
+  UI selection/action/UUID generation. Unsupported disabled, unknown manual status
+  без POST retry/newUUID; cache refresh только подтверждённого target. Active/archived
+  list и UI проходят отдельный контракт/RED; source не installed acceptance.
