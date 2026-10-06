@@ -230,6 +230,11 @@ async function loadModelCatalog(){
 function syncCurrentSessionControls(){const key=currentSessionKey();const historyBusy=Boolean(key&&historyFlights.has(key));const state=key&&historyData.get(key);const hasOlder=Boolean(state&&(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error)));$('chat-send').disabled=!csrf||currentTab!=='sessions'||!key||Boolean(selectedSession?.created&&!state?.initialized&&!state?.confirmedOrigin)||sendsInFlight.has(key)||hasUnknown(key)||!explicitModelReady(key);$('chat-refresh').disabled=!key||historyBusy;$('history-older').disabled=!key||historyBusy||!hasOlder;$('history-retry').hidden=!(state&&state.historyError);$('history-retry').disabled=!key||historyBusy;renderModelControls();renderCurrentSendStatus();syncRenameControls();syncCreateControls();}
 function showTab(tab,load=true){currentTab=tab;const tasks=tab==='tasks';if(tasks)clearHistoryScrollSlack();$('tab-tasks').setAttribute('aria-selected',String(tasks));$('tab-sessions').setAttribute('aria-selected',String(!tasks));$('tasks-panel').hidden=!tasks;$('sessions-panel').hidden=tasks;syncCurrentSessionControls();if(tasks){stopPolling();if(load&&!taskLoaded)refresh();}else{if(load&&!projectNames.length)loadProjects();else if(load&&!selectedProject)loadSessionList(0,false);startPolling();}}
 function setSessionStatus(text){$('session-list-status').textContent=text;}
+function projectExactTime(timestamp){
+  const date=new Date(timestamp*1000);
+  if(!Number.isFinite(date.getTime()))return null;
+  return new Intl.DateTimeFormat('ru-RU',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date);
+}
 function renderProjects(){
   const cloud=$('project-cloud'),focused=document.activeElement,y=window.scrollY;
   const existing=new Map([...cloud.children].map(button=>[button.dataset.project,button]));
@@ -253,13 +258,29 @@ function renderProjects(){
     button.style.setProperty('--tile-width',(112+12*bucket)+'px');button.style.setProperty('--tile-height',(64+8*bucket)+'px');
     const details=unavailable?'Недоступен':value?value.session_count+' сессий'+(value.summary_state==='stale'?' · устарело':''):'Число сессий неизвестно';
     button.replaceChildren(node('span',entry.name,'project-name'),node('span',details,'meta'));
-    button.title=value?'Сводка: '+new Date(value.as_of*1000).toLocaleString()+(value.last_activity===null?' · нет активности':' · последняя активность: '+new Date(value.last_activity*1000).toLocaleString()):details;
+    let activity=unavailable?'Активность недоступна':'Активность неизвестна',exact=null;
+    if(value&&!unavailable){
+      if(value.last_activity===null)activity='Нет активности';
+      else{
+        exact=projectExactTime(value.last_activity);
+        activity='Активность: время неизвестно';
+        if(exact){
+          const time=node('time','Активность: '+messageAge(value.last_activity),'meta');
+          time.dateTime=new Date(value.last_activity*1000).toISOString();time.title=exact;
+          time.dataset.projectTimestamp=String(value.last_activity);
+          button.append(time,node('span',exact,'project-activity-detail'));
+        }
+      }
+    }
+    if(!exact)button.append(node('span',activity,'meta'));
+    button.setAttribute('aria-label',entry.name+', '+details+', '+(exact?'Последняя активность: '+exact:activity));
+    button.title=value?'Сводка: '+(projectExactTime(value.as_of)||'время неизвестно')+(value.last_activity===null?' · нет активности':' · последняя активность: '+(exact||'время неизвестно')):'Метаданные временно недоступны. Обновите проекты, чтобы запросить их снова.';
     cloud.append(button);
   }
   for(const button of existing.values())if(!retained.has(button))button.remove();
   if(retained.has(focused)&&!focused.disabled)focused.focus({preventScroll:true});
   if(window.scrollY!==y)window.scrollTo(0,y);
-  syncCreateControls();
+  syncCreateControls();syncMessageAges();
 }
 function clearUnavailableProject(){stopPolling();selectionGeneration++;initialScrollTarget=null;selectedProject='';selectedSession=null;sessionRows=[];sessionPage=0;sessionsHaveMore=false;clearHistoryView();$('session-list').replaceChildren();$('sessions-more').hidden=true;updateUrl();syncCurrentSessionControls();renderProjects();}
 function projectChanged(name){
@@ -634,16 +655,20 @@ function messageTime(item){
 }
 function stopMessageAges(){if(messageAgeTimer!==null){clearInterval(messageAgeTimer);messageAgeTimer=null;}}
 function messageAgesActive(){return Boolean(csrf&&currentTab==='sessions'&&selectedSession&&document.visibilityState==='visible'&&!$('workspace').hidden&&!$('chat-panel').hidden);}
+function projectAgesActive(){return Boolean(csrf&&currentTab==='sessions'&&document.visibilityState==='visible'&&!$('workspace').hidden&&$('project-cloud').querySelector('time[data-project-timestamp]'));}
 function updateMessageAges(){
-  if(!messageAgesActive())return;
-  for(const time of $('chat-items').querySelectorAll('time[data-timestamp]')){
+  if(messageAgesActive())for(const time of $('chat-items').querySelectorAll('time[data-timestamp]')){
     const text=messageAge(Number(time.dataset.timestamp));
+    if(time.textContent!==text)time.textContent=text;
+  }
+  if(projectAgesActive())for(const time of $('project-cloud').querySelectorAll('time[data-project-timestamp]')){
+    const text='Активность: '+messageAge(Number(time.dataset.projectTimestamp));
     if(time.textContent!==text)time.textContent=text;
   }
 }
 function syncMessageAges(){
   stopMessageAges();
-  if(messageAgesActive()){updateMessageAges();messageAgeTimer=setInterval(updateMessageAges,60000);}
+  if(messageAgesActive()||projectAgesActive()){updateMessageAges();messageAgeTimer=setInterval(updateMessageAges,60000);}
 }
 // INV-WSESS-22/23: bound DOM only; keep loaded cache and opaque gap cursors intact.
 const HISTORY_WINDOW_LIMIT=100;
