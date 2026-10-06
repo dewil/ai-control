@@ -72,12 +72,13 @@ class ScandirCounter:
     """Preserve the real iterator while counting entries actually consumed."""
 
     def __init__(self, iterator, observed, clock=None, expire_after=None,
-                 on_entry=None):
+                 on_entry=None, on_complete=None):
         self.iterator = iterator
         self.observed = observed
         self.clock = clock
         self.expire_after = expire_after
         self.on_entry = on_entry
+        self.on_complete = on_complete
         self.completed = False
 
     def __iter__(self):
@@ -100,13 +101,14 @@ class ScandirCounter:
         if not self.completed:
             self.observed["completed"] += 1
             self.completed = True
+            if self.on_complete is not None:
+                self.on_complete()
 
     def __enter__(self):
         self.iterator.__enter__()
         return self
 
     def __exit__(self, *args):
-        self._complete()
         return self.iterator.__exit__(*args)
 
     def close(self):
@@ -175,7 +177,8 @@ class LinuxBoundReservationFaults(unittest.TestCase):
         self.write_leaf(f"BG-S-{session}.json", canonical(g))
 
     def observe_namespace_iteration(self, *, clock=None, expire_after=None,
-                                    on_entry=None, on_listdir=None):
+                                    on_entry=None, on_listdir=None,
+                                    on_complete=None):
         observed = {"entries": 0, "completed": 0, "listdir": 0, "scans": 0}
         raw_scandir = os.scandir
         raw_listdir = os.listdir
@@ -198,17 +201,21 @@ class LinuxBoundReservationFaults(unittest.TestCase):
             if is_namespace(path):
                 observed["scans"] += 1
                 return ScandirCounter(iterator, observed, clock, expire_after,
-                                      on_entry)
+                                      on_entry, on_complete)
             return iterator
 
         def listdir(path="."):
-            if is_namespace(path):
+            namespace = is_namespace(path)
+            items = raw_listdir(path)
+            if namespace:
                 observed["listdir"] += 1
                 if clock is not None:
                     clock.value = 111.0
                 if on_listdir is not None:
                     on_listdir()
-            return raw_listdir(path)
+                if on_complete is not None:
+                    on_complete()
+            return items
 
         return observed, mock.patch("os.scandir", side_effect=scandir), \
             mock.patch("os.listdir", side_effect=listdir)
@@ -245,75 +252,63 @@ class LinuxBoundReservationFaults(unittest.TestCase):
         for _ in range(80):
             self.add_pair()
         prepared = self.prepare()
-        real_ns = time.monotonic_ns
-        timer = {"baseline": False, "expired": False}
+        delayed = {"done": False}
 
-        def measured_ns():
-            timer["baseline"] = True
-            return real_ns() + (1_000_000_000 if timer["expired"] else 0)
+        def delay_later_scan(_entries):
+            if observed["scans"] >= 2 and not delayed["done"]:
+                delayed["done"] = True
+                time.sleep(0.15)
 
-        def advance_after_baseline(entries):
-            if timer["baseline"] and entries >= 20:
-                timer["expired"] = True
-
-        def advance_listdir():
-            if timer["baseline"]:
-                timer["expired"] = True
+        def delay_later_listdir():
+            if observed["listdir"] >= 2 and not delayed["done"]:
+                delayed["done"] = True
+                time.sleep(0.15)
 
         observed, scan_patch, list_patch = self.observe_namespace_iteration(
-            on_entry=advance_after_baseline, on_listdir=advance_listdir)
-        with self.store.locked(self.ref, 100.2) as base:
-            with scan_patch, list_patch, mock.patch(
-                    "time.monotonic_ns", side_effect=measured_ns):
+            on_entry=delay_later_scan, on_listdir=delay_later_listdir)
+        with self.store.locked(self.ref, 100.1) as base:
+            with scan_patch, list_patch:
                 self.unavailable(lambda: self.store.lookup_create(
-                    base, self.ref, PROJECT, PROJECT_ROOT, OP, 100.2))
+                    base, self.ref, PROJECT, PROJECT_ROOT, OP, 100.1))
         self.assertGreaterEqual(observed["entries"] + observed["listdir"], 1)
-        self.assertTrue(timer["baseline"] and timer["expired"],
-                        "callback-free final pass was not exercised")
+        self.assertTrue(delayed["done"], "later namespace pass was not exercised")
         self.assertFalse((self.namespace / r_name(self.ref, OP)).exists())
 
-        timer.update(baseline=False, expired=False)
+        delayed["done"] = False
         observed, scan_patch, list_patch = self.observe_namespace_iteration(
-            on_entry=advance_after_baseline, on_listdir=advance_listdir)
-        with self.store.locked(self.ref, 100.2) as base:
-            with scan_patch, list_patch, mock.patch(
-                    "time.monotonic_ns", side_effect=measured_ns):
+            on_entry=delay_later_scan, on_listdir=delay_later_listdir)
+        with self.store.locked(self.ref, 100.1) as base:
+            with scan_patch, list_patch:
                 self.unavailable(lambda: self.store.publish_create(
-                    base, self.ref, prepared, 100.2))
+                    base, self.ref, prepared, 100.1))
         self.assertGreaterEqual(observed["entries"] + observed["listdir"], 1)
-        self.assertTrue(timer["baseline"] and timer["expired"])
+        self.assertTrue(delayed["done"], "later publication pass was not exercised")
         self.assertFalse((self.namespace / r_name(self.ref, OP)).exists())
 
-    def test_replay_receipt_refuses_exact_deadline_at_leaf_fence(self):
+    def test_replay_receipt_refuses_elapsed_budget_at_later_leaf_fence(self):
         prepared = self.prepare()
         with self.store.locked(self.ref, 110.0, create=True) as base:
             receipt = self.store.publish_create(base, self.ref, prepared, 110.0)
         self.assertEqual(receipt.status, "unknown")
         original_open = os.open
-        real_ns = time.monotonic_ns
-        observed = {"g_open": False, "baseline": False, "expired": False}
-
-        def measured_ns():
-            observed["baseline"] = True
-            return real_ns() + (1_000_000_000 if observed["expired"] else 0)
+        observed = {"g_opens": 0, "delayed": False}
 
         def expire_after_g_open(path, *args, **kwargs):
             fd = original_open(path, *args, **kwargs)
             if not isinstance(path, int):
                 name = os.fsdecode(path)
                 if "BG-S-" in name and name.endswith(".json"):
-                    observed["g_open"] = True
-                    if observed["baseline"]:
-                        observed["expired"] = True
+                    observed["g_opens"] += 1
+                    if observed["g_opens"] >= 2 and not observed["delayed"]:
+                        observed["delayed"] = True
+                        time.sleep(0.15)
             return fd
 
-        with self.store.locked(self.ref, 101.0) as base:
-            with mock.patch("os.open", side_effect=expire_after_g_open), \
-                 mock.patch("time.monotonic_ns", side_effect=measured_ns):
+        with self.store.locked(self.ref, 100.1) as base:
+            with mock.patch("os.open", side_effect=expire_after_g_open):
                 self.unavailable(lambda: self.store.lookup_create(
-                    base, self.ref, PROJECT, PROJECT_ROOT, OP, 101.0))
-        self.assertTrue(observed["g_open"] and observed["baseline"]
-                        and observed["expired"], "terminal G fence was not exercised")
+                    base, self.ref, PROJECT, PROJECT_ROOT, OP, 100.1))
+        self.assertTrue(observed["delayed"], "later G fence was not exercised")
         self.assertEqual(len(list(self.namespace.iterdir())), 2)
 
     def test_over_capacity_scan_consumes_at_most_10001_physical_entries(self):
@@ -338,12 +333,16 @@ class LinuxBoundReservationFaults(unittest.TestCase):
         prepared = self.prepare()
         future_name = r_name(self.ref, OP).replace(".R.json", ".C.json")
         r_path = self.namespace / r_name(self.ref, OP)
-        state = {"temp_seen": False, "injected": False}
+        state = {"temp_seen": False, "later_listing_done": False,
+                 "injected": False}
         original_open = os.open
 
+        def listing_complete():
+            if state["temp_seen"]:
+                state["later_listing_done"] = True
+
         def clock_callback():
-            if (state["temp_seen"] and not state["injected"]
-                    and observed["scans"] + observed["listdir"] > 0
+            if (state["later_listing_done"] and not state["injected"]
                     and not r_path.exists()):
                 state["injected"] = True
                 self.write_leaf(future_name, b"invented-future-stage")
@@ -356,29 +355,51 @@ class LinuxBoundReservationFaults(unittest.TestCase):
             return fd
 
         with self.store.locked(self.ref, 110.0, create=True) as base:
-            observed, scan_patch, list_patch = self.observe_namespace_iteration()
+            observed, scan_patch, list_patch = self.observe_namespace_iteration(
+                on_complete=listing_complete)
             self.clock.callback = clock_callback
+            outcome = None
             with scan_patch, list_patch, mock.patch("os.open", side_effect=watch_temp):
-                self.unavailable(lambda: self.store.publish_create(
-                    base, self.ref, prepared, 110.0))
-        self.assertGreater(observed["scans"] + observed["listdir"], 0,
-                           "pre-publication namespace listing was not exercised")
-        self.assertTrue(state["temp_seen"], "temp publication stage was not observed")
-        self.assertTrue(state["injected"], "clock did not inject the future stage")
-        self.assertTrue((self.namespace / future_name).exists())
-        self.assertFalse(r_path.exists(), "R became visible after a future stage appeared")
+                try:
+                    outcome = self.store.publish_create(
+                        base, self.ref, prepared, 110.0)
+                except self.catalog.AccountError as error:
+                    outcome = error
+        self.assertGreater(observed["scans"] + observed["listdir"], 0)
+        self.assertTrue(state["temp_seen"], "publication temp was not observed")
+        self.assertTrue(state["later_listing_done"],
+                        "post-temp namespace listing was not completed")
+        if state["injected"]:
+            self.assertIsInstance(outcome, self.catalog.AccountError)
+            self.assertEqual(outcome.code, "store_unavailable")
+            self.assertTrue((self.namespace / future_name).exists())
+            self.assertFalse(r_path.exists(), "R became visible after the late C")
+        else:
+            self.assertEqual(outcome.status, "unknown")
+            self.assertTrue(r_path.exists())
 
     def test_later_clock_mutates_earlier_pinned_g_before_absence_return(self):
         self.add_pair()
         self.add_pair()
-        seen = []
-        state = {"injected": False}
+        counts = {}
+        state = {"first": None, "first_later_fd": None,
+                 "later_group_seen": False, "injected": False}
         original_open = os.open
 
+        def prior_descriptor_closed():
+            fd = state["first_later_fd"]
+            if fd is None:
+                return False
+            try:
+                target = os.readlink(f"/proc/self/fd/{fd}")
+            except FileNotFoundError:
+                return True
+            return not target.endswith("/" + state["first"])
+
         def clock_callback():
-            if len(seen) >= 2 and not state["injected"]:
+            if state["later_group_seen"] and not state["injected"]:
                 state["injected"] = True
-                first = self.namespace / seen[0]
+                first = self.namespace / state["first"]
                 fd = original_open(first, os.O_WRONLY | os.O_TRUNC)
                 try:
                     os.write(fd, b"invented-corruption-after-pin")
@@ -391,17 +412,37 @@ class LinuxBoundReservationFaults(unittest.TestCase):
             if not isinstance(path, int):
                 name = os.path.basename(os.fsdecode(path))
                 if name.startswith("BG-S-") and name.endswith(".json"):
-                    if name not in seen:
-                        seen.append(name)
+                    counts[name] = counts.get(name, 0) + 1
+                    if state["first"] is None:
+                        state["first"] = name
+                    if name == state["first"] and counts[name] == 2:
+                        state["first_later_fd"] = fd
+                    if (name != state["first"] and counts[name] >= 2
+                            and observed["completed"] >= 2
+                            and prior_descriptor_closed()):
+                        state["later_group_seen"] = True
             return fd
 
-        self.clock.callback = clock_callback
         with self.store.locked(self.ref, 110.0) as base:
-            with mock.patch("os.open", side_effect=observe_g):
-                self.unavailable(lambda: self.store.lookup_create(
-                    base, self.ref, PROJECT, PROJECT_ROOT, OP, 110.0))
-        self.assertGreaterEqual(len(seen), 2, "two distinct G leaves were not pinned")
-        self.assertTrue(state["injected"], "later clock callback did not mutate G")
+            observed, scan_patch, list_patch = self.observe_namespace_iteration()
+            self.clock.callback = clock_callback
+            outcome = None
+            with scan_patch, list_patch, mock.patch("os.open", side_effect=observe_g):
+                try:
+                    outcome = self.store.lookup_create(
+                        base, self.ref, PROJECT, PROJECT_ROOT, OP, 110.0)
+                except self.catalog.AccountError as error:
+                    outcome = error
+        self.assertGreaterEqual(len(counts), 2, "two distinct G leaves were not read")
+        self.assertTrue(state["later_group_seen"],
+                        "later G group after prior FD close was not observed")
+        if state["injected"]:
+            self.assertIsInstance(outcome, self.catalog.AccountError)
+            self.assertEqual(outcome.code, "store_unavailable")
+            self.assertEqual((self.namespace / state["first"]).read_bytes(),
+                             b"invented-corruption-after-pin")
+        else:
+            self.assertIsNone(outcome)
         self.assertFalse((self.namespace / r_name(self.ref, OP)).exists())
 
 
