@@ -49,7 +49,7 @@ atomic fsync publication, no overwrite foreign inode/normalization insecure path
 `SessionChat.rename(project,sid,operation_id,title)` и
 `SessionChat.rename_status(project,sid,operation_id)` возвращают safe DTO:
 `{operation_id,status}` плюс `title` только при accepted, fresh-proved current
-native title после redaction/cap500. Status: accepted, delivery_unknown, rejected.
+native title после redaction/cap500. Status: accepted, delivery_unknown.
 Accepted означает подтверждённое желаемое name state, не exactly-once native action.
 Повтор accepted может вернуть уже новое current title после иной native операции;
 UI отображает этот проверенный current title, не старый requested string.
@@ -84,9 +84,10 @@ approval action, account/catalog credential I/O или native policy overrides.
 Successful correlated empty result не обновляет UI: затем bounded same-generation
 thread/read(includeTurns:false) reproof root/UUID и сравнение raw native `name`
 с normalized desired title. Preview/default/redacted title не является rename proof.
-Mismatch/malformed/timeout → delivery_unknown. Explicit valid native error before
-success → rejected без guessed raw detail; malformed/transport error → unknown.
-Rejected не повторяется под тем же operation UUID.
+Mismatch/malformed/timeout → delivery_unknown. Любой native error после reserve
+также unknown: core write/index failure может прийти после частичного изменения
+metadata; JSON-RPC error сам по себе не доказывает отсутствие mutation. Preflight
+invalid/forbidden/unsupported отказывает до reserve без native effects.
 
 ## Durable receipt и reconciliation
 
@@ -99,11 +100,11 @@ Title_hash SHA256 normalized_title UTF8. Separate storage namespace from sends,
 binds context/root/sid. Legacy schema1 send receipt не мигрировать/переписывать.
 
 Под lock record lookup прежде reserve. SameUUID/digest exact replay не делает
-name/set снова, даже unknown/rejected. Payload conflict invalid_request/no effects;
+name/set снова, даже unknown. Payload conflict invalid_request/no effects;
 corrupt/unsupported record unavailable, не новый reservation. Initial record status
 unknown fsynced до mutation. Status GET не мутирует native: manual fresh proof/name
 hash match может durable-promote unknown→accepted (desired state observed).
-Mismatch оставляет unknown, не rejected, и не запускает rename. Accepted/rejected
+Mismatch оставляет unknown и не запускает rename. Accepted
 terminal receipt status не понижается; текущий title может законно измениться иной
 операцией. Unknown status после restart сохраняет один operation ID без auto retry.
 
