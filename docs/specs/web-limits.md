@@ -10,7 +10,7 @@ Control displays account-bound cached provider usage independently from live col
 - INV-WLIM-04: Only allowlisted DTO fields reach consumers. Projection is bounded and pure, with no provider/credential/file/process calls, untrusted callbacks or mutable input/output aliases.
 
 ## Contract
-Feature docs/dev/2026-10-06-spec-web-limits-projection.md gives exact types, clock limits, statuses, fields and public project_limits function. tests/test_control_web_limits.py traces these invariants.
+Feature docs/dev/done/2026-10-06-spec-web-limits-projection.md gives exact types, clock limits, statuses, fields and public project_limits function. tests/test_control_web_limits.py traces these invariants.
 
 ## Known gaps
 The existing digest cache has one section per provider and no account attestation. Integration cannot assign it to an arbitrary account. Account-aware collector routing, permission enforcement, cache reader and web UI remain in CONTROL-SUBSCRIPTIONS-LIMITS; they are not enabled by a green pure projection.

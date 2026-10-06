@@ -1,6 +1,6 @@
 # Safe cached subscription projection — first isolated slice
 
-Owner CONTROL-SUBSCRIPTIONS-LIMITS. Base accepted web release3 merge19c15bb. DRAFT, design review before independent RED/author. No web activation or provider IO in this slice.
+Owner CONTROL-SUBSCRIPTIONS-LIMITS. Base accepted web release3 merge19c15bb. Reviewed contract: independent DESIGN and SOURCE passed, blind tests committed before authoring. Merge remains gated on exact full CI. No web activation or provider IO in this slice.
 
 ## Problem and intended behavior
 Existing digest stores one provider section per host snapshot, with no account identity. It must not be relabelled as either of two accounts. Before the panel integration, implement a pure allowlisted projection of already account-bound cached usage records. No probe, token refresh, files, subprocess, environment, networking or authentication is performed by this module. Authenticated caller later supplies expected provider/account from its approved registry. Projection checks equality; it does not attest the collector or grant authority.
@@ -25,3 +25,6 @@ Pure unit tests in tests/test_control_web_limits.py tag invariants. Commit indep
 
 ## DESIGN clarification before RED/author
 Independent gpt-6-sol/medium READY4adf4c3 identified scalar callback and huge-int hazards. Clarified exact scalar types/timestamp bound and bounded key validation, including hostile keys. This amendment precedes blind test commitment and any runtime code.
+
+## Component validation
+Independent DESIGN gpt-6-sol/medium READY4adf4c3 and3623ff3; leaf-bound clarification584a899 before tests. Blind tests5c2b902 (cherryca119f5), baseline21semanticFAIL0ERROR; author root gpt-6.1-sol d3657f1, same21GREEN; actual distinct gpt-6-sol/medium SOURCE PASS d3657f1873b2b66d2336c06f59ebf07593f7de2e, no findings. No live IO, UI, deployment or whole subscriptions completion claim. This finalized specification records the implemented pure component; acceptance requires complete hosted CI on final PR head.
