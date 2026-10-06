@@ -1,7 +1,7 @@
 # Проверка fixed web deploy scope transition
 
 Дата: 06.10.2026. Владелец: CONTROL-UNIVERSAL-DEPLOY.
-Статус: synthetic GREEN; независимый privileged-source review и CI pending;
+Статус: synthetic GREEN; независимый privileged-source review PASS, CI pending;
 helper/bootstrap/release на сервере не установлен.
 
 Контракт: [спецификация](2026-10-06-spec-web-create-deploy-scope-transition.md).
@@ -52,7 +52,10 @@ cases подтвердили RED до соответствующего recovery 
 
 ## Оставшиеся гейты
 
-Нужны independent privileged-source compliance review точного source и CI.
+Actual gpt-6-sol/high SOURCE PASS на immutable
+`d9770952dc33d20228cca5cc93a595effc14a06e`, header SID
+`01a10fb0-cd31-7c33-92af-ec2063e5e70d`; scoped blockers не найдены.
+Runtime SHA выше неизменён. Полный CI ещё требуется.
 Только после них готовится отдельный reviewed root bootstrap с checksum.
 Существующие prepared13 helper/bootstrap, signing keystore, signed packets,
 server stage/state/services и native accounts этой работой не менялись.
