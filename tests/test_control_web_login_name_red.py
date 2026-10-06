@@ -178,9 +178,13 @@ class LoginNameProvisioningContract(unittest.TestCase):
                 args += ['--username', username]
             with patch.object(sys, 'argv', args), \
                  patch.object(sys, 'path', [str(installed), *sys.path]), \
-                 patch('getpass.getpass', return_value='synthetic-enrollment-password'), \
+                 patch('getpass.getpass', return_value='synthetic-enrollment-password') as prompt, \
                  contextlib.redirect_stdout(output):
-                runpy.run_path(str(installed / 'ai-control-web'), run_name='login_name_enrollment')['main']()
+                try:
+                    runpy.run_path(str(installed / 'ai-control-web'), run_name='login_name_enrollment')['main']()
+                except SystemExit as exc:
+                    self.assertEqual(exc.code, 0, f'valid enrollment CLI exited {exc.code}')
+            self.assertEqual(prompt.call_count, 1)
             config = json.loads(auth.read_text())
             self.assertNotIn('synthetic-enrollment-password', output.getvalue())
             self.assertNotIn(config['totp_secret'], output.getvalue())
@@ -193,6 +197,31 @@ class LoginNameProvisioningContract(unittest.TestCase):
 
     def test_init_auth_defaults_new_enrollment_to_owner(self):
         self.assertEqual(self.run_enrollment().get('username'), 'owner')
+
+    def test_invalid_username_is_rejected_before_prompt_or_private_files(self):
+        with tempfile.TemporaryDirectory(prefix='web-login-invalid-enroll-', dir='/var/tmp') as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            installed = root / 'bin'
+            installed.mkdir(mode=0o700)
+            for filename in ('ai-control-web', '_control_web.py'):
+                shutil.copy2(ROOT / 'bin' / filename, installed / filename)
+            auth, state = root / 'auth.json', root / 'totp-state.json'
+            args = [str(installed / 'ai-control-web'), 'init-auth', '--origin',
+                    'http://127.0.0.1:8787', '--loopback-development', '--output',
+                    str(auth), '--totp-state', str(state), '--username', 'dwl!']
+            with patch.object(sys, 'argv', args), \
+                 patch.object(sys, 'path', [str(installed), *sys.path]), \
+                 patch('getpass.getpass', return_value='synthetic-enrollment-password') as prompt:
+                try:
+                    runpy.run_path(str(installed / 'ai-control-web'), run_name='invalid_login_name')['main']()
+                except (SystemExit, ValueError):
+                    pass
+                else:
+                    self.fail('invalid username enrollment unexpectedly succeeded')
+            self.assertEqual(prompt.call_count, 0)
+            self.assertFalse(auth.exists())
+            self.assertFalse(state.exists())
 
 
 if __name__ == "__main__":
