@@ -1,6 +1,6 @@
 # Подписанный переход web deployment 13 → 14 файлов
 
-Статус: design review pending. Владелец: CONTROL-UNIVERSAL-DEPLOY;
+Статус: независимый design review PASS; privileged-source review pending. Владелец: CONTROL-UNIVERSAL-DEPLOY;
 зависимая продуктовая задача CONTROL-WEB-SESSIONS. Пользователь поручил создание
 сессий и завершение web backlog; новый модуль нужен для установки этой функции.
 Текущий подготовленный helper/bootstrap и сервер не меняются этой спецификацией.
