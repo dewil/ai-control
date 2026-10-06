@@ -3,7 +3,7 @@
 Injected envelopes and local capabilities prove ordering and data consistency,
 never authenticated TLS, durable storage, native ownership or production admission.
 """
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 import json
 import math
@@ -167,10 +167,12 @@ class _CallbackRecord:
     callback: object
     delivery: object
     captured: tuple
-    running: bool = False
-    result: object = None
-    error: object = None
-    capturing: bool = False
+    key: tuple
+    deadline: float
+    # Only the selected capture/refresh worker publishes its immutable outcome.
+    # Map selection and accepted -> running are serialized; external work never
+    # holds the map mutex. A single tuple assignment exposes a whole outcome.
+    state: tuple = ('capturing', None)
 
 
 @dataclass(frozen=True, repr=False)
@@ -343,6 +345,24 @@ class AuthStateValidator:
     def capture_callback(self, delivery, request_id, params, *, deadline):
         return _safe(lambda: self._capture_callback(delivery, request_id, params, deadline))
 
+    @contextmanager
+    def _callback_map(self, deadline, *, validate=None):
+        now = self._remaining(deadline)
+        remaining = deadline - now
+        started = time.monotonic()
+        if validate is not None:
+            validate()
+        wait = remaining - (time.monotonic() - started)
+        if wait <= 0 or not self._callback_lock.acquire(timeout=wait):
+            raise AuthError('refresh_busy')
+        try:
+            # No injected clock/callback runs inside this leaf critical section.
+            if time.monotonic() - started >= remaining:
+                raise AuthError('refresh_busy')
+            yield now
+        finally:
+            self._callback_lock.release()
+
     def _capture_callback(self, delivery, request_id, params, deadline):
         self._delivery_baseline(delivery)
         _require(_request_id(request_id) and _keys(params, 'reason previousAccountId'))
@@ -353,94 +373,99 @@ class AuthStateValidator:
         channel = delivery.channel
         key = (channel.channel_id, channel.transport_generation, type(request_id), request_id)
         original_params = tuple(sorted(params.items()))
-        with self._callback_lock:
-            existing = self._callbacks.get(key)
-            if existing is not None and existing.error is not None:
-                _require(existing.delivery is delivery)
-                raise AuthError(existing.error)
+        with self._callback_map(deadline):
+            record = self._callbacks.get(key)
+            owner = record is None
+            if owner:
+                record = _CallbackRecord(None, delivery, (), key, deadline)
+                self._callbacks[key] = record
+            else:
+                _require(record.delivery is delivery)
+                phase, value = record.state
+                if phase == 'failed':
+                    raise AuthError(value)
+                if phase == 'capturing':
+                    raise AuthError('refresh_busy')
+
+        if not owner:
+            self._current(delivery, delivery.context, deadline)
+            self._callback_baseline(record.callback, channel)
+            _require(tuple(sorted(record.callback.params.items())) == original_params)
+            self._delivery(delivery)
+            return record.callback
+
+        try:
             self._current(delivery, delivery.context, deadline)
             self._delivery(delivery)
-            if existing is not None:
-                try:
-                    _require(not existing.capturing)
-                    self._callback_baseline(existing.callback, channel)
-                    _require(existing.delivery is delivery
-                             and tuple(sorted(existing.callback.params.items())) == original_params)
-                    return existing.callback
-                except Exception as error:
-                    existing.error = error.code if isinstance(error, AuthError) else 'authority_stale'
-                    raise AuthError(existing.error) from None
-            # Reserve the reader identity before its call. A rejected returned
-            # capability (or an exceptional capture) leaves a permanent tombstone.
-            record = _CallbackRecord(None, delivery, (), capturing=True)
-            self._callbacks[key] = record
-            code = None
-            try:
-                callback = self._transport.capture_callback(
-                    channel, request_id, dict(original_params), deadline=deadline)
-                record.callback = callback
-                if type(callback) is CapturedCallback:
-                    _require(id(callback) not in self._callback_records)
-                    self._callback_records[id(callback)] = record
-                record.captured = self._callback_fields(callback, channel)
-                _require(type(callback.request_id) is type(request_id)
-                         and callback.request_id == request_id
-                         and tuple(sorted(callback.params.items())) == original_params)
-                self._callback(callback, channel, deadline)
-                now = self._remaining(min(deadline, record.captured[-1] + 9))
-                _require(record.captured[-1] <= now)
+            callback = self._transport.capture_callback(
+                channel, request_id, dict(original_params), deadline=deadline)
+            record.callback = callback
+            record.captured = self._callback_fields(callback, channel)
+            _require(type(callback.request_id) is type(request_id)
+                     and callback.request_id == request_id
+                     and tuple(sorted(callback.params.items())) == original_params)
+            with self._callback_map(deadline):
+                _require(self._callbacks.get(key) is record
+                         and id(callback) not in self._callback_records)
+                self._callback_records[id(callback)] = record
+            self._callback(callback, channel, deadline)
+            self._remaining(min(deadline, record.captured[-1] + 9))
+            self._callback_baseline(callback, channel)
+            self._delivery(delivery)
+            with self._callback_map(
+                    min(deadline, record.captured[-1] + 9),
+                    validate=lambda: self._delivery(delivery)) as now:
+                _require(self._callbacks.get(key) is record
+                         and record.state[0] == 'capturing'
+                         and record.captured[-1] <= now)
                 self._callback_baseline(callback, channel)
-                self._delivery(delivery)
-            except AuthError as error:
-                code = error.code
-            except Exception:
-                code = 'authority_stale'
-            record.capturing = False
-            if code is not None:
-                record.error = code
-                raise AuthError(code)
-            # A reentrant attempt may have failed this identity while its reader
-            # was running. The original worker cannot revive that tombstone.
-            if record.error is not None:
-                raise AuthError(record.error)
+                self._delivery_baseline(delivery)
+                record.state = ('accepted', None)
             return callback
+        except Exception as error:
+            code = error.code if isinstance(error, AuthError) else 'authority_stale'
+            # A timed-out original worker cannot promote the reserved identity
+            # under a later caller's budget or retry the reader.
+            try:
+                self._remaining(deadline)
+            except Exception:
+                code = 'refresh_busy'
+            record.state = ('failed', code)
+            raise AuthError(code) from None
 
     def refresh(self, delivery, callback, *, deadline):
         return _safe(lambda: self._refresh(delivery, callback, deadline))
 
     def _refresh(self, delivery, callback, deadline):
-        with self._callback_lock:
-            _require(type(callback) is CapturedCallback)
+        _require(type(callback) is CapturedCallback)
+        self._delivery_baseline(delivery)
+        with self._callback_map(deadline):
             record = self._callback_records.get(id(callback))
-            _require(record is not None and record.callback is callback and record.delivery is delivery)
-            self._delivery_baseline(delivery)
-            if record.error is not None:
-                raise AuthError(record.error)
-            _require(not record.capturing)
+            _require(record is not None and record.callback is callback
+                     and record.delivery is delivery
+                     and self._callbacks.get(record.key) is record)
+            phase, value = record.state
+            if phase == 'failed':
+                raise AuthError(value)
+            if phase in ('capturing', 'running'):
+                raise AuthError('refresh_busy')
+            if phase == 'accepted':
+                record.state = ('running', None)
+        if phase == 'completed':
+            self._current(value, value.context, deadline)
             self._callback_baseline(callback, delivery.channel)
-            if record.result is not None:
-                self._current(record.result, record.result.context, deadline)
-                return record.result
-            _require(not record.running)
-            record.running = True
-        code = None
+            return value
+
         try:
             self._delivery(delivery)
             bounded = min(_number(deadline), record.captured[-1] + 9)
             self._callback(callback, delivery.channel, bounded)
             result = self._operation(delivery.context, bounded, delivery.channel, callback)
-        except AuthError as error:
-            code = error.code
-        except Exception:
-            code = 'authority_stale'
-        with self._callback_lock:
-            record.running = False
-            if code is None:
-                record.result = result
-            else:
-                record.error = code
-        if code is not None:
-            raise AuthError(code)
+        except Exception as error:
+            code = error.code if isinstance(error, AuthError) else 'authority_stale'
+            record.state = ('failed', code)
+            raise AuthError(code) from None
+        record.state = ('completed', result)
         return result
 
     def close(self):
