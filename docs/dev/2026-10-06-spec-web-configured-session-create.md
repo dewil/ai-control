@@ -253,7 +253,12 @@ reconciliation. All R/C/A/I/temp entries count capacity; four-stage publication 
 exhaust capacity after native ACK: retain unknown, no unsafe rollback/retry.
 
 `ConfiguredSessionCreate.overlay(project)` returns exact
-`{sessions:[safe accepted session DTO,...],truncated:boolean}`. Fresh grants/root,
+`{sessions:[configured overlay row,...],truncated:boolean}`. Overlay row has
+exact accepted-create session fields sid/project/vendor/context_mode/title PLUS
+required status and updated_at; optional needs_native_attention:true only when
+proved. This is a distinct DTO: create/status and loaded_origin.session keep
+their original accepted-create shape without activity/status additions.
+Fresh grants/root,
 approved stable context and captured generations first. Origins bound to this
 project/context/root only; one same-generation thread/loaded/list scan, ≤4pages,
 limit100/page, ≤400 strict fullUUID IDs, finite strict response, opaque cursor≤4096,
@@ -261,17 +266,29 @@ no duplicate IDs/cursor loop. If scan truncated, overlay truncated true; members
 outside observed IDs never guessed. This scan does not assign SID to an operation.
 For each of at most128 accepted-origin observed loaded SIDs, fenced thread/read
 includeTurns:false confirms fullUUID/root and current context. Only freshly proved
-rows are visible; missing native thread is omitted, grants/context/store error is
+rows are visible. status comes from current native thread.status.type, exact
+0.160 enum notLoaded|idle|systemError|active, valid UTF8 bounded≤500 codepoints;
+status dict and type required. Native updatedAt must be exact int/float (not bool),
+finite and nonnegative; export unchanged as updated_at, without local clock or
+receipt-created substitution. Active attention requires actual validated activeFlags
+list containing waitingOnApproval or waitingOnUserInput. Missing/malformed status
+or updatedAt makes overlay unavailable, never a guessed default.
+Missing native thread is omitted, grants/context/store error is
 unavailable. No metadata-only row is claimed usable. Deadline partial scan must
 return unavailable rather than export unchecked rows. No history turns required.
 
 Owner session list merges ordinary native/registry rows and this confirmed loaded
 origin overlay BEFORE output pagination, full canonical(root,SID) dedup; existing
-native row preferred for metadata if it is already authoritative. New empty rows
-are local display with title fallback, not persisted rollout claims. Project
+native row preferred for metadata if it is already authoritative. Overlay-only export to existing SessionChat list uses standard row sid/title/status/
+vendor plus optional proved needs_native_attention; title null is local labelled
+«Новая сессия» fallback, never preview/native naming claim. Internal updated_at
+is for sort/cloud activity proof and is not an extra existing list API field.
+New empty rows are local display, not persisted rollout claims. Project
 cloud/count/activity includes deduplicated eligible overlay rows only when complete
 native metadata and overlay membership are proved; truncated/unavailable evidence
-makes count/activity unknown/stale, never guessed or partial number. Existing cache
+makes count/activity unknown/stale, never guessed or partial number. Overlay
+activity uses only fresh validated updated_at; receipt time/current time is not
+activity evidence. Prefer existing authoritative native row metadata on duplicate. Existing cache
 key includes context_id+transport/context generations+allowed roots+origin
 namespace held-FD dev/ino/mtime_ns/ctime_ns snapshot; existing TTL is not extended;
 creation A publication invalidates original project views. Overlay reproof on refresh
