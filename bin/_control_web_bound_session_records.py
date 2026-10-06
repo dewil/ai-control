@@ -48,7 +48,7 @@ class _FrozenMap(Mapping):
         return len(_owned_values(self))
 
 
-def _owned_values(value, code='invalid_request'):
+def _owned_values(value, code='invalid_request', *, children=True):
     # Inspect fixed primitive slots before invoking any retained object method.
     try:
         items = object.__getattribute__(value, '_items')
@@ -60,16 +60,17 @@ def _owned_values(value, code='invalid_request'):
         _require(type(pair) is tuple and len(pair) == 2, code)
         key, child = pair
         _require(type(key) is str and key not in result, code)
-        _require(type(child) in (str, int, type(None), _FrozenMap), code)
-        if type(child) is _FrozenMap:
-            _owned_values(child, code)
+        if children:
+            _require(type(child) in (str, int, type(None), _FrozenMap), code)
+            if type(child) is _FrozenMap:
+                _owned_values(child, code)
         result[key] = child
     return result
 
 
 def _mapping(value, code='invalid_request'):
     _require(type(value) in (dict, _FrozenMap), code)
-    captured = dict.copy(value) if type(value) is dict else _owned_values(value, code)
+    captured = dict.copy(value) if type(value) is dict else _owned_values(value, code, children=False)
     _require(all(type(key) is str for key in captured), code)
     return captured
 
@@ -162,8 +163,7 @@ def _commitment(value, expected=None, pattern=None):
 def _record(value, stop, expected_ref=None):
     value = _mapping(value)
     _require('context_ref' in value)
-    # Unsupported nested mapping representations are record-shape errors.
-    _require(type(value['context_ref']) in (dict, _FrozenMap))
+    # An existing nested fullref owns its context_invalid error precedence.
     ref = _reference(value['context_ref'])
     if expected_ref is not None:
         _require(ref == expected_ref, 'context_drift')
