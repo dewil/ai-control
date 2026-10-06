@@ -1,5 +1,6 @@
 /* Local system sans typography and compact spacing inspired by OpenCode UI tokens. */
 .build-info{max-width:1200px;margin:0 auto;padding:12px 20px 24px;color:#adaeb7;font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+#login{width:100%;max-width:28rem;margin-inline:auto}
 :root{font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#e6e6e9;background:#151517;color-scheme:dark;accent-color:#9ba7ff;font-size:16px;line-height:1.5}
 *{box-sizing:border-box}body{margin:0;background:inherit}main{max-width:1200px;margin:auto;padding:20px 20px 60px}header,.toolbar,.actions,.chat-heading,.chat-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}h1{font-size:24px;font-weight:500;margin:4px 0}h2{font-size:20px;font-weight:500;margin:0 0 12px}h3{font-size:17px;font-weight:500}.eyebrow{font-size:12px;letter-spacing:.12em;font-weight:500;color:#adaeb7}
 section,.card{background:#1d1d20;padding:16px;border-radius:6px;border:1px solid #38383e}.card{margin:12px 0}.toolbar{margin-bottom:10px}#workspace{background:none;padding:0;border:0}#tasks-panel,#sessions-panel{margin-top:16px}.tabs{display:flex;gap:8px;margin-top:16px}.tabs button[aria-selected="true"]{background:#393946;box-shadow:inset 0 0 0 1px #a5afff}.tabs button[aria-selected="false"]{background:#252529;color:#d4d4dc}
