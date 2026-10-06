@@ -147,6 +147,44 @@ class AttentionHardlinkRed(unittest.TestCase):
                                  "untrusted label/reasons/counts cannot leak from linked metadata")
                 shutil.rmtree(agent)
 
+    def test_warm_hardlink_failure_retains_only_authorized_stale_reason_then_revocation_clears(self):
+        # One persistent composer exercises public retention and current-view reauthorization.
+        agent = self.add_task("task-warm-cache")
+        put_json(agent / "questions" / (QID + ".json"),
+                 {"qid": QID, "kind": "info", "status": "open"})
+        view, source = self.view_source()
+        overview = composer.AttentionOverview(source, view=view,
+                    monotonic=lambda: 1.0, wall_clock=lambda: NOW)
+
+        first = overview.snapshot()
+        self.assertEqual(len(first["reasons"]), 1)
+        prior_id = first["reasons"][0]["reason_id"]
+        self.assertEqual(first["reasons"][0]["state"], "pending")
+
+        os.link(agent / "control.json", self.tmp / "warm-cache-control-link")
+        self.assertEqual((agent / "control.json").stat().st_nlink, 2)
+        second = overview.snapshot()
+        registry_source = second["sources"]["task_registry"]
+        self.assertEqual((registry_source["state"], registry_source["reason"],
+                          registry_source["complete"],
+                          [reason["reason_id"] for reason in second["reasons"]],
+                          [reason["state"] for reason in second["reasons"]], second["complete"]),
+                         ("incomplete", "invalid_source", False, [prior_id], ["stale"], False),
+                         "unsafe source must retain only the prior authorized reason as stale")
+
+        # Current project authority is now revoked. The composer may safely refuse
+        # the whole view or return an empty protected projection, but cannot retain
+        # cached TASK labels/reasons under the earlier authorization.
+        put_json(self.config, {})
+        third = overview.snapshot()
+        if "error" in third:
+            self.assertIn(third["error"], ("stale", "unavailable"))
+        else:
+            self.assertEqual(third["reasons"], [])
+            self.assertEqual(third["unlinked_tasks"], [])
+            self.assertEqual(third["pool"], {"known_sessions": 0, "running": 0,
+                             "decision": 0, "question": 0, "completed": 0})
+
 
 if __name__ == "__main__":
     unittest.main()
