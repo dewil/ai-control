@@ -9,8 +9,6 @@ from pathlib import Path
 import tempfile
 import unittest
 
-import test_control_web_session_chat_contract as contract
-import test_control_web_session_chat_items_paging as paging
 import test_control_web_message_times_browser as browser_fixture
 
 NOW = browser_fixture.NOW
@@ -21,6 +19,11 @@ OMITTED = object()
 
 class ItemMessageTimesBackend(unittest.TestCase):
     def setUp(self):
+        # Browser runner intentionally has Playwright only; backend fixtures
+        # require FastAPI and are imported only in their own server/test venv.
+        global contract, paging
+        import test_control_web_session_chat_contract as contract
+        import test_control_web_session_chat_items_paging as paging
         self.module = contract.feature(self, '_control_web_sessions')
         previous = os.umask(0o077)
         self.addCleanup(os.umask, previous)
