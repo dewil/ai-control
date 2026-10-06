@@ -324,10 +324,11 @@ class ModelControlsBrowserContract(unittest.TestCase):
         self.assertTrue(effort.is_disabled(), 'Unknown receipt cannot be changed into a new explicit override')
         self.assertFalse(self.send_button().is_enabled(), 'Unknown receipt locks retry/override pending manual resolution')
         check.click()
-        self.assertEqual(len([call for call in self.calls() if call['method'] == 'send']), 1)
+        sends = [call for call in self.calls() if call['method'] == 'send']
+        self.assertEqual(len(sends), 1)
         statuses = [call for call in self.calls() if call['method'] == 'status']
         self.assertGreaterEqual(len(statuses), 1)
-        self.assertEqual({call['message_id'] for call in statuses}, {self.calls()[0]['message_id']})
+        self.assertEqual({call['message_id'] for call in statuses}, {sends[0]['message_id']})
 
 
 if __name__ == '__main__':
