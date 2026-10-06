@@ -287,6 +287,13 @@ guard проверяет fresh catalog grant под тем же producer lock, �
 failure registration откатывает собственную leaf, а устойчивый отказ rollback
 возвращает profile_unsafe/unknown. Общий guard не должен обходить этот rollback
 и возвращать registration failure с оставленной собственной leaf при обычной ошибке.
+После успешных final validation/fsync registration outcome committed; descriptor
+cleanup (close) не является новой validation/rollback phase и не превращает этот
+результат в failure. То же относится к cleanup после atomic TASKrename. One-shot
+close error не разрешает повторно закрывать тот же numeric FD: он мог уже быть
+освобождён и переиспользован. Остальные held descriptors необходимо освобождать
+независимо, не маскируя основной precommit отказ; ошибки открытия/проверки/fsync
+до commit по-прежнему отклоняют операцию согласно существующим нормам.
 
 Каждый будущий resolve/admission/replay/resume/native status/history/registry/
 collector/recovery сравнивает и identity leaf, и exact byte commitment с TASK
