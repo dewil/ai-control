@@ -27,7 +27,7 @@ class SummaryHTTPContract(unittest.TestCase):
             'totp_secret':SECRET,'session_ttl':60,'secure_cookie':True},self.backend,clock=lambda:self.now),base_url=ORIGIN)
         self.addCleanup(self.client.close)
     def login(self):
-        response=self.client.post('/api/login',json={'password':PASSWORD,'totp':self.web.totp_code(SECRET,self.now)},headers={'Origin':ORIGIN})
+        response=self.client.post('/api/login',json={'username': 'owner', 'password':PASSWORD,'totp':self.web.totp_code(SECRET,self.now)},headers={'Origin':ORIGIN})
         self.assertEqual(response.status_code,200)
     def test_INV_WSESS_18_http_requires_auth_and_never_calls_backend_before_login(self):
         self.assertEqual(self.client.get('/api/session-project-summary').status_code,401)

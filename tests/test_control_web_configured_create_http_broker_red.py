@@ -61,7 +61,7 @@ class ConfiguredCreateHTTP(unittest.TestCase):
         self.csrf = None
 
     def login(self):
-        response = self.client.post('/api/login', json={'password': PASSWORD,
+        response = self.client.post('/api/login', json={'username': 'owner', 'password': PASSWORD,
             'totp': self.web.totp_code(SECRET, self.now)}, headers={'Origin': ORIGIN})
         self.assertEqual(response.status_code, 200, response.text)
         self.csrf = response.json()['csrf']

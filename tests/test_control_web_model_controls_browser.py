@@ -164,6 +164,7 @@ class ModelControlsBrowserContract(unittest.TestCase):
         cls.context = cls.browser.new_context(viewport={'width': 390, 'height': 844}, color_scheme='dark', has_touch=True)
         cls.addClassCleanup(cls.context.close)
         login = cls.context.new_page(); login.goto(cls.url)
+        login.locator('#username').fill('owner')
         login.locator('input[type=password]').fill(PASSWORD)
         login.get_by_role('textbox', name=re.compile('TOTP|код|однораз', re.I)).fill(totp())
         login.get_by_role('button', name=re.compile('^Войти$', re.I)).click()

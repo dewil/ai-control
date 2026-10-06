@@ -100,6 +100,7 @@ class MessageTimesBrowser(unittest.TestCase):
         cls.context=cls.browser.new_context(viewport={'width':1280,'height':900},timezone_id='America/Los_Angeles',has_touch=True)
         cls.addClassCleanup(cls.context.close)
         page=cls.context.new_page(); page.goto(cls.url)
+        page.locator('#username').fill('owner')
         page.locator('input[type=password]').fill(PASSWORD)
         page.get_by_role('textbox',name=re.compile('TOTP|код|однораз',re.I)).fill(totp())
         page.get_by_role('button',name=re.compile('^Войти$',re.I)).click()

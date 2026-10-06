@@ -72,6 +72,7 @@ def main():
     enrollment.add_argument('--output', required=True)
     enrollment.add_argument('--origin', required=True)
     enrollment.add_argument('--totp-state', required=True)
+    enrollment.add_argument('--username', default='owner')
     enrollment.add_argument('--loopback-development', action='store_true')
     web = commands.add_parser('web')
     web.add_argument('--auth', required=True)
@@ -89,7 +90,9 @@ def main():
     args = parser.parse_args()
     os.umask(0o077)
     if args.command == 'init-auth':
-        from _control_web import hash_password, create_app
+        from _control_web import hash_password, create_app, valid_username
+        if not valid_username(args.username):
+            raise ValueError('invalid authentication configuration')
         output = private_path(args.output)
         state_path = private_path(args.totp_state)
         if output == state_path or output.exists() or state_path.exists():
@@ -97,7 +100,7 @@ def main():
         password = getpass.getpass('Пароль Control: ')
         if len(password) < 12 or password != getpass.getpass('Повторите пароль: '):
             raise ValueError('password requires at least12 characters and matching confirmation')
-        config = {'origin': args.origin, 'password_hash': hash_password(password),
+        config = {'origin': args.origin, 'username': args.username, 'password_hash': hash_password(password),
                   'totp_secret': base64.b32encode(secrets.token_bytes(20)).decode().rstrip('='),
                   'secure_cookie': not args.loopback_development, 'session_ttl': 3600}
         create_app(config, None)  # Validate before writing an enrollment artifact.

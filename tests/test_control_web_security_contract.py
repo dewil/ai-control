@@ -29,7 +29,7 @@ class DurableWebSecurity(unittest.TestCase):
     def new_client(self):
         return TestClient(self.web.create_app(self.config, self.backend, clock=lambda: self.now), base_url=ORIGIN)
     def login(self, client):
-        return client.post('/api/login', json={'password': PASSWORD, 'totp': self.web.totp_code(SECRET, self.now)}, headers={'Origin': ORIGIN})
+        return client.post('/api/login', json={'username': 'owner', 'password': PASSWORD, 'totp': self.web.totp_code(SECRET, self.now)}, headers={'Origin': ORIGIN})
     def safe_error(self, response, status):
         self.assertEqual(response.status_code, status, response.text)
         self.assertEqual(set(response.json()), {'error'})

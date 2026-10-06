@@ -20,6 +20,10 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 
+def valid_username(value):
+    return type(value) is str and re.fullmatch(r'[a-z][a-z0-9_-]{1,31}', value) is not None
+
+
 def hash_password(password):
     salt = secrets.token_bytes(16)
     digest = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1)
@@ -65,6 +69,9 @@ def _load_totp_step(path):
 
 def create_app(config, backend, clock=None):
     clock = clock or time.time
+    username = config.get('username', 'owner')
+    if not valid_username(username):
+        raise ValueError('invalid authentication configuration')
     origin = config['origin']
     parsed = urlsplit(origin)
     secure = config.get('secure_cookie', True)
@@ -227,7 +234,9 @@ def create_app(config, backend, clock=None):
         if request.headers.get('origin') != origin:
             return error('forbidden', 403)
         data = await body(request)
-        if data is None or set(data) != {'password', 'totp'} or type(data['password']) is not str or len(data['password']) > 1024:
+        if (data is None or set(data) != {'username', 'password', 'totp'}
+                or not valid_username(data['username'])
+                or type(data['password']) is not str or len(data['password']) > 1024):
             return error('invalid_request', 422)
         now = clock()
         with lock:
@@ -236,7 +245,9 @@ def create_app(config, backend, clock=None):
                 return error('rate_limited', 429)
             attempts.append(now)
             try:
-                valid = verify_password(data['password'], config['password_hash']) and consume_totp(data['totp'])
+                # Unknown valid names still pay the hash cost; only the owner may consume TOTP.
+                password_valid = verify_password(data['password'], config['password_hash'])
+                valid = data['username'] == username and password_valid and consume_totp(data['totp'])
             except (OSError, ValueError):
                 return error('unavailable', 503)
             if not valid:

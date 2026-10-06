@@ -76,6 +76,7 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
         self.page.evaluate('window.__readRecoveryIO.reads.length=0')
 
     def login(self):
+        self.page.locator('#username').fill('owner')
         self.page.locator('input[type=password]').fill(PASSWORD)
         self.page.get_by_role('textbox', name=re.compile('TOTP|код|однораз', re.I)).fill(totp())
         self.page.get_by_role('button', name='Войти', exact=True).click()

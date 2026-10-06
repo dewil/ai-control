@@ -39,7 +39,7 @@ class SessionReloadContract(unittest.TestCase):
         return TestClient(self.app if app is None else app, base_url=ORIGIN)
 
     def login(self):
-        response = self.client.post('/api/login', json=dict(password=PASSWORD,
+        response = self.client.post('/api/login', json=dict(username='owner', password=PASSWORD,
             totp=self.web.totp_code(SECRET, self.now)), headers={'Origin': ORIGIN})
         self.assertEqual(response.status_code, 200, response.text)
         self.csrf = response.json()['csrf']

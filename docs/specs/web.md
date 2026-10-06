@@ -15,7 +15,7 @@
 
 ## Внешний контракт
 Python module bin/_control_web.py: create_app(config, backend, clock=None) возвращает ASGI FastAPI app. Config — dict: origin, password_hash, totp_secret, session_ttl (default3600), secure_cookie(defaultTrue); insecure допускается только origin http://127.0.0.1 или localhost с explicit secure_cookie=False. Backend имеет snapshot(), answer(agent,qid,decision,text), verdict(agent,generation,decision,comment); возвращает JSON-safe dict. Hash helpers hash_password(password), verify_password(password,encoded), totp_code(secret,at). Clock callable возвращает epoch seconds. Backend не получает TOTP/password/session.
-HTTP: GET / login/UI; POST /api/login JSON password,totp → csrf; cookie control_session. GET /api/tasks → {tasks:[...]}; POST /api/answer JSON agent,qid,decision(text|approve|reject),text; POST /api/verdict JSON agent,generation,decision(accept|reject),comment,confirmed=true,totp при reject; POST /api/logout. Mutations header X-CSRF-Token; login также exact Origin. Errors JSON {error:stable_safe_code}, status401/403/409/422/429/503. Mutation success {status:applied|already}; answer может вернуть saved_pending и HTTP503, не success. snapshot tasks include agent,engine,state,questions[{qid,kind,status,question,allowed_decisions}],result(null или {generation,state,summary,commit_sha,finalized}). Дополнительные безопасные поля допустимы.
+HTTP: GET / login/UI; POST /api/login JSON ровно username,password,totp → csrf; cookie control_session. GET /api/tasks → {tasks:[...]}; POST /api/answer JSON agent,qid,decision(text|approve|reject),text; POST /api/verdict JSON agent,generation,decision(accept|reject),comment,confirmed=true,totp при reject; POST /api/logout. Mutations header X-CSRF-Token; login также exact Origin. Errors JSON {error:stable_safe_code}, status401/403/409/422/429/503. Mutation success {status:applied|already}; answer может вернуть saved_pending и HTTP503, не success. snapshot tasks include agent,engine,state,questions[{qid,kind,status,question,allowed_decisions}],result(null или {generation,state,summary,commit_sha,finalized}). Дополнительные безопасные поля допустимы.
 Broker module bin/_control_web_broker.py: RegistryBackend(registry,bin_dir,runner=None). Snapshot реализует этот schema. runner callable(args,**kwargs) совместим subprocess.run; argv list shell=False, timeout bounded, sanitized outcomes. answer/verdict вызывают абсолютные trusted bin helpers. Linux socket newline JSON ≤128KiB, one request/connection, peer UID allowlist, strict operation fields. Client SocketBackend(socket_path) реализует backend. CLI bin/ai-control-web: web / broker / init-auth (secret enrollment локально, stdout не содержит секретов; private output file). Systemd templates и отдельная инструкция установки без автоматического public firewall изменения.
 
 ## Известные дыры и вопросы
@@ -70,3 +70,15 @@ mobile320/390 без overflow, workspace не сужен, DOM/поля/hidden/fo
 семантика прежние. Feature ../dev/done/2026-10-06-spec-web-compact-login.md;
 trace tests/test_control_web_compact_login_browser.py (3 independent browser checks).
 SOURCE/browser PASS; final exact CI and installed acceptance are release gates.
+
+## Логин владельца — решение06.10.2026
+INV-WEB-13: username/password/TOTP обязательны для нового owner login API;
+username проверяется сервером и не выбирает роль. В owner-only режиме session
+principal остаётся owner. Неизвестное имя не создаёт session/CSRF и не расходует
+TOTP replay; общая credential ошибка401, malformed request422. Rate-limit,
+password hash verification, CSRF/cookie/logout/absolute TTL сохраняются.
+Существующий enrollment не регенерируется при добавлении username=dwl;
+legacy config без имени имеет только логин owner, не password-only fallback.
+Feature: ../dev/2026-10-06-spec-web-login-name.md. Multiuser grants/writer
+admission остаются отдельным незавершённым корнем. Реализация/traceability и
+installed acceptance этого инварианта пока не завершены.

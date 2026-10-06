@@ -56,7 +56,7 @@ class SessionModelsHTTP(unittest.TestCase):
         self.client = TestClient(self.web.create_app(config, self.backend, clock=lambda: self.now), base_url=ORIGIN)
         self.path = f"/api/session-models?project=demo&sid={SID}"
     def login(self):
-        response = self.client.post("/api/login", json={"password": PASSWORD,
+        response = self.client.post("/api/login", json={"username": "owner", "password": PASSWORD,
             "totp": self.web.totp_code(SECRET, self.now)}, headers={"Origin": ORIGIN})
         self.assertEqual(response.status_code, 200)
     def test_authentication_precedes_session_model_discovery(self):

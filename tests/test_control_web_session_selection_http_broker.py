@@ -64,7 +64,7 @@ class SessionSelectionHTTP(unittest.TestCase):
         self.csrf = None
 
     def login(self):
-        response = self.client.post("/api/login", json={"password": PASSWORD,
+        response = self.client.post("/api/login", json={"username": "owner", "password": PASSWORD,
             "totp": self.web.totp_code(SECRET, self.now)}, headers={"Origin": ORIGIN})
         self.assertEqual(response.status_code, 200)
         self.csrf = response.json()["csrf"]
@@ -132,7 +132,7 @@ class SessionSelectionHTTP(unittest.TestCase):
                       totp_secret=SECRET, session_ttl=60, secure_cookie=True)
         client = TestClient(self.web.create_app(config, legacy, clock=lambda: self.now),
                             base_url=ORIGIN, raise_server_exceptions=False)
-        login = client.post("/api/login", json={"password": PASSWORD,
+        login = client.post("/api/login", json={"username": "owner", "password": PASSWORD,
             "totp": self.web.totp_code(SECRET, self.now)}, headers={"Origin": ORIGIN})
         self.assertEqual(login.status_code, 200)
         response = client.post("/api/session-send", json={**self.body, "selection": dict(SELECTION)},

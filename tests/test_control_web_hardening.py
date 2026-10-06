@@ -15,7 +15,7 @@ class Hardening(unittest.TestCase):
     def client(self):
         return TestClient(self.web.create_app(self.config, Backend(), clock=lambda:self.now),base_url=ORIGIN)
     def login(self, client):
-        return client.post('/api/login',json={'password':PASSWORD,'totp':self.web.totp_code(SECRET,self.now)},headers={'Origin':ORIGIN})
+        return client.post('/api/login',json={'username': 'owner', 'password':PASSWORD,'totp':self.web.totp_code(SECRET,self.now)},headers={'Origin':ORIGIN})
     def test_replay_survives_application_restart(self):
         with tempfile.TemporaryDirectory(dir='/var/tmp',prefix='web-replay-') as directory:
             os.chmod(directory,0o700)
