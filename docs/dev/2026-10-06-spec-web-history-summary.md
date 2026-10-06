@@ -15,7 +15,15 @@ sortDirection=desc, latest limit4/Older limit8, existing opaque turncursor.
 или view, malformed response, duplicate turn IDs, invalid cursor → unavailable.
 Для каждого turn, от нового к старому, thread/items/list принимает EXACT sid,
 turnId, sortDirection=desc, limit32; cursor только native string continuation,
-первый запрос без cursor. Data — ThreadItemEntry с EXACT turnId и item.
+первый запрос без cursor. Data — ThreadItemEntry с обязательными EXACT turnId и item; разрешены только
+два известных optional поля startedAtMs/completedAtMs. Если присутствуют — null
+либо plain int в signed int64 [-2**63,2**63-1], не bool/float/string. Пустое множество
+optional полей совместимо; любые иные дополнительные поля unavailable. Эти native
+item timestamps валидируются и отбрасываются, существующие turn-derived timestamps
+не меняются. Основание — pinned0.160 generated ThreadItemsListResponse definition
+ThreadItemEntry: оба nullable int64 optional, обязательны только item/turnId.
+Actual readonly candidate f222: first32 entries accepted nativeRPC, затем validator
+line928 unavailable из-за лишних двух legitimate timing полей; payload не логировался.
 Каждая страница ≤32 entries; validator existing identity/type/text rules,
 no duplicate item IDs, no repeated/self cursor, no wrong-turn injection.
 Последовательность newest-first разворачивается в chronological items каждого turn.
