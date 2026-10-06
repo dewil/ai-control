@@ -1,8 +1,13 @@
 # Account activation preparation — WAIT
 
-This document grants no activation authority. L077 plus explicit human Mac prep
-instruction permits source-only isolated work. Only a later explicit Linux
-LLM SERVER WORK COMPLETE / ACCOUNT ACTIVATION GO releases server activation.
+This document grants no activation authority. L084 explicitly supplied a conditional
+LLM SERVER WORK COMPLETE / ACCOUNT ACTIVATION GO, reaffirmed in L096. Its accepted
+DESIGN/RED/SOURCE/exact-CI and complete host/store/launcher/kernel/two-account proof
+conditions remain unmet. The current human heartbeat permits isolated source and
+synthetic preparation only; it forbids live login/logout/refresh, runtime restart and
+account rollout. A free server window or idle session does not satisfy these gates.
+Coordinate a concrete server writer window before any future cutover, preserving
+the installed fixed14 release4 confirmed in L105/L106.
 
 ## Before activation
 
@@ -48,3 +53,28 @@ https://learn.chatgpt.com/docs/app-server
 https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server
 External-token callback mode and env-key provider/restart recipe are distinct paths;
 current documentation must not silently change the pinned0.160 contract.
+
+
+## Finite source preparation handoff gates
+
+The handoff is complete only when the bound-account path is runnable against
+synthetic provider/child fixtures using the reviewed adapters. Accepted helpers
+alone do not meet this condition. Each implementation uses independent frozen
+DESIGN, blind RED, distinct SOURCE and exact full CI.
+
+| Deliverable | Completion evidence |
+| --- | --- |
+| Current strict auth and full bound-store integrations | Independent SOURCE and complete CI on exact packaged source bytes |
+| V2 resolver and synthetic provisioning | Immutable session context, anchored new profile/source/native-state objects, durable generation1 and explicit ready head |
+| Complete selected-source adapter | Healthy admit and two successive refreshes; fresh-process refusal of unresolved reserve/rotation/finish/terminal outcomes; selected-account isolation and explicit recovery |
+| Fixed TLS OAuth adapter | Endpoint/client/hostname/CA fixed, no ambient overrides or redirects; synthetic TLS faults and bounded original request/response provenance |
+| Exclusive owned transport and effect journals | One reader/writer, captured child/pipes/invocation/generation, exact frame correlation, no replay of unknown effects, owned drain after auth loss |
+| Closed launcher and kernel view | Real shared HOME/CWD/tools with synthetic private source and other account roots hidden; fixed executable/config/env and actual Linux FD/process/view tests |
+| Full session host composition | Initialize, auth, thread creation, callback, current and cleanup order through actual adapters and synthetic child/provider |
+| Bound-session owner and web wiring | Immutable account session authority through create/history/send/models/stop; A/B isolation, unknown-effect refusal, new B session in common CWD, browser selector and strict route gates |
+| Scoped r4 package and operational handoff | Every leaf packaged, expanded bootstrap reviewed/tested, latest installed UI preserved, exact hash/CI packet and operator provisioning/cutover/rollback matrix |
+
+Operational fresh grants, real issuer/native compatibility, installation and
+actual simultaneous A/B acceptance remain outside the current source-only
+heartbeat. These are later operational gates; their absence does not authorize
+access to existing credentials or a premature source-preparation READY claim.
