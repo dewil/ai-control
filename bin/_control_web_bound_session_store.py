@@ -1,4 +1,4 @@
-"""Immutable R+G reservations only; receipts never authorize native dispatch."""
+"""Immutable bound-session history; receipts confer no native authority."""
 from contextlib import contextmanager
 import ctypes
 import fcntl
@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import stat
 import sys
 import threading
@@ -96,6 +97,34 @@ def _r_name(record):
 
 def _g_name(session):
     return 'BG-S-' + session + '.json'
+
+
+def _stage_name(record, role):
+    return _r_name(record).replace('.R.json', '.' + role + '.json')
+
+
+def _i_session(session):
+    return 'BI-S-' + session + '.json'
+
+
+def _i_native(record):
+    return 'BI-N-' + dto._digest({key: record[key] for key in
+                                 ('context_ref', 'root', 'sid')}) + '.json'
+
+
+def _stop_name(record, role):
+    key = dto._digest({field: record[field] for field in
+                       ('context_ref', 'root', 'session_ref', 'operation_id')})
+    return 'BS-' + key + '.' + role + '.json'
+
+
+def _sid(value):
+    _need(type(value) is str, 'invalid_request')
+    try:
+        valid = str(uuid.UUID(value)) == value
+    except (ValueError, AttributeError):
+        valid = False
+    _need(valid, 'invalid_request')
 
 
 class _Base:
@@ -366,9 +395,9 @@ class BoundSessionStore:
         else:
             self._window_check(base, window)
             held = window[0]
-        # R+G starts at <=9998 entries and has one active temp at a time,
-        # so this slice never needs to consume more than the 10001st witness.
-        limit = min(limit, 10000)
+        # Consume at most the first over-cap witness; transient publication
+        # may additionally count the owned temporary leaf.
+        limit = min(limit, 10002)
         epoch = os.fstat(held.directory)
         original = (epoch.st_mtime_ns, epoch.st_ctime_ns, epoch.st_size)
         names = []
@@ -380,8 +409,6 @@ class BoundSessionStore:
                 else:
                     self._window_check(base, window)
                 name = entry.name
-                _need(not name.startswith(('BI-', 'BS-'))
-                      and not (name.startswith('BC-') and ('.C' in name or '.A' in name)))
                 names.append(name)
         if window is None:
             self._tick(base, deadline)
@@ -486,61 +513,166 @@ class BoundSessionStore:
         _need(name == _g_name(record['session_ref']))
         dto._commitment(record['r_parent'], expected=_r_name(record))
 
+    def _validate_stage(self, name, value):
+        """Strict syntax for every recognized stage, independent of its owner."""
+        if name.startswith('BC-'):
+            _need(re.fullmatch(r'BC-[0-9a-f]{64}\.[RCA]\.json', name) is not None)
+            role = name[-6]
+            if role == 'R':
+                dto.PreparedBoundCreate(value)
+                _need(name == _r_name(value))
+            elif role == 'C':
+                dto._keys(value, 'schema kind r_parent g_parent sid')
+                _need(type(value['schema']) is int and value['schema'] == 1
+                      and value['kind'] == 'bound_session_candidate')
+                dto._commitment(value['r_parent'], expected=name.replace('.C.json', '.R.json'))
+                dto._commitment(value['g_parent'], pattern=r'BG-S-[0-9a-f-]{36}\.json')
+                _sid(value['sid'])
+            else:
+                dto._keys(value, 'schema kind parents')
+                _need(type(value['schema']) is int and value['schema'] == 1
+                      and value['kind'] == 'bound_session_accepted')
+                dto._keys(value['parents'], 'R G C I_session I_native')
+                for parent in value['parents'].values():
+                    dto._commitment(parent, pattern=r'(BC-[0-9a-f]{64}\.[RC]\.json|BG-S-[0-9a-f-]{36}\.json|BI-S-[0-9a-f-]{36}\.json|BI-N-[0-9a-f]{64}\.json)')
+        elif name.startswith('BG-'):
+            self._g(value, name)
+        elif name.startswith('BI-'):
+            dto._keys(value, 'schema kind context_ref project root session_ref operation_id sid r_parent g_parent c_parent')
+            _need(type(value['schema']) is int and value['schema'] == 1
+                  and value['kind'] == 'bound_session_origin')
+            dto._reference(value['context_ref'])
+            dto._match(value['project'], r'[a-zA-Z0-9_-]{1,32}')
+            dto._root(value['root'])
+            dto._uuid(value['session_ref'])
+            dto._uuid(value['operation_id'])
+            _sid(value['sid'])
+            _need(name in (_i_session(value['session_ref']), _i_native(value)))
+            dto._commitment(value['r_parent'], expected=_r_name(value))
+            dto._commitment(value['g_parent'], expected=_g_name(value['session_ref']))
+            dto._commitment(value['c_parent'], expected=_stage_name(value, 'C'))
+        elif name.startswith('BS-'):
+            _need(re.fullmatch(r'BS-[0-9a-f]{64}\.[ST]\.json', name) is not None)
+            if name.endswith('.S.json'):
+                dto.PreparedBoundStop(value)
+                _need(name == _stop_name(value, 'S'))
+            else:
+                dto._keys(value, 'schema kind s_parent')
+                _need(type(value['schema']) is int and value['schema'] == 1
+                      and value['kind'] == 'bound_session_stopped')
+                dto._commitment(value['s_parent'], expected=name.replace('.T.json', '.S.json'))
+
     def _history(self, base, deadline):
         names = self._entries(base, deadline)
         history = {}
         try:
             for name in names:
-                if name.startswith('BG-S-'):
+                if name.startswith(('BC-', 'BG-', 'BI-', 'BS-')):
                     value, pin = self._read(base, name, deadline)
                     _need(value is not None)
-                    self._g(value, name)
+                    self._validate_stage(name, value)
                     history[name] = (value, pin)
+            # Parents are exact current bytes/inodes, never syntax authority.
+            def parent(claim):
+                observed = history.get(claim['filename'])
+                _need(observed is not None and observed[1] == claim)
+                return observed[0]
+            for name, (value, pin) in history.items():
+                if name.startswith('BG-'):
+                    r = parent(value['r_parent'])
+                    _need(all(value[key] == r[key] for key in
+                              ('context_ref', 'project', 'root', 'session_ref', 'operation_id')))
+                elif name.endswith('.C.json'):
+                    r = parent(value['r_parent'])
+                    g = parent(value['g_parent'])
+                    _need(value['g_parent']['filename'] == _g_name(r['session_ref'])
+                          and g['r_parent'] == value['r_parent'])
+                elif name.startswith('BI-'):
+                    r = parent(value['r_parent'])
+                    g = parent(value['g_parent'])
+                    c = parent(value['c_parent'])
+                    _need(all(value[key] == r[key] for key in
+                              ('context_ref', 'project', 'root', 'session_ref', 'operation_id'))
+                          and g['r_parent'] == value['r_parent']
+                          and c['r_parent'] == value['r_parent']
+                          and c['g_parent'] == value['g_parent'] and c['sid'] == value['sid'])
+                    counterpart = history.get(_i_native(value) if name.startswith('BI-S-')
+                                              else _i_session(value['session_ref']))
+                    if counterpart is not None:
+                        _need(counterpart[0] == value and counterpart[1]['sha256'] == pin['sha256'])
+                elif name.endswith('.A.json'):
+                    parents = value['parents']
+                    r = parent(parents['R'])
+                    _need(name == _stage_name(r, 'A'))
+                    fresh = self._create_chain(r, history)
+                    _need(all(fresh.parents[role] is not None for role in
+                              ('R', 'G', 'C', 'I_session', 'I_native')))
+                    _need(parents == {role: dto._capture(fresh.parents[role]) for role in parents})
+                elif name.endswith('.S.json'):
+                    a = parent(value['origin_parent'])
+                    r = parent(a['parents']['R'])
+                    _need(all(value[key] == r[key] for key in ('context_ref', 'root', 'session_ref')))
+                elif name.endswith('.T.json'):
+                    parent(value['s_parent'])
         except Exception:
             raise AccountError('store_unavailable') from None
         _need(set(self._entries(base, deadline)) == set(names))
         return history, names
 
-    def _lookup(self, base, reference, project, root, operation, deadline, history):
-        history, names = history
-        identity = dict(context_ref=reference, project=project, root=root, operation_id=operation)
-        name = _r_name(identity)
-        matched = [(record, pin) for record, pin in history.values()
-                   if all(record[key] == value for key, value in identity.items())]
-        _need(len(matched) <= 1)
-        record, r_pin = self._read(base, name, deadline)
-        if record is None:
-            _need(not matched)
-            window = self._terminal_window(base, deadline)
-            _need(set(self._listing(base, deadline, window=window)) == set(names))
-            self._final_fences(base, tuple(pin for _, pin in history.values()),
-                               deadline, window=window)
+    def _create_chain(self, record, history):
+        r = history.get(_r_name(record))
+        g = history.get(_g_name(record['session_ref']))
+        _need(r is not None and r[0] == record and g is not None
+              and g[0]['r_parent'] == r[1])
+        c = history.get(_stage_name(record, 'C'))
+        locator = history.get(_i_session(record['session_ref']))
+        native = None
+        if c is not None:
+            identity = dict(record, sid=c[0]['sid'])
+            native = history.get(_i_native(identity))
+        _need(locator is None or c is not None)
+        a = history.get(_stage_name(record, 'A'))
+        parents = dict(R=r[1], G=g[1], C=None if c is None else c[1],
+                       I_session=None if locator is None else locator[1],
+                       I_native=None if native is None else native[1],
+                       A=None if a is None else a[1])
+        return dto.BoundCreateReceipt(record, 'unknown' if a is None else 'accepted', parents)
+
+    def _return(self, base, deadline, snapshot, value, *, absent=()):
+        history, names = snapshot
+        pins = tuple(pin for _, pin in history.values())
+        window = self._terminal_window(base, deadline)
+        _need(set(self._listing(base, deadline, window=window)) == set(names))
+        pair = () if value is None else tuple(dto._capture(pin) for pin in value.parents.values()
+                                             if pin is not None)
+        if type(value) is dto.BoundStopReceipt:
+            a = history[value.record['origin_parent']['filename']]
+            pair = tuple(a[0]['parents'].values()) + (a[1],) + pair
+        self._final_fences(base, pins, deadline, window=window, pair=pair)
+        _need(set(self._listing(base, deadline, window=window)) == set(names))
+        for name in absent:
             try:
                 os.stat(name, dir_fd=window[0].directory, follow_symlinks=False)
             except FileNotFoundError:
                 pass
             else:
                 _need(False)
-            self._finish_window(base, window)
-            return None
-        _need(len(matched) == 1)
-        g, g_pin = matched[0]
-        try:
-            _need(g['r_parent'] == r_pin)
-            prepared = dto.PreparedBoundCreate(record)
-            _need(record['session_ref'] == g['session_ref'])
-            checked = self._codec.validate_create(reference, prepared, project=project,
-                        root=root, session_ref=g['session_ref'], operation_id=operation)
-            parents = dict(R=r_pin, G=g_pin, C=None, I_session=None, I_native=None, A=None)
-            receipt = dto.BoundCreateReceipt(checked.record, 'unknown', parents)
-            window = self._terminal_window(base, deadline)
-            _need(set(self._listing(base, deadline, window=window)) == set(names))
-            self._final_fences(base, tuple(pin for _, pin in history.values()),
-                               deadline, window=window, pair=(r_pin, g_pin))
-            self._finish_window(base, window)
-            return receipt
-        except Exception:
-            raise AccountError('store_unavailable') from None
+        self._finish_window(base, window)
+        return value
+
+    def _lookup(self, base, reference, project, root, operation, deadline, history):
+        observed, names = history
+        identity = dict(context_ref=reference, project=project, root=root, operation_id=operation)
+        name = _r_name(identity)
+        matched = [value for filename, (value, _) in observed.items()
+                   if filename.startswith('BG-') and all(value[key] == item for key, item in identity.items())]
+        _need(len(matched) <= 1)
+        r = observed.get(name)
+        if r is None:
+            _need(not matched)
+            return self._return(base, deadline, history, None, absent=(name,))
+        _need(len(matched) == 1 and all(r[0][key] == item for key, item in identity.items()))
+        return self._return(base, deadline, history, self._create_chain(r[0], observed))
 
     @_safe
     def lookup_create(self, base, context_ref, project, root, operation_id, deadline):
@@ -558,11 +690,11 @@ class BoundSessionStore:
         history = self._history(base, deadline)
         return self._lookup(base, reference, project, root, operation_id, deadline, history)
 
-    def _publish_leaf(self, base, name, record, deadline, *, parents=(), absent=(), names=()):
-        raw = dto._canonical(record)
+    def _publish_leaf(self, base, name, record, deadline, *, parents=(), absent=(), names=(), raw=None):
+        raw = dto._canonical(record) if raw is None else raw
         _need(len(raw) <= 4096)
         held = self._tick(base, deadline)
-        _need(len(self._entries(base, deadline)) <= 10000)
+        _need(len(self._entries(base, deadline)) < 10000)
         temp = '.tmp-' + uuid.uuid4().hex
         fd = None
         try:
@@ -612,11 +744,11 @@ class BoundSessionStore:
     @_safe
     def publish_create(self, base, context_ref, prepared, deadline):
         reference = self._context(context_ref)
-        self._base(base, absent=True)
-        _need(base is not None)
         _need(type(prepared) is dto.PreparedBoundCreate, 'invalid_request')
         checked = self._codec._value(prepared, False, reference)
         record = dto._capture(checked.record)
+        self._base(base, absent=True)
+        _need(base is not None)
         self._platform()
         self._tick(base, deadline)
         history = self._history(base, deadline)
@@ -625,7 +757,8 @@ class BoundSessionStore:
             _need(dto._capture(previous.record) == record)
             return previous
         global_history, names = history
-        _need(_g_name(record['session_ref']) not in global_history)
+        _need(_g_name(record['session_ref']) not in global_history
+              and _i_session(record['session_ref']) not in global_history)
         _need(len(self._entries(base, deadline)) <= 9998)
         historical_pins = tuple(pin for _, pin in global_history.values())
         r_pin = self._publish_leaf(base, _r_name(record), record, deadline,
@@ -642,3 +775,241 @@ class BoundSessionStore:
                              record['operation_id'], deadline, self._history(base, deadline))
         _need(final is not None and dto._capture(final.record) == record)
         return final
+
+    def _checked_receipt(self, reference, value, stop=False):
+        expected = dto.BoundStopReceipt if stop else dto.BoundCreateReceipt
+        _need(type(value) is expected, 'invalid_request')
+        return self._codec._value(value, stop, reference)
+
+    def _claim(self, supplied, observed):
+        _need(observed is not None and dto._capture(supplied.record) == dto._capture(observed.record))
+        for role, pin in supplied.parents.items():
+            if pin is not None:
+                _need(dto._capture(pin) == dto._capture(observed.parents[role]))
+        if supplied.status == 'accepted':
+            _need(observed.status == 'accepted')
+        return observed
+
+    def _locator(self, base, reference, root, session, deadline):
+        """Context and root precede any parent interpretation or global scan."""
+        value, pin = self._read(base, _i_session(session), deadline)
+        if value is not None:
+            try:
+                captured = dto._reference(value.get('context_ref'))
+            except Exception:
+                raise AccountError('store_unavailable') from None
+            _need(captured == reference, 'context_drift')
+            _need(value.get('root') == root and value.get('session_ref') == session, 'context_drift')
+        return value, pin
+
+    def _current_create(self, base, reference, receipt, deadline):
+        record = receipt.record
+        self._base(base, absent=True)
+        _need(base is not None)
+        self._platform()
+        self._tick(base, deadline)
+        self._locator(base, reference, record['root'], record['session_ref'], deadline)
+        snapshot = self._history(base, deadline)
+        observed = self._lookup(base, reference, record['project'], record['root'],
+                                record['operation_id'], deadline, snapshot)
+        return self._claim(receipt, observed), snapshot
+
+    def _write_stage(self, base, name, record, deadline, snapshot, *, absent=(), raw=None):
+        history, names = snapshot
+        _need(name not in history and name not in names)
+        return self._publish_leaf(base, name, record, deadline,
+                                  parents=tuple(pin for _, pin in history.values()),
+                                  absent=absent, names=names, raw=raw)
+
+    @_safe
+    def capture_candidate(self, base, context_ref, receipt, sid, deadline):
+        reference = self._context(context_ref)
+        checked = self._checked_receipt(reference, receipt)
+        _sid(sid)
+        current, snapshot = self._current_create(base, reference, checked, deadline)
+        history = snapshot[0]
+        name = _stage_name(current.record, 'C')
+        candidate = dict(schema=1, kind='bound_session_candidate',
+                         r_parent=dto._capture(current.parents['R']),
+                         g_parent=dto._capture(current.parents['G']), sid=sid)
+        if current.parents['C'] is not None:
+            _need(history[name][0] == candidate)
+            return current
+        _need(current.status == 'unknown'
+              and all(current.parents[role] is None for role in ('I_session', 'I_native', 'A')))
+        self._write_stage(base, name, candidate, deadline, snapshot)
+        return self._current_create(base, reference, checked, deadline)[0]
+
+    @_safe
+    def publish_origin(self, base, context_ref, receipt, deadline):
+        reference = self._context(context_ref)
+        checked = self._checked_receipt(reference, receipt)
+        current, snapshot = self._current_create(base, reference, checked, deadline)
+        _need(current.parents['C'] is not None)
+        c = snapshot[0][_stage_name(current.record, 'C')][0]
+        origin = {key: current.record[key] for key in
+                  ('context_ref', 'project', 'root', 'session_ref', 'operation_id')}
+        origin = dto._capture(origin)
+        origin.update(schema=1, kind='bound_session_origin', sid=c['sid'],
+                      r_parent=dto._capture(current.parents['R']),
+                      g_parent=dto._capture(current.parents['G']),
+                      c_parent=dto._capture(current.parents['C']))
+        # Check both locators before the first write. One-I recovery is allowed
+        # only with this exact freshly committed chain and no authoritative A.
+        for role, name in (('I_session', _i_session(origin['session_ref'])),
+                           ('I_native', _i_native(origin))):
+            item = snapshot[0].get(name)
+            _need(item is None or item[0] == origin)
+        # Preserve strict noncanonical JSON bytes when reconciling a single
+        # matching I: the two immutable locator leaves must be byte-identical.
+        raw = None
+        if (current.parents['I_session'] is None) != (current.parents['I_native'] is None):
+            pin = current.parents['I_session'] or current.parents['I_native']
+            held = self._tick(base, deadline)
+            fd, _, raw = self._fence_leaf(held, dto._capture(pin))
+            os.close(fd)
+        for role, name in (('I_session', _i_session(origin['session_ref'])),
+                           ('I_native', _i_native(origin))):
+            if current.parents[role] is None:
+                _need(current.status == 'unknown' and current.parents['A'] is None)
+                self._write_stage(base, name, origin, deadline, snapshot,
+                                  absent=(_stage_name(current.record, 'A'),), raw=raw)
+                current, snapshot = self._current_create(base, reference, checked, deadline)
+        return current
+
+    @_safe
+    def accept_create(self, base, context_ref, receipt, deadline):
+        reference = self._context(context_ref)
+        checked = self._checked_receipt(reference, receipt)
+        current, snapshot = self._current_create(base, reference, checked, deadline)
+        _need(all(current.parents[role] is not None for role in
+                  ('R', 'G', 'C', 'I_session', 'I_native')))
+        if current.status == 'accepted':
+            return current
+        record = dict(schema=1, kind='bound_session_accepted',
+                      parents={role: dto._capture(current.parents[role]) for role in
+                               ('R', 'G', 'C', 'I_session', 'I_native')})
+        self._write_stage(base, _stage_name(current.record, 'A'), record, deadline, snapshot)
+        return self._current_create(base, reference, checked, deadline)[0]
+
+    @_safe
+    def lookup_origin(self, base, context_ref, root, session_ref, deadline):
+        reference = self._context(context_ref)
+        held = self._base(base, absent=True)
+        dto._root(root)
+        dto._uuid(session_ref)
+        self._platform()
+        self._remaining(deadline)
+        if held is None:
+            return None
+        locator, _ = self._locator(base, reference, root, session_ref, deadline)
+        snapshot = self._history(base, deadline)
+        if locator is None:
+            return self._return(base, deadline, snapshot, None, absent=(_i_session(session_ref),))
+        return self._lookup(base, reference, locator['project'], root,
+                            locator['operation_id'], deadline, snapshot)
+
+    @_safe
+    def prepare_stop(self, context_ref, origin, operation_id, host_id, invocation_id, deadline):
+        reference = self._context(context_ref)
+        checked = self._checked_receipt(reference, origin)
+        _need(checked.status == 'accepted', 'invalid_request')
+        dto._uuid(operation_id)
+        dto._uuid(host_id)
+        dto._hex(invocation_id, 32)
+        self._remaining(deadline)
+        try:
+            created = self._clock()
+        except Exception:
+            raise AccountError('invalid_request') from None
+        dto._integer(created, 1, 2**63 - 1)
+        self._remaining(deadline)
+        # Host association and once-only drain belong to the caller's journal.
+        return self._codec.prepare_stop(reference, checked, operation_id, host_id,
+                                        invocation_id, created)
+
+    def _stop_chain(self, identity, history):
+        s = history.get(_stop_name(identity, 'S'))
+        t = history.get(_stop_name(identity, 'T'))
+        if s is None:
+            _need(t is None)
+            return None
+        _need(all(s[0][key] == identity[key] for key in
+                  ('context_ref', 'root', 'session_ref', 'operation_id')))
+        return dto.BoundStopReceipt(s[0], 'unknown' if t is None else 'accepted',
+                                     dict(S=s[1], T=None if t is None else t[1]))
+
+    def _current_stop(self, base, reference, record, deadline):
+        self._base(base, absent=True)
+        _need(base is not None)
+        self._platform()
+        self._tick(base, deadline)
+        self._locator(base, reference, record['root'], record['session_ref'], deadline)
+        snapshot = self._history(base, deadline)
+        return self._stop_chain(record, snapshot[0]), snapshot
+
+    def _stop_origin(self, record, history):
+        locator = history.get(_i_session(record['session_ref']))
+        _need(locator is not None)
+        r = history.get(_r_name(locator[0]))
+        _need(r is not None)
+        origin = self._create_chain(r[0], history)
+        _need(origin.status == 'accepted'
+              and all(origin.record[key] == record[key] for key in ('context_ref', 'root', 'session_ref'))
+              and dto._capture(origin.parents['A']) == record['origin_parent'])
+
+    @_safe
+    def publish_stop(self, base, context_ref, prepared, deadline):
+        reference = self._context(context_ref)
+        _need(type(prepared) is dto.PreparedBoundStop, 'invalid_request')
+        checked = self._codec._value(prepared, True, reference)
+        record = dto._capture(checked.record)
+        current, snapshot = self._current_stop(base, reference, record, deadline)
+        self._stop_origin(record, snapshot[0])
+        if current is not None:
+            _need(dto._capture(current.record) == record)
+            return self._return(base, deadline, snapshot, current)
+        self._write_stage(base, _stop_name(record, 'S'), record, deadline, snapshot,
+                          absent=(_stop_name(record, 'T'),))
+        current, snapshot = self._current_stop(base, reference, record, deadline)
+        _need(current is not None)
+        self._stop_origin(record, snapshot[0])
+        return self._return(base, deadline, snapshot, current)
+
+    @_safe
+    def lookup_stop(self, base, context_ref, root, session_ref, operation_id, deadline):
+        reference = self._context(context_ref)
+        held = self._base(base, absent=True)
+        dto._root(root)
+        dto._uuid(session_ref)
+        dto._uuid(operation_id)
+        self._platform()
+        self._remaining(deadline)
+        if held is None:
+            return None
+        record = dict(context_ref=reference, root=root, session_ref=session_ref,
+                      operation_id=operation_id)
+        current, snapshot = self._current_stop(base, reference, record, deadline)
+        if current is not None:
+            self._stop_origin(dto._capture(current.record), snapshot[0])
+        return self._return(base, deadline, snapshot, current,
+                            absent=() if current is not None else
+                            (_stop_name(record, 'S'), _stop_name(record, 'T')))
+
+    @_safe
+    def accept_stop(self, base, context_ref, receipt, deadline):
+        reference = self._context(context_ref)
+        checked = self._checked_receipt(reference, receipt, True)
+        record = dto._capture(checked.record)
+        current, snapshot = self._current_stop(base, reference, record, deadline)
+        current = self._claim(checked, current)
+        self._stop_origin(record, snapshot[0])
+        if current.status == 'accepted':
+            return self._return(base, deadline, snapshot, current)
+        terminal = dict(schema=1, kind='bound_session_stopped',
+                        s_parent=dto._capture(current.parents['S']))
+        self._write_stage(base, _stop_name(record, 'T'), terminal, deadline, snapshot)
+        current, snapshot = self._current_stop(base, reference, record, deadline)
+        current = self._claim(checked, current)
+        self._stop_origin(record, snapshot[0])
+        return self._return(base, deadline, snapshot, current)
