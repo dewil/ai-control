@@ -26,7 +26,13 @@ class SummarySelectionRecovery(unittest.TestCase):
         before_high = self.tile('high').inner_text()
         before_low = self.tile('loww').inner_text()
         held = []
-        self.page.route('**/api/session-project-summary*', lambda route: held.append(route))
+        def handler(route):
+            held.append(route)
+            if len(held) > 1:
+                # Finish an illegal extra request so failing assertions do not
+                # leave Playwright's deferred route callback pending at teardown.
+                route.fulfill(status=200, json=fixture.summaries())
+        self.page.route('**/api/session-project-summary*', handler)
         self.page.get_by_role('button', name='Обновить проекты', exact=True).click()
         self.page.wait_for_timeout(100)
         self.assertEqual(len(held), 1, 'first actual summary GET must reach deferred fixture')
