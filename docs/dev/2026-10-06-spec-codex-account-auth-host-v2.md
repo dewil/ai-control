@@ -313,8 +313,8 @@ V1 resolve signature/schema stays unchanged; no path-bearing public selector.
 
 ## FIRST CODEUNIT: exact auth-state API (synthetic-only; not runtime GO)
 
-The codeunit adds `bin/_control_codex_auth.py` (stdlib only) and bounded local-only
-authority changes in `bin/_control_codex_auth_authority.py`: monotonic `poison_intent`
+The codeunit adds `bin/_control_codex_auth.py` (stdlib only) and a separate strict
+`AuthStateCoordinator` in `bin/_control_codex_auth_authority.py`: monotonic `poison_intent`
 plus account-wide reservation-in-flight/reserved-attempt state and a `terminal_pending`
 fence owned by the exact active delivery guard. Reservation state lets close poison
 after a source reserve may have reached disk but before native enqueue. `terminal_pending`
@@ -324,6 +324,23 @@ No CLI/HTTP/UI/register/resolver/file-reader/TLS/native implementation, no
 production factory, and no production `supported/admit` flag. Kernel/private-view and
 owned-host proofs remain separate gates. The codeunit runs only against injected typed dependencies;
 their values are data for validation, never provenance or production authority.
+
+The existing `_control_codex_auth_authority.AuthCoordinator` remains the legacy pure
+local foundation with its previously accepted API and tests. The new independent
+`AuthStateCoordinator` does not inherit that class or its reservation-free effect
+methods. `_control_codex_auth.AuthCoordinator` is the exact export alias for the
+strict class; every coordinator reference in this FIRST CODEUNIT and its DESIGN
+corrections means this strict authority. `AuthStateValidator` accepts only that class
+or its instrumented subclass and rejects the legacy coordinator with `authority_stale`
+before any dependency I/O. There is no legacy-mode option or permissive branch in the
+strict coordinator. Existing immutable schema helpers/value types may be reused, but
+strict lease, guard, reservation, provisional-publication, and final-stamp registries
+are independent. A legacy lease/guard/stamp or a fabricated value with matching fields
+cannot authorize a strict operation or Delivery. The Delivery factory requires the
+exact final-stamp identity recorded by strict `_complete_terminal` for that validator
+and attempt, never the dataclass type or generation fields alone. Existing foundation
+tests stay unchanged; new auth-state tests construct and subclass the strict exported
+alias. This separation is synthetic API compatibility, not production integration.
 
 Exact immutable values are `repr=False`; caller-owned data is deep-copied, and no
 public value contains secrets, paths, or FDs. `TLSExchange.body` is the sole private
@@ -466,7 +483,8 @@ Expired/late-generation callback sends NO OAuth/response; initial account curren
 checks remain required. Before exchange, commit and response, validate callback,
 source and coordinator lease again; wrong-context/duplicate ID cannot consume token.
 
-Export `AuthCoordinator(*,clock=time.monotonic)` stdlib in-memory authority with
+Export `_control_codex_auth.AuthCoordinator(*,clock=time.monotonic)` as the strict
+`_control_codex_auth_authority.AuthStateCoordinator`, an in-memory authority with
 peraccount locks keyed exact (provider_id,account_id). Callback map ownership is
 sole validator for each captured channel, NOT this pure coordinator. Production supplies ONE
 shared coordinator per Control owner to ALL validators; not one per TASK/session.
@@ -860,6 +878,10 @@ failure before any publication/replace attempt as `not_written`, but model renam
 success followed by
 directory-fsync failure as `unknown`, poison, and zero OAuth. A foreign, stale, or
 abandoned guard must also fail `begin_exchange` without OAuth.
+Blind RED also proves that the legacy coordinator is rejected by the validator before
+dependency I/O, and that legacy/fabricated leases, guards and final stamps cannot be
+used as strict capabilities or Delivery authority. The existing legacy foundation
+suites remain regression requirements and retain their original expectations.
 The remaining expanded blind RED must prove: (1) reserve precedes the only OAuth call
 and a failed/uncertain reserve causes zero calls; (2) exact attempt id is threaded through source
 rotation and terminal finish; a foreign, stale, abandoned, or not-yet-durable
