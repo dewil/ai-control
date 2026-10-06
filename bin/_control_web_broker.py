@@ -24,6 +24,8 @@ SESSION_FIELDS = {
     'session_models': {'op', 'project', 'sid'},
     'session_send': {'op', 'project', 'sid', 'message_id', 'text'},
     'session_send_status': {'op', 'project', 'sid', 'message_id'},
+    'session_rename': {'op', 'project', 'sid', 'operation_id', 'title'},
+    'session_rename_status': {'op', 'project', 'sid', 'operation_id'},
 }
 
 
@@ -41,14 +43,46 @@ def _valid_session(request):
             return False
     if 'project' in request and (type(request['project']) is not str or not PROJECT.fullmatch(request['project'])):
         return False
-    if any(not valid_qid(request[key]) for key in ('sid', 'message_id') if key in request):
+    if any(not valid_qid(request[key]) for key in ('sid', 'message_id', 'operation_id') if key in request):
         return False
     if 'page' in request and (type(request['page']) is not int or request['page'] < 0):
         return False
     if 'cursor' in request and request['cursor'] is not None and (
             type(request['cursor']) is not str or not 0 < len(request['cursor']) <= 4096):
         return False
+    if 'title' in request and not valid_rename_title(request['title']):
+        return False
     return 'text' not in request or valid_text(request['text'], True)
+
+
+def valid_rename_title(title):
+    try:
+        from _control_web_sessions import SessionChat
+        SessionChat._rename_title(title)
+        return True
+    except Exception:
+        return False
+
+
+def rename_result(result, operation_id):
+    if type(result) is not dict:
+        return {'error': 'unavailable'}
+    if 'error' in result:
+        code = result['error']
+        return {'error': code if code in ('invalid_request', 'forbidden', 'stale') else 'unavailable'}
+    if result.get('operation_id') != operation_id or result.get('status') not in ('accepted', 'delivery_unknown'):
+        return {'error': 'unavailable'}
+    safe = {'operation_id': operation_id, 'status': result['status']}
+    if result['status'] == 'accepted':
+        title = result.get('title')
+        if type(title) is not str or not title.strip():
+            return {'error': 'unavailable'}
+        try:
+            title.encode('utf-8')
+        except UnicodeError:
+            return {'error': 'unavailable'}
+        safe['title'] = redact(title)[:500]
+    return safe
 
 
 def _send_request(project, sid, message_id, text, selection):
@@ -193,8 +227,14 @@ class RegistryBackend:
                 result = self.sessions.models(request['project'], request['sid'])
             elif op == 'session_send':
                 result = _forward_send(self.sessions.send, request)
+            elif op == 'session_rename':
+                result = self.sessions.rename(request['project'], request['sid'], request['operation_id'], request['title'])
+            elif op == 'session_rename_status':
+                result = self.sessions.rename_status(request['project'], request['sid'], request['operation_id'])
             else:
                 result = self.sessions.send_status(request['project'], request['sid'], request['message_id'])
+            if op in ('session_rename', 'session_rename_status'):
+                return rename_result(result, request['operation_id'])
             return result if type(result) is dict else {'error': 'unavailable'}
         except Exception:
             return {'error': 'unavailable'}
@@ -219,6 +259,12 @@ class RegistryBackend:
 
     def session_send_status(self, project, sid, message_id):
         return self._session(dict(op='session_send_status', project=project, sid=sid, message_id=message_id))
+
+    def session_rename(self, project, sid, operation_id, title):
+        return self._session(dict(op='session_rename', project=project, sid=sid, operation_id=operation_id, title=title))
+
+    def session_rename_status(self, project, sid, operation_id):
+        return self._session(dict(op='session_rename_status', project=project, sid=sid, operation_id=operation_id))
 
     def _root(self):
         return os.open(self.registry, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -498,8 +544,14 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = backend.session_models(request['project'], request['sid'])
                     elif op == 'session_send':
                         result = _forward_send(backend.session_send, request)
+                    elif op == 'session_rename':
+                        result = backend.session_rename(request['project'], request['sid'], request['operation_id'], request['title'])
+                    elif op == 'session_rename_status':
+                        result = backend.session_rename_status(request['project'], request['sid'], request['operation_id'])
                     else:
                         result = backend.session_send_status(request['project'], request['sid'], request['message_id'])
+                    if op in ('session_rename', 'session_rename_status'):
+                        result = rename_result(result, request['operation_id'])
                     reply(conn, result)
                 except Exception:
                     try:
@@ -614,3 +666,9 @@ class SocketBackend:
 
     def session_send_status(self, project, sid, message_id):
         return self._session(dict(op='session_send_status', project=project, sid=sid, message_id=message_id))
+
+    def session_rename(self, project, sid, operation_id, title):
+        return self._session(dict(op='session_rename', project=project, sid=sid, operation_id=operation_id, title=title))
+
+    def session_rename_status(self, project, sid, operation_id):
+        return self._session(dict(op='session_rename_status', project=project, sid=sid, operation_id=operation_id))
