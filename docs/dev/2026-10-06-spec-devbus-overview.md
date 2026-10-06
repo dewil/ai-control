@@ -89,7 +89,8 @@ DTO fields are exposed, agent identity is always envelope.source.
 
 `bin/_control_web_devbus_nats.py`: `NatsConfig.from_env(env=None)` reads
 CONTROL_DEVBUS_ENABLED (default0, exact0|1), DEVBUS_NATS_URL,
-DEVBUS_NATS_TOKEN xor DEVBUS_NATS_CREDS; CONTROL_DEVBUS_STREAM(defaultDEVBUS_V1).
+DEVBUS_NATS_TOKEN/DEVBUS_NATS_CREDS (at most one; anonymous local
+fixture and operator-supplied anonymous endpoint permitted by broker policy); CONTROL_DEVBUS_STREAM(defaultDEVBUS_V1).
 No values in repr/errors. Reject credentialed URL, invalid stream, nonlocal
 nonTLS URL; allow nats://localhost/127.0.0.1/::1 for synthetic integration.
 `async connect(config, *, secrets=())` -> transport. Official nats-py==2.9.0,
@@ -145,3 +146,14 @@ reload/reconnect выполняет основная сессия после pac
 Submission/unknown outcome reconciliation, questions/resume/steering/reassign,
 provider accounts, native session migration, ACL/службы/deploy; durable central
 history и quality acceptance — отдельно. Не повторять unknown submit.
+
+## Согласование основной сессии06.10
+
+Main scope ACK допускает ровно две пассивные Python helper строки в
+scripts.manifest для обязательного install completeness CI. No activation,
+no fixed14 allowlist/deploy modification. Manifest входит в SOURCE review.
+
+Уточнение состояния stop: после остановки worker connection disabled/disconnected;
+старое live не сохраняется. Scrub обрабатывает обрезанный PEM BEGIN без END,
+quoted/escaped assignments и Authorization schemes; патологический131072-byte
+ввод не должен блокировать event loop квадратичным regex поиском.
