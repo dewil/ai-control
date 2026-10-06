@@ -233,7 +233,12 @@ class SessionChatContract(unittest.TestCase):
             ('thread/items/list', {'threadId': SID, 'turnId': TURN, 'sortDirection': 'desc', 'limit': 32})])
 
     def test_INV_WSESS_03_pagination_preserves_server_order(self):
-        self.rpc.pages['opaque'] = {'data': [turn(turn_id=OTHER), turn()], 'nextCursor': None}
+        turns = [turn(turn_id=OTHER), turn()]
+        # Positive cross-turn history fixture needs private, globally unique item IDs.
+        for turn_index, native_turn in enumerate(turns):
+            for item_index, item in enumerate(native_turn['items']):
+                item['id'] = f'positive-pagination-{turn_index}-{item_index}'
+        self.rpc.pages['opaque'] = {'data': turns, 'nextCursor': None}
         result = self.chat.history('demo', SID, 'opaque')
         self.assertEqual([t['id'] for t in result['turns']], [OTHER, TURN])
         self.assertIsNone(result['next_cursor'])
@@ -254,8 +259,12 @@ class SessionChatContract(unittest.TestCase):
 
     def test_INV_WSESS_03_total_encoded_budget_is_honest(self):
         # 05.10 compact latest requests4 turns; Older retains this8-turn budget fixture.
-        self.rpc.pages['older-budget-fixture'] = {'data': [turn('界'*8000, turn_id=f'{i:08x}-1111-4111-8111-111111111111')
-                                        for i in range(8)], 'nextCursor': 'older'}
+        turns = [turn('界'*8000, turn_id=f'{i:08x}-1111-4111-8111-111111111111') for i in range(8)]
+        # Positive cross-turn history fixture needs private, globally unique item IDs.
+        for turn_index, native_turn in enumerate(turns):
+            for item_index, item in enumerate(native_turn['items']):
+                item['id'] = f'positive-budget-{turn_index}-{item_index}'
+        self.rpc.pages['older-budget-fixture'] = {'data': turns, 'nextCursor': 'older'}
         result = self.chat.history('demo', SID, 'older-budget-fixture')
         self.assertLessEqual(len(json.dumps(result, ensure_ascii=False, separators=(',', ':')).encode('utf-8')), 96*1024)
         self.assertTrue(result['truncated'])
