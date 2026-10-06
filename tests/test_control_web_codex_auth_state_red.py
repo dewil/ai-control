@@ -5,6 +5,7 @@ native ownership, durable storage, or production admission evidence.
 """
 
 import base64
+import copy
 from contextlib import contextmanager
 import importlib
 import json
@@ -331,7 +332,7 @@ class AuthStateContract(unittest.TestCase):
         events = self.events
         owner = self
 
-        class RecordingCoordinator(authority.AuthCoordinator):
+        class RecordingCoordinator(self.auth.AuthCoordinator):
             @contextmanager
             def delivery_guard(self, *args, **kwargs):
                 with super().delivery_guard(*args, **kwargs) as guard:
@@ -433,6 +434,110 @@ class AuthStateContract(unittest.TestCase):
 
     def admit(self):
         return self.validator.admit(self.ctx, deadline=125.0)
+
+    def test_strict_coordinator_export_is_exact_independent_class(self):
+        self.assertIs(self.auth.AuthCoordinator, self.authority.AuthStateCoordinator)
+        self.assertIsNot(self.auth.AuthCoordinator, self.authority.AuthCoordinator)
+        self.assertIsInstance(self.coordinator, self.auth.AuthCoordinator)
+
+    def test_legacy_coordinator_is_rejected_before_dependency_io(self):
+        legacy = self.authority.AuthCoordinator(clock=self.clock)
+        try:
+            validator = self.auth.AuthStateValidator(
+                profile_source=self.source, oauth_client=self.oauth,
+                owned_transport=self.transport, coordinator=legacy,
+                clock=self.clock, wall_clock=lambda: 1000.0,
+            )
+        except self.auth.AuthError as exc:
+            self.assertEqual(exc.code, "authority_stale")
+        else:
+            self.denied(
+                "authority_stale",
+                lambda: validator.admit(self.ctx, deadline=125.0),
+            )
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.oauth.requests, [])
+
+    def test_legacy_and_fabricated_authority_values_cannot_act_as_strict(self):
+        scope = self.authority.AuthScope(reference(), principal())
+        legacy = self.authority.AuthCoordinator(clock=self.clock)
+        legacy_lease = legacy.open(scope, deadline=125.0)
+        strict_lease = self.coordinator.open(scope, deadline=125.0)
+        try:
+            validator_id = str(uuid.uuid4())
+            attempt_id = str(uuid.uuid4())
+            reservation = self.coordinator.claim_reservation(
+                strict_lease, validator_id, attempt_id, deadline=125.0
+            )
+            self.coordinator.mark_reservation_durable(
+                strict_lease, guard=reservation,
+                outcome=self.auth.ReserveOutcome(attempt_id, "reserved"),
+            )
+            self.denied("authority_stale", lambda: self.coordinator.check(
+                legacy_lease, scope, deadline=125.0
+            ))
+            self.denied("authority_stale", lambda: self.coordinator.check(
+                object(), scope, deadline=125.0
+            ))
+            try:
+                copied = copy.copy(strict_lease)
+            except (TypeError, ValueError):
+                copied = None
+            if copied is not None and copied is not strict_lease:
+                self.denied("authority_stale", lambda: self.coordinator.check(
+                    copied, scope, deadline=125.0
+                ))
+            try:
+                copied_guard = copy.copy(reservation)
+            except (TypeError, ValueError):
+                copied_guard = None
+            if copied_guard is not None and copied_guard is not reservation:
+                self.denied("authority_stale", lambda: self.coordinator.begin_exchange(
+                    strict_lease, validator_id, guard=copied_guard, deadline=125.0
+                ))
+            self.denied("authority_stale", lambda: self.coordinator.begin_exchange(
+                strict_lease, validator_id, guard=object(), deadline=125.0
+            ))
+            with legacy.delivery_guard(
+                legacy_lease, scope, deadline=125.0
+            ) as legacy_guard:
+                legacy_guard.begin_enqueue()
+                legacy_guard.confirm()
+                self.denied("authority_stale", lambda: self.coordinator.begin_exchange(
+                    strict_lease, validator_id, guard=legacy_guard, deadline=125.0
+                ))
+                self.denied("authority_stale", lambda: self.coordinator.publish_delivery(
+                    strict_lease, guard=legacy_guard, deadline=125.0
+                ))
+                legacy_stamp = legacy.publish_delivery(
+                    legacy_lease, guard=legacy_guard, deadline=125.0
+                )
+            with self.assertRaises((self.auth.AuthError, TypeError, ValueError)):
+                self.auth.Delivery(
+                    str(uuid.uuid4()), self.ctx,
+                    self.auth.OwnedChannel(
+                        self.ctx,
+                        "123e4567-e89b-42d3-a456-426614174001",
+                        "123e4567-e89b-42d3-a456-426614174002", 1,
+                    ),
+                    legacy_stamp,
+                )
+            fabricated_stamp = type(legacy_stamp)(
+                legacy_stamp.owner_generation, legacy_stamp.credential_generation
+            )
+            with self.assertRaises((self.auth.AuthError, TypeError, ValueError)):
+                self.auth.Delivery(
+                    str(uuid.uuid4()), self.ctx,
+                    self.auth.OwnedChannel(
+                        self.ctx,
+                        "123e4567-e89b-42d3-a456-426614174001",
+                        "123e4567-e89b-42d3-a456-426614174002", 1,
+                    ),
+                    fabricated_stamp,
+                )
+        finally:
+            self.coordinator.release(strict_lease)
+            legacy.release(legacy_lease)
 
     def test_success_reserves_before_exchange_and_finishes_before_delivery(self):
         delivery = self.admit()
@@ -1177,7 +1282,7 @@ class AuthStateContract(unittest.TestCase):
         restarted = self.auth.AuthStateValidator(
             profile_source=self.source, oauth_client=self.oauth,
             owned_transport=self.transport,
-            coordinator=self.authority.AuthCoordinator(clock=self.clock),
+            coordinator=self.auth.AuthCoordinator(clock=self.clock),
             clock=self.clock, wall_clock=lambda: 1000.0,
         )
         self.denied(
@@ -1204,7 +1309,7 @@ class AuthStateContract(unittest.TestCase):
         restarted = self.auth.AuthStateValidator(
             profile_source=self.source, oauth_client=self.oauth,
             owned_transport=FakeTransport(self.auth, self.events, self.clock),
-            coordinator=self.authority.AuthCoordinator(clock=self.clock),
+            coordinator=self.auth.AuthCoordinator(clock=self.clock),
             clock=self.clock, wall_clock=lambda: 1000.0,
         )
         self.denied(
