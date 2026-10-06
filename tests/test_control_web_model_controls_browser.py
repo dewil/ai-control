@@ -9,7 +9,9 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import urllib.request
 import unittest
 
 from test_control_web_chat_width_browser import private_json, totp, PASSWORD, SECRET, SID
@@ -17,6 +19,20 @@ from test_control_web_chat_width_browser import private_json, totp, PASSWORD, SE
 ROOT = Path(__file__).resolve().parents[1]
 OTHER = '44444444-4444-4444-8444-444444444444'
 MODEL_CATALOG_ID = 'a' * 64
+
+
+def publish_ready(evidence, origin):
+    ready = evidence / 'ready.json'
+    temporary = evidence / f'.ready-{os.getpid()}.tmp'
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            json.dump({'url': origin}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, ready)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def available(rows=None, catalog_id=MODEL_CATALOG_ID, expires_in_ms=60000):
@@ -86,8 +102,38 @@ def serve(root, evidence):
     origin = 'http://127.0.0.1:' + str(listener.getsockname()[1])
     app = web.create_app({'origin': origin, 'password_hash': web.hash_password(PASSWORD),
                           'totp_secret': SECRET, 'session_ttl': 3600, 'secure_cookie': False}, Backend())
-    private_json(evidence / 'ready.json', {'url': origin})
-    uvicorn.Server(uvicorn.Config(app, log_level='error', access_log=False)).run(sockets=[listener])
+    server = uvicorn.Server(uvicorn.Config(app, log_level='error', access_log=False))
+    server_thread = threading.Thread(
+        target=server.run, kwargs={'sockets': [listener]}, daemon=True,
+        name='synthetic-model-controls-http',
+    )
+    server_thread.start()
+    deadline = time.monotonic() + 8
+    try:
+        while not server.started:
+            if not server_thread.is_alive():
+                raise RuntimeError('Synthetic fixture server exited before startup')
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Synthetic fixture server startup timed out')
+            time.sleep(.01)
+        while time.monotonic() < deadline:
+            if not server_thread.is_alive():
+                raise RuntimeError('Synthetic fixture server exited before HTTP readiness')
+            try:
+                with urllib.request.urlopen(origin, timeout=.25) as response:
+                    if response.status == 200:
+                        publish_ready(evidence, origin)
+                        break
+            except OSError:
+                time.sleep(.02)
+        else:
+            raise RuntimeError('Synthetic fixture HTTP endpoint did not become ready')
+    except BaseException:
+        server.should_exit = True
+        server_thread.join(timeout=2)
+        listener.close()
+        raise
+    server_thread.join()
 
 
 class ModelControlsBrowserContract(unittest.TestCase):
