@@ -101,9 +101,14 @@ Accepted replay proof failure unavailable/stale, durable accepted не пони�
 
 Новый `ConfiguredCreateStore(path, *, clock=None)` trusted absolute owner-private
 path вне Git и /data, clock default time.time_ns; результат positive exact int,
-иначе invalid_request до publication. Clock только Python fixture seam; CLI/env
+иначе invalid_request до publication. Новая pure подготовка ниже захватывает
+один clock sample; publisher его повторно не вызывает. Clock только Python fixture seam; CLI/env
 clock/path override отсутствует. `ConfiguredCreateReservation` frozen metadata
 handle с recursively immutable `.record`; это не native admission.
+`ConfiguredPreparedCreate` — отдельный frozen metadata DTO с recursively immutable
+`.record` того же exact initial R shape (unknown/sid=null); он НЕ доказывает
+publication/reservation/receipt/native effects. Constructor strict-валидирует record,
+не читает store и не предоставляет capability flag.
 
 Store переиспользует reviewed RenameStore private FS/anchored directory helpers
 в новом module, без редактирования bound CreateStore/ExecutionContext и без их
@@ -117,9 +122,18 @@ Public methods, под stable namespace directory flock:
   или None при absent read-only namespace; create=True writer provisions safely.
 - `lookup(base, project, operation_id, deadline)` → frozen handle или None; bounded
   named R/C/A/I reads, no native/scan/creation. Partial chain возвращает effective unknown.
+- `prepare_reservation(project, context_id, root, operation_id, deadline)` →
+  ConfiguredPreparedCreate; pure metadata/clock validation без store/native IO.
+  Selectors/root grammar/digest проверены, clock вызывается ровно один раз, deadline
+  проверяется до/после; invalid type/nonpositive clock→invalid_request.
+- `publish_reservation(base, prepared, deadline)` → ConfiguredCreateReservation;
+  prepared exact typed initial record, captured created используется без clock call.
+  Existing matching digest/context/root/project/opUUID returns existing exact chain
+  without rewrite; conflicting payload invalid_request, corrupt state unavailable.
+  For new R immutable publication stores the exact prepared record/sample.
 - `reserve(base, project, context_id, root, operation_id, deadline)` → handle;
-  exact replay возвращает matching chain, conflicting payload invalid_request,
-  corrupt/unsafe state unavailable. R published before native effects.
+  compatible lookup first: matching existing chain replay не вызывает clock. Если
+  record отсутствует, pure prepare then publish. R published before native effects.
 - `candidate(base, reservation, sid, deadline)` → handle; only exact correlated SID,
   already matching SID idempotent; different SID invalid_request. No native effects.
 - `origin(base, reservation, deadline)` → handle; candidate required, публикует
@@ -187,8 +201,14 @@ list rows/timestamp/title/model or retry. Native JSON-RPC ID is not idempotency.
 Validate selectors/opUUID, fresh grants/root, prepare approved context; under
 namespace lock lookup by project/opUUID BEFORE any start. Existing record root/
 context/digest must match captured stable identity; mismatch stale without retry.
-Initial create: final fresh grants/root/context equality, publish+read R unknown,
-then exactly one call_in_generation thread/start({cwd:root}) using captured transport
+Initial create: under namespace lock after existing lookup, final fresh grants/root/
+context and capacity proof, pure prepare_reservation samples/validates clock once.
+A known invalid clock returns invalid_request with no R/native start. Только после
+pure preparation creator ставит unknown barrier BEFORE publish_reservation entry,
+then publish+read exact R unknown. Любая IO/publication uncertainty сохраняет
+delivery_unknown даже если publisher не вернулся: нельзя ставить barrier только
+после success или повторять sample в reserve. Existing replay никогда clock call.
+После confirmed R выполняется exactly one call_in_generation thread/start({cwd:root}) using captured transport
 and context generations. All checks after reserve cannot permit another dispatch.
 
 Only correlated successful response.thread.id canonical fullUUID authorizes C.
@@ -265,7 +285,10 @@ limit100/page, ≤400 strict fullUUID IDs, finite strict response, opaque cursor
 no duplicate IDs/cursor loop. If scan truncated, overlay truncated true; membership
 outside observed IDs never guessed. This scan does not assign SID to an operation.
 For each of at most128 accepted-origin observed loaded SIDs, fenced thread/read
-includeTurns:false confirms fullUUID/root and current context. Only freshly proved
+includeTurns:false confirms fullUUID/root and current context. Read rejection may
+omit a no-longer-loaded candidate ONLY by the bounded authoritative confirmation
+scan below; absence is not inferred from generic error message or successful null
+thread reply. Only freshly proved
 rows are visible. status comes from current native thread.status.type, exact
 0.160 enum notLoaded|idle|systemError|active, valid UTF8 bounded≤500 codepoints;
 status dict and type required. Native updatedAt must be exact int/float (not bool),
@@ -273,8 +296,22 @@ finite and nonnegative; export unchanged as updated_at, without local clock or
 receipt-created substitution. Active attention requires actual validated activeFlags
 list containing waitingOnApproval or waitingOnUserInput. Missing/malformed status
 or updatedAt makes overlay unavailable, never a guessed default.
-Missing native thread is omitted, grants/context/store error is
-unavailable. No metadata-only row is claimed usable. Deadline partial scan must
+After an actual correlated RPCRejected from thread/read only, collect failed
+SIDs and perform ONE shared extra same-generation thread/loaded/list scan for the
+overlay call, same≤4pages/100 limits. This confirmation MUST finish with nextCursor
+null: partial/capped/timeout/malformed scan cannot prove absence. Failed SID absent
+from the fresh complete loaded set is omitted as no longer eligible for this loaded
+overlay; failed SID still present makes the overlay unavailable. This does not claim
+absence of a persisted native thread. Ordinary complete previously proved rows
+remain available; final root/grants/context and parent-chain checks apply to all
+exported rows. Missing loaded members in the initial scan need no failed read.
+No extra scan for successful malformed/null thread responses, ID/root mismatch,
+invalid status/updatedAt, generic transport/provider exception, stale generation,
+permission/store failure: these remain unavailable/stale/forbidden as appropriate.
+No raw native-error parsing/classifier; only existing typed RPCRejected distinguishes
+validated server rejection. Total call remains≤55s, at most4 initial +4 shared
+confirmation loaded-list pages, never one confirmation scan per failed SID.
+No metadata-only row is claimed usable. Deadline partial scan must
 return unavailable rather than export unchecked rows. No history turns required.
 
 Owner session list merges ordinary native/registry rows and this confirmed loaded
@@ -474,7 +511,8 @@ close after explicit selection, not added to transient send status slot.
 Source-blind immutable RED precedes implementation: exact schemas/auth/Origin/CSRF,
 root/grants/context/generation, fixed real transport thread/start allowed, reserve
 before one dispatch, ACK correlation/fullUUID/root, no create-time turn/name/resume,
-unknown once-only/no guessing, partial C/I recovery/A corruption/parent loss, origin collision/index privacy,
+unknown once-only/no guessing, partial C/I recovery/A corruption/parent loss, origin collision/index privacy, pure one-sample clock/prepublication unknown barrier,
+RPCRejected+complete loaded-absence omission and partial/malformed/no-absence refusal,
 loaded-only overlay/native dedup/reload/unknown counts, explicit controlled-origin
 first-send without resume and ordinary-SID no bypass, restart,
 namespace capacity concurrency, foreign inode/temp protection, exact DTO privacy,
