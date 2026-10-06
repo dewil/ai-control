@@ -28,6 +28,21 @@ class ProjectionReviewRED(unittest.TestCase):
         self.assertEqual([event['message_id'] for event in task['transitions']], ['old', 'new'])
         self.assertEqual([event['sequence'] for event in task['transitions']], [1, 2])
 
+    def test_transition_ttl_uses_each_events_observed_age(self):
+        # INV-DEVBUS-04 INV-DEVBUS-06: task refresh must not renew old transitions.
+        now = [NOW]
+        projection = self.api.Projection(clock=lambda: now[0])
+        projection.coverage(1, 2, 10, 1024, replay_complete=True)
+        self.assertTrue(projection.ingest(wire('accepted', mid='A'), 'devbus.events.worker1', 1))
+        now[0] += 9
+        self.assertTrue(projection.ingest(wire('running', mid='B'), 'devbus.events.worker1', 2))
+        now[0] += 2
+        snapshot = projection.snapshot()
+        self.assertEqual(len(snapshot['tasks']), 1)
+        self.assertEqual(snapshot['tasks'][0]['state'], 'running')
+        self.assertEqual([event['message_id'] for event in snapshot['events']], ['B'])
+        self.assertEqual([event['message_id'] for event in snapshot['tasks'][0]['transitions']], ['B'])
+
     def test_json_credential_assignments_are_scrubbed_in_result(self):
         # INV-DEVBUS-06: assignments may have JSON quotes and whitespace.
         projection = self.api.Projection(clock=lambda: NOW)
