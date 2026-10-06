@@ -259,10 +259,15 @@ verified/available, не резолвит profile/auth/config и не вызыв
 
 - `CreateStore.reserve(context,project,operation_id)` → frozen `CreateReservation`.
   Missing record atomically fsync unknown/null candidate, existing exact authority
-  возвращается без rewrite. Same key/different exact digest/context/root конфликт.
+  возвращается без rewrite. Accepted replay перед возвратом проверяет exact
+  binding по persisted candidate/context/ref; missing/corrupt/mismatched binding
+  store_unavailable, не новый reserve/downgrade. Same key/different exact
+  digest/context/root конфликт.
 - `CreateStore.lookup(context,project,operation_id)` → None либо frozen reservation;
   read-only missing roots/record не создаёт каталог/lock. Fresh context/root mismatch
-  не читает чужую запись. Corrupt record ошибкой, не None.
+  не читает чужую запись. Corrupt record ошибкой, не None. Для accepted record
+  exact binding обязателен; missing/corrupt/mismatched binding store_unavailable.
+  Lookup знает operationUUID/candidate и не scans namespace для такого proof.
 - `CreateStore.capture_candidate(reservation,sid)` → frozen reservation после
   null→SID CAS; replay same SID без rewrite, different SID conflict. Этот pure
   method проверяет структуру/authority, но не доказывает correlation/native root.
@@ -278,8 +283,14 @@ verified/available, не резолвит profile/auth/config и не вызыв
   fake flag: owner проверяет их до вызова. Это private storage commit, не право
   HTTP показать production create success или открыть native session.
 - `SessionBindings.resolve(project,session_ref,sid)` → None для missing/invisible
-  prepared pair, иначе frozen binding только после matching accepted marker.
-  Corrupt/mismatching present pair ошибкой. Ни admission, ни native history IO.
+  binding или matching unknown prepared pair, иначе frozen binding только после
+  matching accepted marker. Missing binding None НЕ доказывает отсутствие native
+  session/accepted receipt: resolve не знает operationUUID до чтения binding и
+  не scans namespace/не ищет guessed receipt. Если binding существует, его
+  create_operation_id задаёт exact receipt locator; missing/corrupt/mismatched
+  receipt всегда store_unavailable, не None. Matching unknown marker даёт None
+  как invisible prepared pair; corrupt/mismatching binding также ошибкой.
+  Ни admission, ни native history IO.
   Caller owner проверяет fresh account/profile/native admission отдельно ДО
   bound native operation; resolve не обещает актуальности credential identity.
 
