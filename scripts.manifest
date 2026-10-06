@@ -54,6 +54,7 @@ _rc_projects.sh
 _control_provider_accounts.py
 _control_codex_auth_authority.py
 _control_codex_token_response.py
+_control_codex_refresh_slot.py
 _control_provider_context.py
 _control_web_create_store.py
 _control_web_configured_create.py
