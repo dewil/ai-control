@@ -30,7 +30,8 @@ class MessageTimesContract(unittest.TestCase):
         self.assertIn('turns', result)
         items = result['turns'][0]['items']
         self.assertEqual({i['role'] for i in items}, {'user', 'assistant'})
-        self.assertEqual([m for m, _ in self.rpc.calls[before:]], ['thread/read', 'thread/turns/list'])
+        self.assertEqual([m for m, _ in self.rpc.calls[before:]],
+                         ['thread/read', 'thread/turns/list', 'thread/items/list'])
         self.assertFalse(self.rpc.starts())
         return items
 
@@ -62,13 +63,17 @@ class MessageTimesContract(unittest.TestCase):
         for index, started in enumerate((1700000000, 0, None)):
             frame = turn(turn_id=f'turn-{index}')
             frame['startedAt'] = started
+            for item in frame['items']:
+                item['id'] = f"{item['id']}-{index}"
             frames.append(frame)
         self.rpc.pages['opaque-older'] = {'data': frames, 'nextCursor': 'next-opaque'}
         result = self.chat.history('demo', SID, 'opaque-older')
         self.assertEqual(result.get('next_cursor'), 'next-opaque')
         for frame, expected in zip(result['turns'], (1700000000, 0, None)):
             self.assert_time(frame['items'], expected, 'unknown' if expected is None else 'turn')
-        self.assertEqual(self.rpc.calls[-1][1]['cursor'], 'opaque-older')
+        turn_page_calls = [(method, params) for method, params in self.rpc.calls
+                           if method == 'thread/turns/list']
+        self.assertEqual(turn_page_calls[-1][1]['cursor'], 'opaque-older')
 
 
 if __name__ == '__main__':

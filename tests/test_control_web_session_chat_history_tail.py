@@ -104,11 +104,12 @@ class HistoryTailContract(unittest.TestCase):
                           agent(i)])
         items.append({'id': 'future', 'type': 'futureItem', 'text': 'not exported'})
         self.page([native_turn(0, items)])
-        # Older retains the pre-05.10 128-item/work-budget contract.
+        # Supersedes the old full-turn scan: the native tail is bounded to128 entries.
         self.rpc.pages['older-fixture'] = self.rpc.pages[None]
         result = self.bounded_history(cursor='older-fixture')
-        self.assertEqual([i['id'] for i in result['turns'][0]['items']], [f'item-{i}' for i in range(128)])
-        self.assertIs(result['truncated'], False)
+        self.assertEqual([i['id'] for i in result['turns'][0]['items']], [f'item-{i}' for i in range(85, 128)])
+        self.assertIs(result['truncated'], True)
+        self.assertTrue(all(item['role'] == 'assistant' for item in result['turns'][0]['items']))
 
     def test_empty_user_text_parts_are_eligible_for_newest128(self):
         items = [agent('oldest')]
@@ -179,7 +180,9 @@ class HistoryTailContract(unittest.TestCase):
                      {'type': 'futureItem', 'text': 'missing required native item id'}]
         for bad in malformed:
             with self.subTest(item_type=bad['type']):
-                self.page([native_turn(0, [bad] + [agent(i) for i in range(128)])])
+                # Supersedes the old unbounded scan: malformed oldest item is
+                # inside128 fetched entries, after the latest24 export candidates.
+                self.page([native_turn(0, [bad] + [agent(i) for i in range(127)])])
                 self.assertEqual(self.chat.history('demo', SID), {'error': 'unavailable'})
         self.assertFalse(self.rpc.starts())
 
@@ -192,7 +195,9 @@ class HistoryTailContract(unittest.TestCase):
         for _ in range(2):
             self.assertEqual(self.bounded_history(cursor), expected)
         self.assertEqual(self.rpc.calls, [('thread/read', {'threadId': SID, 'includeTurns': False}),
-            ('thread/turns/list', {'threadId': SID, 'itemsView': 'full', 'sortDirection': 'desc', 'limit': 8, 'cursor': cursor})] * 2)
+            # History uses metadata-only turns before fetching supported text items.
+            ('thread/turns/list', {'threadId': SID, 'itemsView': 'notLoaded', 'sortDirection': 'desc', 'limit': 8, 'cursor': cursor}),
+            ('thread/items/list', {'threadId': SID, 'turnId': TURN, 'sortDirection': 'desc', 'limit': 32})] * 2)
         self.assertGreaterEqual(len(self.resolutions), 2)
 
     def test_deadline_expired_after_frame_is_not_partial_history(self):
