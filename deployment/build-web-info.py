@@ -5,8 +5,10 @@ import datetime as dt
 import html
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
+import uuid
 
 START = '<!-- BUILD-INFO:START -->'
 END = '<!-- BUILD-INFO:END -->'
@@ -53,21 +55,50 @@ def source_branch(root):
     return 'detached@' + revision.stdout.strip()
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--release-id', type=int, required=True)
-    args = parser.parse_args()
-    root = Path(__file__).resolve().parent.parent
-    target = root / 'bin/_control_web.html'
+def stamp(root, release_id):
+    directory = os.open(root / 'bin', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    temporary = None
     try:
-        value = target.read_bytes().decode('utf-8')
+        source = os.open('_control_web.html', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         dir_fd=directory)
+        with os.fdopen(source, 'rb') as stream:
+            metadata = os.fstat(stream.fileno())
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError('build-info target must be a regular source file')
+            value = stream.read().decode('utf-8')
         if value.count(START) != 1 or value.count(END) != 1:
             raise ValueError('expected exactly one build-info marker pair')
         start, end = value.index(START) + len(START), value.index(END)
         if end < start:
             raise ValueError('build-info markers are reversed')
-        footer = render_build_info(args.release_id, dt.datetime.now(dt.timezone.utc), source_branch(root))
-        target.write_bytes((value[:start] + '\n' + footer + '\n' + value[end:]).encode('utf-8'))
+        footer = render_build_info(release_id, dt.datetime.now(dt.timezone.utc), source_branch(root))
+        replacement = (value[:start] + '\n' + footer + '\n' + value[end:]).encode('utf-8')
+        name = '.build-info-' + uuid.uuid4().hex + '.tmp'
+        descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=directory)
+        temporary = name
+        with os.fdopen(descriptor, 'wb') as stream:
+            stream.write(replacement)
+            stream.flush()
+            os.fchmod(stream.fileno(), stat.S_IMODE(metadata.st_mode))
+            os.fsync(stream.fileno())
+        os.replace(temporary, '_control_web.html', src_dir_fd=directory, dst_dir_fd=directory)
+        temporary = None
+    finally:
+        try:
+            if temporary is not None:
+                os.unlink(temporary, dir_fd=directory)
+        finally:
+            os.close(directory)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--release-id', type=int, required=True)
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parent.parent
+    try:
+        stamp(root, args.release_id)
     except (ValueError, OSError, subprocess.SubprocessError):
         print('Build-info preparation failed; check release id, markers and local Git context.', file=sys.stderr)
         return 1
