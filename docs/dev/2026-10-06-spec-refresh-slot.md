@@ -162,3 +162,10 @@ from detected external drift on a valid pending lease. No actual credential IO.
 Pre-RED byte-cap clarification:65536 bytes accommodates a maximally JSON-escaped
 16384-byte allowed ASCII token plus bounded fixed reference fields. Token length
 limit stays16384; no accepted token is rejected solely by its JSON escape expansion.
+
+Pre-RED deadline clarification: after supplied scope/exact lease validation FIRST,
+malformed deadline (non-plain numeric,bool,nonfinite) authority_stale before
+reservation; valid expired deadline or bad/failing monotonic clock auth_unavailable
+before reservation. For a valid already-pending owner these deadline/input/clock
+failures are refresh_unknown and poison. Actual lock-acquisition timeout is
+refresh_busy; no deadline renewed and no IO when rejected before acquisition.
