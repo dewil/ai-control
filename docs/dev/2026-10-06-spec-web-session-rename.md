@@ -30,8 +30,9 @@ receipts. Только native name, подтверждённое metadata read, 
 UI кнопка «Переименовать» в выбранном чате. Диалог с labelled «Название сессии»,
 «Сохранить», «Отмена». Предложение берётся из текущего safe title; сохранение —
 явное действие пользователя. Первая Control policy: строка после trim1..160
-Unicode codepoints и ≤1024 UTF-8 bytes; C0/C1 controls включая CR/LF/TAB/DEL
-запрещены. Не менять case/NFKC/внутренние пробелы. Это локальный product cap,
+Unicode codepoints и ≤1024 UTF-8 bytes; raw input сначала проверяется как valid
+UTF-8 строка ≤2048 codepoints/8192bytes. C0/C1 controls включая CR/LF/TAB/DEL
+запрещены в raw input ДО trim, включая ведущие/конечные controls. Не менять case/NFKC/внутренние пробелы. Это локальный product cap,
 не приписывать его native. Проверять normalized input до filesystem/nativeeffects.
 Native trim отличается от Python на C0 separators; запрет controls закрывает эту
 разницу. Empty/array/null/extra fields invalid_request.
@@ -53,6 +54,10 @@ native title после redaction/cap500. Status: accepted, delivery_unknown.
 Accepted означает подтверждённое желаемое name state, не exactly-once native action.
 Повтор accepted может вернуть уже новое current title после иной native операции;
 UI отображает этот проверенный current title, не старый requested string.
+Если fresh proof/read не удался или native name null/нестроковое/blank/неvalidUTF8,
+ответ safe unavailable (либо stale для доказанного identity drift). Durable accepted
+record остаётся accepted; no downgrade/retry/return guessed requested title или
+preview/default. Не скрывать ошибку чтения под успешным rename DTO.
 Pre-effect ошибки `{error:invalid_request|forbidden|stale|unavailable}`.
 
 POST `/api/session-rename` имеет ровно project/sid/operation_id/title. GET
