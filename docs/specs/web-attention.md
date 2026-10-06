@@ -42,3 +42,8 @@ registered aliases одной captured карты, не user ACL. Peer UID не 
 отдельного principal-forwarding контракта. Installation требует отдельной
 reviewed signed-helper closure, composer вне текущего fixed14 allowlist. INV-WSESS-31..33 сюда
 не входят и сохранены для отдельного создания сессий.
+
+INV-WATTN-02/03 hardlink addendum: regular project-map/TASK metadata nlink==1
+на FD/path/read-final fences; unsafe map —503 до source, unsafe TASK — whole-entry
+exclude/incomplete invalid_source, unsafe spec/control — no legacy task_key.
+Directories multiple-link count не запрещён; reader filesystem не меняет.

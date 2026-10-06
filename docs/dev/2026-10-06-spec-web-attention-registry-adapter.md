@@ -336,3 +336,11 @@ helper closure; source import/manifest не означает installed availabil
 Будущая package/source-path activation требует отдельного reviewed deployment scope
 и installed acceptance. Этот срез не меняет helper/bootstrap и не закрывает
 CONTROL-UNIVERSAL-DEPLOY, полный attention UI или CONTROL-WEB-SESSIONS.
+
+Hardlink acceptance addendum (после review; прежний draft nlink не задавал): regular
+project-map/TASK metadata files MUST st_nlink==1 на opened FD и pathname/read-final
+fences; directories с обычным multiple-link count не отказывают. Unsafe map — view
+unavailable/HTTP503 ДО source; unsafe TASK leaf исключает всю запись/labels/reasons/
+counts, source incomplete/invalid_source; optional legacy task_key отсутствует при
+unsafe control/spec, без attention capture. Reader не создаёт alias identity и не
+меняет filesystem; hardlink отказ не заменяется alternate path или normalization.
