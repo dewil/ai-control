@@ -34,7 +34,9 @@ RED и acceptance остаются открыты; текущий TASK-only ср
 activity/callback unsupported, session counts0 не являются native coverage.
 Atomic registered map/root/current owner grants и явная Control incarnation
 обязательны; private projection context/route не являются native identity.
-Peer UID не заменяет web principal; foreign/delegate requests отказывают до
+Production broker сериализует ВЕСЬ persistent composer.snapshot неблокирующим
+process-local lock: contention немедленно unavailable без нового deadline;
+/api/tasks task_key не меняет attention capture. Peer UID не заменяет web principal; foreign/delegate requests отказывают до
 отдельного principal-forwarding контракта. Installation требует отдельной
 reviewed signed-helper closure, composer вне текущего fixed14 allowlist. INV-WSESS-31..33 сюда
 не входят и сохранены для отдельного создания сессий.

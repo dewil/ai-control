@@ -66,11 +66,24 @@ View реализует принятый composer protocol:
 `snapshot(*,deadline)`, `resolve_project(project,view_snapshot,*,deadline)`,
 `authorize(project_binding,view_snapshot,*,deadline)`, `current(view_snapshot,*,deadline)`.
 Snapshot возвращает exact ViewSnapshot из pool spec или safe отказ, никогда raw FS
-handle. Владелец хранит private capture до конца вызова под process-local lock;
-параллельные overview calls не смешивают captures. Source получает только тот же
-view и его текущий capture, без независимого повторного map выбора.
-Прямой synthetic source вызов требует предшествующего view.snapshot с тем же
-живым deadline/capture; отсутствие capture возвращает unavailable без FS reads.
+handle. RegistryBackend.attention_snapshot владеет process-local NONBLOCKING lock,
+который охватывает ВЕСЬ composer.snapshot: view/source capture, compose, retention,
+version/revision, final current checks и export. Contended call немедленно возвращает
+safe unavailable: никаких wait, retry, fresh timeout или source/view вызовов.
+Только admitted call начинает штатный composer deadline entry+5s; lock обязательно
+освобождается при success/refusal/exception. Persistent composer сохраняется между
+GET: fresh instance на каждый запрос запрещён, иначе потеряются epoch/revision/retention.
+Чистый AttentionOverview API не меняется; его mutable fields не объявляются thread-safe.
+
+Private view capture имеет guard identity текущей admitted operation (и thread),
+не HTTP token. Его нельзя автоматически обновить или переиспользовать другой
+операцией. Source получает только тот же view и текущий guarded capture, без
+независимого map выбора. View/source direct synthetic вызовы требуют того же
+admitted-operation guard; штатный публичный способ fixture — drive вызова через
+RegistryBackend.attention_snapshot с injected dependencies. Вызов вне guard или
+из чужой operation немедленно safe unavailable без FS/capture mutation; отдельный
+view.snapshot не является admission. Внутреннее представление guard не меняет
+ViewSnapshot DTO и не даёт native/auth authority.
 
 `resolve_project` принимает registered alias, возвращает exact ProjectBinding либо
 None. `authorize` exact bool подтверждает alias/root из той же карты и grants;
@@ -237,6 +250,11 @@ configured capability503 unavailable. Read-only GET не требует mutation
 
 Обычный `/api/tasks` может добавить optional `task_key`64lowerhex, только при том
 же root/incarnation proof; старые поля не меняются, отсутствие proof не выдумывает key.
+Расчёт optional task_key в обычном /api/tasks — отдельное anchored root/control
+identity чтение с собственным immutable локальным snapshot. Он НЕ вызывает
+view.snapshot, не меняет attention capture/guard/version и не читает mutable
+capture вне attention lock. Concurrent task snapshot не подменяет source identity
+у admitted attention call; общий только алгоритм canonical task-key digest.
 Переход из unlinked card проверяет exact task_key текущей TASK карточки; agent-only
 match запрещён. Mismatch/missing current key — stale, никогда focus recreated agent.
 Чтение/переход не отвечает на вопрос и не принимает result. UI будет отдельным RED.
@@ -248,6 +266,12 @@ FD/root replacement, duplicate map aliases, root grant revocation, alias collisi
 explicit incarnation/generation/attempt race, result full-key collision isolation,
 private field absence, cap/deadline/partial-source honesty, no native/writer calls,
 owner/foreign/delegate refusal, HTTP strictness/no-store и stale task navigation.
+Отдельный concurrency RED: первый admitted composer call удерживается synthetic
+source; второй attention call сразу unavailable, source/view call count и capture
+первого не изменяются, deadline не продлевается; первый затем выдаёт валидный
+снимок. Concurrent /api/tasks task_key calculation не изменяет attention capture.
+Последующий uncontended GET использует тот же composer epoch/version/retention,
+exception освобождает admission lock, direct unguarded view/source calls отказывают.
 Затем GREEN, scoped regressions, actual different-model SOURCE и exact CI.
 Ни adapter source, ни installed acceptance этим draft не подтверждены.
 
