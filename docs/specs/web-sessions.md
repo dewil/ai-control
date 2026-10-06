@@ -125,7 +125,9 @@ DESIGN/RED ещё впереди; source/installed capability не заявле�
 - INV-WSESS-40: отдельный immutable private R/A receipt, opUUID до dispatch,
   one-shot/restart/replay never resend; unknown не принимается по missing list,
   not-found/notification или guessed outcome. Terminal accepted не downgrade.
-  Точный storage seam обязателен до blind RED; старые send/rename схемы сохраняются.
+  Frozen LifecycleStore/PreparedLifecycle/R+A locator/parent commitments и exact
+  clock/barrier/lookup/result signatures заданы в feature до blind RED; старые
+  send/rename схемы сохраняются. Архивный metadata read не требует loaded/resume.
 - INV-WSESS-41: fixed options/POST/status auth/Origin/CSRF/peer/no-store и immutable
   UI selection/action/UUID generation. Unsupported disabled, unknown manual status
   без POST retry/newUUID; cache refresh только подтверждённого target. Active/archived
