@@ -7,7 +7,7 @@ installed activation and account-bound capability are not implemented by this sl
 
 Frozen candidate source SHA256:
 
-- bin/_control_web_configured_create.py: `87d1fcfe4a0cbfe9f482999808d179021c2324a4663e6875387f61f8d785db64`.
+- bin/_control_web_configured_create.py: `f55befcf8aba551b11c2a48e4b18ffddb94f247772bba17951e87c6dab51f5c5`.
 - bin/_control_web_sessions.py: `454ccc1658b338da076dd96edb4313b5f6315a3acc0fc0825130dafa3156c980`.
 - scripts.manifest: `ac4a3a040429370a63b1e284d41480d7b6d6b446e3d4a2b2385b31c19014e8fe`.
 
@@ -31,7 +31,13 @@ Independent transport fixture corrected the obsolete thread/start prohibition,
 preserving rename/generation/arbitrary-RPC checks. Final rename transport/crash2
 PASS,0 failures,0 errors (0.156s); source bytes unchanged. Immutable test SHA256
 `30243f63a0ae8eb79c27b94aab7e95b0f09198d1f3988ab4726c77d7e3b5b2fd`.
-Source audit and CI gates remain open before merge/activation.
+Overlay metadata amendment060c passed separate actual design review. Independent
+overlay2 baseline:7 semantic failures,0 errors. Normative patch adds distinct
+status/updated_at and validated attention without changing create/status DTO.
+Current focused18 has17 PASS and one known false fixture failure: missing-status
+case supplies valid idle metadata because its default sentinel inserts status.
+Independent mechanical fixture correction is pending; this is not18 GREEN.
+Source audit and all18/CI gates remain open before merge/activation.
 
 Immutable R/C/I/A, parent commitments, no-replace publication, counted temp orphans,
 namespace-capacity locks and once-only correlated ACK creator are implemented.

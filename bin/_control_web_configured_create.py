@@ -6,6 +6,7 @@ import ctypes
 import functools
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -513,6 +514,23 @@ class ConfiguredSessionCreate:
                 'context_mode': 'configured',
                 'title': redact(name)[:500] if name is not None and name.strip() else None}
 
+    @classmethod
+    def _overlay_session(cls, record, thread):
+        status = thread.get('status')
+        updated = thread.get('updatedAt')
+        _need(type(status) is dict and type(status.get('type')) is str
+              and status['type'] in ('notLoaded', 'idle', 'systemError', 'active')
+              and type(updated) in (int, float) and math.isfinite(updated) and updated >= 0)
+        row = cls._session(record, thread) | {'status': status['type'], 'updated_at': updated}
+        if status['type'] == 'active':
+            flags = status.get('activeFlags')
+            _need(type(flags) is list and len(flags) <= 2
+                  and all(type(flag) is str and flag in ('waitingOnApproval', 'waitingOnUserInput')
+                          for flag in flags) and len(flags) == len(set(flags)))
+            if flags:
+                row['needs_native_attention'] = True
+        return row
+
     @staticmethod
     def _unknown(operation_id):
         return {'operation_id': operation_id, 'status': 'delivery_unknown'}
@@ -655,7 +673,7 @@ class ConfiguredSessionCreate:
                 if origin.record['sid'] not in loaded:
                     continue
                 thread = self._proof(project, root, origin.record['sid'], context, deadline)
-                sessions.append(self._session(origin.record, thread))
+                sessions.append(self._overlay_session(origin.record, thread))
             self._fresh(project, root, context, deadline)
             return {'sessions': sessions, 'truncated': truncated or origins['truncated']}
 
