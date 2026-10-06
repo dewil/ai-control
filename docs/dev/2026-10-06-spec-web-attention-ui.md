@@ -66,8 +66,16 @@ reasons. Routine SAMEepoch/revision/equalprojection success обновляет �
 observation/age, не заменяет rows, не теряет focus/expansion. Higher revision
 атомарно обновляет данные, сохраняя bounded expansion counts по stable view epoch:
 steps6/max512 group rows и max128 unlinked TASK; new count clamp к текущему array.
-Если focused stable task/reason остаётся, focus сохраняется на том же target;
-исчезнувший target не фокусирует другой элемент автоматически. New view epoch или
+Stable focus key exact `(view_epoch,surface,surface_id,control_kind,control_id)`:
+surface=group|task-card; group surface_id=decision|question|completed|delivery|unlinked,
+task-card surface_id=full task_key; reason control_id=full reason_id,
+expand control_id=group enum. Совпавший reason_id в group и unlinked TASK card —
+РАЗНЫЕ targets: восстановление только exact full key в прежнем surface/card,
+не первый/последний reason_id match другого origin. Если exact target остаётся,
+focus сохраняется на нём; исчезнувший reason/task не фокусирует другой элемент.
+Исключение: focused expand исчез при полном раскрытии/clamp этой же группы —
+focus переходит на stable heading ТОЙ ЖЕ группы с tabindex=-1; не body/refresh/
+другая группа и не new GET. New view epoch или
 auth/scope change очищает expansions/focus references. Same epoch revision
 не понижается; equal revision может обновить только top/source observed_at при том же
 validated projection content/health (отличие content без новой revision => unavailable).
@@ -142,6 +150,8 @@ Expand aria-expanded/aria-controls правильные, hidden rows не focusa
 | button[data-attention-expand] | значение decision/question/completed/delivery/unlinked, exact expand label |
 | [data-attention-task-key] | displayed TASK row/card, значение full64hex task_key |
 | button[data-attention-reason-id] | «Открыть задачу», full64hex reason identity |
+| [data-attention-focus-surface][data-attention-focus-owner] | reason control: group + group enum либо task-card + full task_key |
+| [data-attention-group-heading] | heading group enum decision/question/completed/delivery/unlinked, tabindex=-1 |
 
 Reason navigation button дополнительно имеет data-task-key/full64hex,
 data-agent/exact target agent, data-qid лишь для question/decision/delivery либо
@@ -234,6 +244,10 @@ Logout/401/grant refresh/selectionABA/visibility/olderepoch-revision late comple
 routine unchanged-scope poll не blank rows и не сбрасывает expansion/focus, все
 navigation disabled in-flight; same revision/equalprojection не replaces rows,
 higher revision сохраняет bounded expansion по epoch, new epoch/scope очищает;
+duplicate reason in group/card: focus each independently, higher revision preserves
+EXACT surface/fulltask_key/reason key without jumping to duplicate. Expand final
+batch removes Show more and focuses SAME group heading (observable activeElement),
+retains expansion, zero extra GET; changed epoch/auth/scope never restores old key.
 любой failure очищает retained presentation; stale reason
 navigation disabled; accessibility labels/text/focus verified observable DOM.
 
