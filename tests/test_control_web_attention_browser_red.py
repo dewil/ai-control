@@ -384,6 +384,40 @@ class AttentionUIBrowserRED(unittest.TestCase):
         self.assertEqual(sum(event == ('ATTENTION_ROUTE', 'GET') for event in self.events), attention_gets,
                          'expansion is local presentation and must not fetch')
 
+    def test_equal_revision_refresh_does_not_steal_focus_changed_during_pending_get(self):
+        self.panel()
+        original = self.page.locator('#attention-question button[data-attention-reason-id]').first
+        original_id = original.get_attribute('data-attention-reason-id')
+        original_node = original.element_handle()
+        original.evaluate('el => el.focus()')
+        self.assertTrue(original.evaluate('el => document.activeElement === el'))
+
+        prior_gets = sum(event == ('ATTENTION_ROUTE', 'GET') for event in self.events)
+        self.hold_next_attention = True
+        self.page.locator('#attention-refresh').evaluate('el => el.click()')
+        self.page.wait_for_timeout(80)
+        self.assertIsNotNone(self.pending_attention, 'manual refresh should hold one synthetic GET in flight')
+
+        chosen = self.page.locator('button[data-attention-expand="question"]')
+        chosen_node = chosen.element_handle()
+        chosen.evaluate('el => el.focus()')
+        self.assertTrue(chosen.evaluate('el => document.activeElement === el'))
+
+        pending, body, status = self.pending_attention
+        pending.fulfill(status=status, content_type='application/json', body=body)
+        self.pending_attention = None
+        self.page.wait_for_function("() => !document.querySelector('#attention-refresh').disabled", timeout=3000)
+
+        self.assertTrue(chosen_node.evaluate('el => el.isConnected'),
+                        'equal projection must preserve the chosen control node')
+        self.assertTrue(chosen_node.evaluate('el => document.activeElement === el'),
+                        'completion of an older focus snapshot must not override the user’s newer focus')
+        self.assertTrue(original_node.evaluate('el => el.isConnected'),
+                        'equal projection must preserve the original reason DOM node too')
+        self.assertEqual(original.get_attribute('data-attention-reason-id'), original_id)
+        self.assertEqual(sum(event == ('ATTENTION_ROUTE', 'GET') for event in self.events), prior_gets + 1)
+        self.assertEqual([url for method, url in self.events if method == 'POST'], [])
+
     def test_scope_aba_late_response_and_navigation_require_fresh_exact_task_identity(self):
         self.panel()
         self.page.get_by_role("tab", name="Сессии").click()
