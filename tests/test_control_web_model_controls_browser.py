@@ -323,7 +323,12 @@ class ModelControlsBrowserContract(unittest.TestCase):
         self.assertTrue(model.is_disabled(), 'Unknown receipt keeps its selection snapshot locked')
         self.assertTrue(effort.is_disabled(), 'Unknown receipt cannot be changed into a new explicit override')
         self.assertFalse(self.send_button().is_enabled(), 'Unknown receipt locks retry/override pending manual resolution')
-        check.click()
+        with self.page.expect_response(
+                lambda response: response.request.method == 'GET'
+                and '/api/session-send-status' in response.url) as status_response:
+            check.click()
+        self.assertEqual(status_response.value.status, 200,
+                         'Manual delivery check must complete before inspecting its backend receipt')
         sends = [call for call in self.calls() if call['method'] == 'send']
         self.assertEqual(len(sends), 1)
         statuses = [call for call in self.calls() if call['method'] == 'status']
