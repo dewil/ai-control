@@ -179,7 +179,12 @@ class _Files(RenameStore):
     def publish(self, name, record, deadline, fence=lambda: None):
         data = _json(record)
         _need(len(data) <= 4096)
-        base = self._base(True, deadline)
+        # One stable directory lock reserves capacity through publication.
+        # Fence reads take no namespace locks, so no inverse lock ordering.
+        with self.locked(deadline, create=True) as base:
+            self._publish(base, name, record, data, deadline, fence)
+
+    def _publish(self, base, name, record, data, deadline, fence):
         temp, fd = '.tmp-' + uuid.uuid4().hex, None
         try:
             self.capacity(base, deadline)
@@ -217,7 +222,6 @@ class _Files(RenameStore):
                 os.close(fd)
             # Failed publication leaves a counted private orphan. Pathname
             # cleanup cannot prove ownership after a same-owner path swap.
-            os.close(base)
 
 
 class _Locks(_Files):
@@ -225,8 +229,18 @@ class _Locks(_Files):
     def hold(self, key, deadline):
         base = self._base(True, deadline)
         fd = None
+        provisioning = False
         try:
             name = key + '.lock'
+            while True:
+                self._check(base, deadline, True)
+                try:
+                    fcntl.flock(base, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    provisioning = True
+                    break
+                except BlockingIOError:
+                    time.sleep(.01)
+            self._anchor(base, deadline)
             try:
                 os.stat(name, dir_fd=base, follow_symlinks=False)
             except FileNotFoundError:
@@ -241,6 +255,12 @@ class _Locks(_Files):
             self._check(fd, deadline)
             os.fsync(fd)
             os.fsync(base)
+            self._anchor(base, deadline)
+            _need(self._pin(os.fstat(fd)) == self._pin(os.stat(name, dir_fd=base, follow_symlinks=False)))
+            # Never wait for a leaf while holding the provisioning directory:
+            # a writer holding an operation leaf may need a binding leaf next.
+            fcntl.flock(base, fcntl.LOCK_UN)
+            provisioning = False
             while True:
                 self._check(fd, deadline)
                 try:
@@ -252,6 +272,8 @@ class _Locks(_Files):
             _need(self._pin(os.fstat(fd)) == self._pin(os.stat(name, dir_fd=base, follow_symlinks=False)))
             yield
         finally:
+            if provisioning:
+                fcntl.flock(base, fcntl.LOCK_UN)
             if fd is not None:
                 os.close(fd)
             os.close(base)
