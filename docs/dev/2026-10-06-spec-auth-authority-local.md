@@ -15,7 +15,7 @@ invalid unknown code sanitized to authority_stale, never arbitrary exception tex
 AuthScope(reference,principal) frozen, repr=False, deep immutable private mapping.
 Exact V2 reference fields schema2/provider_idcodex/account_id/profile_instance_id/
 adapter_revision/registration_snapshot; snapshot dev>=0/ino>0/ctime_ns>0/hash64hex.
-Account grammar [a-z][a-z0-9_-]{0,31}; instance canonicalUUIDv4; schema ints notbool;
+Account grammar [a-z][a-z0-9_-]{0,63}; instance canonicalUUIDv4; schema ints notbool;
 adapter_revision codex-chatgpt-external-auth-host-v2. principal exact kind
 openid_subject_workspace, issuer https://auth.openai.com, subject printableASCII1..255,
 workspace_id ASCII[A-Za-z0-9_-]{1,128}. Extra/invalid keys reject authority_stale.
@@ -30,7 +30,7 @@ check(lease,scope,*,deadline): exact owner/thread/active lease, scope unchanged,
 notquarantined/deadline future, else authority_stale; no secret/native access.
 release(lease): sameowner/thread; idempotent; foreign/cross-thread reject, never
 unlock another account/owner lock. Released lease unusable except own quarantine.
-quarantine(lease,code): exact owner/thread capability (active or released), closed
+quarantine(lease,code,*,deadline): exact owner/thread capability (active or released), closed
 code required; once freezes quarantine and increments owner_generation, denies ALL
 further account checks/open/stamps; repeated quarantine no extra generation/reset.
 Unknown code authority_stale and no state mutation. Other account unchanged.
@@ -39,7 +39,10 @@ Guard coordinator.delivery_guard(lease,scope,*,deadline): context manager holdin
 peraccount RLock; wait min(remaining,1s). Captures lease/thread/fullscope/generation;
 window=min(caller deadline,entryclock+1s), never renews. Same-thread quarantine is
 allowed with RLock and invalidates guard immediately. Other-thread open independent
-accounts must work; sameaccount mutation waits bound then can invalidate.
+accounts must work. The physical lock hold is a COOPERATING CALLER obligation: no
+unconditional preemption/bounded progress is claimed for stalled guard bodies.
+quarantine acquires state lock for min(remaining,1s); timeout refresh_busy means
+NO mutation occurred. Caller must handle this explicitly, never assume invalidation.
 guard.begin_enqueue(): once, verifies live guard/thread/lease/scope/generation and
 window; duplicate authority_stale; local marker only, DOES NOT send native.
 guard.confirm(): only after begin, once, checks same live authority/window; local
@@ -48,6 +51,7 @@ publish_delivery(lease,*,guard,deadline)->AuthorityStamp requires same active gu
 begun+confirmed, once; deadline<=guard original window and strictlyfuture. Returns
 frozen reprFalse stamp(owner_generation,credential_generation), increments account
 credential once only. Out-ofguard/foreign/expired/unconfirmed/duplicate rejects.
+An expired method can refuse but cannot force a stalled caller to release RLock.
 Guard expires/exit no auto publication/redelivery/quarantine, because pure unit
 cannot know nativeeffects; real caller must quarantine unknown effect outcomes.
 Release during guard refuses before unlock (caller cannot free refresh lease early).
