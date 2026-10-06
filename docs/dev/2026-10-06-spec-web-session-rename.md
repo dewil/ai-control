@@ -1,7 +1,9 @@
 # Переименование существующей сессии из панели
 
-Owner CONTROL-WEB-SESSIONS. Статус: contract/design review; implementation HOLD
-до independent committed RED. Создание сессий и account activation вне этого среза.
+Owner CONTROL-WEB-SESSIONS. Статус: module и HTTP/broker реализованы по independent
+committed RED; different-model source review PASS. UI, exact CI и installed acceptance
+ещё впереди. Проверки: [backend validation](2026-10-06-web-session-rename-backend-validation.md).
+Создание сессий и account activation вне этого среза.
 
 ## Источник и native доказательства
 
