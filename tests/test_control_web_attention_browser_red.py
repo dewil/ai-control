@@ -306,6 +306,78 @@ class AttentionUIBrowserRED(unittest.TestCase):
         self.assertNotEqual(self.page.evaluate("document.activeElement?.getAttribute('data-attention-reason-id')"),
                             target_id, "new view epoch clears old focus references")
 
+    def test_higher_revision_restores_duplicate_reason_in_exact_unlinked_card_surface(self):
+        self.panel()
+        card = self.page.locator('#attention-unlinked [data-attention-task-key]').first
+        task_key = card.get_attribute('data-attention-task-key')
+        card_reason = card.locator('button[data-attention-reason-id]').first
+        reason_id = card_reason.get_attribute('data-attention-reason-id')
+        self.assertRegex(task_key or '', r'^[0-9a-f]{64}$')
+        self.assertRegex(reason_id or '', r'^[0-9a-f]{64}$')
+
+        group_reason = None
+        group_name = None
+        for group in ('decision', 'question', 'completed', 'delivery'):
+            candidate = self.page.locator(
+                f'#attention-{group} button[data-attention-reason-id="{reason_id}"]')
+            while candidate.count() == 0:
+                expand = self.page.locator(f'button[data-attention-expand="{group}"]')
+                if expand.count() == 0:
+                    break
+                expand.click()
+            if candidate.count():
+                group_reason, group_name = candidate, group
+                break
+        self.assertIsNotNone(group_reason, 'fixture must expose the same pending reason in its group and task card')
+        self.assertEqual(group_reason.get_attribute('data-task-key'), task_key)
+        self.assertNotEqual(group_name, 'unlinked')
+
+        card_reason.evaluate('el => el.focus()')
+        self.assertTrue(card_reason.evaluate('el => document.activeElement === el'))
+        higher = _attention_fixture(questions_per_task=18, revision=self.payload['revision'] + 1,
+                                    epoch=self.payload['epoch'])
+        self.raw_attention = json.dumps(higher, ensure_ascii=False, separators=(',', ':'))
+        self.refresh()
+
+        active = self.page.evaluate("""() => {
+          const el = document.activeElement;
+          return {
+            reason: el?.getAttribute('data-attention-reason-id'),
+            inCardSurface: !!el?.closest('#attention-unlinked'),
+            surface: el?.getAttribute('data-attention-focus-surface'),
+            owner: el?.getAttribute('data-attention-focus-owner')
+          };
+        }""")
+        self.assertEqual(active['reason'], reason_id, 'higher revision should keep focus on the same reason')
+        self.assertTrue(active['inCardSurface'], 'duplicate reason restoration must not jump back to its group copy')
+        self.assertEqual(active['surface'], 'task-card')
+        self.assertEqual(active['owner'], task_key)
+
+    def test_final_expand_batch_focuses_same_group_heading_without_another_get(self):
+        self.panel()
+        rows = self.page.locator('#attention-question button[data-attention-reason-id]')
+        self.assertEqual(rows.count(), 6)
+        attention_gets = sum(event == ('ATTENTION_ROUTE', 'GET') for event in self.events)
+        while True:
+            expand = self.page.locator('button[data-attention-expand="question"]')
+            self.assertEqual(expand.count(), 1, 'question expansion must end with a final batch')
+            expand.evaluate('el => el.focus()')
+            expand.click()
+            if self.page.locator('button[data-attention-expand="question"]').count() == 0:
+                break
+        focus = self.page.evaluate("""() => ({
+          tag: document.activeElement?.tagName,
+          inGroup: !!document.activeElement?.closest('#attention-question'),
+          group: document.activeElement?.getAttribute('data-attention-group-heading'),
+          tabIndex: document.activeElement?.getAttribute('tabindex')
+        })""")
+        self.assertEqual(focus['tag'], 'H3', 'removing the focused final Show more must move focus to the group heading')
+        self.assertTrue(focus['inGroup'], 'fallback focus must stay inside the expanded question group')
+        self.assertEqual(focus['group'], 'question')
+        self.assertEqual(focus['tabIndex'], '-1')
+        self.assertEqual(sum(event == ('ATTENTION_ROUTE', 'GET') for event in self.events), attention_gets,
+                         'expansion is local presentation and must not fetch')
+
     def test_scope_aba_late_response_and_navigation_require_fresh_exact_task_identity(self):
         self.panel()
         self.page.get_by_role("tab", name="Сессии").click()
