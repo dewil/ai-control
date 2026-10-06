@@ -1,0 +1,3 @@
+# Optional server-side observer; install alongside requirements-web.lock only
+# after signed deployment scope approval. Matches accepted agent-bus transport.
+nats-py==2.9.0
