@@ -203,6 +203,7 @@ class AuthStateValidator:
         self._callbacks = {}
         self._callback_records = {}
         self._callback_lock = threading.RLock()
+        self._closed = False
         self._context_lock = threading.Lock()
         self._captured_context = None
         self._owned_channel = None
@@ -348,6 +349,7 @@ class AuthStateValidator:
     @contextmanager
     def _callback_map(self, deadline, *, validate=None):
         if validate is not None:
+            self._remaining(deadline)
             validate()
         # Validation is an external seam; take the deadline sample after it.
         # Only local identity/state checks follow this sample inside the map.
@@ -361,6 +363,7 @@ class AuthStateValidator:
             # No injected clock/callback runs inside this leaf critical section.
             if time.monotonic() - started >= remaining:
                 raise AuthError('refresh_busy')
+            _require(not self._closed)
             yield now
         finally:
             self._callback_lock.release()
@@ -471,7 +474,15 @@ class AuthStateValidator:
         return result
 
     def close(self):
-        return _safe(lambda: self._coordinator._close_validator(self._validator_id))
+        return _safe(self._close)
+
+    def _close(self):
+        # Callback close and acceptance share one local transition lock. Never
+        # call the coordinator while holding it: account effect claims retain
+        # their independent close ordering and no lock-order dependency is added.
+        with self._callback_lock:
+            self._closed = True
+        self._coordinator._close_validator(self._validator_id)
 
     def _exchange(self, request, refresh_token, scope):
         # Freeze our request BEFORE handing its forgeable public fields to a seam.
