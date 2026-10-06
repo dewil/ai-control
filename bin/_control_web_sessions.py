@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from collections import OrderedDict
 import copy
+import ctypes
 import fcntl
 import functools
 import hashlib
@@ -326,6 +327,151 @@ class _Receipts:
         return [self.result(record) for record in records[:8]]
 
 
+class RenameStore(_Receipts):
+    """Separate digest-only metadata; the private directory is its stable lock."""
+    def __init__(self, path):
+        self.path = os.fspath(path)
+        _need(type(self.path) is str and os.path.isabs(self.path))
+
+    @contextmanager
+    def locked(self, deadline, create=False):
+        base = None
+        try:
+            try:
+                base = self._base(create, deadline)
+            except FileNotFoundError:
+                if create:
+                    raise
+                yield None
+                return
+            while True:
+                _budget(deadline)
+                try:
+                    fcntl.flock(base, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    time.sleep(min(.01, max(0, deadline - time.monotonic())))
+            current = self._base(False, deadline)
+            try:
+                _need((os.fstat(current).st_dev, os.fstat(current).st_ino) ==
+                      (os.fstat(base).st_dev, os.fstat(base).st_ino))
+            finally:
+                os.close(current)
+            yield base
+        finally:
+            if base is not None:
+                os.close(base)
+
+    @staticmethod
+    def _name(context_id, root, sid, operation_id):
+        return _context_token({'kind': 'session_rename', 'context_id': context_id,
+                               'root': root, 'sid': sid, 'operation_id': operation_id}) + '.json'
+
+    def _anchor(self, base, deadline):
+        current = self._base(False, deadline)
+        try:
+            self._check(base, deadline, True)
+            _need((os.fstat(current).st_dev, os.fstat(current).st_ino) ==
+                  (os.fstat(base).st_dev, os.fstat(base).st_ino))
+        finally:
+            os.close(current)
+
+    def lookup(self, base, context_id, root, sid, operation_id, deadline):
+        _budget(deadline)
+        if base is None:
+            return None, None
+        self._anchor(base, deadline)
+        name = self._name(context_id, root, sid, operation_id)
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=base)
+        except FileNotFoundError:
+            return None, None
+        try:
+            self._check(fd, deadline)
+            before = os.fstat(fd)
+            _need(before.st_size <= 4096)
+            data = os.read(fd, 4097)
+            _budget(deadline)
+            _need(len(data) <= 4096 and os.read(fd, 1) == b'')
+            record = json.loads(data, object_pairs_hook=_pairs,
+                                parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+            _need(type(record) is dict and set(record) == {
+                'schema', 'kind', 'context_id', 'root', 'sid', 'operation_id',
+                'digest', 'title_hash', 'status', 'created'})
+            _need(type(record['schema']) is int and record['schema'] == 1
+                  and record['kind'] == 'session_rename'
+                  and record['context_id'] == context_id and record['root'] == root
+                  and record['sid'] == sid and record['operation_id'] == operation_id
+                  and record['status'] in ('unknown', 'accepted')
+                  and type(record['created']) is int and record['created'] > 0
+                  and all(type(record[key]) is str and re.fullmatch('[0-9a-f]{64}', record[key])
+                          for key in ('context_id', 'digest', 'title_hash')))
+            live = os.stat(name, dir_fd=base, follow_symlinks=False)
+            _need(self._pin(before) == self._pin(os.fstat(fd)) == self._pin(live))
+            return record, before
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def _pin(info):
+        return tuple(getattr(info, key) for key in ('st_dev', 'st_ino', 'st_uid', 'st_mode',
+                     'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+
+    def publish(self, base, record, deadline, previous=None):
+        _budget(deadline)
+        data = _json(record)
+        _need(len(data) <= 4096)
+        name = self._name(record['context_id'], record['root'], record['sid'], record['operation_id'])
+        temp = '.tmp-' + uuid.uuid4().hex
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=base)
+        try:
+            os.fchmod(fd, 0o600)
+            view = memoryview(data)
+            while view:
+                _budget(deadline)
+                written = os.write(fd, view)
+                _need(written > 0)
+                view = view[written:]
+            os.fsync(fd)
+            _budget(deadline)
+            self._anchor(base, deadline)
+            self._check(fd, deadline)
+            _need(self._pin(os.fstat(fd)) == self._pin(os.stat(temp, dir_fd=base, follow_symlinks=False)))
+            if previous is None:
+                # Linux atomic no-replace keeps the published receipt at nlink=1,
+                # including a process crash before directory fsync.
+                renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
+                renameat2.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+                renameat2.restype = ctypes.c_int
+                if renameat2(base, os.fsencode(temp), base, os.fsencode(name), 1) != 0:
+                    code = ctypes.get_errno()
+                    raise OSError(code, os.strerror(code))
+            else:
+                _need(self._pin(os.stat(name, dir_fd=base, follow_symlinks=False)) == self._pin(previous))
+                os.replace(temp, name, src_dir_fd=base, dst_dir_fd=base)
+            os.fsync(base)
+            self._anchor(base, deadline)
+            _budget(deadline)
+        finally:
+            os.close(fd)
+            try:
+                os.unlink(temp, dir_fd=base)
+            except FileNotFoundError:
+                pass
+
+    def capacity(self, base, deadline):
+        count = 0
+        with os.scandir(base) as entries:
+            for entry in entries:
+                _budget(deadline)
+                count += 1
+                _need(count < NAMESPACE_ENTRY_LIMIT)
+                if entry.name.startswith('.tmp-'):
+                    continue
+                _need(re.fullmatch(r'[0-9a-f]{64}\.json', entry.name) is not None)
+        _need(count < RECEIPT_LIMIT)
+
+
 def _valid_selection(value, private=False):
     from _control_web_broker import SECRET_RE
     fields = {'catalog_id', 'model_id', 'effort'} | ({'wire_model'} if private else set())
@@ -354,9 +500,13 @@ def _context_token(value):
 class SessionChat:
     def __init__(self, rpc, project_path, project_names, receipt_dir, *,
                  summary_clock=None, summary_wall_clock=None, summary_generation=None,
-                 model_context=None, model_clock=None):
+                 model_context=None, model_clock=None, rename_store=None):
         self.rpc, self.project_path, self.project_names = rpc, project_path, project_names
         self.receipts = _Receipts(receipt_dir)
+        self.renames = (rename_store if rename_store is not None else
+                        RenameStore(os.path.join(os.path.dirname(self.receipts.path), 'web-rename-receipts')))
+        _need(all(callable(getattr(self.renames, method, None))
+                  for method in ('locked', 'lookup', 'publish', 'capacity')))
         self._local = threading.local()
         self._summary_clock = summary_clock or time.monotonic
         self._summary_wall_clock = summary_wall_clock or time.time
@@ -934,6 +1084,126 @@ class SessionChat:
         _need(len(encoded_result) <= HISTORY_LIMIT)
         return result
 
+    @staticmethod
+    def _rename_title(title):
+        _need(type(title) is str, 'invalid_request')
+        try:
+            encoded = title.encode('utf-8')
+        except UnicodeError:
+            raise _DomainError('invalid_request') from None
+        _need(len(title) <= 2048 and len(encoded) <= 8192
+              and not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in title), 'invalid_request')
+        title = title.strip()
+        _need(1 <= len(title) <= 160 and len(title.encode('utf-8')) <= 1024, 'invalid_request')
+        return title
+
+    def _rename_context(self):
+        context = self._catalog_context()
+        _need(self._catalog_reason(context) is None
+              and callable(getattr(self.rpc, 'call_in_generation', None)))
+        _need(self._receipt_context() == {key: context[key] for key in
+              ('schema', 'vendor', 'context_kind', 'context_id')}, 'stale')
+        return context
+
+    def _rename_proof(self, project, root, sid, context):
+        thread = self._send_fenced('thread/read', {'threadId': sid, 'includeTurns': False}, context).get('thread')
+        _need(type(thread) is dict and valid_uuid(thread.get('id'))
+              and type(thread.get('cwd')) is str and os.path.isabs(thread['cwd']))
+        _need(thread['id'] == sid and canonical(thread['cwd']) == root
+              and self._root(project) == root, 'stale')
+        return thread
+
+    @staticmethod
+    def _native_name(thread):
+        name = thread.get('name')
+        _need(type(name) is str and bool(name.strip()))
+        try:
+            name.encode('utf-8')
+        except UnicodeError:
+            raise _DomainError('unavailable') from None
+        return name
+
+    @staticmethod
+    def _rename_result(record, name=None):
+        result = {'operation_id': record['operation_id'],
+                  'status': 'accepted' if record['status'] == 'accepted' else 'delivery_unknown'}
+        if record['status'] == 'accepted':
+            from _control_web_broker import redact
+            _need(type(name) is str)
+            result['title'] = redact(name)[:500]
+        return result
+
+    def _rename_replay(self, record, digest, project, root, sid, context):
+        _need(record['digest'] == digest, 'invalid_request')
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        if record['status'] == 'accepted':
+            thread = self._rename_proof(project, root, sid, context)
+            return self._rename_result(record, self._native_name(thread))
+        return self._rename_result(record)
+
+    @_operation
+    def rename(self, project, sid, operation_id, title):
+        _need(valid_project(project) and valid_uuid(sid) and valid_uuid(operation_id), 'invalid_request')
+        title = self._rename_title(title)
+        root = self._root(project)
+        self._proof(root, sid)
+        context = self._rename_context()
+        digest = _context_token({'kind': 'session_rename', 'context_id': context['context_id'],
+                                 'root': root, 'sid': sid, 'title': title})
+        with self.renames.locked(self._local.deadline) as base:
+            record, _ = self.renames.lookup(base, context['context_id'], root, sid, operation_id, self._local.deadline)
+            if record is not None:
+                return self._rename_replay(record, digest, project, root, sid, context)
+        reserved = False
+        try:
+            with self.renames.locked(self._local.deadline, create=True) as base:
+                record, _ = self.renames.lookup(base, context['context_id'], root, sid, operation_id, self._local.deadline)
+                if record is not None:
+                    return self._rename_replay(record, digest, project, root, sid, context)
+                self.renames.capacity(base, self._local.deadline)
+                self._rename_proof(project, root, sid, context)
+                _need(self._catalog_context() == context, 'stale')
+                record = {'schema': 1, 'kind': 'session_rename', 'context_id': context['context_id'],
+                          'root': root, 'sid': sid, 'operation_id': operation_id, 'digest': digest,
+                          'title_hash': hashlib.sha256(title.encode('utf-8')).hexdigest(),
+                          'status': 'unknown', 'created': time.time_ns()}
+                # Any uncertainty publishing this reserve forbids another set.
+                reserved = True
+                self.renames.publish(base, record, self._local.deadline)
+                _, before = self.renames.lookup(base, context['context_id'], root, sid, operation_id, self._local.deadline)
+                _need(self._root(project) == root, 'stale')
+                response = self._send_fenced('thread/name/set', {'threadId': sid, 'name': title}, context)
+                _need(response == {})
+                thread = self._rename_proof(project, root, sid, context)
+                name = self._native_name(thread)
+                _need(name == title)
+                record['status'] = 'accepted'
+                self.renames.publish(base, record, self._local.deadline, before)
+                self._summary_revision += 1
+                result = self._rename_result(record, name)
+            return result
+        except Exception:
+            if reserved:
+                return {'operation_id': operation_id, 'status': 'delivery_unknown'}
+            raise
+
+    @_operation
+    def rename_status(self, project, sid, operation_id):
+        _need(valid_project(project) and valid_uuid(sid) and valid_uuid(operation_id), 'invalid_request')
+        root = self._root(project)
+        self._proof(root, sid)
+        context = self._rename_context()
+        with self.renames.locked(self._local.deadline) as base:
+            record, before = self.renames.lookup(base, context['context_id'], root, sid, operation_id, self._local.deadline)
+            _need(record is not None, 'stale')
+            thread = self._rename_proof(project, root, sid, context)
+            name = self._native_name(thread)
+            if record['status'] == 'unknown' and hashlib.sha256(name.encode('utf-8')).hexdigest() == record['title_hash']:
+                record['status'] = 'accepted'
+                self.renames.publish(base, record, self._local.deadline, before)
+                self._summary_revision += 1
+            return self._rename_result(record, name)
+
     @_operation
     def send(self, project, sid, message_id, text, selection=None):
         _need(valid_uuid(sid) and valid_uuid(message_id) and type(text) is str
@@ -1043,7 +1313,7 @@ class SessionChat:
 
 class InteractiveRPC:
     """One receiver per connection; never responds to native server requests."""
-    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/resume', 'turn/start', 'model/list'}
+    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set'}
 
     def __init__(self, socket_path, timeout=25):
         if type(socket_path) is not str or type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 55:

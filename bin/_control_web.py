@@ -322,7 +322,7 @@ def create_app(config, backend, clock=None):
             return None
         if 'project' in data and not chat_project(data['project']):
             return None
-        if any(not valid_uuid(data[key]) for key in ('sid', 'message_id') if key in data):
+        if any(not valid_uuid(data[key]) for key in ('sid', 'message_id', 'operation_id') if key in data):
             return None
         if 'cursor' in data and not chat_cursor(data['cursor']):
             return None
@@ -367,6 +367,49 @@ def create_app(config, backend, clock=None):
     @app.get('/api/session-send-status')
     async def session_send_status(request: Request):
         return await chat_read(request, ('project', 'sid', 'message_id'), (), lambda data: backend.session_send_status(data['project'], data['sid'], data['message_id']))
+
+    def rename_response(call, operation_id, sending=False):
+        from _control_web_broker import rename_result
+        try:
+            result = rename_result(call(), operation_id)
+        except Exception:
+            return error('unavailable', 503)
+        if 'error' in result:
+            code = result['error']
+            return error(code, {'invalid_request': 422, 'forbidden': 403, 'stale': 409}.get(code, 503))
+        status = 503 if sending and result['status'] == 'delivery_unknown' else 200
+        return JSONResponse(result, status_code=status)
+
+    @app.get('/api/session-rename-status')
+    async def session_rename_status(request: Request):
+        _, failure = session(request)
+        if failure:
+            return failure
+        supplied_origin = request.headers.get('origin')
+        if supplied_origin is not None and supplied_origin != origin:
+            return error('forbidden', 403)
+        data = chat_query(request, ('project', 'sid', 'operation_id'))
+        if data is None:
+            return error('invalid_request', 422)
+        return await run_in_threadpool(rename_response,
+            lambda: backend.session_rename_status(data['project'], data['sid'], data['operation_id']), data['operation_id'])
+
+    @app.post('/api/session-rename')
+    async def session_rename(request: Request):
+        _, failure = session(request, True)
+        if failure:
+            return failure
+        data = await body(request)
+        if (data is None or set(data) != {'project', 'sid', 'operation_id', 'title'}
+                or not chat_project(data['project']) or not valid_uuid(data['sid'])
+                or not valid_uuid(data['operation_id'])):
+            return error('invalid_request', 422)
+        from _control_web_broker import valid_rename_title
+        if not valid_rename_title(data['title']):
+            return error('invalid_request', 422)
+        return await run_in_threadpool(rename_response,
+            lambda: backend.session_rename(data['project'], data['sid'], data['operation_id'], data['title']),
+            data['operation_id'], True)
 
     @app.post('/api/session-send')
     async def session_send(request: Request):
