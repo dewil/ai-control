@@ -126,7 +126,7 @@ class CompactChatBrowserContract(unittest.TestCase):
         for width in (1280, 768, 360):
             self.page.set_viewport_size({'width': width, 'height': 900}); self.page.wait_for_timeout(100)
             menu = self.session.evaluate('''el => {const s=getComputedStyle(el),r=el.getBoundingClientRect();return {font:s.fontFamily,size:parseFloat(s.fontSize),weight:Number(s.fontWeight),left:r.left,right:r.right,width:r.width,height:r.height}}''')
-            sidebar = self.session.evaluate('''el => {const project=document.querySelector('select');let n=el;while(n.parentElement&&!n.contains(project)) n=n.parentElement;const r=n.getBoundingClientRect();return {width:r.width,right:r.right,containsChat:n.contains(document.querySelector('.chat-items'))};}''')
+            sidebar = self.session.evaluate('''el => {const n=el.closest('aside[aria-label="Сессии проекта"]');const r=n.getBoundingClientRect();return {width:r.width,right:r.right,containsChat:n.contains(document.querySelector('.chat-items'))};}''')
             chat = self.page.locator('.chat-items').bounding_box()
             page = self.page.evaluate('''() => ({width:innerWidth,overflow:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),targets:[...document.querySelectorAll('button,select,textarea')].filter(el=>el.getBoundingClientRect().width&&el.getBoundingClientRect().height).map(el=>({text:el.textContent.slice(0,50),height:el.getBoundingClientRect().height}))})''')
             # Body typography applies to the synthetic message paragraph, not compact turn metadata.
