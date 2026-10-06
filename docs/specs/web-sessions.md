@@ -44,7 +44,7 @@ INV-WSESS-14/15: две пары локальных кнопок document top/bo
 INV-WSESS-16/17: один polite current send status; новые локальные accepted transitions показываются5сек без повторного таймера/announcement, history seed и полныйreload accepted скрыты. Все известные unresolved receipts остаются в compact count/disclosure с exactUUID manual status check; accepted pile отсутствует, dedup/draft/backend/native/scroll invariants неизменны. Feature ../dev/done/2026-10-05-spec-web-transient-send-status.md; independent synthetic browser timer/reload/olderunknown/race/accessibility checks.
 
 - INV-WSESS-18: Project summary counts complete picker-visible metadata by allowed canonical roots, never loaded-page counts or histories. Bounded shared scan, explicit unknown/stale, generation/root keyed cache; no unauthorized metadata projection.
-- INV-WSESS-19: Responsive project cloud uses true selected buttons, count/activity sorting with stable ties and bounded sizes; preserves focus, deeplinks, auth and selection fences. Only sort enum may persist in browser storage.
+- INV-WSESS-19: Responsive project cloud spans the available workspace above session/chat, shows authoritative count and relative last activity with exact accessible date, and uses true selected buttons, count/activity sorting with stable ties and bounded sizes; preserves focus, deeplinks, auth and selection fences. Only sort enum may persist in browser storage.
 
 INV-WSESS-20/21: validated nullable native Turn.startedAt only as explicitly labelled turn-start age/date per text item; unknown never guessed, local minute labels no network or reader/focus movement. Feature ../dev/done/2026-10-06-spec-web-message-times.md.
 
