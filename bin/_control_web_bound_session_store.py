@@ -90,8 +90,8 @@ def _json_types(value, depth=1):
 
 
 def _r_name(record):
-    key = dto._digest({field: record[field] for field in
-                       ('context_ref', 'project', 'root', 'operation_id')})
+    key = dto._digest(dto._capture({field: record[field] for field in
+                       ('context_ref', 'project', 'root', 'operation_id')}))
     return 'BC-' + key + '.R.json'
 
 
@@ -108,13 +108,13 @@ def _i_session(session):
 
 
 def _i_native(record):
-    return 'BI-N-' + dto._digest({key: record[key] for key in
-                                 ('context_ref', 'root', 'sid')}) + '.json'
+    return 'BI-N-' + dto._digest(dto._capture({key: record[key] for key in
+                                 ('context_ref', 'root', 'sid')})) + '.json'
 
 
 def _stop_name(record, role):
-    key = dto._digest({field: record[field] for field in
-                       ('context_ref', 'root', 'session_ref', 'operation_id')})
+    key = dto._digest(dto._capture({field: record[field] for field in
+                       ('context_ref', 'root', 'session_ref', 'operation_id')}))
     return 'BS-' + key + '.' + role + '.json'
 
 
