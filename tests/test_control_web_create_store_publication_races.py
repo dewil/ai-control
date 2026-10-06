@@ -1,6 +1,4 @@
 """Deterministic same-owner path-swap regressions for CREATE publication."""
-import ctypes
-import errno
 import hashlib
 import json
 import os
@@ -76,9 +74,10 @@ class CreatePublicationRaceTests(unittest.TestCase):
         })).hexdigest()
         return self.receipt_root / (locator + '.json')
 
-    def test_cas_destination_swap_after_inode_check_preserves_foreign_file(self):
+    def test_destination_race_is_refused_or_candidate_uses_immutable_stage(self):
         reservation = self.store.reserve(self.context, 'alpha', self.operation_id)
         leaf = self._receipt_leaf()
+        r_before = (leaf.read_bytes(), leaf.stat().st_ino, leaf.stat().st_ctime_ns)
         original_replace = os.replace
         injected = []
         foreign = b'foreign same-owner destination sentinel'
@@ -105,31 +104,45 @@ class CreatePublicationRaceTests(unittest.TestCase):
                 error = exc
 
         failures = []
-        if not injected:
-            failures.append('destination race hook did not run')
-        if outcome is not None or error is None:
-            failures.append('CAS accepted a destination that changed after its inode check')
-        elif error.code != 'store_unavailable':
-            failures.append('path-swap refusal was not store_unavailable')
-        if injected and (leaf.stat().st_ino, leaf.read_bytes()) != injected[0]:
-            failures.append('foreign destination inode or bytes were replaced')
+        if injected:
+            if outcome is not None or error is None:
+                failures.append('CAS accepted a destination that changed after its inode check')
+            elif error.code != 'store_unavailable':
+                failures.append('path-swap refusal was not store_unavailable')
+            if (leaf.stat().st_ino, leaf.read_bytes()) != injected[0]:
+                failures.append('foreign destination inode or bytes were replaced')
+        else:
+            if outcome is None or error is not None:
+                failures.append('immutable candidate publication did not complete')
+            if (leaf.read_bytes(), leaf.stat().st_ino, leaf.stat().st_ctime_ns) != r_before:
+                failures.append('candidate publication changed the immutable R destination')
+            candidate_leaf = self.receipt_root / (hashlib.sha256(_canonical({
+                'kind': 'create_candidate', 'project': 'alpha',
+                'operation_id': self.operation_id,
+            })).hexdigest() + '.json')
+            if not candidate_leaf.is_file():
+                failures.append('path-replacement was avoided without publishing immutable C')
         self.assertEqual(failures, [], '; '.join(failures))
 
-    def test_temp_swap_during_cleanup_preserves_foreign_file(self):
+    def test_root_drift_never_unlinks_a_replaced_temp_path(self):
         original_unlink = os.unlink
         injected = []
         foreign = b'foreign same-owner temporary sentinel'
+        drift_root = self.base / 'drifted-project'
+        drift_root.mkdir(mode=0o700)
 
-        class FailingRenameAt2:
-            argtypes = None
-            restype = None
+        def project_path(name):
+            if name != 'alpha':
+                raise ValueError('unexpected synthetic project')
+            if any(self.receipt_root.glob('.tmp-*')):
+                return str(drift_root)
+            return str(self.project_root)
 
-            def __call__(self, *args):
-                ctypes.set_errno(errno.EIO)
-                return -1
-
-        class UnsupportedRenameAt2:
-            renameat2 = FailingRenameAt2()
+        bindings = create_store.SessionBindings(
+            self.binding_root, self.lock_root, self.receipt_root, project_path)
+        store = create_store.CreateStore(
+            self.receipt_root, bindings, project_path,
+            clock=lambda: 1700000000000000002)
 
         def unlink_with_temp_swap(path, *, dir_fd=None):
             if isinstance(path, str) and path.startswith('.tmp-') and not injected:
@@ -147,23 +160,25 @@ class CreatePublicationRaceTests(unittest.TestCase):
             return original_unlink(path, dir_fd=dir_fd)
 
         error = None
-        with mock.patch.object(create_store.ctypes, 'CDLL',
-                               side_effect=lambda *args, **kwargs: UnsupportedRenameAt2()), \
-             mock.patch.object(create_store.os, 'unlink', unlink_with_temp_swap):
+        with mock.patch.object(create_store.os, 'unlink', unlink_with_temp_swap):
             try:
-                self.store.reserve(self.context, 'alpha', self.operation_id)
+                store.reserve(self.context, 'alpha', self.operation_id)
             except AccountError as exc:
                 error = exc
 
         failures = []
-        if not injected:
-            failures.append('temporary cleanup race hook did not run')
-        if error is None or error.code != 'store_unavailable':
-            failures.append('unsupported publication did not fail closed')
+        if error is None or error.code != 'stale':
+            failures.append('project-root drift before publication did not fail stale')
         if injected:
             leaf, inode, data = injected[0]
             if not leaf.exists() or leaf.stat().st_ino != inode or leaf.read_bytes() != data:
                 failures.append('foreign temporary inode or bytes were unlinked')
+        else:
+            orphans = list(self.receipt_root.glob('.tmp-*'))
+            if not orphans:
+                failures.append('failed publication did not preserve its bounded temp orphan')
+            if any(path.stat().st_nlink != 1 for path in orphans):
+                failures.append('orphan publication created a linked inode')
         self.assertEqual(failures, [], '; '.join(failures))
 
 
