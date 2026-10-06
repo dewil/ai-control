@@ -9,7 +9,7 @@ Scope is pure unarchive receipt storage, not SessionChat/native/HTTP/UI integrat
 | Artifact | SHA256 |
 |---|---|
 | bin/_control_web_lifecycle.py | 94f167f877844a417b520027ec3c447fc1767a50a06528fceda61364258f10ce |
-| tests/test_control_web_lifecycle_storage_red.py | 4399f7b46cad4fdcfb467112343c6b4546e2e7f1fdf15e894ac142d2219e9817 |
+| tests/test_control_web_lifecycle_storage_red.py | f923dfb4ffe4a20a437e89891f17a646660fedb7261099df607848a6eae0959a |
 
 Independent test commit `11aa1f4167875ddfafc69666f8b6761ea276495f` was applied
 before source implementation; author never edited tests. Exact absent-module
@@ -23,10 +23,13 @@ lose flock ownership despite equal numeric FD/inode. Independent `c74d15a` and
 `af2ee0f` tests were applied before the fix:11 methods,2 semantic failures,0 errors
 (0.773s). The candidate now issues opaque exact active store/thread/context
 handles; locked FD remains private and storage methods translate internally.
-Current focused result:10 PASS,1 harness error (0.750s): the old attack test
+Initial patched result:10 PASS,1 harness error (0.750s): the old attack test
 unconditionally calls os.close on the newly specified non-FD handle. Independent
-test correction is pending; this is not accepted GREEN. Original8, opaque lock
-ownership and foreign/raw/stale/thread rejection tests pass; no author test edits.
+test-only correction `8f2155a` conditionally preserves the old numeric-FD attack
+and verifies opaque close refusal/live private lock. Original8 AST is unchanged;
+author never edited tests. Final full focused run:11 PASS,0 errors (0.769s),
+including opaque lock ownership and foreign/raw/stale/thread rejection. Source
+SHA remains exactly the frozen `c0b9b0e` candidate; repeat SOURCE review pending.
 
 Relevant existing regressions after handle change: rename module21 PASS (0.124s),
 rename transport/crash2 PASS (0.172s), configured-create module12 PASS (1.039s).
