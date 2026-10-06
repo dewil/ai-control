@@ -217,7 +217,7 @@ class _Receipts:
                 if fd is not None:
                     os.close(fd)
 
-    def read(self, ns, root, sid, mid, deadline):
+    def read(self, ns, root, sid, mid, deadline, context_id=None):
         _budget(deadline)
         if ns is None:
             return None
@@ -236,8 +236,19 @@ class _Receipts:
                 _need(len(data) <= 4096)
                 record = json.loads(data, object_pairs_hook=_pairs)
             _budget(deadline)
-            _need(type(record) is dict and set(record) ==
-                  {'root', 'sid', 'message_id', 'digest', 'status', 'turn_id', 'created'})
+            _need(type(record) is dict)
+            fields = {'root', 'sid', 'message_id', 'digest', 'status', 'turn_id', 'created'}
+            if 'schema' in record:
+                _need(set(record) == fields | {'schema', 'context_id', 'selection'}
+                      and type(record['schema']) is int and record['schema'] == 2)
+                _need(type(record['context_id']) is str
+                      and re.fullmatch('[0-9a-f]{64}', record['context_id']))
+                if context_id is not None:
+                    _need(record['context_id'] == context_id, 'invalid_request')
+                choice = record['selection']
+                _need(choice is None or _valid_selection(choice, private=True))
+            else:
+                _need(set(record) == fields)
             _need(record['root'] == root and record['sid'] == sid and record['message_id'] == mid)
             _need(type(record['digest']) is str and re.fullmatch('[0-9a-f]{64}', record['digest']))
             _need(record['status'] in ('accepted', 'delivery_unknown', 'rejected'))
@@ -306,13 +317,38 @@ class _Receipts:
         _need(not reserve or count < NAMESPACE_ENTRY_LIMIT)
         return names
 
-    def recent(self, ns, root, sid, deadline):
-        records = [self.read(ns, root, sid, mid, deadline) for mid in self.names(ns, deadline)]
+    def recent(self, ns, root, sid, deadline, context_id=None):
+        records = [self.read(ns, root, sid, mid, deadline, context_id) for mid in self.names(ns, deadline)]
         _budget(deadline)
         _need(all(record is not None for record in records))
         records.sort(key=lambda record: (record['created'], record['message_id']), reverse=True)
         _budget(deadline)
         return [self.result(record) for record in records[:8]]
+
+
+def _valid_selection(value, private=False):
+    from _control_web_broker import SECRET_RE
+    fields = {'catalog_id', 'model_id', 'effort'} | ({'wire_model'} if private else set())
+    return (type(value) is dict and set(value) == fields
+            and type(value['catalog_id']) is str
+            and re.fullmatch('[0-9a-f]{64}', value['catalog_id']) is not None
+            and all(type(value[key]) is str and 0 < len(value[key]) <= 256
+                    and not any(ord(char) < 32 or 127 <= ord(char) <= 159
+                                or 0xd800 <= ord(char) <= 0xdfff for char in value[key])
+                    and SECRET_RE.search(value[key]) is None
+                    for key in fields - {'catalog_id'}))
+
+
+def _receipt_digest(context_id, root, sid, text, selection):
+    payload = {'context_id': context_id, 'root': root, 'sid': sid,
+               'text': text, 'selection': selection}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False,
+                                    separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
+
+
+def _context_token(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                    separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
 
 
 class SessionChat:
@@ -328,7 +364,10 @@ class SessionChat:
         self._summary_lock = threading.Lock()
         self._summary_cache = None
         self._summary_revision = 0
-        self._model_context = model_context or getattr(rpc, 'model_context', lambda: None)
+        self._explicit_model_context = model_context is not None
+        self._has_model_context = hasattr(rpc, 'model_context')
+        self._has_receipt_context = hasattr(rpc, 'receipt_context')
+        self._model_context = model_context if model_context is not None else getattr(rpc, 'model_context', lambda: None)
         self._model_clock = model_clock or time.monotonic
         self._model_lock = threading.Lock()
         self._model_cache = OrderedDict()
@@ -386,6 +425,66 @@ class SessionChat:
         value = self._model_context()
         self._remaining()
         return copy.deepcopy(value)
+
+    def _receipt_context(self):
+        fields = ('schema', 'vendor', 'context_kind', 'context_id')
+        def model_snapshot(context):
+            _need(self._catalog_reason(context) != 'unverified_context'
+                  and context['vendor'] == 'codex'
+                  and (context['native_version'] is None or type(context['native_version']) is str))
+            return {key: context[key] for key in fields}
+        if self._explicit_model_context:
+            return model_snapshot(self._catalog_context())
+        if self._has_receipt_context:
+            provider = getattr(self.rpc, 'receipt_context')
+            _need(callable(provider))
+            context = copy.deepcopy(provider())
+            self._remaining()
+            _need(type(context) is dict and set(context) == set(fields)
+                  and type(context['schema']) is int and context['schema'] == 1
+                  and context['vendor'] == 'codex' and context['context_kind'] == 'legacy_unbound'
+                  and type(context['context_id']) is str
+                  and re.fullmatch('[0-9a-f]{64}', context['context_id']))
+            if self._has_model_context:
+                live = self._catalog_context()
+                if live is not None:
+                    _need(model_snapshot(live) == context)
+            return context
+        if self._has_model_context:
+            return model_snapshot(self._catalog_context())
+        # A trusted plain callable has only server-owned store identity. This
+        # compatibility marker grants no model capability or adapter authority.
+        identity = {'schema': 1, 'vendor': 'codex', 'context_kind': 'legacy_unbound',
+                    'owner_uid': os.getuid(), 'receipt_root': self.receipts.path}
+        return {key: identity[key] for key in fields[:-1]} | {'context_id': _context_token(identity)}
+
+    def _send_selection(self, selection, context):
+        _need(self._catalog_reason(context) is None
+              and callable(getattr(self.rpc, 'call_in_generation', None)))
+        _need(self._catalog_context() == context, 'stale')
+        key = tuple(context[field] for field in ('vendor', 'context_kind', 'context_id',
+                                                'transport_generation', 'context_generation'))
+        with self._model_lock:
+            entry = self._model_cache.get(key)
+            if entry is None:
+                _need(not any(row['dto']['catalog_id'] == selection['catalog_id']
+                              for row in self._model_cache.values()), 'stale')
+                raise _DomainError('unavailable')
+            _need(entry['expires'] > self._model_clock()
+                  and entry['dto']['catalog_id'] == selection['catalog_id'], 'stale')
+            row = next((row for row in entry['dto']['rows'] if row['id'] == selection['model_id']), None)
+            _need(row is not None and selection['effort'] in row['efforts'], 'invalid_request')
+            return dict(selection, wire_model=entry['wire_models'][selection['model_id']])
+
+    def _send_fenced(self, method, params, context):
+        _need(self._catalog_context() == context, 'stale')
+        result = self.rpc.call_in_generation(method, params,
+                    transport_generation=context['transport_generation'],
+                    context_generation=context['context_generation'], timeout=self._remaining())
+        self._remaining()
+        _need(self._catalog_context() == context, 'stale')
+        _need(type(result) is dict)
+        return result
 
     @staticmethod
     def _catalog_reason(context):
@@ -719,12 +818,14 @@ class SessionChat:
     @_operation
     def history(self, project, sid, cursor=None):
         _need(valid_uuid(sid) and valid_cursor(cursor), 'invalid_request')
+        context = self._receipt_context()
         root = self._root(project)
         thread = self._proof(root, sid)
         page = self._page(sid, cursor, limit=4 if cursor is None else 8)
         from _control_web_broker import redact
+        _need(self._receipt_context() == context, 'stale')
         with self.receipts.namespace(root, sid, self._local.deadline) as ns:
-            recent = self.receipts.recent(ns, root, sid, self._local.deadline)
+            recent = self.receipts.recent(ns, root, sid, self._local.deadline, context['context_id'])
         turns = [{'id': turn['id'], 'status': turn['status'], 'items': []}
                  for turn in page['data']]
         item_limit = 24 if cursor is None else 128
@@ -834,27 +935,55 @@ class SessionChat:
         return result
 
     @_operation
-    def send(self, project, sid, message_id, text):
+    def send(self, project, sid, message_id, text, selection=None):
         _need(valid_uuid(sid) and valid_uuid(message_id) and type(text) is str
               and 0 < len(text) <= 16000 and bool(text.strip()), 'invalid_request')
+        _need(selection is None or _valid_selection(selection), 'invalid_request')
+        selection = copy.deepcopy(selection)
+        context = self._receipt_context()
+        model_context = self._catalog_context() if selection is not None else None
+        if model_context is not None:
+            _need(model_context.get('context_id') == context['context_id'], 'stale')
         root = self._root(project)
         self._proof(root, sid)
-        digest = hashlib.sha256(text.encode('utf-8')).hexdigest()
-        with self.receipts.namespace(root, sid, self._local.deadline, create=True) as ns:
-            record = self.receipts.read(ns, root, sid, message_id, self._local.deadline)
+        _need(self._receipt_context() == context, 'stale')
+        # Existing UUID lookup precedes live catalog validation: stored wire
+        # mapping is the only authority for an exact replay.
+        with self.receipts.namespace(root, sid, self._local.deadline) as ns:
+            record = self.receipts.read(ns, root, sid, message_id, self._local.deadline, context['context_id'])
             if record is not None:
-                _need(record['digest'] == digest, 'invalid_request')
-                return self.receipts.result(record)
+                return self._send_replay(record, context, root, sid, text, selection)
+        choice = self._send_selection(selection, model_context) if selection is not None else None
+        digest = _receipt_digest(context['context_id'], root, sid, text, choice)
+        with self.receipts.namespace(root, sid, self._local.deadline, create=True) as ns:
+            record = self.receipts.read(ns, root, sid, message_id, self._local.deadline, context['context_id'])
+            if record is not None:
+                return self._send_replay(record, context, root, sid, text, selection)
             _need(len(self.receipts.names(ns, self._local.deadline, reserve=True)) < RECEIPT_LIMIT)
-            self._proof(root, sid, 'thread/resume')
+            if selection is None:
+                self._proof(root, sid, 'thread/resume')
+            else:
+                choice = self._send_selection(selection, model_context)
             _need(self._root(project) == root, 'stale')
+            _need(self._receipt_context() == context, 'stale')
             self._remaining()
-            record = {'root': root, 'sid': sid, 'message_id': message_id, 'digest': digest,
+            record = {'schema': 2, 'context_id': context['context_id'], 'selection': choice,
+                      'root': root, 'sid': sid, 'message_id': message_id, 'digest': digest,
                       'status': 'delivery_unknown', 'turn_id': None, 'created': time.time_ns()}
             self.receipts.write(ns, record, self._local.deadline)
             try:
-                response = self._rpc('turn/start', {'threadId': sid,
-                    'input': [{'type': 'text', 'text': text}], 'clientUserMessageId': message_id})
+                params = {'threadId': sid, 'input': [{'type': 'text', 'text': text}],
+                          'clientUserMessageId': message_id}
+                if choice is not None:
+                    thread = self._send_fenced('thread/resume', {'threadId': sid, 'excludeTurns': True}, model_context).get('thread')
+                    _need(type(thread) is dict and thread.get('id') == sid
+                          and type(thread.get('cwd')) is str and os.path.isabs(thread['cwd'])
+                          and canonical(thread['cwd']) == root, 'stale')
+                    _need(self._root(project) == root, 'stale')
+                    params.update(model=choice['wire_model'], effort=choice['effort'])
+                    response = self._send_fenced('turn/start', params, model_context)
+                else:
+                    response = self._rpc('turn/start', params)
                 turn = response.get('turn')
                 _need(type(turn) is dict and _identity(turn.get('id')))
                 record.update(status='accepted', turn_id=turn['id'])
@@ -866,13 +995,28 @@ class SessionChat:
                 return {'status': 'delivery_unknown', 'message_id': message_id, 'turn_id': None}
             return self.receipts.result(record)
 
+    def _send_replay(self, record, context, root, sid, text, selection):
+        if 'schema' not in record:
+            _need(selection is None, 'invalid_request')
+            digest = hashlib.sha256(text.encode('utf-8')).hexdigest()
+        else:
+            choice = record['selection']
+            public = None if choice is None else {key: choice[key] for key in ('catalog_id', 'model_id', 'effort')}
+            _need(public == selection, 'invalid_request')
+            digest = _receipt_digest(context['context_id'], root, sid, text, choice)
+        _need(record['digest'] == digest, 'invalid_request')
+        _need(self._receipt_context() == context, 'stale')
+        return self.receipts.result(record)
+
     @_operation
     def send_status(self, project, sid, message_id):
         _need(valid_uuid(sid) and valid_uuid(message_id), 'invalid_request')
+        context = self._receipt_context()
         root = self._root(project)
         self._proof(root, sid)
+        _need(self._receipt_context() == context, 'stale')
         with self.receipts.namespace(root, sid, self._local.deadline) as ns:
-            record = self.receipts.read(ns, root, sid, message_id, self._local.deadline)
+            record = self.receipts.read(ns, root, sid, message_id, self._local.deadline, context['context_id'])
             _need(record is not None, 'stale')
             if record['status'] != 'delivery_unknown':
                 return self.receipts.result(record)
@@ -881,6 +1025,7 @@ class SessionChat:
                 if time.monotonic() >= self._local.deadline:
                     break
                 page = self._page(sid, cursor)
+                _need(self._receipt_context() == context, 'stale')
                 for turn in page['data']:
                     if any(item['type'] == 'userMessage' and item.get('clientId') == message_id
                            for item in turn['items']):
@@ -911,7 +1056,9 @@ class InteractiveRPC:
         self._generation = 0
         self._context_generation = 0
         self._native_version = None
-        self._model_context_id = os.urandom(32).hex()
+        self._model_context_id = _context_token({'schema': 1, 'vendor': 'codex',
+            'context_kind': 'legacy_unbound', 'owner_uid': os.getuid(),
+            'socket_alias': os.path.abspath(socket_path)})
         self._pending = {}
         self._closed = False
 
@@ -1123,6 +1270,11 @@ class InteractiveRPC:
         deadline = time.monotonic() + duration
         ws, generation = self._connect(deadline)
         return self._request(ws, generation, method, params, deadline)
+
+    def receipt_context(self):
+        """Stable offline metadata; fresh peer/thread proof still gates IO."""
+        return {'schema': 1, 'vendor': 'codex', 'context_kind': 'legacy_unbound',
+                'context_id': self._model_context_id}
 
     def model_context(self):
         with self._lock:

@@ -29,8 +29,16 @@ SESSION_FIELDS = {
 
 def _valid_session(request):
     if (type(request) is not dict or type(request.get('op')) is not str
-            or request['op'] not in SESSION_FIELDS or set(request) != SESSION_FIELDS[request['op']]):
+            or request['op'] not in SESSION_FIELDS):
         return False
+    fields = SESSION_FIELDS[request['op']]
+    if set(request) != fields and not (
+            request['op'] == 'session_send' and set(request) == fields | {'selection'}):
+        return False
+    if 'selection' in request:
+        from _control_web_sessions import _valid_selection
+        if not _valid_selection(request['selection']):
+            return False
     if 'project' in request and (type(request['project']) is not str or not PROJECT.fullmatch(request['project'])):
         return False
     if any(not valid_qid(request[key]) for key in ('sid', 'message_id') if key in request):
@@ -41,6 +49,20 @@ def _valid_session(request):
             type(request['cursor']) is not str or not 0 < len(request['cursor']) <= 4096):
         return False
     return 'text' not in request or valid_text(request['text'], True)
+
+
+def _send_request(project, sid, message_id, text, selection):
+    request = dict(op='session_send', project=project, sid=sid, message_id=message_id, text=text)
+    if selection is not None:
+        request['selection'] = selection
+    return request
+
+
+def _forward_send(target, request):
+    args = (request['project'], request['sid'], request['message_id'], request['text'])
+    if 'selection' in request:
+        return target(*args, selection=request['selection'])
+    return target(*args)
 
 
 # Intentional per-binary copy of ai-agent-run's complete export policy.
@@ -170,7 +192,7 @@ class RegistryBackend:
             elif op == 'session_models':
                 result = self.sessions.models(request['project'], request['sid'])
             elif op == 'session_send':
-                result = self.sessions.send(request['project'], request['sid'], request['message_id'], request['text'])
+                result = _forward_send(self.sessions.send, request)
             else:
                 result = self.sessions.send_status(request['project'], request['sid'], request['message_id'])
             return result if type(result) is dict else {'error': 'unavailable'}
@@ -192,8 +214,8 @@ class RegistryBackend:
     def session_models(self, project, sid):
         return self._session(dict(op='session_models', project=project, sid=sid))
 
-    def session_send(self, project, sid, message_id, text):
-        return self._session(dict(op='session_send', project=project, sid=sid, message_id=message_id, text=text))
+    def session_send(self, project, sid, message_id, text, selection=None):
+        return self._session(_send_request(project, sid, message_id, text, selection))
 
     def session_send_status(self, project, sid, message_id):
         return self._session(dict(op='session_send_status', project=project, sid=sid, message_id=message_id))
@@ -475,7 +497,7 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                     elif op == 'session_models':
                         result = backend.session_models(request['project'], request['sid'])
                     elif op == 'session_send':
-                        result = backend.session_send(request['project'], request['sid'], request['message_id'], request['text'])
+                        result = _forward_send(backend.session_send, request)
                     else:
                         result = backend.session_send_status(request['project'], request['sid'], request['message_id'])
                     reply(conn, result)
@@ -507,7 +529,10 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                 else:
                     request = _receive(conn)
                     if (type(request) is not dict or type(request.get('op')) is not str
-                            or request['op'] not in fields or set(request) != fields[request['op']]):
+                            or request['op'] not in fields
+                            or (set(request) != fields[request['op']] and not (
+                                request['op'] == 'session_send'
+                                and set(request) == fields[request['op']] | {'selection'}))):
                         result = {'error': 'invalid_request' if type(request) is dict and request.get('op') == 'session_project_summary' else 'invalid_or_stale'}
                     elif request['op'] in SESSION_FIELDS and not _valid_session(request):
                         result = {'error': 'invalid_request'}
@@ -584,8 +609,8 @@ class SocketBackend:
     def session_models(self, project, sid):
         return self._session(dict(op='session_models', project=project, sid=sid))
 
-    def session_send(self, project, sid, message_id, text):
-        return self._session(dict(op='session_send', project=project, sid=sid, message_id=message_id, text=text))
+    def session_send(self, project, sid, message_id, text, selection=None):
+        return self._session(_send_request(project, sid, message_id, text, selection))
 
     def session_send_status(self, project, sid, message_id):
         return self._session(dict(op='session_send_status', project=project, sid=sid, message_id=message_id))
