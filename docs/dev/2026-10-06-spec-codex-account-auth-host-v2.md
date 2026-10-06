@@ -720,9 +720,9 @@ during terminal fsync while outer D remains future yields no stamp, no retry, an
 poison; (8) duplicate/
 replayed callback, second validator/channel, stale generation and +9s receipt cannot
 reserve/exchange; (9) reentrant close at pre-enqueue, write, receipt, finish and
-publication edges never creates a post-close stamp or second delivery; (9) source/
+publication edges never creates a post-close stamp or second delivery; (10) source/
 channel/response typed objects cannot substitute for production provenance; and
-(10) tokens remain absent
+(11) tokens remain absent
 from repr, exceptions, logs and return values. Linux synthetic tests must assert the
 same order and outcomes. These tests exercise only injected fakes and synthetic
 identities; they do not close TLS, kernel view, owned stdio, durable quarantine,
