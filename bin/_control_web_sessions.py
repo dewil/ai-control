@@ -1313,7 +1313,7 @@ class SessionChat:
 
 class InteractiveRPC:
     """One receiver per connection; never responds to native server requests."""
-    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set'}
+    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set', 'thread/start', 'thread/loaded/list'}
 
     def __init__(self, socket_path, timeout=25):
         if type(socket_path) is not str or type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 55:
@@ -1530,6 +1530,18 @@ class InteractiveRPC:
             return ws, generation
         finally:
             self._connect_lock.release()
+
+    def prepare_context(self, timeout=None):
+        """Initialize the approved owned transport without a native operation."""
+        if timeout is not None and (type(timeout) not in (int, float)
+                or not math.isfinite(timeout) or timeout <= 0):
+            raise ValueError('RPC deadline refused')
+        duration = self.timeout if timeout is None else min(self.timeout, timeout)
+        ws, generation = self._connect(time.monotonic() + duration)
+        with self._lock:
+            if self._closed or self._ws is not ws or self._generation != generation:
+                raise RuntimeError('RPC generation unavailable')
+            return self.model_context()
 
     def call(self, method, params, timeout=None):
         if type(method) is not str or method not in self.METHODS or type(params) is not dict:
