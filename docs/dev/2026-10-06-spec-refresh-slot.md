@@ -26,7 +26,8 @@ Fixed children refresh-source.json, .refresh-slot.lock, refresh-attempt.json.
 All regular current uid/exact0600/nlink1/nofollow, strict duplicate-aware JSON<=32768
 UTF8 bytes, no extra keys/nonfinite/bool-for-int/surrogates. Lock leaf may be created
 O_EXCL0600; directory fsync, reopen existing safely, NEVER replace/unlink lock.
-Lock per same anchored root in-process plus flock on Linux, bounded by min(original
+Lock keyed by anchored root dev+ino (not pathname/object) in-process plus flock on Linux,
+bounded by min(original
 remaining,0.5seconds). Different roots independent. Unsupported platforms refuse
 BEFORE filesystem IO; actual positive Linux FD/flock/atomic-replace proof in Ubuntu CI.
 
@@ -52,11 +53,22 @@ commit_rotation(lease,scope,attempt_id,new_token,*,deadline)->None
 finish_confirmed(lease,scope,attempt_id,*,deadline)->None
 close(lease)->None
 
-open checks pending journal BEFORE secret read. Existing pending, malformed or
-unreadable attempt file fails closed; no recovery/cleanup/replay. Successful open
-captures fresh source reference+generation but does not expose token until read.
+open first checks durable attempt head BEFORE exposing a secret. Head NEVER absent:
+explicit fresh provisioning creates BOTH source generation1 and journal
+{schema:1,reference,generation:1,state:'ready'} durably. Missing/corrupt/unreadable
+head or pending refuses; no inference of fresh provisioning from absence and no
+cleanup/reconstruction. Ready requires source generation1. Completed requires exact
+reference and final generation equal fresh source generation; it permits a new
+attempt, not replay of the completed provider/native effect. Successful open captures
+fresh source reference+generation without exposing token until read.
 read_refresh fresh reads exact source/ref/generation and returns selected token;
 repeat reads only BEFORE reservation, never fallback/cache from another root.
+Capture exact source bytes/token AND fresh leaf dev/ino/ctime_ns/mode/uid/nlink after
+read. reserve_attempt freshly rereads/fences that entire capture, not generation
+alone. Same-generation token or inode substitution refuses. commit_rotation repeats
+this exact original capture check before replacement; after successful rotation
+capture exact fresh new source bytes/identity for finish. The source cannot change
+between read/reserve/commit except the one validated own rotation.
 Deadline finite plain int/float notbool strictly future, one shared monotonic budget
 never renewed; clock failure closed. Constructor no credential read, source IO only
 inside held active lease. close same-thread idempotent, releases descriptors/lock,
@@ -64,9 +76,11 @@ never writes/deletes/retries; poisoned lease may always be closed.
 
 reserve_attempt requires canonical UUIDv4, active unreserved lease and fresh source
 unchanged. Durable journal {schema:1,reference,generation,attempt_id,state:'pending'}
-created once via temp O_EXCL0600/full write/file fsync/Linux RENAME_NOREPLACE/dir fsync.
+atomically replaces the exact freshly fenced ready/completed head via temp
+O_EXCL0600/full write/file fsync/anchored os.replace/dir fsync; never delete head.
+No caller-chosen head or overwrite of pending/corrupt/unrecognized state.
 Any possible publication or uncertain outcome poisons lease refresh_unknown. No
-unsafe rename/link/overwrite fallback or retries. Provider host may send request
+link/unlink/unsafe publication fallback or retries. Provider host may send request
 ONLY AFTER success. Journal is token-free. Second reservation is refresh_unknown.
 
 commit_rotation requires same live pending attempt ID and original fresh source,
@@ -76,22 +90,31 @@ fsync, final fresh leaf/anchors fence; no unlink/rollback/retry of possible new 
 Generation overflow refuses. Success updates captured generation only after durable
 completion. Any ambiguous stage after pending reservation poisons refresh_unknown.
 If provider returns no rotated token, skip commit; old source remains with pending.
-Any external/source/ref/lock replacement after reservation poisons, never overwrites
+Any external/source/ref/lock replacement after reservation poisons refresh_unknown,
+which takes precedence over authority_stale and all other input/IO errors; never overwrites
 an unrecognized source. Atomic replace relies on cooperating owner filesystem lock;
 this unit does not claim prevention of hostile same-uid writes between fences.
 
 finish_confirmed is CALLER-ATTESTED bookkeeping only AFTER correlated native delivery
 AND successful coordinator publish_delivery under live authority guards. It proves
-neither native ACK nor stamp. Same pending attempt and current source generation
-(original if no rotation,incremented if rotated) required, then unlink only exact
-fresh own pending journal under lock and dir fsync. Success ends lease operations;
-close still allowed. Any uncertain unlink/fsync poisons refresh_unknown. Full host
-must retain shared account quarantine after unknown even if journal disappeared;
-RESTART-SAFE recovery for ambiguous journal deletion needs durable terminal marker
-or a separate reviewed recovery ledger BEFORE fullhost wiring. This known hole is
-an explicit DESIGN question, not an accepted runtime retry policy.
+neither native ACK nor stamp. Same freshly fenced pending attempt and exact current
+source bytes/identity required (original if no rotation, own captured new if rotated).
+Atomically replace pending with terminal {schema:1,reference,attempt_id,
+initial_generation,final_generation,state:'completed'} via temp O_EXCL0600/full
+write/file fsync/anchored os.replace/dir fsync and final head/source/anchor fences.
+NEVER unlink sole journal. Success ends lease operations; close still allowed.
+Uncertain terminal transition poisons refresh_unknown and live-account quarantine
+is REQUIRED even after confirmed delivery; this durable transition is not optional
+cleanup. It specializes parent's cleanup-error row; no supported/success claim on
+unknown terminal write. Restart sees pending (deny) OR valid completed with matching
+source (prior trusted host completed before terminal write); absence/corruption deny.
+Completed marker records trusted host assertion only, never itself native authority.
+A new durable reservation may replace completed; no automatic retry/replay of prior
+operation. Temp orphans retained, bounded physical root entries<=10000 including
+source/head/lock/temps, transient<=10001; refuse if no slot for a new temp.
 
-Startup pending always blocks automatic refresh, even if source generation changed.
+Startup pending/absent/corrupt head always blocks automatic refresh, even if source
+generation changed. No operation rebuilds a missing head.
 No automatic rollback/cleanup/manual reconciliation or token reuse after unknown.
 Crash before request conservatively blocks. Fresh startup without journal by itself
 is not provider/native operation history or admission proof.
@@ -106,7 +129,9 @@ post-reservation mutation/finish refresh_unknown. Invalid token/attempt inputs b
 reservation authority_stale; after reservation refresh_unknown. No OS/path/token/
 cause/decoder text or secret repr/dataclass/asdict/output/logs.
 
-Independent DESIGN must close terminal-journal ambiguity before freeze/RED/author.
+Independent repeat DESIGN required before freeze/RED/author. Previous terminal
+unlink finding replaced with durable ready/pending/completed head protocol, exact
+read source capture, anchored identity locking and post-reservation error precedence.
 Then source-blind committed RED, implementation unchanged tests, distinct SOURCE,
 exact complete Ubuntu CI. Synthetic A/B independent, same-root exclusion, fullscope
 first/noIOconstructor, opaque lifecycle, owner/mode/nlink/symlinks/aliases, strictJSON,
