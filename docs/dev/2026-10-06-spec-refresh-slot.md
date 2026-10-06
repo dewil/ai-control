@@ -58,14 +58,22 @@ explicit fresh provisioning creates BOTH source generation1 and journal
 {schema:1,reference,generation:1,state:'ready'} durably. Missing/corrupt/unreadable
 head or pending refuses; no inference of fresh provisioning from absence and no
 cleanup/reconstruction. Ready requires source generation1. Completed requires exact
-reference and final generation equal fresh source generation; it permits a new
+reference and final generation equal fresh source generation. Completed schema
+exact as defined below; attempt_id canonical UUIDv4, initial_generation plain int
+1..2**63-1, final_generation plain int exactly initial OR initial+1 (no overflow),
+no bool/extra/foreignref allowed. Pending schema exact, generation plain int in same
+range and attempt_id canonical UUIDv4; pending ALWAYS refuses. Ready exact schema
+above, generation exact plain int1. No malformed terminal data is interpreted as
+completed. Valid completed permits a new
 attempt, not replay of the completed provider/native effect. Successful open captures
 fresh source reference+generation without exposing token until read.
 read_refresh fresh reads exact source/ref/generation and returns selected token;
 repeat reads only BEFORE reservation, never fallback/cache from another root.
-Capture exact source bytes/token AND fresh leaf dev/ino/ctime_ns/mode/uid/nlink after
-read. reserve_attempt freshly rereads/fences that entire capture, not generation
-alone. Same-generation token or inode substitution refuses. commit_rotation repeats
+FIRST successful read pins exact source bytes/token AND fresh leaf
+ dev/ino/ctime_ns/mode/uid/nlink. Later reads MUST equal that original capture, else
+ authority_stale; never replace capture with a new token/identity. reserve_attempt
+ requires a previous successful read and freshly rereads/fences that exact first
+ capture, not generation alone. Same-generation token or inode substitution refuses. commit_rotation repeats
 this exact original capture check before replacement; after successful rotation
 capture exact fresh new source bytes/identity for finish. The source cannot change
 between read/reserve/commit except the one validated own rotation.
@@ -111,7 +119,9 @@ source (prior trusted host completed before terminal write); absence/corruption 
 Completed marker records trusted host assertion only, never itself native authority.
 A new durable reservation may replace completed; no automatic retry/replay of prior
 operation. Temp orphans retained, bounded physical root entries<=10000 including
-source/head/lock/temps, transient<=10001; refuse if no slot for a new temp.
+source/head/lock/temps. Physical count NEVER exceeds10000, including transient
+temps; require <=9999 BEFORE each temp/lock creation, then recheck. No filtering
+orphans/malformed names; no cleanup to reclaim capacity.
 
 Startup pending/absent/corrupt head always blocks automatic refresh, even if source
 generation changed. No operation rebuilds a missing head.
@@ -124,7 +134,7 @@ is not provider/native operation history or admission proof.
 Reuse AuthError from reviewed authority. Invalid supplied scope/foreignlease/config
 or valid source ref/generation drift authority_stale; malformed/missing/wrong-schema
 fresh source unsupported_auth_profile; definite pre-reservation IO auth_unavailable;
-lock timeout refresh_busy; pending/corrupt attempt, poisoned lease, any uncertain
+lock timeout refresh_busy; absent/pending/corrupt attempt head, poisoned lease, any uncertain
 post-reservation mutation/finish refresh_unknown. Invalid token/attempt inputs before
 reservation authority_stale; after reservation refresh_unknown. No OS/path/token/
 cause/decoder text or secret repr/dataclass/asdict/public HTTP/UI output/logs.
