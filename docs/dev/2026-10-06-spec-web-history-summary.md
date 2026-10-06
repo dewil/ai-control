@@ -50,9 +50,18 @@ intermediate commentary AND steering user text; latest and Older exact turncurso
 order/item limits preserved;4page cap sets truncated; wrongturn/duplicatecursor/
 malformed page fail honestly; send_status retains full and finds steering clientId.
 Existing fake-native fixture methods дополняются только items paging according
-to same synthetic turn data, existing assertions unchanged EXCEPT history's explicit
-full itemsView assertions become notLoaded with comment superseded norm. Receipt
-recovery full assertions unchanged. No tests generated from new production code.
+to same synthetic turn data. Existing assertions unchanged EXCEPT history's three
+explicit full itemsView expectations become notLoaded and two obsolete whole-turn
+scan scenarios below. Receipt recovery full assertions unchanged.
+- test_unsupported_and_image_only_items_do_not_consume_text_limit: old385-entry
+  turn is intentionally outside the published128-entry cap. Keep same mixed data,
+  require exact newest43 supported messages in chronological order, tool/image
+  exclusion and truncated=true; do not promise128texts inside128nativeentries.
+- test_discarded_older_malformed_items_fail_closed: retain all malformed variants,
+  move malformed oldest into128-entry scanned tail (127valid+bad) and use latest
+ 24text projection; reject malformed item even after latest24 export candidates.
+  No guarantee about unrequested129thnativeentry. Comment both changed fixtures
+  as superseded full-turn scan norm; no skipped assertions/cases or raised caps. No tests generated from new production code.
 After fix scoped history/receipts/context/socket/broker/browser regressions,
 actual independent SOURCE review, exact full CI, reviewed deploy +readonly installed
 same-thread proof. No multiaccount work. Initial summary tests/spec not codeGO.
