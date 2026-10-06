@@ -6,6 +6,7 @@ native ownership, durable storage, or production admission evidence.
 
 import base64
 import copy
+from collections.abc import Mapping
 from contextlib import contextmanager
 import importlib
 import json
@@ -36,14 +37,21 @@ def synthetic_jwt(claims):
     return encoded({"alg": "RS256", "typ": "JWT"}) + "." + encoded(claims) + ".c2ln"
 
 
-def synthetic_body():
+def synthetic_body(*, flat_only=False, access_serial=1):
     claims = {
         "iss": ISSUER, "aud": CLIENT, "sub": SUBJECT, "iat": 1000,
         "exp": 5000,
-        "https://api.openai.com/auth.chatgpt_account_id": WORKSPACE,
     }
+    if flat_only:
+        claims["https://api.openai.com/auth.chatgpt_account_id"] = WORKSPACE
+    else:
+        claims["https://api.openai.com/auth"] = {
+            "chatgpt_account_id": WORKSPACE,
+        }
     return json.dumps({
-        "access_token": synthetic_jwt({"exp": 5000, "sub": ACCESS_MARKER}),
+        "access_token": synthetic_jwt({
+            "exp": 5000, "sub": ACCESS_MARKER, "synthetic_serial": access_serial,
+        }),
         "id_token": synthetic_jwt(claims),
         "refresh_token": REFRESH_MARKER,
         "token_type": "Bearer", "expires_in": 3600,
@@ -74,6 +82,18 @@ class Clock:
 
     def __call__(self):
         return self.now
+
+
+class WallClock:
+    def __init__(self):
+        self.next_value = 1000.0
+        self.samples = []
+
+    def __call__(self):
+        value = self.next_value
+        self.next_value += 1.0
+        self.samples.append(value)
+        return value
 
 
 class FakeGuard:
@@ -174,12 +194,18 @@ class FakeSource:
 
 
 class FakeOAuth:
-    def __init__(self, auth, events, clock):
+    def __init__(self, auth, events, clock, wall_clock):
         self.auth = auth
         self.events = events
         self.clock = clock
+        self.wall_clock = wall_clock
         self.requests = []
         self.before_return_hook = None
+        self.body_mode = "nested"
+        self.received_wall_override = None
+        self.received_walls = []
+        self.last_access_token = None
+        self.access_tokens = []
 
     def exchange(self, request, refresh_token, *, deadline):
         assert refresh_token == REFRESH_MARKER
@@ -187,11 +213,21 @@ class FakeOAuth:
         self.events.append(("oauth.exchange", request.attempt_id))
         if self.before_return_hook is not None:
             self.before_return_hook()
+        body = synthetic_body(
+            flat_only=self.body_mode == "flat_only",
+            access_serial=len(self.requests),
+        )
+        self.last_access_token = json.loads(body)["access_token"]
+        self.access_tokens.append(self.last_access_token)
+        received_wall = self.wall_clock()
+        if self.received_wall_override is not None:
+            received_wall = self.received_wall_override
+        self.received_walls.append(received_wall)
         return self.auth.TLSExchange(
             request.attempt_id, request.context,
             ISSUER + "/api/accounts/oauth/token", CLIENT, "auth.openai.com",
-            True, False, False, 200, synthetic_body(),
-            self.clock.now, 1001.0,
+            True, False, False, 200, body,
+            self.clock.now, received_wall,
         )
 
 
@@ -214,6 +250,8 @@ class FakeTransport:
         self.login_write_hook = None
         self.login_receipt_hook = None
         self.write_refresh_hook = None
+        self.expected_access = None
+        self.payload_checks = []
 
     def capture(self, ctx, *, validator_id, deadline):
         self.events.append(("transport.capture", deadline))
@@ -263,6 +301,14 @@ class FakeTransport:
     def login(self, channel, payload, *, guard, deadline):
         assert channel is self.channel
         assert isinstance(guard, FakeGuard)
+        assert isinstance(payload, Mapping)
+        assert set(payload) == {
+            "type", "accessToken", "chatgptAccountId", "chatgptPlanType",
+        }
+        assert payload["type"] == "chatgptAuthTokens"
+        assert payload["accessToken"] == self.expected_access()
+        assert payload["chatgptAccountId"] == WORKSPACE
+        assert payload["chatgptPlanType"] is None
         sent = str(uuid.uuid4())  # Transport owns the JSON-RPC correlation id.
         self.sent_login_ids.append(sent)
         self.events.append(("transport.login", sent))
@@ -293,10 +339,18 @@ class FakeTransport:
             self.login_receipt_hook()
         return receipt
 
-    def write_refresh(self, channel, callback, *, guard, deadline):
+    def write_refresh(self, channel, callback, payload, *, guard, deadline):
         assert channel is self.channel
         assert isinstance(guard, FakeGuard)
         request_id = self.callback_ids[id(callback)]
+        assert isinstance(payload, Mapping)
+        assert set(payload) == {
+            "accessToken", "chatgptAccountId", "chatgptPlanType",
+        }
+        assert payload["accessToken"] == self.expected_access()
+        assert payload["chatgptAccountId"] == WORKSPACE
+        assert payload["chatgptPlanType"] is None
+        self.payload_checks.append((request_id, tuple(sorted(payload))))
         self.write_count += 1
         self.events.append(("transport.write_refresh", request_id))
         if self.write_refresh_hook is not None:
@@ -316,6 +370,7 @@ class AuthStateContract(unittest.TestCase):
 
     def fresh_fixture(self):
         self.clock = Clock()
+        self.wall = WallClock()
         self.events = []
         self.durable_hook = None
         self.exchange_before_hook = None
@@ -329,8 +384,9 @@ class AuthStateContract(unittest.TestCase):
         self.final_stamp_transform = None
         self.last_authority_lease = None
         self.source = FakeSource(self.auth, self.events)
-        self.oauth = FakeOAuth(self.auth, self.events, self.clock)
+        self.oauth = FakeOAuth(self.auth, self.events, self.clock, self.wall)
         self.transport = FakeTransport(self.auth, self.events, self.clock)
+        self.transport.expected_access = lambda: self.oauth.last_access_token
         authority = self.authority
         events = self.events
         owner = self
@@ -426,7 +482,7 @@ class AuthStateContract(unittest.TestCase):
         self.validator = self.auth.AuthStateValidator(
             profile_source=self.source, oauth_client=self.oauth,
             owned_transport=self.transport, coordinator=self.coordinator,
-            clock=self.clock, wall_clock=lambda: 1000.0,
+            clock=self.clock, wall_clock=self.wall,
         )
 
     def codes(self):
@@ -481,7 +537,7 @@ class AuthStateContract(unittest.TestCase):
             validator = self.auth.AuthStateValidator(
                 profile_source=self.source, oauth_client=self.oauth,
                 owned_transport=self.transport, coordinator=legacy,
-                clock=self.clock, wall_clock=lambda: 1000.0,
+                clock=self.clock, wall_clock=self.wall,
             )
         except self.auth.AuthError as exc:
             self.assertEqual(exc.code, "authority_stale")
@@ -627,6 +683,12 @@ class AuthStateContract(unittest.TestCase):
         ):
             self.assertLess(names.index(before), names.index(after))
         self.assertEqual(len(self.oauth.requests), 1)
+        self.assertGreaterEqual(len(self.wall.samples), 3)
+        self.assertLessEqual(
+            self.oauth.requests[0].started_wall, self.oauth.received_walls[0]
+        )
+        self.assertLessEqual(self.oauth.received_walls[0], self.wall.samples[-1])
+        self.assertEqual(self.wall.samples, sorted(self.wall.samples))
         attempt = self.oauth.requests[0].attempt_id
         self.assertRegex(attempt, r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
         self.assertEqual(next(value for name, value in self.events if name == "source.reserve"), attempt)
@@ -640,6 +702,22 @@ class AuthStateContract(unittest.TestCase):
         self.assertEqual(names.count("source.read"), 1)
         for value in (ACCESS_MARKER, REFRESH_MARKER, SUBJECT):
             self.assertNotIn(value, repr(delivery))
+
+    def test_flat_only_id_workspace_cannot_admit(self):
+        self.oauth.body_mode = "flat_only"
+        self.denied("auth_response_invalid", self.admit)
+        self.assertEqual(len(self.oauth.requests), 1)
+        self.assertNotIn("source.rotation", self.codes())
+        self.assertNotIn("transport.login", self.codes())
+
+    def test_received_wall_after_actual_evaluation_is_rejected(self):
+        self.oauth.received_wall_override = 2000.0
+        self.denied("auth_response_invalid", self.admit)
+        self.assertEqual(self.oauth.received_walls, [2000.0])
+        self.assertLess(max(self.wall.samples), 2000.0)
+        self.assertEqual(len(self.oauth.requests), 1)
+        self.assertNotIn("source.rotation", self.codes())
+        self.assertNotIn("transport.login", self.codes())
 
     def test_preclaim_close_has_no_reserve_or_exchange(self):
         original = self.source.read_refresh
@@ -697,7 +775,7 @@ class AuthStateContract(unittest.TestCase):
             profile_source=self.source, oauth_client=self.oauth,
             owned_transport=FakeTransport(self.auth, self.events, self.clock),
             coordinator=self.coordinator, clock=self.clock,
-            wall_clock=lambda: 1000.0,
+            wall_clock=self.wall,
         )
         self.denied(
             "authority_stale", lambda: second.admit(self.ctx, deadline=125.0)
@@ -748,7 +826,7 @@ class AuthStateContract(unittest.TestCase):
                     profile_source=self.source, oauth_client=self.oauth,
                     owned_transport=FakeTransport(self.auth, self.events, self.clock),
                     coordinator=self.coordinator, clock=self.clock,
-                    wall_clock=lambda: 1000.0,
+                    wall_clock=self.wall,
                 )
                 self.denied(
                     "authority_stale",
@@ -973,7 +1051,7 @@ class AuthStateContract(unittest.TestCase):
             profile_source=self.source, oauth_client=self.oauth,
             owned_transport=FakeTransport(self.auth, self.events, self.clock),
             coordinator=self.coordinator, clock=self.clock,
-            wall_clock=lambda: 1000.0,
+            wall_clock=self.wall,
         )
         self.denied(
             "authority_stale", lambda: second.admit(self.ctx, deadline=125.0)
@@ -1010,7 +1088,17 @@ class AuthStateContract(unittest.TestCase):
             self.validator.refresh(initial, callback, deadline=125.0), refreshed
         )
         self.assertEqual(self.transport.write_count, 1)
+        self.assertEqual(
+            self.transport.payload_checks,
+            [(73, ("accessToken", "chatgptAccountId", "chatgptPlanType"))],
+        )
+        for capability in (callback, refreshed):
+            self.assertNotIn(self.oauth.last_access_token, repr(capability))
+            self.assertNotIn(REFRESH_MARKER, repr(capability))
+            for token_field in ("access_token", "id_token", "refresh_token", "payload"):
+                self.assertFalse(hasattr(capability, token_field))
         self.assertEqual(len(self.oauth.requests), 2)
+        self.assertNotEqual(self.oauth.access_tokens[0], self.oauth.access_tokens[1])
         self.assertNotEqual(self.oauth.requests[0].attempt_id,
                             self.oauth.requests[1].attempt_id)
 
@@ -1106,7 +1194,7 @@ class AuthStateContract(unittest.TestCase):
         second = self.auth.AuthStateValidator(
             profile_source=self.source, oauth_client=self.oauth,
             owned_transport=self.transport, coordinator=self.coordinator,
-            clock=self.clock, wall_clock=lambda: 1000.0,
+            clock=self.clock, wall_clock=self.wall,
         )
         before_read = self.codes().count("source.read")
         self.denied(
@@ -1211,7 +1299,7 @@ class AuthStateContract(unittest.TestCase):
                 profile_source=self.source, oauth_client=self.oauth,
                 owned_transport=FakeTransport(self.auth, self.events, self.clock),
                 coordinator=self.coordinator, clock=self.clock,
-                wall_clock=lambda: 1000.0,
+                wall_clock=self.wall,
             )
             with self.assertRaises(self.auth.AuthError) as raised:
                 second.admit(self.ctx, deadline=100.25)
@@ -1352,7 +1440,7 @@ class AuthStateContract(unittest.TestCase):
             profile_source=self.source, oauth_client=self.oauth,
             owned_transport=self.transport,
             coordinator=self.auth.AuthCoordinator(clock=self.clock),
-            clock=self.clock, wall_clock=lambda: 1000.0,
+            clock=self.clock, wall_clock=self.wall,
         )
         self.denied(
             "refresh_unknown", lambda: restarted.admit(self.ctx, deadline=125.0)
@@ -1379,7 +1467,7 @@ class AuthStateContract(unittest.TestCase):
             profile_source=self.source, oauth_client=self.oauth,
             owned_transport=FakeTransport(self.auth, self.events, self.clock),
             coordinator=self.auth.AuthCoordinator(clock=self.clock),
-            clock=self.clock, wall_clock=lambda: 1000.0,
+            clock=self.clock, wall_clock=self.wall,
         )
         self.denied(
             "refresh_unknown", lambda: restarted.admit(self.ctx, deadline=125.0)
