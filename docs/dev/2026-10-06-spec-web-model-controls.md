@@ -376,3 +376,7 @@ Thread/history/turn/account/auth запросы не выполнялись. Liv
 06.10 metadata-only owner probe подтвердил diagnostic compiled prefix0.160.0;
 передача thread/history/turn/account/auth requests исключена. Diagnostic version
 за existing trusted-owner boundary — compatibility hint, не attested artifact.
+
+## Состояние реализации06.10
+
+Discovery и HTTPcatalog PR44/45, sender/schema2receipts/HTTPselection PR47 объединены в main. Независимые тесты19/9/14/5/9 и source review другой моделью PASS; противоречивый vendor metadata отказ до send закрыт. UI source588fbfb: native labelled controls, explicit sticky/futurework notes и immutable pending state; independent10 + соответствующие browser regressions прошли, порядок последней HTML правки сохранён в privateproof. Combined vendorbadge/UI final browser sweep и source review/точныйCI выполняются. Production остаётся прежней: installed native/phone acceptance не выполнены, effective model/entitlement/multi-account proof не объявляются.
