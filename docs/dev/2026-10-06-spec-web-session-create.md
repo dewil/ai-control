@@ -218,6 +218,124 @@ missing binding или accepted marker. Native thread/start не вызывае�
 Corrupt/conflicting/different-context binding не удаляется/не переназначается;
 unknown остаётся unknown/error. Accepted terminal не downgraded при read failure.
 
+## Первый foundation slice: точный storage-only Python контракт
+
+Новый public test seam `bin/_control_web_create_store.py`; stdlib и existing
+metadata validators/storage fences. Production HTTP/broker/host/native paths в
+этом срезе не подключаются. Constructor injection только trusted owner Python
+API и synthetic fixtures, не CLI/body/env test switch. Сначала независимый RED;
+этот документ не объявляет реализацию готовой.
+
+Точные constructors:
+
+```python
+SessionBindings(binding_root, lock_root, receipt_root, project_path)
+CreateStore(receipt_root, bindings, project_path, *, clock=None)
+```
+
+Три roots — absolute `str|os.PathLike` owner-local paths, fixed production siblings
+выше; fixture roots private `/var/tmp`. `bindings` — exact SessionBindings instance
+с тем же canonical receipt_root; несовпадение unavailable, без attach/migration.
+`project_path` trusted owner callable existing project resolver: принимает project
+name, возвращает canonical existing absolute directory string. Он задан owner,
+не serialized request. Каждый storage method re-resolves root before lookup/write
+и перед publication сравнивает его с captured reservation root; alias drift/stale
+не переназначает record. Project grammar existing `PROJECT_RE`, UUID canonical
+full form existing session validator. `clock` optional trusted callable возвращает
+positive exact int timestamp, default time.time_ns; bool/nonpositive отказ.
+
+Context аргумент reserve/lookup — exact existing
+`_control_provider_context.ExecutionContext`, не bool/dict/legacy context.
+Reference извлекается deep copy immutable `.reference` и проверяется existing
+`validate_context_ref` после превращения nested MappingProxy в plain mapping.
+Сохраняются ровно schema/provider/account/profile_instance/adapter_revision/
+registration_snapshot поля existing reference contract, включая exact integer
+snapshot и64lowerhex hash. Context homes/env/principal не serializes/reads в
+store. Metadata-valid ExecutionContext НЕ native admission: storage не ставит
+verified/available, не резолвит profile/auth/config и не вызывает native RPC.
+
+Точные methods и returns:
+
+- `CreateStore.reserve(context,project,operation_id)` → frozen `CreateReservation`.
+  Missing record atomically fsync unknown/null candidate, existing exact authority
+  возвращается без rewrite. Same key/different exact digest/context/root конфликт.
+- `CreateStore.lookup(context,project,operation_id)` → None либо frozen reservation;
+  read-only missing roots/record не создаёт каталог/lock. Fresh context/root mismatch
+  не читает чужую запись. Corrupt record ошибкой, не None.
+- `CreateStore.capture_candidate(reservation,sid)` → frozen reservation после
+  null→SID CAS; replay same SID без rewrite, different SID conflict. Этот pure
+  method проверяет структуру/authority, но не доказывает correlation/native root.
+  Передать candidate owner вправе лишь после correlated proof; такой proof не
+  заменяется fixture boolean или storage return.
+- `SessionBindings.publish_candidate(reservation)` → frozen `SessionBinding`.
+  Требует persisted matching unknown/accepted receipt с nonnull candidate;
+  атомарный no-replace binding exact replay без rewrite, conflict без overwrite.
+  Existing receipt authority проверяется до binding read/write.
+- `CreateStore.commit_accepted(reservation,binding)` → frozen reservation;
+  re-lookup exact persisted candidate/context/root/digest и exact immutable binding,
+  atomic unknown→accepted marker. Native admission/metadata сюда не передаётся
+  fake flag: owner проверяет их до вызова. Это private storage commit, не право
+  HTTP показать production create success или открыть native session.
+- `SessionBindings.resolve(project,session_ref,sid)` → None для missing/invisible
+  prepared pair, иначе frozen binding только после matching accepted marker.
+  Corrupt/mismatching present pair ошибкой. Ни admission, ни native history IO.
+  Caller owner проверяет fresh account/profile/native admission отдельно ДО
+  bound native operation; resolve не обещает актуальности credential identity.
+
+`CreateReservation` и `SessionBinding` — frozen dataclasses, `repr=False`, exact
+read-only `.record` mapping с nested immutable context/snapshot и no mutable
+aliases. `.record` содержит только соответствующие exact private keys выше;
+copy-return не меняет bytes/identity. Внешние dict/subclass/lookalike вместо
+этих объектов отказ. Все writer methods re-read authoritative stored record,
+не доверяют его копии как разрешению перезаписи. Binding read чувствителен к
+operation/digest/context/candidate marker, не просто parsed sid/ref equality.
+
+Receipt locator закреплён project/operationUUID независимо от context_key:
+одна и та же operationUUID в том же project с другим context/root — conflict,
+не новая reservation. Context commitment проверяется до использования candidate/
+binding; same SID разных contexts возможен с разными operationUUID/session_ref.
+Иначе новая context namespace могла бы незаметно повторить unknown create.
+
+Record caps: receipt/binding ≤4096 UTF8 bytes, strict duplicate-free JSON и finite
+values, created positive exact integer; all IDs/hash/key grammars exact. Namespace
+≤10000 records и10002 directory entries включая temp/orphans; overflow отказ до
+publication. Leaves names SHA256 canonical `{kind:'create_receipt',project,
+operation_id}` + `.json`; binding names session_ref + `.json`; stable
+lock leaves analogous opaque64hex + `.lock`. Foreign filenames/inodes не chmod/
+unlink/overwrite. Paths with /data/Git ancestry, symlinks, wrong UID/mode/hardlinks,
+path/root/inode swaps fail closed; private parents/0700 store и0600 leaf, no-follow
+held FD/inode pinning и durable fsync соответствуют reviewed rename store policy.
+Initial reserve/binding используют atomic no-replace без link/unlink crash-окна;
+unsupported filesystem safe error без fallback. Updates CAS exact held FD snapshot.
+Missing read-only lookup не создаёт roots; writer создаёт только собственные
+missing fixed roots/locks, не нормализует небезопасные existing paths.
+
+Ошибки — existing `AccountError` с exact `.code`: `context_invalid` для context,
+`invalid_request` для project/UUID/object/input grammar, `stale` для resolver
+root drift, `store_conflict` для payload/candidate/binding conflict,
+`store_unavailable` для unsafe/corrupt/schema/IO/capacity/uncertain publication.
+Исключение не включает raw paths/native/principal/env/record; нет silent None при
+corruption и нет ответа «не записано» после uncertain write. Caller до native
+writer трактует store uncertainty как unknown/no dispatch; после dispatch owner
+никогда не разрешает новый native create. Accepted marker не downgraded/retried.
+
+Pure recovery — повтор `publish_candidate`/`commit_accepted` над persisted
+candidate reservation и matching binding. Foundation не имеет `create_thread`,
+`activate`, admission callback/flag или automatic recovery writer. Missing
+candidate остаётся unknown; storage не scans list/history для SID. Test writer
+проверяет actual filesystem/restart/process crash/concurrency, exact digest,
+read-only missing/invisible prepared pair, two contexts sameSID distinctref,
+conflict/corruption/unsafe inode/no overwrite/no namespace mixing и zero native/
+profile/auth effects. Positive pair commit в synthetic fixture доказывает только
+storage semantics, не production account или создание сессии.
+
+Минимальность: before code проверить reuse existing strict JSON/context validators,
+rename no-follow/private-root/lock/fsync/no-replace primitives; не копировать
+provider login/host runtime и не вводить dependency. Legacy send/rename records и
+transport не меняются. Если общий helper требует изменения reviewed behavior,
+foundation использует bounded storage primitive без broad refactor; конкретный
+выбор проверяется immutable RED и review перед implementation freeze.
+
 ## Фиксированный account-bound interactive host/routing seam
 
 Отдельный descriptor `codex-managed-chatgpt-file-interactive-v1`, pinned0.160.0,
