@@ -318,7 +318,17 @@ return unavailable rather than export unchecked rows. No history turns required.
 
 Owner session list merges ordinary native/registry rows and this confirmed loaded
 origin overlay BEFORE output pagination, full canonical(root,SID) dedup; existing
-native row preferred for metadata if it is already authoritative. Overlay-only export to existing SessionChat list uses standard row sid/title/status/
+native row preferred for metadata if it is already authoritative. If the accepted
+origin overlay is truncated, list_sessions returns safe unavailable before any
+merged row export/pagination. It cannot claim a correct page or has_more from a
+partial set: an omitted origin may sort before a returned row, and has_more=true
+cannot imply an available later page. Current bounded origin enumeration exports
+at most128 accepted origins;129 or more eligible origins can therefore make this
+list unavailable. This is an explicit bounded first-slice limitation, not a claim
+that older origins disappeared or a reason to recreate them. Future complete
+origin paging/index work is separate backlog scope; no unbounded scan or guessed
+cursor is added here. Summary still uses its documented unknown/compatible-stale
+result for incomplete evidence. Overlay-only export to existing SessionChat list uses standard row sid/title/status/
 vendor plus optional proved needs_native_attention; title null is local labelled
 «Новая сессия» fallback, never preview/native naming claim. Internal updated_at
 is for sort/cloud activity proof and is not an extra existing list API field.
