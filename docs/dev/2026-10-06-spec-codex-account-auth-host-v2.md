@@ -166,10 +166,14 @@ real fresh authenticated response в admit; это operational availability gate
 operator assertion/verification flag/local JWT не заменяют эти proofs.
 
 Require ID payload exact expected `iss=I`, `aud=C` либо array ровно [C], nonempty
-`sub=S`, integer iat/exp; optional azp если присутствует ровно C. Require fresh ID namespaced `https://api.openai.com/auth.chatgpt_account_id=W`
-ровно expectation W; pinned login/server.rs879..894 проверяет именно ID workspace.
+`sub=S`, integer iat/exp; optional azp если присутствует ровно C. Require fresh ID
+payload member `"https://api.openai.com/auth"` containing the JSON object
+`{"chatgpt_account_id": W}` (bounded additional accepted claims may be present).
+The nested workspace equals expectation W; a flat member named
+`"https://api.openai.com/auth.chatgpt_account_id"` is not this claim and cannot
+satisfy the required ID workspace. Pinned login/server.rs879..894 checks ID workspace.
 Actual access token приходит из SAME authenticated TLS TokenResponse. Если access
-содержит namespaced chatgpt_account_id, он обязан совпасть с W; отсутствие
+содержит этот nested namespaced chatgpt_account_id, он обязан совпасть с W; отсутствие
 access W допустимо по same-response issuer association, не fallback. Дополнительный
 chatgpt_user_id/user_id НЕ требуется: stable individual identity именно (iss,sub),
 не email/plan/workspaceRouting. Access sub не считается тем же полем без semantics.
@@ -322,7 +326,14 @@ is required because the durable refresh-slot contract completes only after coord
 publication, while no Delivery may be usable until that durable completion succeeds.
 No CLI/HTTP/UI/register/resolver/file-reader/TLS/native implementation, no
 production factory, and no production `supported/admit` flag. Kernel/private-view and
-owned-host proofs remain separate gates. The codeunit runs only against injected typed dependencies;
+owned-host proofs remain separate gates. The accepted pure token-response parser
+from PR65 commit `e279f957a9915bf598bdb99c10b7de9f4c1ddf3b` is reused unchanged:
+`bin/_control_codex_token_response.py` SHA256
+`538753d953a704deb40f68eacb67b9053410ac1b008a216f5956c88e3169e5e7`.
+Its exact module and accepted tests are integrated as an existing dependency,
+separately from the two authored auth-state source files. No second JWT parser or
+relaxation of the accepted parser's schema/time checks is permitted.
+The codeunit runs only against injected typed dependencies;
 their values are data for validation, never provenance or production authority.
 
 The existing `_control_codex_auth_authority.AuthCoordinator` remains the legacy pure
@@ -333,7 +344,11 @@ strict class; every coordinator reference in this FIRST CODEUNIT and its DESIGN
 corrections means this strict authority. `AuthStateValidator` accepts only that class
 or its instrumented subclass and rejects the legacy coordinator with `authority_stale`
 before any dependency I/O. There is no legacy-mode option or permissive branch in the
-strict coordinator. Existing immutable schema helpers/value types may be reused, but
+strict coordinator. The validator and strict coordinator use the existing exact
+`_control_codex_auth_authority.AuthScope` class and `_snapshot` schema helper;
+the unchanged accepted parser requires `type(expected) is AuthScope`, not a new
+strict scope type or subclass. Other immutable schema helpers/value types may be
+reused, but
 strict lease, guard, reservation, provisional-publication, and final-stamp registries
 are independent. A legacy lease/guard/stamp or a fabricated value with matching fields
 cannot authorize a strict operation or Delivery. The Delivery factory requires the
@@ -343,10 +358,14 @@ tests stay unchanged; new auth-state tests construct and subclass the strict exp
 alias. This separation is synthetic API compatibility, not production integration.
 
 Exact immutable values are `repr=False`; caller-owned data is deep-copied, and no
-public value contains secrets, paths, or FDs. `TLSExchange.body` is the sole private
-transient exception: it contains the bounded token-bearing OAuth response solely
-inside the validator/parser and must never be repr'd, serialized, logged, persisted,
-placed in Delivery/context, or included in exceptions/metrics.
+public value contains secrets, paths, or FDs. Among these typed envelope/context
+values, `TLSExchange.body` is the sole private token-bearing field: the bounded
+OAuth response. Private source-read values, parser output tokens and private
+OAuth/transport argument payloads are transient implementation data, not public
+capabilities. They must never be repr'd, logged, exported, placed in Delivery/context
+or CapturedCallback, or included in exceptions/metrics. Only the separately reviewed
+selected-source rotation protocol may persist the new refresh token; transport
+serialization is solely the exact private native auth frame specified here.
 
 - `AuthContext(reference,expected_native_principal,execution_identity)` enforces the
   exact V2 metadata/principal/execution schemas. `capture_auth_context(...)` is a
@@ -420,11 +439,16 @@ Transport exposes `capture(ctx,*,validator_id,deadline)->OwnedChannel`,
 `capture_callback(channel,request_id,params,*,deadline)->CapturedCallback`,
 `validate_current(channel,ctx,*,deadline)`, `validate_callback(callback,channel,*,deadline)`,
 `login(channel,payload,*,guard,deadline)->LoginReceipt`, and
-`write_refresh(channel,callback,*,guard,deadline)->WriteReceipt`. The login payload
+`write_refresh(channel,callback,payload,*,guard,deadline)->WriteReceipt`. The login payload
 and exact positive JSON-RPC result are fixed above; `login` generates and records its
 own UUIDv4 request id in the JSON-RPC frame and returns the correlated id in the
-receipt. Refresh writes only the captured callback response, on the same channel and
-request id. None of the injected protocols
+receipt. The private refresh payload is exactly
+`{"accessToken": parsed.access_token, "chatgptAccountId": W, "chatgptPlanType": null}`;
+it has no `type`, ID token, or refresh token. Login has the same three fields plus
+`"type": "chatgptAuthTokens"`. The actual accepted parser's access token is supplied
+directly; no hidden setter or token-bearing callback mutation. The trusted writer
+wraps that payload as the captured callback's JSON-RPC result on the same channel
+and exact request id. None of the injected protocols
 accept caller-supplied endpoint/path/token-verification switches.
 
 Duplicate capture for one live channel/request returns the same callback capability;
@@ -656,6 +680,18 @@ FIRST unit parses JWT claims/header from SAME fresh directly authenticated TLS
 response under OIDC3.1.3.7, no standalone JWS crypto verifier. Trusted DI tests may
 use RS256 header/nonempty structural base64url signature with typed fake TLSExchange;
 alg none/other reject, at_hash verified. No production TLS/JWS claim or local JWT trust.
+The validator constructs the existing exact authority `AuthScope` from the context
+and calls accepted
+`parse_token_response(status, body, scope, request_start_wall=started_wall,
+response_end_wall=received_wall, evaluation_wall=wall_clock())`. These three wall
+samples must be finite, nonnegative and ordered start <= response end <= evaluation;
+never clamp or fabricate evaluation time to accept an incoherent response. Synthetic
+wall clocks must advance coherently with the fake response, independently of the
+monotonic deadline clock. Call `parsed.usable_at(wall_clock())` again before native
+enqueue, requiring both expiries >= that actual sample +30s. Parser error codes map
+to the frozen closed `AuthError` vocabulary; no retained parser exception cause,
+context, body, claim or token text may escape. Parser results validate data consistency
+only and never authenticate the injected TLS envelope or enable production admission.
 
 ## Mac DESIGN correction06.10: final external fences (pending review)
 
@@ -882,6 +918,13 @@ Blind RED also proves that the legacy coordinator is rejected by the validator b
 dependency I/O, and that legacy/fabricated leases, guards and final stamps cannot be
 used as strict capabilities or Delivery authority. The existing legacy foundation
 suites remain regression requirements and retain their original expectations.
+Blind RED additionally proves canonical nested ID workspace acceptance, flat-only
+ID workspace rejection, coherent start/end/evaluation wall samples without clamping,
+and rejection of a response whose received wall time exceeds actual evaluation.
+The refresh fake verifies the exact three-field private result payload carries the
+fresh returned access token, selected workspace and null plan, and the writer uses
+the captured callback request id. No token is retained by callbacks or Delivery;
+accepted parser tests remain unchanged.
 The remaining expanded blind RED must prove: (1) reserve precedes the only OAuth call
 and a failed/uncertain reserve causes zero calls; (2) exact attempt id is threaded through source
 rotation and terminal finish; a foreign, stale, abandoned, or not-yet-durable
