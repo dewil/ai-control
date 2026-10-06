@@ -44,7 +44,7 @@ SessionChat constructor получает optional rename_store; прежние �
 фиксированный sibling `web-rename-receipts` рядом с existing send receipt root;
 read-only lookup не создаёт каталог. Same storage policies: outside /data/Git,
 owner0700/leaf0600/nlink1/no-follow, stable private lock, finite strict JSON≤4096,
-atomic fsync publication, no overwrite foreign inode/normalization insecure paths.
+atomic fsync publication, no overwrite foreign inode/normalization insecure paths. Process crash во время initial publication не оставляет record с nlink2: restart lookup/status сохраняет unknown/accepted receipt без ослабления запрета foreign hardlinks. Production fixed transport разрешает именно thread/name/set, без wildcard/arbitrary native methods. Linux atomic no-replace primitive поддерживается явно; отсутствие syscall/filesystem capability не заменяется unsafe overwrite или link/unlink fallback.
 Новые records не попадают в history.recent_sends и не читаются как message receipts.
 
 `SessionChat.rename(project,sid,operation_id,title)` и
