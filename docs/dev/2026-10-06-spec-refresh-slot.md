@@ -1,4 +1,4 @@
-# New V2 refresh source slot — DRAFT before independent DESIGN
+# New V2 refresh source slot — frozen independent DESIGN contract
 
 Owner CONTROL-PROVIDER-ACCOUNTS. Module bin/_control_codex_refresh_slot.py.
 Local filesystem source transaction only, synthetic private namespaces in tests.
@@ -99,7 +99,10 @@ Generation overflow refuses. Success updates captured generation only after dura
 completion. Any ambiguous stage after pending reservation poisons refresh_unknown.
 If provider returns no rotated token, skip commit; old source remains with pending.
 Any external/source/ref/lock replacement after reservation poisons refresh_unknown,
-which takes precedence over authority_stale and all other input/IO errors; never overwrites
+after valid supplied scope and exact owned lease have been validated FIRST.
+Malformed/foreign supplied scope or lease always authority_stale before clock/FS;
+for that valid pending owner, source drift/invalid operation fields/IO uncertainty
+are refresh_unknown and poison the lease. Never overwrites
 an unrecognized source. Atomic replace relies on cooperating owner filesystem lock;
 this unit does not claim prevention of hostile same-uid writes between fences.
 
@@ -151,3 +154,7 @@ pendingrestart denial,
 terminalcompletion crash outcome, no credential migration/provider/native effects.
 Grants resolver guard, private kernel view, fresh fixed verifiedTLS request/response
 association, pinned exclusive owned native stdio, actual two accounts remain gates.
+
+Independent refresh_slot_design repeat DESIGN READY d031e61 on 2026-10-06.
+Freeze precedes blind RED; editorial precedence above distinguishes foreign caller
+from detected external drift on a valid pending lease. No actual credential IO.
