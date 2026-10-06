@@ -24,7 +24,13 @@
       <ol id="chat-items" class="chat-items" aria-label="История переписки"></ol>
       <p id="history-truncated" class="truncation" hidden>История показана не полностью. Некоторые сообщения могут отсутствовать или быть сокращены.</p>
       <div id="receipt-list" class="receipt-list"></div>
-      <form id="chat-form"><label for="chat-draft">Сообщение</label><textarea id="chat-draft" maxlength="16000" autocomplete="off"></textarea><div class="chat-actions"><button id="chat-send" type="submit">Отправить</button><button id="send-check" type="button" class="secondary" hidden>Проверить доставку</button><span id="send-status" role="status" aria-live="polite"></span></div></form>
+      <p id="model-status" class="meta" role="status" aria-live="polite"></p>
+      <div id="model-notes" class="meta" hidden><p>Выбор сохраняется для следующих сообщений; перед отправкой можно изменить</p><p>Уже начатая работа сохраняет свои настройки; выбор действует при следующем запуске</p></div>
+      <form id="chat-form">
+        <div class="model-controls"><label for="chat-model">Модель<select id="chat-model"><option value="">Наследовать текущую</option></select></label><label for="chat-effort">Уровень размышления<select id="chat-effort"><option value="">Выберите уровень размышления</option></select></label></div>
+        <button id="models-refresh" type="button" class="secondary">Обновить список моделей</button>
+        <label for="chat-draft">Сообщение</label><textarea id="chat-draft" maxlength="16000" autocomplete="off"></textarea><div class="chat-actions"><button id="chat-send" type="submit">Отправить</button><button id="send-check" type="button" class="secondary" hidden>Проверить доставку</button><span id="send-status" role="status" aria-live="polite"></span></div>
+      </form>
     </section>
     <div class="page-navigation"><button type="button" class="secondary" data-page-scroll="up">↑ В начало</button><button type="button" class="secondary" data-page-scroll="down">↓ В конец</button></div>
   </section>
