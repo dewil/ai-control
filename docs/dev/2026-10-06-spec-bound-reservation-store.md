@@ -130,3 +130,19 @@ server account/runtime operations. Full C/I/A/stop/native/auth gates remain sepa
 
 Independent reservation_design repeat DESIGN READY for 2886e45 on 2026-10-06.
 This freeze precedes source-blind RED; no Linux behavior proof is implied.
+
+## SOURCE correction contract before independent fault RED
+
+Absent create=False result MUST revalidate EVERY held ancestor against the current
+configured pathname AFTER every trusted clock callback, including final-component
+absence. A held stale ancestor FD cannot authorize returning None. Replacement
+path with a namespace under it refuses store_unavailable rather than old-FD absence.
+
+Namespace enumeration must be streaming and bounded: consume at most10001 physical
+entries, then fail closed if over10000; do not first materialize an unbounded whole
+directory list. All names count, including malformed/temp/orphans. Check original
+shared deadline during scan and large final-fence passes, and before returning
+absence/receipt or permitting a publication. Exhaustion during those passes is
+store_unavailable, no new R/normal receipt. Deadline callbacks retain existing
+base/anchor revalidation obligation before effects; no renewed budget or successful
+late result. Actual Linux fault RED precedes fixing these SOURCE findings.
