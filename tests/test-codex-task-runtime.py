@@ -368,7 +368,7 @@ class RuntimeContract(unittest.TestCase):
             self.assertEqual(index.read_text(), raw)
             self.assertEqual(self.effects, [])
 
-    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False, native_history_default=False, approval_resolution=None, ordinary_materialization=None, rollout_registry=None, resume_path_mismatch=False, answer_lock_contention=None, slow_ordinary_callback=False):
+    def discovery_fixture(self, *, config_failure=False, invalid_names=False, second_launch_failure=False, native_mode=None, child_mismatch=None, retained_cell=False, default_checkpoint=False, human_decision=None, approval_state=None, checkpoint_crash=False, readiness_mode=None, readiness_drift=None, bootstrap_publication_fault=False, asynchronous_bootstrap=None, registry_wire=None, bootstrap_noise=None, registry_sequence=None, checkpoint_prepare_crash=False, native_history_default=False, approval_resolution=None, ordinary_materialization=None, rollout_registry=None, resume_path_mismatch=False, answer_lock_contention=None, slow_ordinary_callback=False, expire_stalled_semantic=False):
         from _codex_task_host import HostSnapshot
         from _codex_task_profile import sealed_overrides
         case = self
@@ -390,6 +390,7 @@ class RuntimeContract(unittest.TestCase):
         rollout_frames = []
         rollout_reads = []
         clock_offset = [0.0]
+        semantic_expired = [False]
         fixture_clock = lambda: time.monotonic() + clock_offset[0]
         case.registry_observation_deadlines = []
         from _codex_task_files import CodexTaskFiles
@@ -554,6 +555,19 @@ class RuntimeContract(unittest.TestCase):
                 self.ordinary_history_polls = 0
                 self.slow_events = None
 
+            def expire_semantic_resolution_wait(self):
+                # INV-RTFIX-02: a subsequent empty history/receive probe means
+                # previously queued resolution/completion events were processed.
+                if (expire_stalled_semantic and approval_replies and not self.events
+                        and approval_resolution in ('missing', 'wrong_type', 'wrong_thread')
+                        and not semantic_expired[0]):
+                    case.assertEqual(order.count('reply_approval'), 1)
+                    if approval_resolution != 'missing':
+                        case.assertIn('native_resolution_delivered', order)
+                    semantic_expired[0] = True
+                    clock_offset[0] += 60
+                    order.append('semantic_resolution_wait_expired')
+
             def deliver_slow_ordinary_callback(self):
                 if self.slow_events is not None:
                     clock_offset[0] += 20
@@ -657,9 +671,18 @@ class RuntimeContract(unittest.TestCase):
                                 'excludeTmpdirEnvVar': True, 'excludeSlashTmp': True,
                                 'writableRoots': [str(case.agent / 'work')]}}
                     if method == 'thread/read':
+                        self.expire_semantic_resolution_wait()
                         self.deliver_slow_ordinary_callback()
                         if self.ordinary_pending_items is not None:
                             self.ordinary_history_polls += 1
+                            # INV-RTFIX-02: reach two real missing-message observations
+                            # before expiring the synthetic wait, independently of CI load.
+                            if (expire_stalled_semantic and ordinary_materialization == 'never'
+                                    and self.ordinary_history_polls == 3 and not semantic_expired[0]):
+                                case.assertEqual(order.count('ordinary_user_message_not_materialized'), 2)
+                                semantic_expired[0] = True
+                                clock_offset[0] += 60
+                                order.append('semantic_ordinary_wait_expired')
                             if self.ordinary_history_polls == 1 or ordinary_materialization == 'never':
                                 order.append('ordinary_user_message_not_materialized')
                             else:
@@ -879,6 +902,7 @@ class RuntimeContract(unittest.TestCase):
                         case.assertEqual(confirmed, [], 'Confirmed receipt preceded native resolution')
                         order.append('native_resolution_delivered')
                     return event
+                self.expire_semantic_resolution_wait()
                 raise TimeoutError('offline fixture empty')
 
             def reply_dynamic(self, request_id, result, *, thread_id, turn_id, call_id, deadline):
@@ -1868,7 +1892,7 @@ class RuntimeContract(unittest.TestCase):
                 try:
                     case.publish_registry()
                     controller, hosts, calls, order = case.discovery_fixture(native_mode=mode)
-                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 3)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 30)
                     self.assertEqual(result['outcome'], expected)
                     self.assertEqual(order.count('reply_dynamic'), 1)
                     self.assertTrue(all(h.phase == 'stopped' for h in hosts))
@@ -2219,10 +2243,19 @@ class RuntimeContract(unittest.TestCase):
                 try:
                     case.publish_registry()
                     controller, hosts, calls, order = case.discovery_fixture(native_mode='read',
-                        ordinary_materialization=materialization)
-                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 1)
+                        ordinary_materialization=materialization, expire_stalled_semantic=True)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 30)
                     self.assertIn(result['outcome'], ('blocked', 'unknown'))
                     self.assertIn('ordinary_start_returned_before_user_message', order)
+                    if materialization == 'never':
+                        self.assertGreaterEqual(order.count('ordinary_user_message_not_materialized'), 2)
+                        self.assertEqual(order.count('semantic_ordinary_wait_expired'), 1)
+                        observations = [i for i, item in enumerate(order)
+                            if item == 'ordinary_user_message_not_materialized']
+                        self.assertLess(observations[1], order.index('semantic_ordinary_wait_expired'))
+                    else:
+                        self.assertIn('ordinary_user_message_materialized', order)
+                        self.assertNotIn('semantic_ordinary_wait_expired', order)
                     self.assertEqual(sum(method == 'turn/start' for method, params in calls), 2)
                     self.assertNotIn('reply_dynamic', order)
                     self.assertNotIn('checkpoint_commit', order)
@@ -2272,10 +2305,18 @@ class RuntimeContract(unittest.TestCase):
                 try:
                     case.publish_registry()
                     controller, hosts, calls, order = case.discovery_fixture(native_mode='approval_full',
-                        human_decision='decline', approval_resolution=resolution)
-                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 1)
+                        human_decision='decline', approval_resolution=resolution, expire_stalled_semantic=True)
+                    result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 30)
                     self.assertIn(result['outcome'], ('blocked', 'unknown'))
                     self.assertEqual(order.count('reply_approval'), 1)
+                    if resolution == 'missing':
+                        self.assertNotIn('native_resolution_delivered', order)
+                        self.assertEqual(order.count('semantic_resolution_wait_expired'), 1)
+                    else:
+                        self.assertIn('native_resolution_delivered', order)
+                        if 'semantic_resolution_wait_expired' in order:
+                            self.assertLess(order.index('native_resolution_delivered'),
+                                order.index('semantic_resolution_wait_expired'))
                     questions = list((case.agent / 'questions').glob('*.json'))
                     self.assertEqual(len(questions), 1)
                     question = json.loads(questions[0].read_text())
