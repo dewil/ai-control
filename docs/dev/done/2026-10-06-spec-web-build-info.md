@@ -32,3 +32,6 @@ Independent DESIGN, source-blind tests tests/test_control_web_build_info.py (pur
 
 ## Уточнение DESIGN06.10
 Actual gpt-6-sol/medium DESIGN01a11127 отметил возможность произвольных CLI timestamp/branch overrides. Они исключены из CLI: только captured local Git + single UTC clock. Pure render arguments остаются для deterministic synthetic tests, не runtime endpoint/packaging override. Production сборка использует только --release-id; root packaging проверяет frozenrelease-id и branch capture evidence до подписания.
+
+## Уточнение SOURCE06.10
+Actualgpt6-sol/medium SOURCE01a1112d обнаружил запись через symlink HTML за пределы designatedleaf. Utility отказывает для symlink/nonregular leaf и symlink bin parent без изменения target. Итог записывается атомарной заменой локального HTML через anchored bin directory FD; не открывать конечный путь на запись с followlinks. Если leaf меняется после чтения, replacement всё равно не пишет через symlink или hardlink в посторонний inode. Synthetic symlinkleaf/binparent tests RED до narrowfix. Runtime/helper unaffected.
