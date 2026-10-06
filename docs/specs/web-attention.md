@@ -59,3 +59,7 @@ proof, без navigation/fresh claims; current authority refusal/revocation clea
 inflight polling запрещают resurrect/downgrade после late response. Routine same-scope
 poll сохраняет last valid display/expansion/focus без active navigation; response
 failure или auth/scope change очищает protected rows. Никаких writers.
+
+UI observed_at: top positive safe integer, source null|positive согласно health;
+unsupported sources null/completeFalse, stale retention при null source health
+не parser error. Raw duplicate-key decoding и generation fence до TASK DOM обязательны.

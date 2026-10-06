@@ -37,13 +37,21 @@ Source health unsupported не скрывается даже при успешн
 ## Exact DTO parsing и атомарное render
 
 Ответ проверяется целиком до DOM: exact schema1/top fields, source keys/enums/
-health, finite numbers/plain safe nonnegative integer revision/counts, positive
-safe integer observed_at, 32hex epoch,64hex opaque keys, canonical UUID targets,
+health, finite numbers/plain safe nonnegative integer revision/counts,
+TOP-LEVEL observed_at — positive safe integer (не null). PER-SOURCE observed_at —
+null ИЛИ positive safe integer по source-health schema: fresh+complete=True требует
+positive observed_at и reason=None; complete=False допускает null/positive по
+backend contract. Unsupported activity/native_callbacks требуют EXACT observed_at=None,
+complete=False,reason=unsupported. TASK unavailable/partial source с null observation
+и authorized stale retention — valid DTO, не parser failure. 32hex epoch,
+64hex opaque keys, canonical UUID targets,
 project/name/text caps из pool schema, boolean complete/truncated. UTF8 encoded
 body<=128KiB, arrays sessions<=256/unlinked<=128/reasons<=512. No duplicate keys
 (включая raw JSON), duplicate identities/reason references, dangling references,
 несогласованные counts/target identity, unknown fields или unsafe strings.
 Невалидный/oversize ответ => unavailable, не частично rendered cards.
+Implementation читает BOUNDED RAW response и decoder отвергает duplicate JSON keys
+до обычного object parsing; existing response.json() само по себе этого не доказывает.
 
 Первый UI принимает только declared TASK-only capability: sessions empty,
 pool counts0, activity/native_callbacks unsupported с complete=False;
@@ -195,6 +203,9 @@ current kind info/permission согласно reason, status=open, answered=Fals
 Changed/missing key/qid/generation/state => «Задача изменилась. Обновите обзор»,
 не focus другого/recreated agent и не auto-select nearest task. Raw errors не показаны.
 
+Fresh TASK GET renderer проверяет captured auth/scope/navigation-request generation
+ПЕРЕД любым DOM assignment/status/focus: existing unguarded refresh() не используется
+как готовая fenced navigation implementation; late task response не resurrect cards.
 Renderer прежнего #cards добавляет только validated attributes:
 article.card[data-agent][data-task-key] и tabindex=-1; question container
 [data-qid], result container [data-result-generation]. Используются нынешние
@@ -211,7 +222,10 @@ history fetch, project/session/deeplink guessing. Existing explicit TASK actions
 Independent browser RED до source: initial running unavailable + distinct TASK
 badges; pending delivery separate; multi-reason sameTASK dedup/count lower bounds;
 6-prefix/expand caps; no fabricated session links/idle; incomplete/truncated labels.
-Malformed/duplicate/dangling/private DTO fail closed без leaked labels; DOM text
+Valid unsupported NULL source health и TASK unavailable/partial NULL health с
+retained stale reasons принимаются, source не считается fresh и navigation disabled;
+TOP observed_at=null отвергается. Malformed/duplicate/dangling/private DTO fail closed
+без leaked labels; DOM text
 escaping; readonly clicks have zero POST/history calls. Current fullkey/qid/result
 navigation focus succeeds; recreated sameagent/absentkey/changedgeneration refuses.
 Logout/401/grant refresh/selectionABA/visibility/olderepoch-revision late completion
