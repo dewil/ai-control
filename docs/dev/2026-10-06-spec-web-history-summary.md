@@ -1,36 +1,58 @@
-# История сессии без полного служебного payload
+# История сессии небольшими native страницами
 
-Owner CONTROL-WEB-SESSIONS. Incident: выбранная `control` отображается в списке,
-но история возвращает unavailable. Actual installed `da0ed863`: запрос
-thread/turns/list с full itemsView закрывает WebSocket кодом 1009 при лимите4MiB.
-На том же thread readonly summary probe получает4turns/123086bytes за10ms,
-а существующий SessionChat.history формирует текстовую историю за43ms.
-Авторизация, thread state и файлы переписки не изменялись; текст не логировался.
+Owner CONTROL-WEB-SESSIONS. Incident: installed da0ed863 full turns/list
+limit4 закрывает WebSocket 1009 (>4MiB). Summary-only draft563518a НЕ принят:
+pinned0.160 summary оставляет только first-user и final-agent, теряет commentary.
+Его synthetic RED17c974 сохраняется как отвергнутый вариант, не acceptance этого fix.
+Readonly proof samecontrol: notLoaded1turn530bytes/10ms; per-turn items/list
+16entries40725bytes/5ms,1textitem; весь probe45ms. No writers/auth/textlogs.
 
-## Норма перед исправлением INV-WSESS-03
+## INV-WSESS-03: загрузка истории, отдельно от send_status
 
-История использует explicit itemsView=summary, descending order. Native summary
-должен сохранять исходные userMessage text и agentMessage text; source evidence
-pinned0.160 для этой гарантии проверяется до кода. Heavy tool/image payload не нужен
-текстовой ленте и не требует full mode. Не увеличивать предел WebSocket, не делать
-fallback full/resume, не угадывать конец истории после отказа.
+History получает metadata через thread/turns/list explicit itemsView=notLoaded,
+sortDirection=desc, latest limit4/Older limit8, existing opaque turncursor.
+Каждый turn имеет исходные id/status/startedAt и пустой items; неожиданные items
+или view, malformed response, duplicate turn IDs, invalid cursor → unavailable.
+Для каждого turn, от нового к старому, thread/items/list принимает EXACT sid,
+turnId, sortDirection=desc, limit32; cursor только native string continuation,
+первый запрос без cursor. Data — ThreadItemEntry с EXACT turnId и item.
+Каждая страница ≤32 entries; validator existing identity/type/text rules,
+no duplicate item IDs, no repeated/self cursor, no wrong-turn injection.
+Последовательность newest-first разворачивается в chronological items каждого turn.
 
-Остальные параметры сохраняются: latest безcursor limit4/24textitems, Older
-limit8/128textitems, строгие UUID/root proof, native cursor, secret redaction,
-96KiB encoded output,8000char text, явный truncated и receipts/context fences.
-Устаревшие tests, прямо требующие full, меняются независимым test writer только
-на summary согласно этой новой норме; остальные assertions не ослабляются.
+На каждый turn максимум4 страницы (128entries), в запросе latest≤16 item RPC,
+Older≤32 item RPC. Кумулятивный encoded native item-response budget8MiB,
+неизменённый operation deadline и frame cap4MiB. Если4страницы исчерпаны и
+nextCursor есть — existing response truncated=true: это bounded tail, не complete.
+Если следующая успешно полученная страница превысила total8MiB, она не включается,
+оставшаяся гидрация прекращается, truncated=true. Невалидная/ошибочная страница,
+1009/single huge item, timeout → unavailable, не fake end/summary/full fallback.
+Даже empty metadata response обязан пройти existing scope/context fences.
 
-## Независимые RED и завершение
+Native tool/reasoning/image payload не экспортируется; в памяти retained
+projection только supported user text /agent text и bounded metadata; не сохранять
+большие tool outputs между native страницами. Latest24/Older128 supported text
+items,8000char/text,96KiB encoded output, redaction/timestamps/truncation unchanged.
+Existing full turncursor как был; truncated предупреждает про пропуски внутри
+turn по bounded scan, новый UI режим/поиск/длинный replay в этой задаче не вводится.
 
-Fake native receiver отвергает full payload >4MiB (моделирует1009), но отдаёт
-bounded summary с полными текстами и тяжёлыми неэкспортируемыми item types.
-Latest и Older запрашивают summary; latest/older limit/cursor неизменны.
-Полный разрешённый текст, pagination, truncation/redaction/root/context и HTTP
-ошибки сохраняются. Tests semantic RED против f9 BEFORE implementation.
-После минимального fix: scoped history/socket/broker/browser regressions,
-независимая SOURCE сверка, exact full CI, reviewed deploy и readonly installed
-проверка того же thread. Native/auth writers и multiaccount вне этой задачи.
+Thread/root proof перед чтением; context checks и monotonic remaining budget между
+страницами, final root/context proof и scoped receipts перед export. Никаких
+resume/start/native mutations. InteractiveRPC METHODS добавляет только readonly
+thread/items/list. Общий _page и send_status остаются full: поиск user.clientId
+не должен потерять steering messages. Никаких изменений auth/account/controller.
 
-Known gate: pinned native summary semantics и RED ещё не закрыты; этот документ
-не утверждает готовый код или установленное исправление.
+## Acceptance перед кодом
+
+Independent synthetic RED before implementation: oversized full turn has >4MiB
+unexported tool output, notLoaded metadata +bounded per-item pages preserve
+intermediate commentary AND steering user text; latest and Older exact turncursor,
+order/item limits preserved;4page cap sets truncated; wrongturn/duplicatecursor/
+malformed page fail honestly; send_status retains full and finds steering clientId.
+Existing fake-native fixture methods дополняются только items paging according
+to same synthetic turn data, existing assertions unchanged EXCEPT history's explicit
+full itemsView assertions become notLoaded with comment superseded norm. Receipt
+recovery full assertions unchanged. No tests generated from new production code.
+After fix scoped history/receipts/context/socket/broker/browser regressions,
+actual independent SOURCE review, exact full CI, reviewed deploy +readonly installed
+same-thread proof. No multiaccount work. Initial summary tests/spec not codeGO.
