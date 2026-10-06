@@ -324,6 +324,8 @@ class AuthStateContract(unittest.TestCase):
         self.publish_before_hook = None
         self.publish_after_hook = None
         self.last_provisional = None
+        self.last_final_stamp = None
+        self.final_stamp_transform = None
         self.last_authority_lease = None
         self.source = FakeSource(self.auth, self.events)
         self.oauth = FakeOAuth(self.auth, self.events, self.clock)
@@ -407,8 +409,11 @@ class AuthStateContract(unittest.TestCase):
                     owner.complete_before_hook()
                 result = super()._complete_terminal(*args, **kwargs)
                 events.append(("coordinator.complete", None))
+                owner.last_final_stamp = result
                 if owner.complete_after_hook is not None:
                     owner.complete_after_hook()
+                if owner.final_stamp_transform is not None:
+                    return owner.final_stamp_transform(result)
                 return result
 
         self.coordinator = RecordingCoordinator(clock=self.clock)
@@ -435,9 +440,31 @@ class AuthStateContract(unittest.TestCase):
     def admit(self):
         return self.validator.admit(self.ctx, deadline=125.0)
 
+    def duplicate_strict_stamp(self, real):
+        builders = (
+            lambda: copy.copy(real),
+            lambda: copy.deepcopy(real),
+            lambda: type(real)(real.owner_generation, real.credential_generation),
+        )
+        for build in builders:
+            try:
+                duplicate = build()
+            except (TypeError, ValueError):
+                continue
+            if duplicate is not real and type(duplicate) is type(real):
+                self.assertEqual(duplicate.owner_generation, real.owner_generation)
+                self.assertEqual(
+                    duplicate.credential_generation, real.credential_generation
+                )
+                return duplicate
+        self.fail("strict final stamp cannot be duplicated for provenance RED")
+
     def test_strict_coordinator_export_is_exact_independent_class(self):
         self.assertIs(self.auth.AuthCoordinator, self.authority.AuthStateCoordinator)
         self.assertIsNot(self.auth.AuthCoordinator, self.authority.AuthCoordinator)
+        self.assertFalse(issubclass(
+            self.auth.AuthCoordinator, self.authority.AuthCoordinator
+        ))
         self.assertIsInstance(self.coordinator, self.auth.AuthCoordinator)
 
     def test_legacy_coordinator_is_rejected_before_dependency_io(self):
@@ -538,6 +565,36 @@ class AuthStateContract(unittest.TestCase):
         finally:
             self.coordinator.release(strict_lease)
             legacy.release(legacy_lease)
+
+    def test_fabricated_strict_stamp_with_matching_fields_cannot_create_delivery(self):
+        self.final_stamp_transform = self.duplicate_strict_stamp
+        self.denied("refresh_unknown", self.admit)
+        self.assertIsNotNone(self.last_final_stamp)
+        self.assertIn("source.finish", self.codes())
+        self.assertIn("coordinator.complete", self.codes())
+        self.assertEqual(len(self.oauth.requests), 1)
+
+    def test_real_strict_stamp_from_earlier_attempt_cannot_authorize_refresh(self):
+        initial = self.admit()
+        borrowed = self.last_final_stamp
+        self.assertIsNotNone(borrowed)
+        callback = self.validator.capture_callback(
+            initial, 87,
+            {"reason": "unauthorized", "previousAccountId": WORKSPACE},
+            deadline=125.0,
+        )
+        self.final_stamp_transform = lambda actual: borrowed
+        self.denied(
+            "refresh_unknown",
+            lambda: self.validator.refresh(initial, callback, deadline=125.0),
+        )
+        self.assertIsNot(self.last_final_stamp, borrowed)
+        self.assertEqual(self.codes().count("coordinator.complete"), 2)
+        self.assertEqual(self.transport.write_count, 1)
+        self.denied(
+            "authority_stale",
+            lambda: self.validator.current(initial, self.ctx, deadline=125.0),
+        )
 
     def test_success_reserves_before_exchange_and_finishes_before_delivery(self):
         delivery = self.admit()
