@@ -1,17 +1,17 @@
 # Read-only attention foundation: validation
 
-Status: source frozen for independent review; no production adapter, endpoint,
+Status: different-model source review and independent focused QA PASS; no production adapter, endpoint,
 UI, deploy-helper change or installed claim. Accepted design is
 `1f63794cd2cb53c0e4bc1a06c180d4211fef6f25` (INV-WATTN-01..03).
 
 ## Frozen artifacts
 
-Module source commit: `2a9aa9d93c404acf3fd656bffaee46608c20fe66`.
+Module source commit: `f5ddc3fa771e72db593c23041ccc045cdcdddc43`.
 
 | Artifact | SHA256 |
 |---|---|
-| `bin/_control_web_attention.py` | `1051011cc7fe475b3d788ab15634beae9d8751b9006b78141975f9f8d6cca6d6` |
-| `tests/test_control_web_attention.py` | `a84c33f677fc09dbaae0d10c4ed6828c18cba2984561496fdd8ae9aa5a2e351b` |
+| `bin/_control_web_attention.py` | `8030b3e40e240ceb33b5419a77e2af012b730efc3a7c38fb41f87d55faf6ff26` |
+| `tests/test_control_web_attention.py` | `2124cbd2d19713519e76b9886418b840e7818c090db818171fb0b29a63776648` |
 
 The author did not edit independent tests. Initial immutable source-absent
 baseline: 7 semantic failures, 0 errors. Independent corrections fixed owner-view
@@ -23,7 +23,7 @@ Independent final source-absent baseline: 8 semantic failures, 0 errors.
 
 | Check | Result |
 |---|---|
-| Final attention contract, `python3 -m unittest discover -s tests -p test_control_web_attention.py` | 8 PASS, 0.006s |
+| Final attention contract, `python3 -m unittest discover -s tests -p test_control_web_attention.py` | 10 PASS, 0.008s |
 | Existing registry metadata, same discovery with `test_control_web_registry_interop_contract.py` under existing web-test venv | 2 PASS, 0.015s |
 | Existing operation storage, `python3 tests/test-codex-task-operation-store.py` | 64 PASS, 127.258s |
 | Private synthetic contract probes | 9 PASS |
@@ -41,9 +41,10 @@ The composer uses only compact injected sources and the trusted view, validates
 bindings/grants before output, keeps bounded process-local retention, fences the
 final view, and reuses the existing display redactor. None activity/callback
 adapters report unsupported; known counts are emitted lower bounds, not an
-assertion of a complete working fleet. Source review and integration acceptance
-remain outstanding.
+assertion of a complete working fleet. Actual gpt-6-sol/medium repeat source review PASS closes two findings: GET-only revision increments and retained reasons across a source epoch change. Independent addendum reproduced 2 failures, 8 passes, 0 errors before the fix; final independent QA passed all 10 tests with source/test hashes unchanged. Hosted CI and integration acceptance remain outstanding.
 
 `bin/_control_web_attention.py` is outside the current fixed13 signed helper
 allowlist. Production installation/wiring requires separate reviewed source-path
 and scope acceptance. This change does not alter the approved bootstrap/helper.
+
+Main was integrated after the source freeze; only an existing browser test fixture changed. Reviewed module and independent test bytes remain unchanged.
