@@ -308,15 +308,20 @@ class AttentionUIBrowserRED(unittest.TestCase):
 
     def test_scope_aba_late_response_and_navigation_require_fresh_exact_task_identity(self):
         self.panel()
+        self.page.get_by_role("tab", name="Сессии").click()
+        alpha = self.page.get_by_role("button", name=re.compile("^alpha\\b"))
+        beta = self.page.get_by_role("button", name=re.compile("^beta\\b"))
+        alpha.wait_for(state="visible")
+        beta.wait_for(state="visible")
         self.assertEqual(self.page.locator("#project-cloud button").count(), 2)
         old = _attention_fixture(label_prefix="Old scope sentinel")
         self.raw_attention = json.dumps(old, ensure_ascii=False, separators=(",", ":"))
         self.hold_next_attention = True
         self.refresh()
         self.assertIsNotNone(self.pending_attention, "manual refresh should issue one attention GET")
-        self.page.get_by_role("button", name=re.compile("^alpha\\b")).click()
-        self.page.get_by_role("button", name=re.compile("^beta\\b")).click()
-        self.page.get_by_role("button", name=re.compile("^alpha\\b")).click()
+        alpha.click()
+        beta.click()
+        alpha.click()
         current = _attention_fixture(label_prefix="Current scope sentinel")
         self.raw_attention = json.dumps(current, ensure_ascii=False, separators=(",", ":"))
         pending, delayed_raw, delayed_status = self.pending_attention
