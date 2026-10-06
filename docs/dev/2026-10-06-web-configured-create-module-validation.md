@@ -21,7 +21,7 @@ PR52 bound storage source SHA256 remains
 Independent immutable absent-source RED:16 methods,16 semantic failures,0 errors.
 The independent writer corrected only obsolete RCA/A and transport-union fixtures;
 author never edited tests. Final focused16 PASS,0 failures,0 errors (1.308s).
-Test SHAs: module12 `e97a1dbe10cd5eff9c1fa2e15710e6fc96e3763e5768ed71be9f52a24450fec3`;
+Test SHAs: module12 `ef4aea73580b7d6ee0317801cc3c0283c4cf1500902667158c7b9f91de7a9080`;
 origin4 `fd2d4d3a0d526552763dbef84bf580bb2e3e4f0cb71824452dc4a7f9b7dccb8a`.
 Existing socket15, model19, rename module21 PASS; regular packaging106 assertions,
 0FAIL. git diff --check PASS. Fixtures private /var/tmp, umask077, isolated venv;
@@ -34,10 +34,12 @@ PASS,0 failures,0 errors (0.156s); source bytes unchanged. Immutable test SHA256
 Overlay metadata amendment060c passed separate actual design review. Independent
 overlay2 baseline:7 semantic failures,0 errors. Normative patch adds distinct
 status/updated_at and validated attention without changing create/status DTO.
-Current focused18 has17 PASS and one known false fixture failure: missing-status
-case supplies valid idle metadata because its default sentinel inserts status.
-Independent mechanical fixture correction is pending; this is not18 GREEN.
-Source audit and all18/CI gates remain open before merge/activation.
+Independent writer corrected the missing-status sentinel and explicitly protected
+the owned socket with0600 permissions; author did not edit tests or relax runtime.
+Final focused18 PASS,0 failures,0 errors (1.548s), also with ambient process umask.
+Overlay2 test SHA256 `120c947d2e81e4d7bacf69b886e6091a019b377230eeaa3420f01acf3cc28ad6`.
+Sources remain byte-identical to the frozen overlay candidate. Source audit,
+independent QA and CI remain separate gates before merge/activation.
 
 Immutable R/C/I/A, parent commitments, no-replace publication, counted temp orphans,
 namespace-capacity locks and once-only correlated ACK creator are implemented.
