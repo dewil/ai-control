@@ -318,7 +318,17 @@ return unavailable rather than export unchecked rows. No history turns required.
 
 Owner session list merges ordinary native/registry rows and this confirmed loaded
 origin overlay BEFORE output pagination, full canonical(root,SID) dedup; existing
-native row preferred for metadata if it is already authoritative. Overlay-only export to existing SessionChat list uses standard row sid/title/status/
+native row preferred for metadata if it is already authoritative. If the accepted
+origin overlay is truncated, list_sessions returns safe unavailable before any
+merged row export/pagination. It cannot claim a correct page or has_more from a
+partial set: an omitted origin may sort before a returned row, and has_more=true
+cannot imply an available later page. Current bounded origin enumeration exports
+at most128 accepted origins;129 or more eligible origins can therefore make this
+list unavailable. This is an explicit bounded first-slice limitation, not a claim
+that older origins disappeared or a reason to recreate them. Future complete
+origin paging/index work is separate backlog scope; no unbounded scan or guessed
+cursor is added here. Summary still uses its documented unknown/compatible-stale
+result for incomplete evidence. Overlay-only export to existing SessionChat list uses standard row sid/title/status/
 vendor plus optional proved needs_native_attention; title null is local labelled
 «Новая сессия» fallback, never preview/native naming claim. Internal updated_at
 is for sort/cloud activity proof and is not an extra existing list API field.
@@ -332,6 +342,67 @@ key includes context_id+transport/context generations+allowed roots+origin
 namespace held-FD dev/ino/mtime_ns/ctime_ns snapshot; existing TTL is not extended;
 creation A publication invalidates original project views. Overlay reproof on refresh
 or page reload restores accepted loaded empties without needing browser operationUUID.
+
+Phase2 caller-deadline seam: `overlay(project, *, deadline=None)`,
+`loaded_origin(project,sid, *, deadline=None)` and
+`unavailable_history(project,sid, *, deadline=None)` preserve their existing default
+results and authority checks. They accept the same optional absolute monotonic
+deadline normalization/error grammar as cache_identity below. Every nested provider,
+namespace lock, origin lookup, loaded scan, thread proof and final fence uses that
+one effective deadline; helpers never reset it. SessionChat passes its current
+operation deadline for list/history/send and its existing15s deadline for summary.
+Calls without a deadline retain the existing whole-method55s ceiling. This is a
+trusted Python seam, never an HTTP/body/browser field.
+
+Phase2 exact trusted cache seam:
+`ConfiguredSessionCreate.cache_identity(*, deadline=None)` returns frozen private
+`ConfiguredCacheIdentity` with exactly immutable attributes `context` and `namespace`.
+Context is the exact validated seven-field configured context above; namespace is
+None for an absent private namespace, otherwise an immutable mapping with exactly
+`dev`, `ino`, `mtime_ns`, `ctime_ns`, each a nonnegative exact int (not bool), copied
+from one held safe namespace directory FD. Neither object is a browser DTO, session
+origin witness, account proof or permission to mutate. Namespace None is only a
+cache identity, not proof that a historical receipt/origin never existed.
+
+Deadline is an optional absolute monotonic exact int/float, finite and positive,
+not bool. Invalid input raises safe invalid_request. The effective deadline is the
+minimum of caller deadline and method-entry monotonic time+55s; omitted deadline
+uses that 55s bound. Already-expired deadline raises safe unavailable. Summary
+passes its existing remaining operation deadline (currently15s whole budget);
+this method never starts an additional nested55s allowance for that caller.
+It may call only existing approved prepare_context/initialize and local current
+context checks: no native loaded/list/read/start, provider/root lookup, receipt
+scan or FS creation. It uses existing anchored `locked(deadline,create=False)`;
+absent namespace stays absent. Existing owner/mode/nofollow/path-anchor checks
+remain mandatory. On a present namespace, held-FD identity and path anchor must
+remain unchanged through final capture; context must still exactly match captured
+seven fields. Unsafe namespace, context drift or deadline failure is safe
+unavailable/stale as appropriate, never a substitute None token.
+
+With a trusted configured_creator injected, SessionChat summary requires this
+method. Without creator the existing summary contract remains. Its key contains
+existing authoritative allowed canonical roots, existing summary generation and
+the entire private ConfiguredCacheIdentity. Capture identity before cache lookup
+or scan; recapture equal identity and revalidate the same allowed roots before
+any fresh cache-hit export or fresh result publication/export. Root, generation,
+context or namespace change invalidates the candidate; it cannot export a fresh
+mixed snapshot or reuse cached counts from a different identity. Preserve existing
+TTL, total deadline and compatible stale/unknown rules. Failed identity capture
+cannot authorize reuse of an incompatible cache. Directory timestamps conservatively
+invalidate views even when an unrelated operation changed the namespace. No
+filesystem watch, global environment/body selector, browser private-context field
+or fake bound ExecutionContext is introduced.
+
+Summary final grants/root check uses fresh authoritative project_names/project_path,
+not the earlier allowed tuple alone. For complete counts/activity, all native and
+origin evidence must be validated and complete under the same effective deadline,
+current grants and final equal identity. Partial/truncated/unavailable overlay,
+native proof failure, expired deadline or failed final fence cannot publish a
+complete count or fresh activity. Existing safe unknown/unavailable or identity-
+compatible stale DTO rules apply; no partial count, guessed timestamp or fabricated
+empty result. A cache hit also performs final current-grant/root and identity fences
+before fresh export. Acquiring a safe directory FD is not by itself a snapshot of
+all rows; exact parent commitments and row proof fences remain required.
 This indexes accepted origins, not private unresolved receipts, auth or histories.
 
 New optional trusted SessionChat constructor argument configured_creator=None;

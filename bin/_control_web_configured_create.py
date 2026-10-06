@@ -125,6 +125,24 @@ class ConfiguredPreparedCreate(ConfiguredCreateReservation):
 
 
 @dataclass(frozen=True, repr=False)
+class ConfiguredCacheIdentity:
+    context: object = field(repr=False)
+    namespace: object = field(repr=False)
+
+    def __post_init__(self):
+        context = _plain(self.context)
+        _need(set(context) == {'schema', 'vendor', 'context_kind', 'context_id',
+                              'transport_generation', 'context_generation', 'native_version'}
+              and SessionChat._catalog_reason(context) is None)
+        object.__setattr__(self, 'context', _freeze(context))
+        if self.namespace is not None:
+            namespace = _plain(self.namespace)
+            _need(set(namespace) == {'dev', 'ino', 'mtime_ns', 'ctime_ns'}
+                  and all(type(v) is int and v >= 0 for v in namespace.values()))
+            object.__setattr__(self, 'namespace', _freeze(namespace))
+
+
+@dataclass(frozen=True, repr=False)
 class ConfiguredLoadedOrigin:
     reservation: ConfiguredCreateReservation = field(repr=False)
     context: object = field(repr=False)
@@ -686,9 +704,39 @@ class ConfiguredSessionCreate:
             cursors.add(cursor)
         return ids, not complete
 
+    @staticmethod
+    def _deadline(deadline):
+        now = time.monotonic()
+        if deadline is None:
+            return now + 55
+        _need(type(deadline) in (int, float) and math.isfinite(deadline)
+              and deadline > 0, 'invalid_request')
+        deadline = min(deadline, now + 55)
+        _budget(deadline)
+        return deadline
+
     @_safe
-    def overlay(self, project):
-        deadline = time.monotonic() + 55
+    def cache_identity(self, *, deadline=None):
+        deadline = self._deadline(deadline)
+        context = self._prepare(deadline)
+        with self.store.locked(deadline, create=False) as base:
+            namespace = None
+            if base is not None:
+                self.store._anchor(base, deadline)
+                before = os.fstat(base)
+                namespace = dict(dev=before.st_dev, ino=before.st_ino,
+                                 mtime_ns=before.st_mtime_ns, ctime_ns=before.st_ctime_ns)
+                self._unchanged(context, deadline)
+                self.store._anchor(base, deadline)
+                after = os.fstat(base)
+                _need(namespace == dict(dev=after.st_dev, ino=after.st_ino,
+                                        mtime_ns=after.st_mtime_ns, ctime_ns=after.st_ctime_ns), 'stale')
+            self._unchanged(context, deadline)
+            return ConfiguredCacheIdentity(context, namespace)
+
+    @_safe
+    def overlay(self, project, *, deadline=None):
+        deadline = self._deadline(deadline)
         root = self._root(project, deadline)
         context = self._prepare(deadline)
         with self.store.locked(deadline) as base:
@@ -745,13 +793,13 @@ class ConfiguredSessionCreate:
             return proof, thread
 
     @_safe
-    def loaded_origin(self, project, sid):
-        return self._loaded_origin(project, sid, time.monotonic() + 55)[0]
+    def loaded_origin(self, project, sid, *, deadline=None):
+        return self._loaded_origin(project, sid, self._deadline(deadline))[0]
 
     @_safe
-    def unavailable_history(self, project, sid):
+    def unavailable_history(self, project, sid, *, deadline=None):
         from _control_web_sessions import _attention
-        proof, thread = self._loaded_origin(project, sid, time.monotonic() + 55, True)
+        proof, thread = self._loaded_origin(project, sid, self._deadline(deadline), True)
         if proof is None:
             return None
         return ConfiguredUnavailableHistory(proof.reservation, proof.context, proof.session,
