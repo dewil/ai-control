@@ -1,4 +1,4 @@
-# Pure token-response data parser — DRAFT for independent DESIGN
+# Pure token-response data parser — frozen for blind RED after DESIGN READY91dd9ee
 
 Module `bin/_control_codex_token_response.py`, stdlib + existing local AuthScope
 contract only. No network, filesystem, clock, credential reads, persistence,
@@ -59,7 +59,7 @@ availability policy, to be revised only with reviewed provider semantics.
 ID required iss=https://auth.openai.com, aud fixed
 app_EMoamEEZ73f0CkXaXp7hrann (string or singleton array containing exact string),
 sub exact expected principal.subject, iat and exp plain positive bounded ints,
-exp>iat. Optional azp if present exact client string. Required namespaced claim
+exp>iat at the time-bound stage. Optional azp if present exact client string. Required namespaced claim
 `https://api.openai.com/auth` is plain object with chatgpt_account_id exact
 expected workspace_id. Principal issuer must match fixed issuer, as AuthScope
 requires. Missing/malformed required claims auth_response_invalid; well-typed
