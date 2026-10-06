@@ -418,6 +418,50 @@ class AttentionUIBrowserRED(unittest.TestCase):
         self.assertEqual(sum(event == ('ATTENTION_ROUTE', 'GET') for event in self.events), prior_gets + 1)
         self.assertEqual([url for method, url in self.events if method == 'POST'], [])
 
+    def test_equal_revision_refresh_does_not_restore_focus_after_user_blurs_to_body(self):
+        self.panel()
+        original = self.page.locator('#attention-question button[data-attention-reason-id]').first
+        original_id = original.get_attribute('data-attention-reason-id')
+        original_node = original.element_handle()
+        original.evaluate('el => el.focus()')
+        self.assertTrue(original.evaluate('el => document.activeElement === el'))
+
+        prior_gets = sum(event == ('ATTENTION_ROUTE', 'GET') for event in self.events)
+        self.hold_next_attention = True
+        self.page.locator('#attention-refresh').evaluate('el => el.click()')
+        self.page.wait_for_timeout(80)
+        self.assertIsNotNone(self.pending_attention, 'one synthetic attention GET should remain pending')
+
+        # A real pointer click on blank page background causes focusout without
+        # focusing another control and therefore must clear the old focus target.
+        point = self.page.evaluate("""() => {
+          for (let y = innerHeight - 2; y >= 2; y -= 5) {
+            for (let x = innerWidth - 2; x >= 2; x -= 5) {
+              const el = document.elementFromPoint(x, y);
+              if (el === document.body || el === document.documentElement ||
+                  !el?.closest('button,a,input,textarea,select,[tabindex]')) return {x, y};
+            }
+          }
+          return null;
+        }""")
+        self.assertIsNotNone(point, 'synthetic viewport must provide a noninteractive blank pointer target')
+        self.page.mouse.click(point['x'], point['y'])
+        self.assertEqual(self.page.evaluate('document.activeElement?.tagName'), 'BODY',
+                         'the pointer action must produce an observable body blur before releasing the response')
+
+        pending, body, status = self.pending_attention
+        pending.fulfill(status=status, content_type='application/json', body=body)
+        self.pending_attention = None
+        self.page.wait_for_function("() => !document.querySelector('#attention-refresh').disabled", timeout=3000)
+
+        self.assertTrue(original_node.evaluate('el => el.isConnected'),
+                        'equal projection should retain the original reason DOM node')
+        self.assertEqual(original.get_attribute('data-attention-reason-id'), original_id)
+        self.assertEqual(self.page.evaluate('document.activeElement?.tagName'), 'BODY',
+                         'same-revision completion must not resurrect focus after the user blurred it')
+        self.assertEqual(sum(event == ('ATTENTION_ROUTE', 'GET') for event in self.events), prior_gets + 1)
+        self.assertEqual([url for method, url in self.events if method == 'POST'], [])
+
     def test_scope_aba_late_response_and_navigation_require_fresh_exact_task_identity(self):
         self.panel()
         self.page.get_by_role("tab", name="Сессии").click()
