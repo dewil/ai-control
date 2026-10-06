@@ -430,7 +430,7 @@ class SessionChat:
         fields = ('schema', 'vendor', 'context_kind', 'context_id')
         def model_snapshot(context):
             _need(self._catalog_reason(context) != 'unverified_context'
-                  and context['vendor'] in ('codex', 'claude')
+                  and context['vendor'] == 'codex'
                   and (context['native_version'] is None or type(context['native_version']) is str))
             return {key: context[key] for key in fields}
         if self._explicit_model_context:
