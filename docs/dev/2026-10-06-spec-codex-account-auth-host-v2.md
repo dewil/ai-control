@@ -347,7 +347,7 @@ refresh grant only; adapter owns bounded TLS request/body and maps uncertain sen
 outcome to AuthError("refresh_unknown"). No constructor accepts credential paths.
 `OwnedChannel(context,invocation_id,channel_id,transport_generation)` frozen repr=False;
 invocation_id=32lowerhex, channel_id=UUIDv4, generation=int>=0 (no bool).
-`owned_transport.capture(ctx,*,deadline)->OwnedChannel` syntax checked by validator;
+`owned_transport.capture(ctx,*,validator_id,deadline)->OwnedChannel` syntax checked by validator;
 actual owned invocation/stdio/kernel proof remains next-slice dependency obligation.
 `owned_transport.validate_current(channel,ctx,*,deadline)->None` no reconnect.
 `owned_transport.login(channel,payload,*,guard,deadline)->dict` exact login response
@@ -430,18 +430,18 @@ checks remain required. Before exchange, commit and response, validate callback,
 source and coordinator lease again; wrong-context/duplicate ID cannot consume token.
 
 Export `AuthCoordinator(*,clock=time.monotonic)` stdlib in-memory authority with
-peraccount locks keyed exact (provider_id,account_id), separate callback maps by
-(account key,channel_id,transport_generation,request_id). Production supplies ONE
+peraccount locks keyed exact (provider_id,account_id). Callback map ownership is
+sole validator for each captured channel, NOT this pure coordinator. Production supplies ONE
 shared coordinator per Control owner to ALL validators; not one per TASK/session.
 Metadata/native restart persistence is next integration gate, not claimed by unit.
-`open(ctx,*,deadline)->AuthorityLease`: wait <=500ms shared deadline, freezes
+`open(scope,*,deadline)->AuthorityLease`: wait <=500ms shared deadline, freezes
 full reference+principal on first account capture, owner_generation=1, credential=0;
 existing account context/principal mismatch raises authority_stale, no rebind/reset.
 Lease opaque repr=False, same owner account key/reference/principal/generation.
-`check(lease,ctx,*,deadline)->None`: exact capture/current generation, not quarantined.
-`publish_delivery(lease,*,deadline)->AuthorityStamp`: increments credential_generation
+`check(lease,scope,*,deadline)->None`: exact capture/current generation, not quarantined.
+`publish_delivery(lease,*,guard,deadline)->AuthorityStamp`: increments credential_generation
 ONLY after confirmed login/response write; stamp owner+credential integer tuple.
-`quarantine(lease,code)->None`: once sets shared quarantine code, increments owner
+`quarantine(lease,code,*,deadline)->None`: once sets shared quarantine code, increments owner
  generation, invalidates ALL existing Delivery/callbacks of account, never B.
 `release(lease)->None`: idempotent account lock release, not quarantine reset.
 Validator lock order coordinator.open→profile_source.open; reverse release. No
@@ -490,7 +490,7 @@ or OAuth, then releases. A released source lease is never reused as current proo
 
 ### Final delivery linearization
 
-`coordinator.delivery_guard(lease,ctx,*,deadline)->context manager yielding opaque
+`coordinator.delivery_guard(lease,scope,*,deadline)->context manager yielding opaque
 DeliveryGuard` holds peraccount reentrant state lock, exact live lease/thread/context.
 Guard budget min(caller remaining,1s) covers final source/channel/coordinator/local
 validator checks, `guard.begin_enqueue()`, bounded native login/response enqueue
@@ -572,3 +572,17 @@ No component acquires either refresh lock while holding state/source/channel gua
 revoke-only operations skip refresh locks and take the remaining guards in order.
 Every wait shares caller absolute budget; mutation timeout is refusal, no assumed
 invalidation. Guards must not call back into coordinator.open or source.open_selected.
+
+Exact callback owner: each captured channel/invocation/generation has ONE immutable
+validator_id canonicalUUIDv4. owned_transport.capture(ctx,*,validator_id,deadline)
+atomically claims exclusive auth-validator ownership BEFORE provider exchange; a
+second validator_id for same channel rejects owned_host_unproven without refresh
+read/OAuth/native mutation. Trusted owner persists this association for channel
+lifetime and does not replace validator on timeout/unknown; newchannel requires
+newgeneration/native admission, not a duplicate handler. Registry is trusted owner
+transport metadata, not native/body auth DTO. Per-validator callback map keys
+channel_id/transport_generation/request_id and is never discarded midchannel.
+Thus duplicate callback cannot reach another validator under same channel; separate
+channels/accounts retain independent maps and shared coordinator accountgeneration.
+Actual owner capture registry/wire lifetime proof is future adapter gate, no
+production capability claim from pure local coordinator.
