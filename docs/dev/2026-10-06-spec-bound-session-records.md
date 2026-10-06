@@ -40,7 +40,7 @@ capture, THEN nested record.context_ref, BEFORE hashing/other identifiers/parent
 Malformed fullref context_invalid; valid foreign fullref context_drift. Other
 malformed data invalid_request. Plain type/key validation precedes foreign
 equality/hash/iteration methods. No raw exception text escapes. No generic custom
-Mapping objects accepted; exact dict / internally frozen mappingproxy accepted.
+Mapping objects accepted; exact dict / module-owned immutable mapping accepted.
 
 ## Exact data
 
@@ -100,3 +100,20 @@ replay. This codec never performs that lookup or synthesizes a trusted identity.
 Store integration explicitly maps BoundRecordError context_invalid/context_drift/
 invalid_request into its AccountError vocabulary, and maps corrupt disk data to
 store_unavailable. This source slice imports no store and changes no existing error API.
+
+## SOURCE amendment: owned mappings and single capture
+
+An exact MappingProxyType alone is not proof its backing storage is a plain dict.
+Externally supplied mapping proxies must be rejected BEFORE calling their backing
+iteration/getitem methods, even if a particular proxy happens to wrap a plain dict.
+DTO outputs may use an exact private module-owned immutable Mapping implementation
+rather than MappingProxyType. Its captured storage consists only of independently
+validated primitive tuples/owned immutable children; foreign Mapping objects and
+subclasses confer no trust. Public DTOs remain data, not filesystem capabilities.
+
+For every accepted record/reference/commitment/parent map, take ONE independent
+plain primitive snapshot and perform ALL schema/value/hash/filename checks against
+that same snapshot. Never validate one caller read then capture a second read.
+Mutable aliases or repeated-read changes must not let captured bytes contain values
+that were never validated. DTO revalidation checks fresh snapshots of retained
+owned data; simulated privileged alias changes must still refuse invalid data.
