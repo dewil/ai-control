@@ -227,6 +227,15 @@ metadata validators/storage fences. Production HTTP/broker/host/native paths в
 API и synthetic fixtures, не CLI/body/env test switch. Сначала независимый RED;
 этот документ не объявляет реализацию готовой.
 
+Deployment: действующий signed universal helper/manifest с fixed13 paths не
+включает новый `_control_web_create_store.py` и provider context modules.
+Foundation source может пройти review/merge как не подключённый library срез,
+но не объявляется installed web API. Future activation требует отдельного
+review и согласованного расширения deployment scope/root allowlist по владельцу
+CONTROL-UNIVERSAL-DEPLOY. Prepared bootstrap hash/current helper не меняются;
+новый module не маскируется под existing path, import success в source worktree
+не является доказательством полноты installed package.
+
 Точные constructors:
 
 ```python
