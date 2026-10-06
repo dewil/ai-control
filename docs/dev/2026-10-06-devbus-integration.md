@@ -3,6 +3,11 @@
 Этот PR добавляет самостоятельные модули, но не включает observer в текущую
 панель. Основная сессия владеет общими web-файлами, навигацией и деплоем.
 
+Согласование main: допускаются ровно два пассивных Python helper в
+scripts.manifest и отдельный optional lockfile; observer не активируется.
+SOURCE PASS:95d67ab, Sonnet5.5/OpenRouter medium.41local checks GREEN включая
+3realJetStream/3browser checks; финальный полный CI — на exact PR head.
+
 ## Сервер
 
 Установить requirements-web.lock + requirements-devbus.lock в web environment.

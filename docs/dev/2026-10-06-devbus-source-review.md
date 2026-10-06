@@ -1,5 +1,9 @@
 # SOURCE compliance: CONTROL-DEVBUS-OVERVIEW
 
+Итог: SOURCE PASS на95d67ab, Sonnet5.5/OpenRouter medium. Все найденные
+нарушения исправлены; runtime/manifest не меняются после этого source head.
+CI конкретного итогового head отслеживается в PR74. Installed proof отдельно.
+
 ## Первый проход
 
 Reviewer: gpt-6-astra medium; source author gpt-6.1-sol low. Модель подтверждена
@@ -45,3 +49,28 @@ timeout2s на двух pathological120000-byte inputs. Исправления �
 Замечание Sonnet о неизвестной сигнатуре pull_subscribe_bind не является
 нарушением: реальный nats-py2.9.0/disposableNATS integration уже проверяет
 этот путь. Installed acceptance остаётся отдельно.
+
+## Финальный SOURCE PASS95d67ab
+
+OpenRouter response gen-1791313748-82LLRQ1jN3kqomt14IkQ: requested/returned
+anthropic/claude-sonnet-5.5, reasoning medium.18437prompt/4564completion,
+2392reasoning, costUSD0.082514. Ответ проверен на непустой final content и
+совпадение requested/returned model.
+
+Все SOURCE blockers закрыты: линейный scrub, incompletePEM, Basic/Token и
+escapedquoted assignments, stop status; previous replay/dedup/TTL fixes
+остались закрыты. Проверяющий оценил согласованные ровно2passivehelpers
+scripts.manifest, owner-only/generic errors/no-store, message shape/sequence
+и replay bounds. NATS/JS/CSS source byte-identical7cc1109, повторно не читались.
+Не найдены материальные новые нарушения INV-DEVBUS-01..09.
+
+Локальное исполнение на95d67ab:41tests GREEN,0skip, включая3real disposable
+NATS cases и3browser320px cases. Completeness112ok/0FAIL. Реальные тесты
+подтверждают pull_subscribe_bind nats-py2.9.0, eventACK independence, unchanged
+stream config, reopen/replay/live-tail/cleanup. SOURCE проверяющий их не запускал.
+
+Суффиксные access_token/client_secret и любая немаркированная секретная строка
+не заявлены как гарантированно распознаваемые. Producer обязан не публиковать
+секреты. Broker anonymous config допустим по явно уточнённому optional auth
+контракту; это не изменение ACL. Полное SOURCE PASS не заменяет main integration,
+fixed14 package extension и installed PONG/reconnect acceptance.
