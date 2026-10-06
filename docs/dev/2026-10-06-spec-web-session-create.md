@@ -134,7 +134,7 @@ server-derived canonical cwd/persistent empty-thread settings. Native caller
 threadId/account/modelProvider overrides из browser запрещены.
 
 Successful correlated ACK сначала сохраняет private attributable candidate fullUUID
-в том же receipt без выдачи created result. Candidate принимается только из
+в immutable candidate stage той же operation без выдачи created result. Candidate принимается только из
 ответа именно этой RPC/generation и при matching root/context, не из любого
 thread/started event. Затем same-host fenced metadata proof и authoritative
 immutable session binding дают durable accepted; лишь после этого UI открывает
@@ -176,8 +176,9 @@ inode, atomic no-replace и fsync. Не reuse send/rename namespace. Initial res
 candidate_sid,status,created}`: schema1, kind session_create, candidate_sid null,
 status unknown. `context_ref` полный existing validated immutable execution
 reference; digest SHA256 canonical finite compact sorted UTF8 JSON
-`{kind,operation_id,project,root,context_ref}`. Candidate CAS меняет только null→
-один canonicalUUID; иное значение conflict, не новое создание. Receipt никогда
+`{kind,operation_id,project,root,context_ref}`. Candidate stage монотонно добавляет
+один canonicalUUID к effective reservation; иное значение conflict, не новое
+создание. Initial reserve leaf не переписывается. Receipt никогда
 не перепривязывается к свежему context при drift.
 
 `context_key` — SHA256 canonical exact context_ref; binding key
@@ -201,23 +202,105 @@ digest/record и сравнивается до использования author
 не существует. Metadata-only listing/resolve не берет operation lock и не создаёт
 lock/store; fixed bound host guard не запускается под catalog write lock.
 Не меняется existing profile producer→profile ordering. Binding publish и accepted
-CAS выполняются под operation+binding locks; native
+marker publication выполняются под operation+binding locks; native
 writer/read используют held admitted host-use guard и operation lock, без
 binding/catalog write lock во время RPC.
 
-Pair publication recoverable: сначала fsync unknown receipt с candidate,
-затем no-replace+fsync immutable binding, затем atomic CAS+fsync receipt
-unknown→accepted. Accepted receipt — единственный commit marker пары; binding
+Pair publication recoverable: сначала fsync immutable candidate stage,
+затем no-replace+fsync immutable binding, затем no-replace+fsync accepted stage.
+Accepted stage — единственный commit marker пары; binding
 без matching accepted receipt не появляется в list и не разрешает history/send.
 Reader проверяет matching operation/digest/context/candidate/binding до export;
 accepted без matching binding unavailable, never guessed/recreated from list.
-Таким образом pair visibility атомарна по accepted marker, несмотря на два
-файла. Crash до binding оставляет candidate unknown; после binding до marker
+Таким образом pair visibility атомарна по accepted marker, несмотря на несколько
+immutable файлов. Crash до binding оставляет candidate unknown; после binding до marker
 оставляет invisible prepared binding. Recovery под теми же locks сравнивает
 exact authority, fresh grants/context/native metadata и idempotently допубликует
 missing binding или accepted marker. Native thread/start не вызывается снова.
 Corrupt/conflicting/different-context binding не удаляется/не переназначается;
 unknown остаётся unknown/error. Accepted terminal не downgraded при read failure.
+
+## Immutable stages: точный layout и отсутствие overwrite CAS
+
+Уточнение после source review06.10.2026. Linux не имеет
+atomic compare-destination-inode-and-replace primitive. `stat` + `os.replace`
+оставляет race: чужой inode может появиться после check. Поэтому любой replace
+receipt/stage/binding/pointer запрещён; дополнительные stat не называются CAS.
+Нормативный механизм ниже сохраняет no-foreign-overwrite без расширения полномочий.
+
+Fixed names для одного project/operationUUID, SHA256 canonical compact finite
+sorted UTF8 JSON, + `.json`:
+
+- Reserve `R`: `{kind:'create_receipt',project,operation_id}`.
+- Candidate `C`: `{kind:'create_candidate',project,operation_id}`.
+- Accepted `A`: `{kind:'create_accepted',project,operation_id}`.
+- Binding `B`: прежний `session_ref.json`, identity context_key/native SID.
+
+Имена не содержат candidate SID или context; один operationUUID не получает
+новую stage namespace после смены payload/context. Initial R имеет ровно ранее
+описанные reservation keys, status unknown/candidate_sid null и никогда не
+меняется. Frozen public/internal `.record` сохраняет прежнюю exact reservation
+форму: reader материализует effective unknown/candidate или accepted из chain.
+Это не обещание, что initial R bytes после capture содержат candidate/accepted.
+
+Commitment exact `{filename,dev,ino,ctime_ns,sha256}`: filename — ровно ожидаемое
+fixed opaque filename родителя, три числа exact nonnegative int без bool, sha256
+64lowerhex от exact bytes held validated parent FD, не normalized parsed JSON.
+Все parents regular0600/nlink1/owner и no-follow, root/inode fences обязательны.
+Commitment не является native principal и не экспортируется в safe DTO.
+
+C exact keys `{schema,kind,record,parent}`: schema1,
+kind `session_create_candidate`, record — exact effective reservation с matching
+R authority/digest/created, candidate_sid canonical UUID, status unknown;
+parent — commitment к R. A exact keys `{schema,kind,record,parent,binding}`:
+schema1, kind `session_create_accepted`, record — effective reservation с той же
+candidate/authority/status accepted; parent — commitment к C; binding — commitment
+к exact B bytes/inode. B сохраняет прежние exact binding keys и не перезаписывается.
+Материализованный record проходит прежние validators; wrapper keys/duplicates/
+finite values/types/grammar проверяются отдельно. Каждый leaf ≤4096 UTF8 bytes.
+
+Publication R/C/A/B — только atomic `RENAME_NOREPLACE`+fsync private directory.
+При existing destination reader проверяет exact stage/chain и делает replay без
+rewrite; mismatching authority/candidate — store_conflict, malformed/inode-parent
+drift — store_unavailable. Нет last-writer-wins, pointer overwrite или replace.
+При same-owner namespace interference prior check не гарантирует syscall CAS;
+post-publication held temp FD должен совпасть с destination inode/exact bytes,
+ancestry/parents rechecked до success. Mismatch даёт safe store_unavailable;
+подменённый destination не удаляется и не «чинится». Writer никогда не overwrites
+existing destination, даже если его заменили между validation и publication.
+
+Writers сначала создают свой random `.tmp-<uuidhex>`0600/O_EXCL/no-follow и
+fsync payload. Success no-replace перемещает temp целиком, без hardlink/nlink2.
+Finally НЕ unlink pathname temp: нет atomic compare-inode-and-unlink примитива;
+подменённый temp нельзя удалить по старому check. Failed/uncertain publication
+оставляет bounded private orphan, включая empty/partial own temp; own FD только
+закрывается. Никакого auto cleanup по pathname, rename-quarantine foreign inode
+или нормализации permissions. Orphans учитываются namespace capacity; при cap
+отказ, без обхода лимита/hidden cleanup. Отдельная recovery/GC outside этого среза.
+
+Lookup знает project/opUUID и делает bounded named reads R/C/A, без scans.
+All absent → None; stage present без обязательного parent, corrupt stage,
+wrong immutable parent inode/bytes, unmatched authority — store_unavailable,
+не новый reserve. R only → unknown/null candidate. R+C без A → unknown/candidate;
+matching prepared B пока invisible. R+C+A требует exact matching B commitment
+до accepted return. Accepted без B/unmatched B unavailable, не downgrade/retry.
+Binding-only resolve сначала читает B; missing B → None без proof отсутствия
+сессии. Existing B задаёт project/opUUID: затем тот же bounded R/C/A chain;
+missing/corrupt/mismatch chain unavailable, matching unknown chain → None.
+Accepted chain export только после совпадения B и его commitment. Не искать
+неизвестную operation по всему namespace; не угадывать foreign/unmapped SID.
+
+Replay после crash до R publication — all absent, native dispatch не мог начаться.
+Crash после R — durable unknown, без повторного native create. До C publication
+candidate остаётся unknown/null; C не восстанавливается из списка/notification.
+После C, до B — known candidate unknown; publish B по same immutable authority.
+После B, до A — invisible prepared pair; explicit recovery допубликует A после
+owner proof без thread/start. После A, до return — receipt-aware replay
+accepted при exact chain/B; fsync/publication uncertainty никогда не доказывает
+отсутствие effect и не разрешает новую operation автоматически. Broken accepted
+chain/B не ремонтируется перезаписью чужих inodes. Concurrent cooperating writers
+берут прежние operation→binding locks; immutable stage no-replace также закрывает
+foreign overwrite при namespace races вне cooperating lock.
 
 ## Первый foundation slice: точный storage-only Python контракт
 
@@ -279,7 +362,7 @@ verified/available, не резолвит profile/auth/config и не вызыв
   exact binding обязателен; missing/corrupt/mismatched binding store_unavailable.
   Lookup знает operationUUID/candidate и не scans namespace для такого proof.
 - `CreateStore.capture_candidate(reservation,sid)` → frozen reservation после
-  null→SID CAS; replay same SID без rewrite, different SID conflict. Этот pure
+  immutable C publication; replay same SID без rewrite, different SID conflict. Этот pure
   method проверяет структуру/authority, но не доказывает correlation/native root.
   Передать candidate owner вправе лишь после correlated proof; такой proof не
   заменяется fixture boolean или storage return.
@@ -289,7 +372,7 @@ verified/available, не резолвит profile/auth/config и не вызыв
   Existing receipt authority проверяется до binding read/write.
 - `CreateStore.commit_accepted(reservation,binding)` → frozen reservation;
   re-lookup exact persisted candidate/context/root/digest и exact immutable binding,
-  atomic unknown→accepted marker. Native admission/metadata сюда не передаётся
+  immutable A no-replace marker. Native admission/metadata сюда не передаётся
   fake flag: owner проверяет их до вызова. Это private storage commit, не право
   HTTP показать production create success или открыть native session.
 - `SessionBindings.resolve(project,session_ref,sid)` → None для missing/invisible
@@ -318,17 +401,19 @@ Receipt locator закреплён project/operationUUID независимо о
 binding; same SID разных contexts возможен с разными operationUUID/session_ref.
 Иначе новая context namespace могла бы незаметно повторить unknown create.
 
-Record caps: receipt/binding ≤4096 UTF8 bytes, strict duplicate-free JSON и finite
+Record caps: R/C/A/B ≤4096 UTF8 bytes each, strict duplicate-free JSON и finite
 values, created positive exact integer; all IDs/hash/key grammars exact. Namespace
 ≤10000 records и10002 directory entries включая temp/orphans; overflow отказ до
-publication. Leaves names SHA256 canonical `{kind:'create_receipt',project,
-operation_id}` + `.json`; binding names session_ref + `.json`; stable
+publication. Namespace counts все R/C/A/B stages и temp/orphans, не число
+операций; предел может достигаться раньше10000 operations. Leaves names fixed
+по immutable layout выше; binding names session_ref + `.json`; stable
 lock leaves analogous opaque64hex + `.lock`. Foreign filenames/inodes не chmod/
 unlink/overwrite. Paths with /data/Git ancestry, symlinks, wrong UID/mode/hardlinks,
 path/root/inode swaps fail closed; private parents/0700 store и0600 leaf, no-follow
 held FD/inode pinning и durable fsync соответствуют reviewed rename store policy.
-Initial reserve/binding используют atomic no-replace без link/unlink crash-окна;
-unsupported filesystem safe error без fallback. Updates CAS exact held FD snapshot.
+Все stages/binding используют atomic no-replace без link/unlink crash-окна;
+unsupported filesystem safe error без fallback. Mutable leaf updates отсутствуют;
+exact parent/bytes/inode commitments проверяются при chain read/replay.
 Missing read-only lookup не создаёт roots; writer создаёт только собственные
 missing fixed roots/locks, не нормализует небезопасные existing paths.
 
