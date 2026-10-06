@@ -1074,6 +1074,7 @@ class SessionChat:
         else:
             native = service._rows(root)
             overlay = self._configured_overlay(project)
+            _need(not overlay['truncated'])
             by_sid = {row['sid']: row for row in native}
             for row in overlay['sessions']:
                 if row['sid'] not in by_sid:
@@ -1081,7 +1082,7 @@ class SessionChat:
                                               mtime=row['updated_at'], _configured=True)
             all_rows = sorted(by_sid.values(), key=lambda row: row['mtime'], reverse=True)
             result = {'rows': all_rows[page * 8:(page + 1) * 8],
-                      'has_more': len(all_rows) > (page + 1) * 8 or overlay['truncated']}
+                      'has_more': len(all_rows) > (page + 1) * 8}
             _need(self._root(project) == root, 'stale')
         from _control_web_broker import redact
         rows = []
