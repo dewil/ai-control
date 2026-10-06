@@ -80,9 +80,12 @@ class LoginNameHTTPContract(unittest.TestCase):
 
     def test_configured_username_is_required_exact_and_owner_only_fields_rejected(self):
         self.safe_unauthorized(self.attempt(username='owner'))
-        self.safe_unauthorized(self.client.post('/api/login', json={
+        # Missing username is a malformed exact-shape request, not a valid unknown name.
+        missing = self.client.post('/api/login', json={
             'password': PASSWORD, 'totp': self.web.totp_code(SECRET, self.now)},
-            headers={'Origin': ORIGIN}))
+            headers={'Origin': ORIGIN})
+        self.assertEqual(missing.status_code, 422, missing.text)
+        self.assertFalse(self.client.cookies)
         for key in ('role', 'principal', 'grants'):
             response = self.attempt(**{key: 'admin'})
             self.assertEqual(response.status_code, 422, response.text)
@@ -184,7 +187,8 @@ class LoginNameProvisioningContract(unittest.TestCase):
                     runpy.run_path(str(installed / 'ai-control-web'), run_name='login_name_enrollment')['main']()
                 except SystemExit as exc:
                     self.assertEqual(exc.code, 0, f'valid enrollment CLI exited {exc.code}')
-            self.assertEqual(prompt.call_count, 1)
+            # Preserve the public enrollment password-and-confirmation contract.
+            self.assertEqual(prompt.call_count, 2)
             config = json.loads(auth.read_text())
             self.assertNotIn('synthetic-enrollment-password', output.getvalue())
             self.assertNotIn(config['totp_secret'], output.getvalue())
