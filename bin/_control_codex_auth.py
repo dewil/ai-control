@@ -170,6 +170,7 @@ class _CallbackRecord:
     running: bool = False
     result: object = None
     error: object = None
+    capturing: bool = False
 
 
 @dataclass(frozen=True, repr=False)
@@ -343,30 +344,65 @@ class AuthStateValidator:
         return _safe(lambda: self._capture_callback(delivery, request_id, params, deadline))
 
     def _capture_callback(self, delivery, request_id, params, deadline):
-        self._delivery(delivery)
+        self._delivery_baseline(delivery)
         _require(_request_id(request_id) and _keys(params, 'reason previousAccountId'))
         _require(type(params['reason']) is str and params['reason'] == 'unauthorized')
         previous = params['previousAccountId']
         _require(previous is None or (type(previous) is str
                  and previous == self._workspace()))
-        self._current(delivery, delivery.context, deadline)
         channel = delivery.channel
         key = (channel.channel_id, channel.transport_generation, type(request_id), request_id)
+        original_params = tuple(sorted(params.items()))
         with self._callback_lock:
             existing = self._callbacks.get(key)
+            if existing is not None and existing.error is not None:
+                _require(existing.delivery is delivery)
+                raise AuthError(existing.error)
+            self._current(delivery, delivery.context, deadline)
+            self._delivery(delivery)
             if existing is not None:
-                self._callback_baseline(existing.callback, channel)
-                _require(existing.delivery is delivery and dict(existing.callback.params) == params)
-                return existing.callback
-            callback = self._transport.capture_callback(channel, request_id, params, deadline=deadline)
-            captured = self._callback_fields(callback, channel)
-            _require(type(callback.request_id) is type(request_id) and callback.request_id == request_id
-                     and dict(callback.params) == params)
-            record = _CallbackRecord(callback, delivery, captured)
+                try:
+                    _require(not existing.capturing)
+                    self._callback_baseline(existing.callback, channel)
+                    _require(existing.delivery is delivery
+                             and tuple(sorted(existing.callback.params.items())) == original_params)
+                    return existing.callback
+                except Exception as error:
+                    existing.error = error.code if isinstance(error, AuthError) else 'authority_stale'
+                    raise AuthError(existing.error) from None
+            # Reserve the reader identity before its call. A rejected returned
+            # capability (or an exceptional capture) leaves a permanent tombstone.
+            record = _CallbackRecord(None, delivery, (), capturing=True)
             self._callbacks[key] = record
-            self._callback_records[id(callback)] = record
-            self._callback(callback, channel, deadline)
-            self._bound(delivery.context, channel)
+            code = None
+            try:
+                callback = self._transport.capture_callback(
+                    channel, request_id, dict(original_params), deadline=deadline)
+                record.callback = callback
+                if type(callback) is CapturedCallback:
+                    _require(id(callback) not in self._callback_records)
+                    self._callback_records[id(callback)] = record
+                record.captured = self._callback_fields(callback, channel)
+                _require(type(callback.request_id) is type(request_id)
+                         and callback.request_id == request_id
+                         and tuple(sorted(callback.params.items())) == original_params)
+                self._callback(callback, channel, deadline)
+                now = self._remaining(min(deadline, record.captured[-1] + 9))
+                _require(record.captured[-1] <= now)
+                self._callback_baseline(callback, channel)
+                self._delivery(delivery)
+            except AuthError as error:
+                code = error.code
+            except Exception:
+                code = 'authority_stale'
+            record.capturing = False
+            if code is not None:
+                record.error = code
+                raise AuthError(code)
+            # A reentrant attempt may have failed this identity while its reader
+            # was running. The original worker cannot revive that tombstone.
+            if record.error is not None:
+                raise AuthError(record.error)
             return callback
 
     def refresh(self, delivery, callback, *, deadline):
@@ -377,10 +413,11 @@ class AuthStateValidator:
             _require(type(callback) is CapturedCallback)
             record = self._callback_records.get(id(callback))
             _require(record is not None and record.callback is callback and record.delivery is delivery)
-            self._callback_baseline(callback, delivery.channel)
             self._delivery_baseline(delivery)
             if record.error is not None:
                 raise AuthError(record.error)
+            _require(not record.capturing)
+            self._callback_baseline(callback, delivery.channel)
             if record.result is not None:
                 self._current(record.result, record.result.context, deadline)
                 return record.result
