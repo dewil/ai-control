@@ -346,6 +346,11 @@ def _receipt_digest(context_id, root, sid, text, selection):
                                     separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
 
 
+def _context_token(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                    separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
+
+
 class SessionChat:
     def __init__(self, rpc, project_path, project_names, receipt_dir, *,
                  summary_clock=None, summary_wall_clock=None, summary_generation=None,
@@ -359,7 +364,10 @@ class SessionChat:
         self._summary_lock = threading.Lock()
         self._summary_cache = None
         self._summary_revision = 0
-        self._model_context = model_context or getattr(rpc, 'model_context', lambda: None)
+        self._explicit_model_context = model_context is not None
+        self._has_model_context = hasattr(rpc, 'model_context')
+        self._has_receipt_context = hasattr(rpc, 'receipt_context')
+        self._model_context = model_context if model_context is not None else getattr(rpc, 'model_context', lambda: None)
         self._model_clock = model_clock or time.monotonic
         self._model_lock = threading.Lock()
         self._model_cache = OrderedDict()
@@ -419,11 +427,36 @@ class SessionChat:
         return copy.deepcopy(value)
 
     def _receipt_context(self):
-        context = self._catalog_context()
-        _need(self._catalog_reason(context) != 'unverified_context'
-              and context['vendor'] in ('codex', 'claude'))
-        # Receipt identity is independent of connection/catalog generations.
-        return {key: context[key] for key in ('schema', 'vendor', 'context_kind', 'context_id')}
+        fields = ('schema', 'vendor', 'context_kind', 'context_id')
+        def model_snapshot(context):
+            _need(self._catalog_reason(context) != 'unverified_context'
+                  and context['vendor'] in ('codex', 'claude')
+                  and (context['native_version'] is None or type(context['native_version']) is str))
+            return {key: context[key] for key in fields}
+        if self._explicit_model_context:
+            return model_snapshot(self._catalog_context())
+        if self._has_receipt_context:
+            provider = getattr(self.rpc, 'receipt_context')
+            _need(callable(provider))
+            context = copy.deepcopy(provider())
+            self._remaining()
+            _need(type(context) is dict and set(context) == set(fields)
+                  and type(context['schema']) is int and context['schema'] == 1
+                  and context['vendor'] == 'codex' and context['context_kind'] == 'legacy_unbound'
+                  and type(context['context_id']) is str
+                  and re.fullmatch('[0-9a-f]{64}', context['context_id']))
+            if self._has_model_context:
+                live = self._catalog_context()
+                if live is not None:
+                    _need(model_snapshot(live) == context)
+            return context
+        if self._has_model_context:
+            return model_snapshot(self._catalog_context())
+        # A trusted plain callable has only server-owned store identity. This
+        # compatibility marker grants no model capability or adapter authority.
+        identity = {'schema': 1, 'vendor': 'codex', 'context_kind': 'legacy_unbound',
+                    'owner_uid': os.getuid(), 'receipt_root': self.receipts.path}
+        return {key: identity[key] for key in fields[:-1]} | {'context_id': _context_token(identity)}
 
     def _send_selection(self, selection, context):
         _need(self._catalog_reason(context) is None
@@ -1022,7 +1055,9 @@ class InteractiveRPC:
         self._generation = 0
         self._context_generation = 0
         self._native_version = None
-        self._model_context_id = os.urandom(32).hex()
+        self._model_context_id = _context_token({'schema': 1, 'vendor': 'codex',
+            'context_kind': 'legacy_unbound', 'owner_uid': os.getuid(),
+            'socket_alias': os.path.abspath(socket_path)})
         self._pending = {}
         self._closed = False
 
@@ -1234,6 +1269,11 @@ class InteractiveRPC:
         deadline = time.monotonic() + duration
         ws, generation = self._connect(deadline)
         return self._request(ws, generation, method, params, deadline)
+
+    def receipt_context(self):
+        """Stable offline metadata; fresh peer/thread proof still gates IO."""
+        return {'schema': 1, 'vendor': 'codex', 'context_kind': 'legacy_unbound',
+                'context_id': self._model_context_id}
 
     def model_context(self):
         with self._lock:
