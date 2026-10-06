@@ -31,9 +31,7 @@ class SyntheticRPC:
     def __init__(self, root, *, status=_UNSET, updated_at=1700000000.25):
         self.root = str(root)
         self.thread = {'id': SID, 'cwd': self.root, 'name': 'Synthetic title'}
-        if status is _UNSET:
-            self.thread['status'] = {'type': 'idle'}
-        else:
+        if status is not _UNSET:
             self.thread['status'] = status
         if updated_at is not _UNSET:
             self.thread['updatedAt'] = updated_at
@@ -163,6 +161,12 @@ class ConfiguredCreateOverlayContract(unittest.TestCase):
                     reservation = store.origin(base, reservation, deadline)
                     store.accept(base, reservation, deadline)
                 rpc = SyntheticRPC(case_root, status=status, updated_at=updated_at)
+                if label == 'missing-status':
+                    self.assertNotIn('status', rpc.thread,
+                                     'negative fixture must omit native status')
+                if label == 'missing-updatedAt':
+                    self.assertNotIn('updatedAt', rpc.thread,
+                                     'negative fixture must omit native updatedAt')
                 owner = self.feature.ConfiguredSessionCreate(
                     rpc, lambda project, root=case_root: str(root), lambda: ['demo'],
                     str(self.base / (label + '-send')), store=store)
