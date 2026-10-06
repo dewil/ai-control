@@ -36,9 +36,13 @@ class Clock:
     def __init__(self):
         self.value = 100.0
         self.calls = 0
+        self.once = None
 
     def __call__(self):
         self.calls += 1
+        callback, self.once = self.once, None
+        if callback is not None:
+            callback()
         return self.value
 
 
@@ -56,6 +60,11 @@ class PoisonIntentContract(unittest.TestCase):
         method = getattr(self.coordinator, "poison_intent", None)
         self.assertTrue(callable(method), "AuthCoordinator.poison_intent is required")
         method(self.scope, "refresh_unknown")
+
+    def require_poison_method(self):
+        method = getattr(self.coordinator, "poison_intent", None)
+        self.assertTrue(callable(method), "AuthCoordinator.poison_intent is required")
+        return method
 
     def denied(self, call):
         with self.assertRaises(self.auth.AuthError) as raised:
@@ -131,6 +140,67 @@ class PoisonIntentContract(unittest.TestCase):
         other_lease = self.coordinator.open(other, deadline=120.0)
         self.coordinator.check(other_lease, other, deadline=120.0)
         self.coordinator.release(other_lease)
+
+    def test_clock_reentry_poison_during_begin_never_claims_effect(self):
+        poison = self.require_poison_method()
+        lease = self.coordinator.open(self.scope, deadline=110.0)
+        try:
+            with self.coordinator.delivery_guard(
+                lease, self.scope, deadline=110.0
+            ) as guard:
+                fired = []
+
+                def inject():
+                    fired.append(True)
+                    poison(self.scope, "refresh_unknown")
+
+                self.clock.once = inject
+                self.denied(guard.begin_enqueue)
+                self.assertEqual(fired, [True], "begin did not sample the injected clock")
+                # A denied begin has no claimed effect to confirm or publish.
+                self.denied(guard.confirm)
+                self.denied(lambda: self.coordinator.publish_delivery(
+                    lease, guard=guard, deadline=110.0
+                ))
+        finally:
+            self.clock.once = None
+            self.coordinator.release(lease)
+
+    def test_clock_reentry_poison_during_publish_denies_new_generation(self):
+        poison = self.require_poison_method()
+        lease = self.coordinator.open(self.scope, deadline=110.0)
+        try:
+            with self.coordinator.delivery_guard(
+                lease, self.scope, deadline=110.0
+            ) as first_guard:
+                first_guard.begin_enqueue()
+                first_guard.confirm()
+                first = self.coordinator.publish_delivery(
+                    lease, guard=first_guard, deadline=110.0
+                )
+                self.assertEqual(first.credential_generation, 1)
+
+            with self.coordinator.delivery_guard(
+                lease, self.scope, deadline=110.0
+            ) as guard:
+                guard.begin_enqueue()
+                guard.confirm()
+                fired = []
+
+                def inject():
+                    fired.append(True)
+                    poison(self.scope, "refresh_unknown")
+
+                self.clock.once = inject
+                self.denied(lambda: self.coordinator.publish_delivery(
+                    lease, guard=guard, deadline=110.0
+                ))
+                self.assertEqual(fired, [True], "publish did not sample the injected clock")
+                self.assertEqual(first.credential_generation, 1)
+        finally:
+            self.clock.once = None
+            self.coordinator.release(lease)
+        self.denied(lambda: self.coordinator.open(self.scope, deadline=110.0))
 
 
 if __name__ == "__main__":
