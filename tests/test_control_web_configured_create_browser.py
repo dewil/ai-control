@@ -59,7 +59,9 @@ def serve(root, evidence):
         def session_history(self, project, sid, cursor):
             data = settings()
             if sid == CREATED or data.get('history_unavailable'):
-                return {'history_state': 'unavailable', 'reason': 'unavailable', 'recent_sends': []}
+                return {'history_state': 'unavailable', 'reason': 'unavailable', 'recent_sends': [
+                    {'status': 'rejected', 'message_id': '44444444-4444-4444-8444-444444444444',
+                     'turn_id': None}] if sid == CREATED else []}
             return {'turns': [{'id': 'synthetic-turn', 'status': 'completed', 'items': [
                 {'id': 'synthetic-item', 'role': 'assistant', 'text': 'Synthetic existing history', 'truncated': False}]}],
                 'next_cursor': None, 'truncated': False, 'recent_sends': []}
@@ -283,6 +285,22 @@ class ConfiguredCreateBrowser(unittest.TestCase):
         self.assertEqual([c['method'] for c in self.calls()].count('send'), 0,
                          'Create acceptance does not send a hidden greeting')
         self.assertEqual(self.page.get_by_text('<img src=x onerror=alert(1)>', exact=True).count(), 0)
+
+    def test_unavailable_history_keeps_rejected_recent_receipt_and_composer(self):
+        dialog = self.open_dialog()
+        self.assertEqual(dialog.get_by_role('button', name='Создать', exact=True).count(), 1)
+        with self.page.expect_response(lambda response: response.request.method == 'POST' and
+                                       '/api/session-create' in response.url) as created:
+            dialog.get_by_role('button', name='Создать', exact=True).click()
+        self.assertEqual(created.value.status, 200)
+        self.assertEqual(self.page.get_by_text('История пока недоступна', exact=True).count(), 1,
+                         'The proved unavailable-history variant is not a generic error')
+        rejected = self.page.get_by_text(re.compile('отклон|rejected', re.I))
+        self.assertGreater(rejected.count(), 0, 'Actual rejected receipt remains visible in recent delivery state')
+        self.assertEqual(self.page.locator('textarea').count(), 1)
+        self.assertTrue(self.page.get_by_role('button', name='Отправить', exact=True).is_enabled())
+        self.assertEqual([c['method'] for c in self.calls()].count('send'), 0,
+                         'Showing the prior receipt never sends a hidden message')
 
     def test_unknown_preserves_dialog_uuid_and_uses_only_manual_status(self):
         private_json(self.evidence / 'control.json', {'create_result': 'delivery_unknown'})
