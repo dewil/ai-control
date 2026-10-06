@@ -62,3 +62,11 @@ INV-WEB-12: В явно включённом multiuser режиме administrato
 
 ## Идентичность поставки
 INV-WBUILD-01..04: footer — frozen identity/time/source branch доставляемого артефакта, безопасный текст и mobile layout, без runtime Git/auth/state access. Контракт: ../dev/done/2026-10-06-spec-web-build-info.md; traceability tests/test_control_web_build_info.py. DESIGN и10blindGREEN приняты; SOURCE/fullCI/installed acceptance учитываются отдельно владельцем CONTROL-WEB-BUILD-INFO.
+
+
+## Компактная форма входа
+INV-LOGIN-01..02: только #login имеет width100%, max-width28rem и центрирование;
+mobile320/390 без overflow, workspace не сужен, DOM/поля/hidden/focus и auth
+семантика прежние. Feature ../dev/done/2026-10-06-spec-web-compact-login.md;
+trace tests/test_control_web_compact_login_browser.py (3 independent browser checks).
+SOURCE/browser PASS; final exact CI and installed acceptance are release gates.
