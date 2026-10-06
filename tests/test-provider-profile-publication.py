@@ -70,6 +70,28 @@ class RegistrationFixtureHelpers:
 
 
 class ProviderProfilePublicationTests(RegistrationFixtureHelpers, unittest.TestCase):
+    def test_prepublication_fsync_failure_still_refuses_registration_without_leaf(self):
+        original_fsync = os.fsync
+        failed = False
+        leaf = self.profile_root / 'registration.json'
+
+        def fail_before_publication(descriptor):
+            nonlocal failed
+            if not failed and not leaf.exists():
+                failed = True
+                raise OSError(errno.EIO, 'synthetic prepublication file fsync failure')
+            return original_fsync(descriptor)
+
+        with self.no_native_reads():
+            with patch.object(os, 'fsync', fail_before_publication):
+                error = self.assert_safe_account_error(self.registered)
+
+        self.assertTrue(failed, 'prepublication fsync fault must be reached')
+        self.assertIsInstance(error, accounts.AccountError)
+        self.assertFalse(leaf.exists(), 'precommit IO failure cannot publish registration')
+        self.assertEqual(list((self.profile_root / 'codex').iterdir()), [])
+        self.assertEqual(list((self.profile_root / 'native-home').iterdir()), [])
+
     def test_catalog_revoked_after_registration_link_fails_and_removes_leaf(self):
         original_link = os.link
         mutated = False

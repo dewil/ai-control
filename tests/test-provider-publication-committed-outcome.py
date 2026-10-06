@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic post-publication outcome tests from the public provider spec."""
 import importlib
+import errno
 import inspect
 import json
 import os
@@ -124,6 +125,48 @@ class PublicationCommittedOutcome(unittest.TestCase):
         self.assertEqual(final.read_text(encoding="utf-8"), "synthetic committed task\n")
         self.assertTrue(unrelated.is_file())
 
+    def test_task_rename_remains_committed_when_postrename_descriptor_close_reports_error(self):
+        registry = self.home / "tasks-close-fault"
+        registry.mkdir(mode=0o700)
+        staged = registry / "task.stage"
+        final = registry / "TASK.md"
+        staged.write_text("synthetic close-committed task\n", encoding="utf-8")
+        staged.chmod(0o600)
+        real_replace, real_rename, real_close = os.replace, os.rename, os.close
+        renamed = threading.Event()
+        injected = threading.Event()
+
+        def wrap_rename(real):
+            def rename(source, destination, *args, **kwargs):
+                result = real(source, destination, *args, **kwargs)
+                if Path(destination) == final:
+                    renamed.set()
+                return result
+            return rename
+
+        def close_then_fail_once(fd):
+            result = real_close(fd)
+            if renamed.is_set() and not injected.is_set():
+                injected.set()
+                raise OSError(errno.EIO, "synthetic one-shot close after TASK rename")
+            return result
+
+        caught = None
+        with patch.object(profiles_module.os, "replace", wrap_rename(real_replace)):
+            with patch.object(profiles_module.os, "rename", wrap_rename(real_rename)):
+                with patch.object(profiles_module.os, "close", close_then_fail_once):
+                    try:
+                        with self.publication_guard():
+                            os.replace(staged, final)
+                    except BaseException as error:
+                        caught = error
+
+        self.assertTrue(renamed.is_set(), "atomic TASK rename must be reached")
+        self.assertTrue(injected.is_set(), "one-shot fault must follow the committed rename")
+        self.assertIsNone(caught, "descriptor cleanup cannot report a committed TASK as unpublished")
+        self.assertTrue(final.is_file())
+        self.assertEqual(final.read_text(encoding="utf-8"), "synthetic close-committed task\n")
+
     def test_registration_postpublication_validation_failure_rolls_back_owned_leaf(self):
         """A registration validation error after its leaf rename must not leave that leaf behind."""
         leaf = self.profile_root / "registration.json"
@@ -152,6 +195,56 @@ class PublicationCommittedOutcome(unittest.TestCase):
                               "post-publication validation should report the detected ordinary drift")
         self.assertFalse(leaf.exists(), "ordinary registration failure must roll back its own leaf")
         self.assertTrue(unrelated.is_file(), "rollback must preserve the unrelated injected entry")
+
+    def test_registration_remains_committed_when_profile_descriptor_close_reports_error(self):
+        leaf = self.profile_root / "registration.json"
+        real_fsync, real_close = os.fsync, os.close
+        committed_fsync = threading.Event()
+        injected = threading.Event()
+        independently_closed = []
+        root_info = self.profile_root.stat()
+
+        def fsync_after_publication(fd):
+            result = real_fsync(fd)
+            if leaf.is_file():
+                committed_fsync.set()
+            return result
+
+        def close_root_then_fail_once(fd):
+            is_profile_root = False
+            try:
+                info = os.fstat(fd)
+                is_profile_root = (info.st_dev, info.st_ino) == (root_info.st_dev, root_info.st_ino)
+            except OSError:
+                pass
+            result = real_close(fd)
+            if injected.is_set():
+                independently_closed.append(fd)
+            elif committed_fsync.is_set() and is_profile_root:
+                injected.set()
+                raise OSError(errno.EIO, "synthetic one-shot profile close after commit")
+            return result
+
+        caught = None
+        with patch.object(profiles_module.os, "fsync", fsync_after_publication):
+            with patch.object(profiles_module.os, "close", close_root_then_fail_once):
+                try:
+                    self.register()
+                except BaseException as error:
+                    caught = error
+
+        violations = []
+        if not leaf.is_file():
+            violations.append("registration leaf missing after close fault")
+        if not committed_fsync.is_set():
+            violations.append("profile-root fsync after publication not observed")
+        if not injected.is_set():
+            violations.append("one-shot fault did not follow committed root descriptor close")
+        if caught is not None:
+            violations.append("committed registration returned " + type(caught).__name__)
+        if not independently_closed:
+            violations.append("no independent descriptor was closed after injected close error")
+        self.assertEqual(violations, [], "postcommit descriptor cleanup must be non-failing and exhaustive")
 
 
 if __name__ == "__main__":
