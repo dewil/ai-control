@@ -293,7 +293,10 @@ class ConfiguredCreateBrowser(unittest.TestCase):
                                        '/api/session-create' in response.url) as created:
             dialog.get_by_role('button', name='Создать', exact=True).click()
         self.assertEqual(created.value.status, 200)
-        self.assertEqual(self.page.get_by_text('История пока недоступна', exact=True).count(), 1,
+        from playwright.sync_api import expect
+        unavailable = self.page.get_by_text('История пока недоступна', exact=True)
+        expect(unavailable).to_be_visible(timeout=5000)
+        self.assertEqual(unavailable.count(), 1,
                          'The proved unavailable-history variant is not a generic error')
         rejected = self.page.get_by_text(re.compile('отклон|rejected', re.I))
         self.assertGreater(rejected.count(), 0, 'Actual rejected receipt remains visible in recent delivery state')
