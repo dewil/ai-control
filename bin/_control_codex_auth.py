@@ -347,11 +347,13 @@ class AuthStateValidator:
 
     @contextmanager
     def _callback_map(self, deadline, *, validate=None):
+        if validate is not None:
+            validate()
+        # Validation is an external seam; take the deadline sample after it.
+        # Only local identity/state checks follow this sample inside the map.
         now = self._remaining(deadline)
         remaining = deadline - now
         started = time.monotonic()
-        if validate is not None:
-            validate()
         wait = remaining - (time.monotonic() - started)
         if wait <= 0 or not self._callback_lock.acquire(timeout=wait):
             raise AuthError('refresh_busy')
