@@ -22,7 +22,8 @@ because writable `__dict__` no longer exists; single-capture method PASS. Total
 provider catalog 13 PASS with private canonical TMPDIR on macOS; default /var
 symlink was refused, and production path checks were not weakened.
 
-The workflow includes all three authority scripts alongside the complete existing
-web, provider-account, signed-deployment and installation jobs. Exact hosted CI
+The existing web unittest discovery loads all three frozen authority suites through
+a discovery adapter; no workflow permission change is required. Existing provider,
+signed-deployment and installation jobs also run unchanged. Exact hosted CI
 must be GREEN before this source unit is accepted. No synthetic test or receipt
 confers native launch/authentication authority.
