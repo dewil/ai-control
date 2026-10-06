@@ -163,6 +163,7 @@ let historyScrollbarStartY=null;
 let currentTab='tasks';
 let projectPage=0;
 let sessionPage=0;
+let sessionListRequest=0;
 let sessionsHaveMore=false;
 let sessionRows=[];
 let projectNames=[];
@@ -229,6 +230,11 @@ async function loadModelCatalog(){
 function syncCurrentSessionControls(){const key=currentSessionKey();const historyBusy=Boolean(key&&historyFlights.has(key));const state=key&&historyData.get(key);const hasOlder=Boolean(state&&(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error)));$('chat-send').disabled=!csrf||currentTab!=='sessions'||!key||Boolean(selectedSession?.created&&!state?.initialized&&!state?.confirmedOrigin)||sendsInFlight.has(key)||hasUnknown(key)||!explicitModelReady(key);$('chat-refresh').disabled=!key||historyBusy;$('history-older').disabled=!key||historyBusy||!hasOlder;$('history-retry').hidden=!(state&&state.historyError);$('history-retry').disabled=!key||historyBusy;renderModelControls();renderCurrentSendStatus();syncRenameControls();syncCreateControls();}
 function showTab(tab,load=true){currentTab=tab;const tasks=tab==='tasks';if(tasks)clearHistoryScrollSlack();$('tab-tasks').setAttribute('aria-selected',String(tasks));$('tab-sessions').setAttribute('aria-selected',String(!tasks));$('tasks-panel').hidden=!tasks;$('sessions-panel').hidden=tasks;syncCurrentSessionControls();if(tasks){stopPolling();if(load&&!taskLoaded)refresh();}else{if(load&&!projectNames.length)loadProjects();else if(load&&!selectedProject)loadSessionList(0,false);startPolling();}}
 function setSessionStatus(text){$('session-list-status').textContent=text;}
+function projectExactTime(timestamp){
+  const date=new Date(timestamp*1000);
+  if(!Number.isFinite(date.getTime()))return null;
+  return new Intl.DateTimeFormat('ru-RU',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date);
+}
 function renderProjects(){
   const cloud=$('project-cloud'),focused=document.activeElement,y=window.scrollY;
   const existing=new Map([...cloud.children].map(button=>[button.dataset.project,button]));
@@ -252,13 +258,29 @@ function renderProjects(){
     button.style.setProperty('--tile-width',(112+12*bucket)+'px');button.style.setProperty('--tile-height',(64+8*bucket)+'px');
     const details=unavailable?'Недоступен':value?value.session_count+' сессий'+(value.summary_state==='stale'?' · устарело':''):'Число сессий неизвестно';
     button.replaceChildren(node('span',entry.name,'project-name'),node('span',details,'meta'));
-    button.title=value?'Сводка: '+new Date(value.as_of*1000).toLocaleString()+(value.last_activity===null?' · нет активности':' · последняя активность: '+new Date(value.last_activity*1000).toLocaleString()):details;
+    let activity=unavailable?'Активность недоступна':'Активность неизвестна',exact=null;
+    if(value&&!unavailable){
+      if(value.last_activity===null)activity='Нет активности';
+      else{
+        exact=projectExactTime(value.last_activity);
+        activity='Активность: время неизвестно';
+        if(exact){
+          const time=node('time','Активность: '+messageAge(value.last_activity),'meta');
+          time.dateTime=new Date(value.last_activity*1000).toISOString();time.title=exact;
+          time.dataset.projectTimestamp=String(value.last_activity);
+          button.append(time,node('span',exact,'project-activity-detail'));
+        }
+      }
+    }
+    if(!exact)button.append(node('span',activity,'meta'));
+    button.setAttribute('aria-label',entry.name+', '+details+', '+(exact?'Последняя активность: '+exact:activity));
+    button.title=value?'Сводка: '+(projectExactTime(value.as_of)||'время неизвестно')+(value.last_activity===null?' · нет активности':' · последняя активность: '+(exact||'время неизвестно')):'Метаданные временно недоступны. Обновите проекты, чтобы запросить их снова.';
     cloud.append(button);
   }
   for(const button of existing.values())if(!retained.has(button))button.remove();
   if(retained.has(focused)&&!focused.disabled)focused.focus({preventScroll:true});
   if(window.scrollY!==y)window.scrollTo(0,y);
-  syncCreateControls();
+  syncCreateControls();syncMessageAges();
 }
 function clearUnavailableProject(){stopPolling();selectionGeneration++;initialScrollTarget=null;selectedProject='';selectedSession=null;sessionRows=[];sessionPage=0;sessionsHaveMore=false;clearHistoryView();$('session-list').replaceChildren();$('sessions-more').hidden=true;updateUrl();syncCurrentSessionControls();renderProjects();}
 function projectChanged(name){
@@ -267,27 +289,41 @@ function projectChanged(name){
 }
 async function loadProjects(){
   if(!csrf)return;
-  const generation=++projectsGeneration,auth=csrf,selection=selectionGeneration,hadNames=projectEntries.length>0;
-  const current=()=>csrf===auth&&generation===projectsGeneration;
+  const generation=++projectsGeneration,auth=chatAuthGeneration,selection=selectionGeneration,hadNames=projectEntries.length>0;
+  const current=()=>Boolean(csrf&&auth===chatAuthGeneration&&generation===projectsGeneration);
   if(!hadNames)setSessionStatus('Загружаем проекты…');
   $('projects-refresh').disabled=true;
   try{
-    const data=await api('/api/session-projects');if(!current())return;
+    const data=await api('/api/session-projects',undefined,undefined,current);if(!current())return;
     if(!Array.isArray(data.projects))throw new Error('invalid projects');
     projectEntries=data.projects.filter(x=>x&&typeof x.name==='string');
     projectNames=projectEntries.map(x=>x.name);
     availableProjects=new Set(projectEntries.filter(x=>x.unavailable!==true).map(x=>x.name));
     if(selectedProject&&!availableProjects.has(selectedProject)){clearUnavailableProject();setSessionStatus('Выбранный проект недоступен. Выберите другой проект.');}
     renderProjects();
-    let summaryFailed=false;
+    let summarySelection=selectionGeneration;
+    const summaryCurrent=()=>current()&&summarySelection===selectionGeneration;
+    let summaryFailed=false,summaryUnknown=false;
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
+    const validSummary=data=>exactFields(data,['projects'])&&Array.isArray(data.projects)&&data.projects.length<=1000&&data.projects.length===projectNames.length&&new Set(data.projects.map(x=>x?.name)).size===data.projects.length&&data.projects.every(x=>exactFields(x,['name','session_count','last_activity','summary_state','as_of'])&&projectNames.includes(x.name)&&(['fresh','stale'].includes(x.summary_state)?Number.isSafeInteger(x.session_count)&&x.session_count>=0&&(x.last_activity===null||typeof x.last_activity==='number'&&Number.isFinite(x.last_activity)&&x.last_activity>=0)&&typeof x.as_of==='number'&&Number.isFinite(x.as_of)&&x.as_of>=0:['unknown','unavailable'].includes(x.summary_state)&&x.session_count===null&&x.last_activity===null&&x.as_of===null));
+    const unknown=data=>data.projects.some(x=>availableProjects.has(x.name)&&x.summary_state==='unknown');
     try{
-      const summary=await api('/api/session-project-summary');if(!current())return;
-      if(!Array.isArray(summary.projects))throw new Error('invalid summary');
+      let summary=await api('/api/session-project-summary',undefined,controller.signal,summaryCurrent);if(!summaryCurrent())return;
+      if(!validSummary(summary))throw new Error('invalid summary');
+      if(unknown(summary)){
+        $('project-summary-status').textContent='Обновляем метаданные проектов…';
+        if(!summaryCurrent()||controller.signal.aborted)return;
+        summary=await api('/api/session-project-summary',undefined,controller.signal,summaryCurrent);if(!summaryCurrent())return;
+        if(!validSummary(summary))throw new Error('invalid summary');
+      }
+      summaryUnknown=unknown(summary);
       projectSummaries=new Map(summary.projects.filter(x=>x&&projectNames.includes(x.name)).map(x=>[x.name,x]));
       for(const [name,value] of projectSummaries)if(value.summary_state==='unavailable')availableProjects.delete(name);
-      if(selectedProject&&!availableProjects.has(selectedProject)){clearUnavailableProject();setSessionStatus('Выбранный проект недоступен. Выберите другой проект.');}
-    }catch(_){if(!current())return;projectSummaries.clear();summaryFailed=true;}
-    $('project-summary-status').textContent=summaryFailed?'Сводка недоступна. Число сессий и активность неизвестны.':'';
+      if(selectedProject&&!availableProjects.has(selectedProject)){clearUnavailableProject();summarySelection=selectionGeneration;setSessionStatus('Выбранный проект недоступен. Выберите другой проект.');}
+    }catch(_){if(!summaryCurrent())return;projectSummaries.clear();summaryFailed=true;}
+    finally{clearTimeout(timer);if(current()&&!summaryCurrent())$('project-summary-status').textContent='';}
+    if(!summaryCurrent())return;
+    $('project-summary-status').textContent=summaryFailed?'Сводка недоступна. Число сессий и активность неизвестны.':summaryUnknown?'Некоторые метаданные пока недоступны. Обновите проекты, чтобы повторить.':'';
     renderProjects();
     // A refresh never reopens history or overrides a newer user selection.
     if(selection!==selectionGeneration)return;
@@ -301,7 +337,31 @@ async function loadProjects(){
   }catch(_){if(current())setSessionStatus('Список проектов недоступен. Нажмите «Обновить проекты», чтобы повторить.');}
   finally{if(current())$('projects-refresh').disabled=false;}
 }
-async function loadSessionList(page=0,append=false,deepSid=null){const project=selectedProject;if(!project||!availableProjects.has(project))return;const generation=selectionGeneration;setSessionStatus(deepSid?'Ищем выбранную сессию…':'Загружаем сессии…');$('sessions-more').disabled=true;try{const data=await api(queryPath('/api/sessions',{project,page}));if(project!==selectedProject||generation!==selectionGeneration)return;const rows=Array.isArray(data.rows)?data.rows:[];sessionPage=page;sessionsHaveMore=data.has_more===true;sessionRows=append?sessionRows.concat(rows):rows;renderSessions();$('sessions-more').hidden=!sessionsHaveMore;if(deepSid){const found=rows.find(row=>row&&row.sid===deepSid);if(found){openChat(found);return;}if(sessionsHaveMore&&page<99)return loadSessionList(page+1,false,deepSid);setSessionStatus('Сессия из ссылки не найдена среди доступных сессий. Выберите другую из списка.');}else setSessionStatus(sessionRows.length?'Выберите сессию для переписки.':'В этом проекте пока нет доступных сессий.');}catch(_){if(project===selectedProject&&generation===selectionGeneration)setSessionStatus('Список сессий недоступен. Попробуйте ещё раз.');}finally{$('sessions-more').disabled=false;}}
+async function loadSessionList(page=0,append=false,deepSid=null){
+  const project=selectedProject;if(!project||!availableProjects.has(project))return;
+  const generation=selectionGeneration,auth=chatAuthGeneration,request=++sessionListRequest;
+  const owns=()=>Boolean(csrf&&auth===chatAuthGeneration&&project===selectedProject&&request===sessionListRequest);
+  const current=()=>owns()&&generation===selectionGeneration;
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
+  setSessionStatus(deepSid?'Ищем выбранную сессию…':'Загружаем сессии…');$('sessions-more').disabled=true;
+  try{
+    const path=queryPath('/api/sessions',{project,page});let data;
+    try{data=await api(path,undefined,controller.signal,current);}
+    catch(err){
+      if(err.status!==409||err.code!=='stale'||!current()||controller.signal.aborted)throw err;
+      setSessionStatus('Обновляем метаданные сессий…');
+      data=await api(path,undefined,controller.signal,current);
+    }
+    if(!current()||controller.signal.aborted)return;
+    const rows=Array.isArray(data.rows)?data.rows:[];sessionPage=page;sessionsHaveMore=data.has_more===true;
+    sessionRows=append?sessionRows.concat(rows):rows;renderSessions();$('sessions-more').hidden=!sessionsHaveMore;
+    if(deepSid){const found=rows.find(row=>row&&row.sid===deepSid);if(found){openChat(found);return;}
+      if(sessionsHaveMore&&page<99)return loadSessionList(page+1,false,deepSid);
+      setSessionStatus('Сессия из ссылки не найдена среди доступных сессий. Выберите другую из списка.');
+    }else setSessionStatus(sessionRows.length?'Выберите сессию для переписки.':'В этом проекте пока нет доступных сессий.');
+  }catch(err){if(current())setSessionStatus(err.status===409&&err.code==='stale'?'Метаданные сессий устарели. Обновите список, чтобы повторить.':'Список сессий недоступен. Обновите список, чтобы повторить.');}
+  finally{clearTimeout(timer);if(owns())$('sessions-more').disabled=false;}
+}
 function renderSessions(){const list=$('session-list');const frag=document.createDocumentFragment();for(const row of sessionRows){if(!row||typeof row.sid!=='string'||!UUID_RE.test(row.sid))continue;const b=node('button',undefined,'session-choice'+(selectedSession&&selectedSession.sid===row.sid?' selected':''));b.type='button';b.setAttribute('aria-pressed',String(Boolean(selectedSession&&selectedSession.sid===row.sid)));b.append(node('span',row.title||'Codex','session-title'));const vendorLabel=row.vendor==='codex'?'Codex':row.vendor==='claude'?'Claude':'Вендор неизвестен';b.append(node('span',vendorLabel,'session-vendor-badge'));b.append(node('span',statusLabel(row.status),'meta'));if(row.needs_native_attention===true)b.append(node('span','Нужно действие в клиенте Codex; ответы из панели пока недоступны.','attention-inline'));b.addEventListener('click',()=>openChat(row));frag.append(b);}list.replaceChildren(frag);}
 function statusLabel(status){const labels={active:'Работает',idle:'Готова',notLoaded:'Недоступна',systemError:'Ошибка',completed:'Завершён',interrupted:'Прерван',failed:'Ошибка',inProgress:'Выполняется'};return labels[status]||'Состояние неизвестно';}
 function chatError(err){if(err&&err.code==='stale')return 'Сессия устарела или изменилась. Обновите список и выберите её снова.';return err&&err.message||messages.unavailable;}
@@ -574,8 +634,8 @@ async function loadHistory(older=false,manual=false){
   })();
   flight.promise=promise;syncCurrentSessionControls();return promise;
 }
-// INV-WSESS-20/21: only validated native turn starts supply dates; ages are local.
-function messageTimestamp(item){return item.time_precision==='turn'&&Number.isInteger(item.timestamp)&&item.timestamp>=0&&item.timestamp<=253402300799?item.timestamp:null;}
+// INV-WSESS-20/21: producer item starts are preferred; turn fallbacks are explicit.
+function messageTimestamp(item){return ['item','turn'].includes(item.time_precision)&&Number.isInteger(item.timestamp)&&item.timestamp>=0&&item.timestamp<=253402300799?item.timestamp:null;}
 function messageAge(timestamp){
   const age=Date.now()/1000-timestamp;
   if(!Number.isFinite(age)||age<0)return 'время неизвестно';
@@ -588,26 +648,31 @@ function messageTime(item){
   const timestamp=messageTimestamp(item);
   if(timestamp===null)return node('span','время неизвестно','message-time-unknown');
   const date=new Date(timestamp*1000);
-  const exact=new Intl.DateTimeFormat('ru-RU',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date)+' — начало хода';
+  const exact=new Intl.DateTimeFormat('ru-RU',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date)+(item.time_precision==='item'?' — начало сообщения':' — начало хода');
   const control=node('button',undefined,'message-time');control.type='button';
   control.setAttribute('aria-label',exact);control.setAttribute('aria-expanded','false');
   const time=node('time',messageAge(timestamp));time.dateTime=date.toISOString();time.dataset.timestamp=String(timestamp);
+  if(item.time_precision==='turn')control.append(node('span','Ход начат','message-time-precision'));
   control.append(time,node('span',exact,'message-time-detail'));
   control.addEventListener('click',()=>control.setAttribute('aria-expanded',String(control.getAttribute('aria-expanded')!=='true')));
   return control;
 }
 function stopMessageAges(){if(messageAgeTimer!==null){clearInterval(messageAgeTimer);messageAgeTimer=null;}}
 function messageAgesActive(){return Boolean(csrf&&currentTab==='sessions'&&selectedSession&&document.visibilityState==='visible'&&!$('workspace').hidden&&!$('chat-panel').hidden);}
+function projectAgesActive(){return Boolean(csrf&&currentTab==='sessions'&&document.visibilityState==='visible'&&!$('workspace').hidden&&$('project-cloud').querySelector('time[data-project-timestamp]'));}
 function updateMessageAges(){
-  if(!messageAgesActive())return;
-  for(const time of $('chat-items').querySelectorAll('time[data-timestamp]')){
+  if(messageAgesActive())for(const time of $('chat-items').querySelectorAll('time[data-timestamp]')){
     const text=messageAge(Number(time.dataset.timestamp));
+    if(time.textContent!==text)time.textContent=text;
+  }
+  if(projectAgesActive())for(const time of $('project-cloud').querySelectorAll('time[data-project-timestamp]')){
+    const text='Активность: '+messageAge(Number(time.dataset.projectTimestamp));
     if(time.textContent!==text)time.textContent=text;
   }
 }
 function syncMessageAges(){
   stopMessageAges();
-  if(messageAgesActive()){updateMessageAges();messageAgeTimer=setInterval(updateMessageAges,60000);}
+  if(messageAgesActive()||projectAgesActive()){updateMessageAges();messageAgeTimer=setInterval(updateMessageAges,60000);}
 }
 // INV-WSESS-22/23: bound DOM only; keep loaded cache and opaque gap cursors intact.
 const HISTORY_WINDOW_LIMIT=100;

@@ -952,6 +952,8 @@ class SessionChat:
                         _need(type(item.get('text')) is str)
                         page_projection.append({'id': item['id'], 'type': item['type'],
                                                 'text': item['text']})
+                    if item['type'] in ('userMessage', 'agentMessage'):
+                        page_projection[-1]['startedAtMs'] = entry.get('startedAtMs')
                 entry = item = part = None
                 if used + size > 8 * 1024 * 1024:
                     truncated, stopped = True, True
@@ -1262,6 +1264,9 @@ class SessionChat:
                 timestamp = None
             timing = {'timestamp': timestamp,
                       'time_precision': 'turn' if timestamp is not None else 'unknown'}
+            item_started = native_item.get('startedAtMs')
+            if type(item_started) is int and 0 <= item_started <= 253402300799999:
+                timing = {'timestamp': item_started // 1000, 'time_precision': 'item'}
             if native_item['type'] == 'userMessage':
                 raw_text = '\n'.join(part['text'] for part in native_item['content']
                                      if part['type'] == 'text')
