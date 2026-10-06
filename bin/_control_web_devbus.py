@@ -104,6 +104,9 @@ class Projection:
                 if now - collection[key]['_observed'] >= ttl:
                     del collection[key]
 
+        for task in self._tasks.values():
+            task['transitions'] = [event for event in task['transitions'] if now-event['_observed'] < ttl]
+
     def _bound(self, collection, limit):
         while len(collection) > limit:
             collection.popitem(last=False)
@@ -114,7 +117,7 @@ class Projection:
             text = text.replace(secret, '***')
         text = re.sub(r'-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----', '***', text, flags=re.S)
         text = re.sub(r'(?i)\bBearer\s+[^\s,;]+', 'Bearer ***', text)
-        text = re.sub(r'(?i)\b(?:token|password|api_key|secret|authorization)\s*[:=]\s*(?:"[^"]*"|\x27[^\x27]*\x27|[^\s,;]+)', '***', text)
+        text = re.sub(r'(?i)\b(?:token|password|api_key|secret|authorization)[\"\x27]?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|\x27(?:\\.|[^\x27\\])*\x27|[^\s,;]+)', '***', text)
         text = re.sub(r'(?i)\b[a-z][a-z0-9+.-]*://[^\s/@]+@[^\s]+', '***', text)
         return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
 
@@ -150,6 +153,12 @@ class Projection:
         if kind in _STATES and task_id in self._tasks and self._tasks[task_id]['agent'] != agent:
             self.issue('id_conflict')
             return False
+        if kind in _STATES and task_id in self._tasks:
+            for retained in self._tasks[task_id]['transitions']:
+                if retained['message_id'] == mid:
+                    if retained['_digest'] != fingerprint:
+                        self.issue('id_conflict')
+                    return False
         now = self.clock()
         self._ids[mid] = dict(digest=fingerprint, _observed=now)
         self._bound(self._ids, self.limits.dedup)
@@ -164,7 +173,7 @@ class Projection:
                 duration_seconds=None, result=None, error=None, output_truncated=False,
                 transitions=[], _sequence=0, _observed=now))
             task['_observed'] = now
-            task['transitions'].append(event)
+            task['transitions'].append(dict(event, _observed=now, _digest=fingerprint))
             task['transitions'].sort(key=lambda e:e['sequence'])
             if len(task['transitions']) > self.limits.transitions:
                 task['transitions'] = task['transitions'][-self.limits.transitions:]
@@ -205,7 +214,12 @@ class Projection:
             coverage['mode'] = 'window'
         else:
             coverage['mode'] = 'replaying'
-        tasks = [public(t) for t in self._tasks.values() if (task is None or t['task_id']==task) and (agent is None or t['agent']==agent)]
+        tasks = []
+        for record in self._tasks.values():
+            if (task is None or record['task_id']==task) and (agent is None or record['agent']==agent):
+                value = public(record)
+                value['transitions'] = [public(event) for event in record['transitions']]
+                tasks.append(value)
         events = [public(e) for e in self._events.values() if (task is None or e['task_id']==task) and (agent is None or e['agent']==agent)]
         events.sort(key=lambda e:e['sequence'])
         agents = []
@@ -231,8 +245,9 @@ class Observer:
         self._last_observed = None
         self._last_stream = None
 
-    async def _io(self, awaitable):
-        async with asyncio.timeout(self.timeout):
+    async def _io(self, awaitable, remaining=None):
+        timeout = self.timeout if remaining is None else min(self.timeout, max(0, remaining))
+        async with asyncio.timeout(timeout):
             return await awaitable
 
     async def start(self):
@@ -260,50 +275,121 @@ class Observer:
 
     def _metadata(self, info, complete):
         first, last = info['first_seq'], info['last_seq']
-        if self._last_stream is not None and last < self._last_stream:
+        reset = self._last_stream is not None and last < self._last_stream
+        if reset:
             self.projection.reset()
             self._last_observed = None
         elif self._last_observed is not None and first > self._last_observed+1:
             self.projection.issue('retention_gap')
         self._last_stream = last
         self.projection.coverage(first,last,info['ttl_seconds'],info['max_bytes'],replay_complete=complete)
+        return reset
+
+    async def _refresh(self, transport, state):
+        try:
+            next_refresh = time.monotonic() + 1
+            while True:
+                await asyncio.sleep(max(0, next_refresh-time.monotonic()))
+                next_refresh = time.monotonic() + 1
+                info = await self._io(transport.info())
+                state['info'] = info
+                if self._metadata(info, state['complete']):
+                    state['failed'] = True
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            state['failed'] = True
 
     async def _run(self):
         try:
             while not self._stopping:
                 self.projection.connection('connecting')
+                refresh = None
                 try:
                     self._transport = await self._io(self.connect())
                     info = await self._io(self._transport.info())
                     self._metadata(info,False)
                     initial_last = info['last_seq']
-                    complete, limited = False, False
+                    state = dict(info=info, complete=False, failed=False)
+                    limited = False
                     count = size = 0
-                    started = refreshed = time.monotonic()
+                    deadline = time.monotonic() + 10
+                    refresh = asyncio.create_task(self._refresh(self._transport,state))
                     self.projection.connection('replaying')
+
+                    def remaining():
+                        return None if state['complete'] or limited else deadline-time.monotonic()
+
+                    def check_generation():
+                        if state['failed']:
+                            raise RuntimeError('unavailable')
+
+                    async def cutoff():
+                        nonlocal limited
+                        check_generation()
+                        self.projection.issue('replay_incomplete')
+                        limited = True
+                        await self._io(self._transport.skip_to(initial_last+1))
+                        check_generation()
+                        self.projection.connection('live')
+
                     while not self._stopping:
-                        if time.monotonic()-refreshed >= 1:
-                            info = await self._io(self._transport.info())
-                            self._metadata(info,complete)
-                            refreshed = time.monotonic()
-                        messages = await self._io(self._transport.fetch())
+                        check_generation()
+                        if remaining() is not None and remaining() <= 0:
+                            await cutoff()
+                        try:
+                            messages = await self._io(self._transport.fetch(),remaining())
+                        except asyncio.TimeoutError:
+                            if remaining() is not None and remaining() <= 0:
+                                await cutoff()
+                                continue
+                            raise
                         for message in messages:
-                            count += 1
-                            size += len(message.data)
-                            if message.subject.startswith('devbus.events.'):
+                            check_generation()
+                            replaying = not state['complete'] and not limited
+                            # Never ingest a message that would cross a replay quota.
+                            if replaying and (count >= 10000 or size+len(message.data) > 8*1024*1024 or remaining() <= 0):
+                                await cutoff()
+                                break
+                            if replaying:
+                                count += 1
+                                size += len(message.data)
+                            is_event = message.subject.startswith('devbus.events.')
+                            if is_event:
                                 self.projection.ingest(message.data,message.subject,message.sequence)
                                 self._last_observed = max(self._last_observed or 0,message.sequence)
-                                await self._io(message.ack())
-                        if not complete and not limited:
-                            if count >= 10000 or size >= 8*1024*1024 or time.monotonic()-started >= 10:
-                                self.projection.issue('replay_incomplete')
-                                await self._io(self._transport.skip_to(initial_last+1))
-                                limited = True
-                                self.projection.connection('live')
-                            elif await self._io(self._transport.pending()) == 0:
-                                complete = True
-                                self._metadata(info,True)
-                                self.projection.connection('live')
+                            if replaying and (count >= 10000 or size >= 8*1024*1024):
+                                # Deleting our replay consumer also disposes its unacked tail.
+                                await cutoff()
+                                break
+                            if is_event:
+                                try:
+                                    await self._io(message.ack(),remaining())
+                                except asyncio.TimeoutError:
+                                    if remaining() is not None and remaining() <= 0:
+                                        await cutoff()
+                                        break
+                                    raise
+                            # Allow periodic metadata progress even with immediate fake ACKs.
+                            await asyncio.sleep(0)
+                        check_generation()
+                        if not state['complete'] and not limited:
+                            if remaining() <= 0:
+                                await cutoff()
+                            else:
+                                try:
+                                    pending = await self._io(self._transport.pending(),remaining())
+                                except asyncio.TimeoutError:
+                                    if remaining() <= 0:
+                                        await cutoff()
+                                        continue
+                                    raise
+                                check_generation()
+                                if pending == 0:
+                                    state['complete'] = True
+                                    self._metadata(state['info'],True)
+                                    self.projection.connection('live')
                         if not messages:
                             await asyncio.sleep(.01)
                 except asyncio.CancelledError:
@@ -311,6 +397,12 @@ class Observer:
                 except Exception:
                     self.projection.connection('disconnected','unavailable')
                 finally:
+                    if refresh is not None:
+                        refresh.cancel()
+                        try:
+                            await refresh
+                        except asyncio.CancelledError:
+                            pass
                     await self._close()
                 if not self._stopping:
                     await asyncio.sleep(self.retry_seconds)
