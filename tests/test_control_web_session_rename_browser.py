@@ -219,13 +219,25 @@ class SessionRenameBrowser(unittest.TestCase):
         return [request for request in self.network
                 if request.method == 'GET' and '/api/session-rename-status' in request.url]
 
-    def outside_status(self):
-        return self.page.locator('[role="status"]').evaluate_all(
-            "els => els.filter(el => el.textContent.trim() && !el.closest('form')).map(el => ({text:el.textContent.trim(),live:el.getAttribute('aria-live')}))")
+    def dialog_status_texts(self, dialog):
+        return [value.strip() for value in dialog.get_by_role('status').all_inner_texts() if value.strip()]
 
-    def wait_outside_status(self):
-        self.page.wait_for_function("Array.from(document.querySelectorAll('[role=status]')).some(el => el.textContent.trim() && !el.closest('form'))",
-                                    timeout=1200)
+    def assert_terminal_dialog_status(self, dialog, previous_texts=()):
+        dialog.get_by_role('status').filter(has_text=re.compile(r'\S')).wait_for(
+            state='visible', timeout=1200)
+        values = self.dialog_status_texts(dialog)
+        self.assertEqual(len(values), 1, 'Rename exposes exactly one live status inside its dialog')
+        self.assertNotIn(values[0], previous_texts,
+                         'The terminal acknowledgment replaces any pending dialog status')
+        live = dialog.get_by_role('status')
+        self.assertEqual(live.count(), 1)
+        self.assertEqual(live.get_attribute('aria-live'), 'polite')
+        same_text_outside_dialog = self.page.locator('[role="status"]').evaluate_all(
+            "(els, text) => els.filter(el => el.textContent.trim() === text && !el.closest('[role=dialog]')).length",
+            values[0])
+        self.assertEqual(same_text_outside_dialog, 0,
+                         'The same rename acknowledgment is not duplicated outside its dialog')
+        return values[0]
 
     def assert_title(self, title):
         self.assertEqual(self.row(title).count(), 1, 'Only the matching session list row receives the title')
@@ -244,22 +256,34 @@ class SessionRenameBrowser(unittest.TestCase):
 
     def test_INV_WSESS_30_confirmed_title_updates_exact_row_heading_and_keeps_chat_models_and_send(self):
         title = 'Confirmed synthetic rename'
+        private_json(self.evidence / 'control.json', {'hold_rename': True, 'accepted_title': title})
         dialog = self.dialog()
         self.title_box(dialog).fill(title)
-        with self.page.expect_request(lambda request: request.method == 'POST' and
-                                      '/api/session-rename' in request.url) as captured:
-            dialog.get_by_role('button', name='Сохранить', exact=True).click()
-        request = captured.value
+        previous_statuses = self.dialog_status_texts(dialog)
+        with self.page.expect_response(lambda response: response.request.method == 'POST' and
+                                       '/api/session-rename' in response.url) as completed:
+            with self.page.expect_request(lambda request: request.method == 'POST' and
+                                          '/api/session-rename' in request.url) as captured:
+                dialog.get_by_role('button', name='Сохранить', exact=True).click()
+            request = captured.value
+            self.assertTrue(self.title_box(dialog).is_disabled(),
+                            'Pending title cannot be changed while the immutable rename is in flight')
+            self.assert_title(OLD_TITLE)
+            pending_statuses = self.dialog_status_texts(dialog)
+            private_json(self.evidence / 'release-rename.json', {'release': True})
+        response = completed.value
+        self.assertEqual(response.status, 200, 'UI title updates only after an accepted backend response')
         self.assertEqual(set(json.loads(request.post_data)), {'project', 'sid', 'operation_id', 'title'})
         body = json.loads(request.post_data)
         self.assertEqual((body['project'], body['sid'], body['title']), ('demo', SID, title))
         self.assertRegex(body['operation_id'], r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
-        self.wait_outside_status()
+        dto = response.json()
+        self.assertEqual(dto.get('status'), 'accepted')
+        self.assertEqual(dto.get('operation_id'), body['operation_id'])
+        self.assertEqual(dto.get('title'), title)
         self.assert_title(title)
+        notice_text = self.assert_terminal_dialog_status(dialog, previous_statuses + pending_statuses)
         self.assertEqual(self.row(OTHER_TITLE).count(), 1, 'Other session row keeps its title')
-        notices = self.outside_status()
-        self.assertEqual(len(notices), 1, 'Rename has one status outside the composer')
-        self.assertEqual(notices[0]['live'], 'polite')
         self.assertEqual(self.page.get_by_text('Synthetic history for ' + OLD_TITLE, exact=True).count(), 1)
 
         model = self.page.get_by_role('combobox', name='Модель', exact=True)
@@ -277,42 +301,64 @@ class SessionRenameBrowser(unittest.TestCase):
         self.assertEqual([event['sid'] for event in self.calls() if event['method'] == 'models'], [SID])
 
         self.page.wait_for_timeout(5300)
-        self.assertEqual(self.outside_status(), [],
-                         'Accepted rename announcement expires after five seconds')
+        notice = dialog.get_by_role('status').filter(has_text=notice_text, exact=True)
+        self.assertFalse(notice.is_visible(),
+                         'Accepted dialog status expires after five seconds or dialog closure')
+        if dialog.is_visible():
+            dialog.get_by_role('button', name='Отмена', exact=True).click()
+            dialog.wait_for(state='hidden')
         self.assertEqual(self.post_request().post_data, request.post_data)
 
     def test_INV_WSESS_30_unknown_preserves_uuid_and_draft_then_manual_status_proves_title(self):
         title = 'Unknown synthetic title'
+        fresh_title = 'Different synthetic native title'
         private_json(self.evidence / 'control.json', {
-            'rename_result': 'delivery_unknown', 'status_result': 'accepted', 'status_title': title})
+            'rename_result': 'delivery_unknown', 'status_result': 'accepted', 'status_title': fresh_title})
         dialog = self.dialog()
         box = self.title_box(dialog)
         box.fill(title)
-        with self.page.expect_request(lambda request: request.method == 'POST' and
-                                      '/api/session-rename' in request.url) as captured:
-            dialog.get_by_role('button', name='Сохранить', exact=True).click()
-        first = captured.value
-        body = json.loads(first.post_data)
+        with self.page.expect_response(lambda response: response.request.method == 'POST' and
+                                       '/api/session-rename' in response.url) as posted:
+            with self.page.expect_request(lambda request: request.method == 'POST' and
+                                          '/api/session-rename' in request.url) as captured:
+                dialog.get_by_role('button', name='Сохранить', exact=True).click()
+        first = posted.value
+        self.assertEqual(first.status, 200)
+        body = json.loads(captured.value.post_data)
+        unknown_dto = first.json()
+        self.assertEqual(unknown_dto.get('status'), 'delivery_unknown')
+        self.assertEqual(unknown_dto.get('operation_id'), body['operation_id'])
+        self.assertNotIn('title', unknown_dto)
         self.assertEqual(body['title'], title)
         self.assertEqual(set(body), {'project', 'sid', 'operation_id', 'title'})
-        self.page.get_by_role('button', name='Проверить название', exact=True).wait_for(state='visible')
+        check = self.page.get_by_role('button', name='Проверить название', exact=True)
+        check.wait_for(state='visible')
         self.assertEqual(box.input_value(), title, 'Unknown retains the exact draft')
         self.assertTrue(box.is_disabled(), 'Unknown locks title until manual reconciliation')
+        self.assertTrue(check.is_enabled(), 'Unknown exposes one explicit read-only status check')
         self.assertEqual(self.status_requests(), [], 'Unknown cannot trigger automatic status polling')
         self.page.wait_for_timeout(150)
         self.assertEqual(self.status_requests(), [], 'A visible unknown state stays inert until user action')
         self.assertEqual(len([r for r in self.network if r.method == 'POST' and
                               '/api/session-rename' in r.url]), 1,
                          'Unknown cannot create a second mutation request')
-        with self.page.expect_request(lambda request: request.method == 'GET' and
-                                      '/api/session-rename-status' in request.url) as checked:
-            self.page.get_by_role('button', name='Проверить название', exact=True).click()
-        status_request = checked.value
+        previous_statuses = self.dialog_status_texts(dialog)
+        with self.page.expect_response(lambda response: response.request.method == 'GET' and
+                                       '/api/session-rename-status' in response.url) as checked:
+            check.click()
+        self.assertEqual(checked.value.status, 200)
+        status_request = checked.value.request
+        status_dto = checked.value.json()
+        self.assertEqual(status_dto.get('status'), 'accepted')
+        self.assertEqual(status_dto.get('operation_id'), body['operation_id'])
+        self.assertEqual(status_dto.get('title'), fresh_title)
         query = dict(part.split('=', 1) for part in status_request.url.split('?', 1)[1].split('&'))
         self.assertEqual(set(query), {'project', 'sid', 'operation_id'})
         self.assertEqual(query, {'project': 'demo', 'sid': SID, 'operation_id': body['operation_id']})
-        self.wait_outside_status()
-        self.assert_title(title)
+        self.assertNotEqual(fresh_title, title)
+        self.assert_title(fresh_title)
+        self.assertEqual(self.row(title).count(), 0, 'Requested draft is not substituted for current native title')
+        self.assert_terminal_dialog_status(dialog, previous_statuses)
         self.assertEqual(len([r for r in self.network if r.method == 'POST' and
                               '/api/session-rename' in r.url]), 1, 'Manual reconciliation never repeats mutation')
         self.assertEqual(len(self.status_requests()), 1)
@@ -329,8 +375,7 @@ class SessionRenameBrowser(unittest.TestCase):
                                        '/api/session-rename' in response.url) as first:
             dialog.get_by_role('button', name='Сохранить', exact=True).click()
         first_body = json.loads(first.value.request.post_data)
-        self.page.wait_for_function("Array.from(document.querySelectorAll('[role=alert],[role=status]')).some(el => el.textContent.trim())",
-                                    timeout=1200)
+        self.assertEqual(first.value.status, 409, 'Stale is a proven pre-effect refusal')
         self.assertEqual(box.input_value(), title, 'Safe error keeps the editable draft')
         self.assertTrue(box.is_enabled(), 'Pre-reserve error permits an explicit corrected attempt')
         self.assertEqual(self.row(OLD_TITLE).count(), 1)
@@ -339,6 +384,7 @@ class SessionRenameBrowser(unittest.TestCase):
         self.assertEqual(self.status_requests(), [])
         corrected = 'Corrected synthetic title'
         box.fill(corrected)
+        self.assertTrue(dialog.get_by_role('button', name='Сохранить', exact=True).is_enabled())
         with self.page.expect_response(lambda response: response.request.method == 'POST' and
                                        '/api/session-rename' in response.url) as second:
             dialog.get_by_role('button', name='Сохранить', exact=True).click()
@@ -366,9 +412,11 @@ class SessionRenameBrowser(unittest.TestCase):
         self.assertEqual(box.input_value(), title)
         self.assertTrue(box.is_disabled())
         self.assertEqual(self.status_requests(), [], 'Transport uncertainty cannot trigger an automatic GET')
+        check = self.page.get_by_role('button', name='Проверить название', exact=True)
+        self.assertTrue(check.is_enabled())
         with self.page.expect_response(lambda response: response.request.method == 'GET' and
                                        '/api/session-rename-status' in response.url) as first_check:
-            self.page.get_by_role('button', name='Проверить название', exact=True).click()
+            check.click()
         self.assertEqual(first_check.value.status, 503, 'A status error does not prove mutation was absent')
         self.assertEqual(box.input_value(), title)
         self.assertTrue(box.is_disabled())
@@ -413,24 +461,38 @@ class SessionRenameBrowser(unittest.TestCase):
                                       '/api/session-rename' in response.url):
             private_json(self.evidence / 'release-rename.json', {'release': True})
         self.assert_title(OLD_TITLE)
-        self.page.get_by_role('button', name='Проверить название', exact=True).wait_for(state='visible')
+        check = self.page.get_by_role('button', name='Проверить название', exact=True)
+        check.wait_for(state='visible')
         self.assertEqual(self.row(title).count(), 0,
                          'Late A result cannot update the reselected A generation or any other row')
         self.assertEqual(self.heading(OLD_TITLE).count(), 1)
-        manual = self.page.get_by_role('button', name='Проверить название', exact=True)
+        manual = check
         self.assertTrue(manual.is_enabled(), 'Late result leaves the original operation manually reconcilable')
         self.assertEqual(len([r for r in self.network if r.method == 'POST' and
                               '/api/session-rename' in r.url]), 1)
         self.assertEqual(self.status_requests(), [])
         self.assertEqual(payload['operation_id'], json.loads(request.post_data)['operation_id'])
 
-        with self.page.expect_request(lambda candidate: candidate.method == 'GET' and
-                                      '/api/session-rename-status' in candidate.url) as checked:
+        fresh_title = 'Late current native title'
+        private_json(self.evidence / 'control.json', {'status_result': 'accepted',
+                     'status_title': fresh_title})
+        dialog = self.page.get_by_role('dialog')
+        previous_statuses = self.dialog_status_texts(dialog)
+        self.assertEqual(self.title_box(dialog).input_value(), title,
+                         'Reselection restores the immutable operation draft')
+        self.assertTrue(self.title_box(dialog).is_disabled())
+        with self.page.expect_response(lambda response: response.request.method == 'GET' and
+                                       '/api/session-rename-status' in response.url) as checked:
             manual.click()
-        query = dict(part.split('=', 1) for part in checked.value.url.split('?', 1)[1].split('&'))
+        self.assertEqual(checked.value.status, 200)
+        status_dto = checked.value.json()
+        self.assertEqual(status_dto.get('status'), 'accepted')
+        self.assertEqual(status_dto.get('operation_id'), payload['operation_id'])
+        self.assertEqual(status_dto.get('title'), fresh_title)
+        query = dict(part.split('=', 1) for part in checked.value.request.url.split('?', 1)[1].split('&'))
         self.assertEqual(query['operation_id'], payload['operation_id'])
-        self.wait_outside_status()
-        self.assert_title(title)
+        self.assert_title(fresh_title)
+        self.assert_terminal_dialog_status(dialog, previous_statuses)
         self.assertEqual(len([r for r in self.network if r.method == 'POST' and
                               '/api/session-rename' in r.url]), 1)
         self.assertEqual(len(self.status_requests()), 1)
