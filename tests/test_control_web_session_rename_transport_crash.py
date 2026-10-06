@@ -57,6 +57,9 @@ class InteractiveRenameTransport(unittest.TestCase):
                     elif method == "thread/read":
                         ws.send(json.dumps({"id": frame["id"], "result": {"thread": {
                             "id": SID, "cwd": str(self.base / "project"), "name": "Old title"}}}))
+                    elif method == "thread/start":
+                        ws.send(json.dumps({"id": frame["id"], "result": {"thread": {
+                            "id": SID, "cwd": str(self.base / "project"), "name": None}}}))
                     elif method == "thread/name/set":
                         ws.send(json.dumps({"id": frame["id"], "result": {}}))
                     else:
@@ -74,7 +77,7 @@ class InteractiveRenameTransport(unittest.TestCase):
         self.addCleanup(worker.join, 2)
         self.addCleanup(server.shutdown)
 
-    def test_INV_WSESS_30_interactive_transport_dispatches_only_fixed_name_set_in_captured_generation(self):
+    def test_INV_WSESS_30_interactive_transport_dispatches_only_fixed_rename_and_create_in_captured_generation(self):
         rpc_type = getattr(self.module, "InteractiveRPC", None)
         self.assertTrue(callable(rpc_type), "InteractiveRPC public transport seam must exist")
         fenced = getattr(rpc_type, "call_in_generation", None)
@@ -106,18 +109,36 @@ class InteractiveRenameTransport(unittest.TestCase):
         except Exception as error:
             result = {"raised": type(error).__name__}
         self.assertEqual(result, {})
+        before_start = len(self.frames)
+        try:
+            started = rpc.call_in_generation("thread/start", {"cwd": str(self.base / "project")},
+                transport_generation=transport_generation, context_generation=context_generation, timeout=1)
+        except Exception as error:
+            started = {"raised": type(error).__name__}
+        with self.subTest("fixed configured create RPC is allowed with cwd only"):
+            self.assertEqual(started, {"thread": {
+                "id": SID, "cwd": str(self.base / "project"), "name": None}},
+                "the fixed create RPC must be dispatched in the captured generation")
+            self.assertEqual(len(self.frames), before_start + 1)
+            start_frames = [frame for frame in self.frames if frame.get("method") == "thread/start"]
+            self.assertEqual(len(start_frames), 1)
+            if start_frames:
+                start_call = start_frames[0]
+                self.assertEqual(start_call.get("params"), {"cwd": str(self.base / "project")})
+                self.assertIsNotNone(start_call.get("id"))
+            self.assertEqual([frame.get("method") for frame in self.frames],
+                             ["initialize", "initialized", "thread/read", "thread/name/set", "thread/start"])
+
         before_forbidden = len(self.frames)
         try:
-            rpc.call_in_generation("thread/start", {"cwd": str(self.base / "project")},
+            rpc.call_in_generation("thread/arbitraryPrivateMutation", {},
                 transport_generation=transport_generation, context_generation=context_generation, timeout=1)
             forbidden_error = None
         except Exception as error:
             forbidden_error = error
         self.assertIsNotNone(forbidden_error, "arbitrary native RPC methods must be refused")
         self.assertEqual(len(self.frames), before_forbidden,
-                         "arbitrary or create RPC methods must be refused before wire dispatch")
-        self.assertEqual([frame.get("method") for frame in self.frames],
-                         ["initialize", "initialized", "thread/read", "thread/name/set"])
+                         "non-allowlisted RPC methods must be refused before wire dispatch")
         name_frames = [frame for frame in self.frames if frame.get("method") == "thread/name/set"]
         self.assertEqual(len(name_frames), 1)
         if name_frames:
