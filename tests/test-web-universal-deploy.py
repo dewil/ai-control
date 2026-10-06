@@ -288,7 +288,7 @@ class SignedDeploy(unittest.TestCase):
   files=self.changed();self.release(1,files);self.accepted(dict(result='installed',release_id=1))
   self.release(2,files,base=self.base);self.refused()
   self.release(1,files,base=files);self.refused()
-  self.release(2,files,base=files);self.accepted(dict(result='installed',release_id=2))
+  self.release(2,files,base=files);self.accepted(dict(result='advanced',release_id=2))
   self.release(1,files,base=files);self.refused()
 
  def test_target_untracked_drift_or_mixed_accepted_tree_refuse(self):
@@ -411,7 +411,10 @@ class SignedDeploy(unittest.TestCase):
 
  def test_rollback_allows_already_absent_new_leaf(self):
   self.release(1,self.changed());self.fail_starts=1
-  self.before_start=lambda:(self.target/NEW_LEAF).unlink()
+  def remove_new_leaf_once():
+   self.before_start=None
+   (self.target/NEW_LEAF).unlink()
+  self.before_start=remove_new_leaf_once
   with self.assertRaises((self.api.Rejected,RuntimeError)):
    self.deploy().run()
   self.assertEqual(self.tree(),self.base)
