@@ -529,6 +529,8 @@ class InteractiveRPCContract(unittest.TestCase):
             except Exception as error:
                 self.server_errors.append(error)
         server = unix_serve(safe_handler, self.socket)
+        # Keep the fake owned transport socket private under any process umask.
+        os.chmod(self.socket, 0o600)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
         self.addCleanup(worker.join, 2)
