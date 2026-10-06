@@ -46,8 +46,8 @@ Tasks: task_id, agent, state (accepted/running/completed/failed/needs_attention)
 delivery='unknown', quality='unreviewed', event_at(str|null), submitted_at=null,
 duration_seconds=null, result(str|null), error(str|null), output_truncated(bool),
 transitions(list event DTO, stream sequence order). Только state events создают tasks.
-Agents: agent, registered(bool), capabilities(list ID strings max32),
-executor ('codex'|'echo-test-only'|null), version(ID|null),
+Agents: agent, registered(bool), capabilities(list metadata strings max32),
+executor ('codex'|'echo-test-only'|null), version(metadata string|null),
 heartbeat_at(str|null), heartbeat_status('fresh'|'stale'|'unknown').
 Events: message_id,task_id,agent,kind,event_at(str|null),sequence.
 result — payload.text для completed; error — fixed reason allowlist
@@ -74,6 +74,11 @@ age expires all retained local entries after broker ttl (default86400), wall
 observed age, not producer time; periodic snapshot purges. Disconnection keeps
 visible stale state with connection label. Heartbeat freshness uses event_at:
 future >5s unknown, >=stale_seconds stale, otherwise fresh; missing unknown.
+
+Metadata strings for capabilities/version: [A-Za-z0-9_.:-]{1,80},
+not envelope ID grammar. Accepted reference uses research.submit capability
+and semantic version; envelope IDs remain unchanged. Compatibility clarification
+06.10.2026 after SOURCE review: original spec incorrectly suppressed dots.
 
 Wire kind exact strings: accepted/running/completed/failed/needs_attention/
 registration/heartbeat (no prefix). Registration payload may contain agent_id,
