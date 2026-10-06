@@ -11,6 +11,7 @@ import json
 import pathlib
 import sys
 import unittest
+from unittest import mock
 import uuid
 
 
@@ -331,6 +332,35 @@ class AuthStateContract(unittest.TestCase):
         owner = self
 
         class RecordingCoordinator(authority.AuthCoordinator):
+            @contextmanager
+            def delivery_guard(self, *args, **kwargs):
+                with super().delivery_guard(*args, **kwargs) as guard:
+                    guard_type = type(guard)
+                    original_begin = guard_type.begin_enqueue
+                    original_confirm = guard_type.confirm
+
+                    def observed_begin(active_guard, *begin_args, **begin_kwargs):
+                        try:
+                            result = original_begin(
+                                active_guard, *begin_args, **begin_kwargs
+                            )
+                        except authority.AuthError:
+                            events.append(("guard.begin.refused", None))
+                            raise
+                        events.append(("guard.begin.claimed", None))
+                        return result
+
+                    def observed_confirm(active_guard, *confirm_args, **confirm_kwargs):
+                        result = original_confirm(
+                            active_guard, *confirm_args, **confirm_kwargs
+                        )
+                        events.append(("guard.confirm", None))
+                        return result
+
+                    with mock.patch.object(guard_type, "begin_enqueue", observed_begin), \
+                         mock.patch.object(guard_type, "confirm", observed_confirm):
+                        yield guard
+
             def open(self, *args, **kwargs):
                 result = super().open(*args, **kwargs)
                 owner.last_authority_lease = result
@@ -364,9 +394,6 @@ class AuthStateContract(unittest.TestCase):
             def publish_delivery(self, *args, **kwargs):
                 if owner.publish_before_hook is not None:
                     owner.publish_before_hook()
-                detail = self._guards[kwargs["guard"]]
-                owner.assertIs(detail.confirmed, True)
-                events.append(("guard.confirmed", None))
                 result = super().publish_delivery(*args, **kwargs)
                 events.append(("coordinator.publish", None))
                 owner.last_provisional = result
@@ -419,8 +446,8 @@ class AuthStateContract(unittest.TestCase):
             ("oauth.exchange", "source.rotation"),
             ("source.rotation", "transport.login"),
             ("transport.login", "coordinator.publish"),
-            ("transport.login.receipt", "guard.confirmed"),
-            ("guard.confirmed", "coordinator.publish"),
+            ("transport.login.receipt", "guard.confirm"),
+            ("guard.confirm", "coordinator.publish"),
             ("coordinator.publish", "source.finish"),
             ("source.finish", "coordinator.complete"),
         ):
@@ -542,6 +569,18 @@ class AuthStateContract(unittest.TestCase):
                 self.assertEqual(self.codes().count("source.reserve"), 1)
                 self.assertNotIn("coordinator.abandon", self.codes())
                 self.assertNotIn("coordinator.durable", self.codes())
+                self.assertNotIn("oauth.exchange", self.codes())
+                second = self.auth.AuthStateValidator(
+                    profile_source=self.source, oauth_client=self.oauth,
+                    owned_transport=FakeTransport(self.auth, self.events, self.clock),
+                    coordinator=self.coordinator, clock=self.clock,
+                    wall_clock=lambda: 1000.0,
+                )
+                self.denied(
+                    "authority_stale",
+                    lambda: second.admit(self.ctx, deadline=125.0),
+                )
+                self.assertEqual(self.codes().count("source.reserve"), 1)
                 self.assertNotIn("oauth.exchange", self.codes())
 
     def test_begin_requires_exact_live_durable_reservation_guard(self):
@@ -716,10 +755,15 @@ class AuthStateContract(unittest.TestCase):
                     ) as guard:
                         if order == "poison_first":
                             self.coordinator.poison_intent(scope, "refresh_unknown")
+                            claimed_before = self.codes().count("guard.begin.claimed")
                             self.denied("authority_stale", lambda: guard.begin_enqueue(
                                 reservation_guard=reservation, deadline=101.0
                             ))
-                            self.assertIs(self.coordinator._guards[guard].begun, False)
+                            self.assertIn("guard.begin.refused", self.codes())
+                            self.assertEqual(
+                                self.codes().count("guard.begin.claimed"),
+                                claimed_before,
+                            )
                         else:
                             guard.begin_enqueue(
                                 reservation_guard=reservation, deadline=101.0
