@@ -107,7 +107,8 @@ class SessionChatContract(unittest.TestCase):
 
     def test_INV_WSESS_02_list_requires_metadata_proof_for_exported_uuid(self):
         result = self.chat.list_sessions('demo')
-        self.assertEqual(result, {'rows': [{'sid': SID, 'title': 'Synthetic session', 'status': 'idle'}], 'has_more': False})
+        # INV-WSESS-28: fixed adapter vendor accompanies the existing proved row.
+        self.assertEqual(result, {'rows': [{'sid': SID, 'title': 'Synthetic session', 'status': 'idle', 'vendor': 'codex'}], 'has_more': False})
         self.assertIn(('thread/read', {'threadId': SID, 'includeTurns': False}), self.rpc.calls)
         self.rpc.read_id = OTHER
         self.assert_error(self.chat.list_sessions('demo'), 'stale')

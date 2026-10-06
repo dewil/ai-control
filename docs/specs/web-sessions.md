@@ -97,3 +97,5 @@ browser checks и отдельный native installed proof необходимы
 Discovery INV-WSESS-24: tests/test_control_web_session_models_module.py; existing
 chat/socket regressions. Source4b2f149 independent gpt-6-sol/medium compliance PASS.
 HTTP/send/receipt/UI acceptance остаётся открытой.
+
+INV-WSESS-28: список экспортирует trusted adapter vendor отдельно от account binding; текстовый badge использует exact allowlist, неизвестные/отсутствующие/prototype-key значения показываются как «Вендор неизвестен». Не выводить vendor из title/model/UUID, не добавлять native/account IO. Feature ../dev/2026-10-06-spec-web-session-management.md stage1; tests/test_control_web_session_vendor_badge.py. Create/rename INV29/30 остаются draft/capability HOLD.
