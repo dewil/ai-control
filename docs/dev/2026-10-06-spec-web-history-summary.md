@@ -85,3 +85,12 @@ per-turn paging and readonly method allowlist), and
 only readonly thread/items/list). Preserve every existing projection count/order,
 root proof/cursor/value/timestamp boundary/negative assertion. No time semantic,
 writer allowlist, frame/deadline or send_status full-call expectation changes.
+
+The MessageTimes positive three-turn fixture must use distinct synthetic item
+IDs per turn (accepted global uniqueness); all time assertions stay unchanged.
+Its opaque turn cursor is asserted on the metadata turns/list call, rather than
+on the chronologically last RPC, which is now an item page. Compact history's
+malformed-oldest negative fixture follows the existing scanned-tail exception:
+keep malformed variants and both latest/Older refusal assertions, place the bad
+entry inside the scanned128-entry tail. Do not relax item-page size, issue extra
+pages or pretend that an unread161st native entry was validated.
