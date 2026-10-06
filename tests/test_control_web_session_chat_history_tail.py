@@ -192,7 +192,9 @@ class HistoryTailContract(unittest.TestCase):
         for _ in range(2):
             self.assertEqual(self.bounded_history(cursor), expected)
         self.assertEqual(self.rpc.calls, [('thread/read', {'threadId': SID, 'includeTurns': False}),
-            ('thread/turns/list', {'threadId': SID, 'itemsView': 'full', 'sortDirection': 'desc', 'limit': 8, 'cursor': cursor})] * 2)
+            # History uses metadata-only turns before fetching supported text items.
+            ('thread/turns/list', {'threadId': SID, 'itemsView': 'notLoaded', 'sortDirection': 'desc', 'limit': 8, 'cursor': cursor}),
+            ('thread/items/list', {'threadId': SID, 'turnId': TURN, 'sortDirection': 'desc', 'limit': 32})] * 2)
         self.assertGreaterEqual(len(self.resolutions), 2)
 
     def test_deadline_expired_after_frame_is_not_partial_history(self):

@@ -136,16 +136,21 @@ class SessionChatItemsPaging(unittest.TestCase):
             rpc.item_pages[(TURN, cursor)] = {'data': [
                 {'turnId': TURN, 'item': agent(f'budget-{n}', text)}],
                 'nextCursor': f'budget-page-{n+1}'}
+            self.assertLess(len(json.dumps(rpc.item_pages[(TURN, cursor)], separators=(',', ':')).encode()),
+                            4 * 1024 * 1024, 'Each synthetic native page remains below the frame cap')
         result = self.chat(rpc).history('demo', SID)
         self.assertIs(result.get('truncated'), True)
         self.assertEqual(len(rpc.item_pages[(TURN, None)]['data'][0]['item']['text'].encode()), 3 * 1024 * 1024)
         self.assertEqual(len(result.get('turns', [{}])[0].get('items', [])), 2,
                          'The successfully received over-budget third page is not retained')
+        self.assertEqual([item['id'] for item in result['turns'][0]['items']], ['budget-1', 'budget-0'])
 
     def test_wrong_turn_duplicate_cursor_and_malformed_page_are_unavailable(self):
         cases = [
             {'data': [{'turnId': 'foreign-turn', 'item': agent('a', 'wrong turn')}], 'nextCursor': None},
             {'data': [{'turnId': TURN, 'item': agent('a', 'one')}], 'nextCursor': 'again'},
+            {'data': [{'turnId': TURN, 'item': agent('duplicate', 'one')},
+                      {'turnId': TURN, 'item': agent('duplicate', 'two')}], 'nextCursor': None},
             {'data': [{'turnId': TURN, 'item': {'id': 'bad', 'type': 'agentMessage', 'text': 7}}], 'nextCursor': None},
         ]
         for page in cases:
@@ -155,7 +160,7 @@ class SessionChatItemsPaging(unittest.TestCase):
                 rpc.item_pages[(TURN, 'again')] = page
                 result = self.chat(rpc).history('demo', SID)
                 self.assertEqual(result, {'error': 'unavailable'})
-                self.assertTrue(any(m == 'thread/items/list' for m, _ in rpc.calls),
+        self.assertTrue(any(m == 'thread/items/list' for m, _ in rpc.calls),
                                 'The malformed synthetic item page must be inspected and rejected')
 
     def test_duplicate_metadata_turn_ids_and_invalid_turn_cursor_fail_closed(self):
