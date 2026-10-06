@@ -15,8 +15,11 @@ fault RED f82b447:8 methods /5 assertion failures /0 errors /0 skips. Authorfix
 7635b243 uses owned frozen primitive storage and validates single snapshots.
 
 Final module SHA256 `9558fe02d7690b397e3e49c62efbb32c60e6dc02fd5955aa394571938ee29908`
-received same independent SOURCE PASS, including zero backing-method dispatch on
+closed the proxy findings in independent review, including zero backing-method dispatch on
 foreign proxies and invalid privileged-slot changes refused during revalidation.
+Final SOURCE verdict remains BLOCKED pending nested malformed-fullref error-code
+correction: current code returns invalid_request for None/scalar nested fullref
+where frozen contract requires context_invalid. Additional blind RED precedes fix.
 Frozen suites22+8 PASS; existing authority25PASS/3intentionalSKIP. Package manifest
 includes the new leaf; exact complete hosted CI required before acceptance.
 

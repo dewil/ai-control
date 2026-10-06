@@ -117,3 +117,11 @@ that same snapshot. Never validate one caller read then capture a second read.
 Mutable aliases or repeated-read changes must not let captured bytes contain values
 that were never validated. DTO revalidation checks fresh snapshots of retained
 owned data; simulated privileged alias changes must still refuse invalid data.
+
+## Nested reference error precedence clarification
+
+Once a plain record has a context_ref field, that value is a fullref: None, scalar,
+external proxy or malformed dict always context_invalid (before other record/
+expected identity fields). Valid foreign nested fullref is context_drift. Missing
+context_ref field is malformed record shape invalid_request. Unsupported outer
+record mapping is invalid_request and must not be inspected.
