@@ -314,10 +314,61 @@ lock it may acquire origin namespace for bounded proof, then release before turn
 No origin→message wait is allowed. New origin metadata cannot extend send authority
 into another project/root/context. Same-host offline explicit first-send usability
 proof with dummy input is required separately before activated available UI; it must
-show initial thread/turns/list empty page (existing history reader), no resume,
-one explicit turn, expected SID/root, history after that turn and existing send
-receipt replay. Origin alone must never fabricate an empty history page.
+show authoritative initial zero-turn native metadata witness below, no resume,
+one explicit turn, expected SID/root, ordinary history after that turn and existing
+send receipt replay. Origin alone must never fabricate an empty history page.
 No account/network entitlement or real user history is claimed by an offline fixture.
+
+### Proven zero-turn initial history
+
+A separate own offline probe found initial thread/turns/list returns native -32600
+not-materialized before first user message. It stopped without issuing a turn.
+Therefore ordinary history RPC success is not a prerequisite guessed from start,
+and a bare history RPC error never means empty. Rendering requires an independent
+native zero-turn witness; if it is absent, history remains unavailable.
+
+New owner method `ConfiguredSessionCreate.empty_history(project,sid)` returns None
+if no origin or valid native witness contains nonempty turns; otherwise frozen
+`ConfiguredEmptyHistory` exact immutable attributes reservation/context/session/
+needs_native_attention; first three match ConfiguredLoadedOrigin types, last is
+exact bool from the same fresh native thread metadata via existing attention policy. It does not create a receipt or write native.
+Existing I must have complete accepted R/C/I/A authority, current allowed project/
+root/context and observed loaded membership. Same-generation thread/read with exact
+`{threadId:sid,includeTurns:true}` must return thread dict with canonical exact full
+SID/root and explicit `turns` list exactly []; missing/null/non-list turns, malformed
+identity, read failure or context drift is safe unavailable/stale, never empty.
+Response strict finite JSON≤1MiB, bounded same deadline; no preview/status/name/ACK
+or a receipt is a substitute for actual native turns. Nonempty valid turns return
+None and never project a truncated empty result. No user-history IO outside this
+selected authoritative context; only synthetic fixtures during source tests.
+
+`SessionChat.history(project,sid,cursor=None)` first preserves existing root/fullSID
+proof and ordinary paginated history path. On an initial-page native turns-list
+failure ONLY, trusted configured_creator may obtain this fresh empty witness.
+No fallback for nonnull cursor, unindexed/random SID, prepared/unknown create,
+bare native error without witness, stale/unavailable origin or nonempty turns.
+No catch that converts arbitrary validation/storage/authorization failure to empty:
+root/grant/context/input and receipt failures retain existing safe errors.
+
+When an exact empty witness exists, the existing projection uses data=[] and
+nextCursor=None internally; final existing DTO has turns=[], next_cursor=null,
+truncated=false plus actual existing recent_sends, and needs_native_attention if
+fresh native metadata proves it. Do not suppress unknown/accepted send receipts or
+claim persisted history. Existing projection byte caps/redaction/receipt namespace
+and context checks remain; fresh final root/context proof before export. No
+turn/start, resume, hidden seed/name, inferred timestamp/count or fabricated native
+response. Other history behavior, Older cursor semantics and page/window invariants
+are unchanged. Empty witness is invocation/generation scoped; never reused after
+first send, notification/drift/reconnect without a fresh read. On restart missing
+unmaterialized thread remains unavailable and accepted create is not recreated.
+
+Independent RED must cover native turns-list failure + authoritative [] witness,
+no origin/bare failure/missing or nonempty turns/oversize response/cursor/drift/grant
+refusal, actual recent receipts/attention, no mutation, and normal first-message
+history. Own offline native proof must separately show includeTurns:true can
+actually report [] for the newly loaded empty, then explicit direct turn and normal
+history. If native cannot supply this witness, available UI stays blocked; synthetic
+reply injection does not establish production usability.
 
 ## INV-WSESS-36: HTTP / broker exact contracts
 
