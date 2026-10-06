@@ -16,7 +16,8 @@ channel; parse success alone cannot grant writes, delivery or account access.
 
 `TokenResponseError(code)` safe closed authority_stale/auth_response_invalid/
 identity_mismatch/auth_expired; unknown code normalizes auth_response_invalid.
-No input values, raw exception strings or nested exception context in output/errors.
+No input values, raw exception strings or nested exception context in errors, repr,
+logs or automatic serialization. Output exposes only the specifically named values.
 Output frozen slotted repr=False ParsedTokenResponse has read-only access_token,
 refresh_token (None when absent), id_expires_at, access_expires_at, scope_snapshot
 (independent immutable primitive tuple captured from expected); raw ID token and
@@ -39,7 +40,8 @@ keys access_token/id_token; optional refresh_token/token_type/expires_in/scope.
 Any extra envelope key denies in this first slice. Tokens plain nonempty ASCII
 strings <=16384 bytes without whitespace/control; refresh is opaque text.
 Optional token_type exactly Bearer; expires_in plain int1..86400; scope plain
-ASCII space-separated `[A-Za-z0-9_:/.-]+` terms, nonempty <=4096 bytes.
+ASCII terms `[A-Za-z0-9_:/.-]+` separated by a single ASCII SP, no leading/trailing
+space or empty terms, nonempty <=4096 bytes.
 expires_in does NOT substitute for access JWT exp; absence of refresh token means
 no rotation data returned, not permission to read an old credential.
 
@@ -72,7 +74,7 @@ at_hash auth_response_invalid, well-formed unequal identity_mismatch.
 Access payload required exp positive bounded plain int, <=response_end+86400.
 If namespaced auth object is present it must be plain object; if its workspace
 claim is present it must be well-typed and match expected W. Access sub is not
-interpreted as ID sub. Other access/ID payload claims are bounded/skipped; they
+interpreted as ID sub; optional access iat is bounded/skipped and not interpreted. Other access/ID payload claims are bounded/skipped; they
 confer no identity/provenance. Optional access issuer not interpreted in this
 data-only slice, same-response association remains trusted host responsibility.
 
@@ -85,3 +87,19 @@ expected scope independent capture, output/error non-disclosure, and no IO/clock
 calls. All fixtures synthetic. No actual provider response/request, stored grant
 or user account is used. Native frame-size, refresh unknown-outcome quarantine,
 durable rotation, TLS evidence and pre-enqueue expiry recheck remain host gates.
+
+## Deterministic error stages before RED
+
+Complete each stage before advancing: expected scope snapshot → scalar times
+(type/finite/order) → plain status200 → body envelope parsing/schema/value types
+→ BOTH JWT structures/headers → ALL required/optional interpreted claim types
+→ identity equality checks (including at_hash) → iat/max-expiry time bounds
+→ remaining lifetime. The earliest failing stage determines the closed code.
+Required claim types include every relevant field in BOTH tokens; malformed claims
+auth_response_invalid dominate well-typed identity mismatches. Identity mismatch
+dominates later time-bound/lifetime failures. Wrong time window or maximum expiry
+auth_response_invalid dominates insufficient lifetime auth_expired.
+Audience structural type is nonempty string or nonempty list of plain nonempty
+strings; equality stage permits exactly C or [C], rejecting multiple audiences
+with identity_mismatch. at_hash structural check requires canonical base64url
+decoding exactly16bytes; correct-shape unequal hash identity_mismatch.
