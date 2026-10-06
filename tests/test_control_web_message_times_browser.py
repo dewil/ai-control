@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from urllib.parse import urlsplit
 from control_browser_helpers import choose_project
 from test_control_web_chat_width_browser import private_json, totp, PASSWORD, SECRET, SID
 
@@ -211,7 +212,9 @@ class MessageTimesBrowser(unittest.TestCase):
         self.assertEqual(self.page.locator('.chat-items').inner_text(),visible,'Hidden tab cannot run age updates')
         self.page.evaluate('testVisibility(false)')
         self.assertIn('2 мин. назад',self.bubble('Time assistant 0').inner_text())
-        self.assertEqual(self.network,before)
+        self.assertEqual([(method,urlsplit(url).path) for method,url in self.network[len(before):]],
+                         [('GET','/api/attention')],
+                         'Visible return may refresh attention only; age recomputation cannot fetch history')
 
     def test_valid_future_keeps_exact_date_but_relative_age_unknown(self):
         future=NOW+3600
