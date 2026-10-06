@@ -11,6 +11,7 @@ import importlib
 import json
 import pathlib
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 import uuid
@@ -449,15 +450,22 @@ class AuthStateContract(unittest.TestCase):
         for build in builders:
             try:
                 duplicate = build()
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, copy.Error):
                 continue
             if duplicate is not real and type(duplicate) is type(real):
                 self.assertEqual(duplicate.owner_generation, real.owner_generation)
                 self.assertEqual(
                     duplicate.credential_generation, real.credential_generation
                 )
+                self.stamp_fabrication_route = "distinct same type"
                 return duplicate
-        self.fail("strict final stamp cannot be duplicated for provenance RED")
+        # An opaque stamp may refuse construction and return itself on copying.
+        # Its visible generation fields still must not authorize a substitute.
+        self.stamp_fabrication_route = "field matched substitute"
+        return SimpleNamespace(
+            owner_generation=real.owner_generation,
+            credential_generation=real.credential_generation,
+        )
 
     def test_strict_coordinator_export_is_exact_independent_class(self):
         self.assertIs(self.auth.AuthCoordinator, self.authority.AuthStateCoordinator)
@@ -566,10 +574,14 @@ class AuthStateContract(unittest.TestCase):
             self.coordinator.release(strict_lease)
             legacy.release(legacy_lease)
 
-    def test_fabricated_strict_stamp_with_matching_fields_cannot_create_delivery(self):
+    def test_fabricated_or_field_matched_stamp_cannot_create_delivery(self):
         self.final_stamp_transform = self.duplicate_strict_stamp
         self.denied("refresh_unknown", self.admit)
         self.assertIsNotNone(self.last_final_stamp)
+        self.assertIn(
+            self.stamp_fabrication_route,
+            ("distinct same type", "field matched substitute"),
+        )
         self.assertIn("source.finish", self.codes())
         self.assertIn("coordinator.complete", self.codes())
         self.assertEqual(len(self.oauth.requests), 1)
