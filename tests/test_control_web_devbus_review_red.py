@@ -43,6 +43,21 @@ class ProjectionReviewRED(unittest.TestCase):
         self.assertEqual([event['message_id'] for event in snapshot['events']], ['B'])
         self.assertEqual([event['message_id'] for event in snapshot['tasks'][0]['transitions']], ['B'])
 
+    def test_registration_metadata_accepts_capability_and_semantic_version_grammar(self):
+        # INV-DEVBUS-06: metadata grammar includes dots/colons; envelope IDs unchanged.
+        projection = self.api.Projection(clock=lambda: NOW)
+        payload = {'agent_id': 'worker1',
+                   'capabilities': ['research.submit', 'questions:answer', 'bad whitespace', 'x'*81],
+                   'executor': 'codex', 'version': '0.1.0', 'schema_version': 1}
+        self.assertTrue(projection.ingest(wire('registration', payload=payload), 'devbus.events.worker1', 1))
+        snapshot = projection.snapshot()
+        self.assertEqual(len(snapshot['agents']), 1)
+        agent = snapshot['agents'][0]
+        self.assertEqual(agent['agent'], 'worker1')
+        self.assertEqual(agent['capabilities'], ['research.submit', 'questions:answer'])
+        self.assertEqual(agent['version'], '0.1.0')
+        self.assertEqual(snapshot['tasks'], [])
+
     def test_json_credential_assignments_are_scrubbed_in_result(self):
         # INV-DEVBUS-06: assignments may have JSON quotes and whitespace.
         projection = self.api.Projection(clock=lambda: NOW)
