@@ -313,12 +313,16 @@ V1 resolve signature/schema stays unchanged; no path-bearing public selector.
 
 ## FIRST CODEUNIT: exact auth-state API (synthetic-only; not runtime GO)
 
-The codeunit adds `bin/_control_codex_auth.py` (stdlib only) and one narrow change to
-`bin/_control_codex_auth_authority.py`: monotonic `poison_intent` serialized with
-begin-enqueue/publication and checked by every local authority path. No other authority
-behavior changes. No CLI/HTTP/UI/register/resolver/file-reader/TLS/native implementation,
-no production factory, and no production `supported/admit` flag. Kernel/private-view
-and owned-host proofs remain separate gates. The codeunit runs only against injected typed dependencies;
+The codeunit adds `bin/_control_codex_auth.py` (stdlib only) and bounded local-only
+authority changes in `bin/_control_codex_auth_authority.py`: monotonic `poison_intent`
+plus account-wide reservation-in-flight/reserved-attempt state and a `terminal_pending`
+fence owned by the exact active delivery guard. Reservation state lets close poison
+after a source reserve may have reached disk but before native enqueue. `terminal_pending`
+is required because the durable refresh-slot contract completes only after coordinator
+publication, while no Delivery may be usable until that durable completion succeeds.
+No CLI/HTTP/UI/register/resolver/file-reader/TLS/native implementation, no
+production factory, and no production `supported/admit` flag. Kernel/private-view and
+owned-host proofs remain separate gates. The codeunit runs only against injected typed dependencies;
 their values are data for validation, never provenance or production authority.
 
 Exact immutable values are `repr=False`; caller-owned data is deep-copied, and no
@@ -350,9 +354,14 @@ placed in Delivery/context, or included in exceptions/metrics.
   writer returns it only after the entire exact frame is accepted by the pinned
   stream writer; this does not attest that the native peer parsed or applied it.
   Receipts are forgeable test data and never production provenance.
-- `Delivery(delivery_id,context,channel,owner_generation,credential_generation)` is an
-  opaque in-process capability, never a public DTO. `AuthError(code)` exposes only
-  the frozen closed codes, and `str(error)` is exactly the code.
+- `ReservationGuard(attempt_id,validator_id,lease)` is an opaque one-attempt capability
+  created before the source reserve call. It remains active until proved pre-write
+  abandonment or successful terminal completion.
+- `Delivery(delivery_id,context,channel,stamp)` is an opaque in-process capability,
+  never a public DTO. Only the validator-owned delivery factory constructs it, using
+  the exact final `AuthorityStamp` returned by terminal completion; the provisional
+  publication type is not accepted. `AuthError(code)` exposes only the frozen closed
+  codes, and `str(error)` is exactly the code.
 
 `AuthStateValidator(*,profile_source,oauth_client,owned_transport,coordinator,
 clock=time.monotonic,wall_clock=time.time)` has no `verified`, bypass, path or policy
@@ -449,8 +458,35 @@ full reference+principal on first account capture, owner_generation=1, credentia
 existing account context/principal mismatch raises authority_stale, no rebind/reset.
 Lease opaque repr=False, same owner account key/reference/principal/generation.
 `check(lease,scope,*,deadline)->None`: exact capture/current generation, not quarantined.
-`publish_delivery(lease,*,guard,deadline)->AuthorityStamp`: increments credential_generation
-ONLY after confirmed login/response write; stamp owner+credential integer tuple.
+`claim_reservation(lease,validator_id,attempt_id,*,deadline)->ReservationGuard`
+atomically records reservation-in-flight under the intent mutex before source
+`reserve_attempt`; it releases that mutex before source I/O. A proved definitely-not-
+written reserve calls `abandon_reservation(lease,*,guard)` to clear only that in-flight
+record; uncertain outcomes poison and retain it. A successful reserve is marked durable
+by `mark_reservation_durable(lease,*,guard)` under the mutex before OAuth may start.
+This transition refuses if close/poison already won. Close before the claim remains local and
+prevents source reserve. Close after the claim poisons because durable reserve may have
+reached disk, even if its return is pending. Poison remains monotonic.
+`publish_delivery(lease,*,guard,deadline)->ProvisionalPublication`: after a known
+transport outcome, provisionally increments credential_generation under the exact active
+terminal guard and, under the per-account intent mutex, atomically checks poison and
+records the provisional value/generation. The opaque provisional value is not accepted
+by `Delivery`. While the
+account is terminal-pending, every ordinary authority/current path is refused, including
+same-thread reentry; only the owning guard may confirm, publish, or complete this attempt.
+The validator alone calls trusted-internal
+`_complete_terminal(lease,*,guard,publication,deadline)->AuthorityStamp` after the
+exact source `finish_confirmed` returns success. This is caller-attested ordering: the
+synthetic coordinator cannot independently prove source durability, and this call is
+not exposed to web/native data or a production authority surface. It verifies the exact
+live guard/provisional value, then atomically rechecks poison and local close under the
+same per-account intent mutex used by `poison_intent`, clears terminal-pending, and
+returns the final stamp. That mutex is the success linearization point: poison/close
+first means no final stamp; successful completion first means later poison/close cannot
+retroactively change the operation's result, though future current checks still refuse.
+A failed/uncertain finish leaves the provisional value unusable and sets poison before
+guard release; the caller returns `refresh_unknown` and no Delivery. Final stamps prove
+only local ordering, not source durability or native ACK.
 `quarantine(lease,code,*,deadline)->None`: once sets shared quarantine code, increments owner
  generation, invalidates ALL existing Delivery/callbacks of account, never B.
 `release(lease)->None`: idempotent account lock release, not quarantine reset.
@@ -464,9 +500,9 @@ explicit recovery/persistent coordinator wiring requires separate reviewed slice
 
 | Stage/outcome | Closed code | Account quarantine | Delivery/current | New admit/callback |
 | --- | --- | --- | --- | --- |
-| Before durable reserve: stale/expired callback or authority | authority_stale | No | offending channel fails; other current survives | no reserve/exchange; fresh valid scope allowed |
-| Lock budget exhausted before durable reserve | refresh_busy | No | existing valid retained | fresh explicit call allowed |
-| After durable reserve but before OAuth send, including close/stale/deadline | refresh_unknown | Yes | all local deliveries fail; source attempt unresolved | refuse; no retry |
+| Before reservation claim: stale/expired callback or authority | authority_stale | No | offending channel fails; other current survives | no source reserve/exchange; fresh valid scope allowed |
+| Lock budget exhausted before reservation claim | refresh_busy | No | existing valid retained | fresh explicit call allowed |
+| After reservation claim or durable reserve but before OAuth send, including close/stale/deadline | refresh_unknown | Yes | all local deliveries fail; source attempt unresolved | refuse; no retry |
 | Provider definitely rejected grant | auth_expired or auth_unavailable | Yes | all account deliveries invalid | refused; no retry |
 | OAuth may be sent, lost response/body/deadline | refresh_unknown | Yes | all invalid | refused |
 | 2xx malformed/missing ID/oversize/invalid JWT | auth_response_invalid | Yes | all invalid; no native delivery | refused |
@@ -474,9 +510,9 @@ explicit recovery/persistent coordinator wiring requires separate reviewed slice
 | Rotation write/fsync failure/uncertain | refresh_unknown | Yes | all invalid; no native delivery | refused |
 | Authority/channel changes after exchange | authority_stale | Yes | all invalid; no native delivery | refused |
 | Native login/response delivery ambiguous or failed | refresh_unknown | Yes | new Delivery not published; all invalid | refused, no redelivery |
-| Reentrant close after begin_enqueue | refresh_unknown | selected account on guard exit | native effect confirmed/unknown; NO new Delivery/stamp | refused, no resend |
-| Confirmed sameowner delivery | none | No | publish stamp; older sameowner current retained | fresh callback may refresh |
-| Cleanup error after terminal finish and publication | none | No | return published Delivery; cleanup not undo | no automatic redelivery |
+| Close wins before terminal completion after begin_enqueue | refresh_unknown | selected account on guard exit | native effect confirmed/unknown; NO new Delivery/final stamp | refused, no resend |
+| Confirmed sameowner delivery | none | No | terminal completion returns final stamp; older sameowner current retained | fresh callback may refresh |
+| Cleanup error after terminal completion and Delivery construction | none | No | return completed Delivery; cleanup cannot undo it | no automatic redelivery |
 
 Unknown/failed exchange does NOT commit refresh rotation. Already published durable
 rotation cannot be silently rolled back after later delivery failure; selected account
@@ -484,11 +520,11 @@ quarantines. Root/profile metadata/ref immutable; no migrating or resuming under
 Duplicate callback capture returns existing captured capability without new reserve;
 second refresh of completed callback returns SAME Delivery without OAuth/response.
 Failed/unknown callback repeats same closed error, zero OAuth/token delivery. Callback
-abandoned before durable reserve is local-stale and cannot be resurrected by
+abandoned before reservation claim is local-stale and cannot be resurrected by
 constructing another object; an operation canceled after reserve is `refresh_unknown`
 and account-poisoned even if OAuth has not started. `close()` is idempotent and closes
 local validator/deliveries/callbacks without native/auth requests or quarantine
-clearing. Before-reserve close abandons only local work. Worker owning lease releases it exactly once in
+clearing. Before-claim close abandons only local work. Worker owning lease releases it exactly once in
 finally; close never releases another thread lock or authorizes delayed delivery.
 Other validators remain current unless shared account quarantined.
 Native host drains and durable quarantine/recovery remain next-slice obligations.
@@ -507,16 +543,29 @@ Let D be the one absolute operation deadline; each operation receives min(D, its
 fixed local cap). The final absolute subdeadline is F=min(D, guard-entry monotonic
 +1s). Pass F unchanged to every final source/channel/coordinator/local-validator
 check, `guard.begin_enqueue()`, bounded native login/callback write,
-`guard.confirm()`, durable `finish_confirmed`, and `publish_delivery`, all under the
-SAME live guards. The source terminal fsync consumes F; no step renews it. No
-OAuth/TLS, refresh-source secret read/rotation commit or refresh-mutex acquisition
-inside guard. If F expires while D remains in the future, no terminal finish or
-publication is accepted; after a native effect was claimed, outcome is
-`refresh_unknown` plus poison, never a later retry under D.
-begin_enqueue rechecks closed/generation/quarantine after dependency checks, marks attempt; stale/foreign guard refuses.
-`publish_delivery(lease,*,guard,deadline=F)` requires the exact same active guard
-after known transport outcome and durable `finish_confirmed`; outsideguard refused,
-no stamp after ambiguous outcome.
+`guard.confirm()`, provisional `publish_delivery`, durable `finish_confirmed`, and
+`_complete_terminal`, all under the SAME live guards. The source terminal fsync consumes
+F; no step renews it. No OAuth/TLS, refresh-source secret read/rotation commit or
+refresh-mutex acquisition inside guard. If F expires while D remains in the future,
+no terminal finish or terminal completion is accepted; after a native effect was
+claimed, outcome is `refresh_unknown` plus poison, never a later retry under D.
+`begin_enqueue` requires the exact active `ReservationGuard` with a successful
+`mark_reservation_durable` result. It rechecks closed/generation/poison after dependency checks, atomically
+marks the one native effect claimed and sets account-wide terminal-pending under the
+intent mutex; stale/foreign guard refuses. `guard.confirm()` may record a known bounded outcome
+after poison only when this same guard won begin first; it never clears poison or permits
+publication. Poison ordered first prevents begin and every external effect.
+`publish_delivery(lease,*,guard,deadline=F)` requires the exact same active guard after
+known transport outcome, with no poison, and returns only an internal provisional stamp.
+The matching guard calls `_complete_terminal(...,deadline=F)` only after the source
+durably finishes the exact attempt. Until then, terminal-pending makes ordinary
+`open`, `check`, `delivery_guard`, and current/delivery operations refuse, including
+same-thread reentry; only the exact owning guard may confirm, provisionally publish, and
+complete. No Delivery is constructed or returned before completion. If finish or
+completion fails or has an uncertain outcome, set poison before any bounded durable
+quarantine or guard release; no usable stamp/Delivery is produced and no retry follows.
+Never clear terminal-pending on a failed attempt; poison remains a second sticky local
+fence.
 After poison intent, bounded coordinator quarantine uses the account state lock;
 neither close nor quarantine releases another caller's refresh lease. Poison intent
 is linearized under a tiny per-account intent mutex, separate from the state/source/
@@ -524,23 +573,31 @@ channel guards and never held across I/O. If poison linearizes before
 `begin_enqueue` claims the operation, poison wins and no native write begins. If
 `begin_enqueue` claims first, that one external attempt wins; a later poison intent
 blocks every new attempt and publication. The in-flight effect is allowed only to
-reach a bounded known outcome or `refresh_unknown`; it cannot publish a Delivery
+reach a bounded known outcome or `refresh_unknown`; it cannot publish a usable Delivery
 after poison. `guard.confirm()` records only the known transport outcome; it never
 overrides poison. No resend follows either outcome.
-Other-thread close first marks the validator locally closed. If it interrupts an
-operation after durable reserve or external-effect claim, it also sets account poison
-intent; idle/before-reserve close stays local. It then waits only the remaining
-bounded guard window (<=1s), never for OAuth; after acquiring it returns closed and
-publication is already refused. Same-thread
-close/quarantine during preenqueue checks invalidates immediately; during enqueue
-close marks LOCAL closed immediately with reentrant state lock, without deadlock or
-claim to undo an already-linearized native attempt. Accounting retains known
-transport outcome, but publish_delivery refuses NEW Delivery/stamp for a closed
-validator or poisoned account. Guard exit sets poison intent BEFORE any bounded
-durable quarantine attempt and before unlock; current/future writers are denied
+Other-thread close marks the validator locally closed under the intent mutex. If a
+reservation claim, durable reservation, or terminal-pending attempt exists, it sets
+account poison in the same transition; idle/before-claim close stays local and prevents
+source reserve. It then waits only the remaining bounded guard window (<=1s), never for
+OAuth. If close wins before `_complete_terminal`, it returns
+closed with publication/completion refused. If completion wins first, a later close
+cannot rewrite that result; its Delivery may be returned after close but is immediately
+non-current. Same-thread close/quarantine during pre-enqueue checks invalidates
+immediately; during enqueue close sets LOCAL closed under the intent mutex while the
+reentrant state lock is held, without deadlock or claim to undo an already-linearized
+native attempt. Accounting retains
+known transport outcome, but publication/completion refuses a usable stamp or Delivery
+when close/poison wins before terminal completion. An operation that exits after a
+claimed effect without successful terminal completion sets poison intent BEFORE any
+bounded durable quarantine attempt and before unlock; current/future writers are denied
 locally even if that attempt times out. Repeated close is idempotent.
-Never extend deadline. RED: close before/during/afterenqueue/secondthread, no fresh
-postclose Delivery/stamp or duplicate delivery; A/B independent.
+Never extend deadline. RED: close before reservation claim stays local and prevents
+source reserve; claim-first/close-second poisons and prevents OAuth even if source
+reserve is still returning; close after durable reserve and before OAuth yields zero
+OAuth plus poison; close-before-completion refuses, while completion-before-close may
+return a Delivery that is already non-current; no success linearizes after close; no
+duplicate delivery; A/B independent.
 FIRST unit parses JWT claims/header from SAME fresh directly authenticated TLS
 response under OIDC3.1.3.7, no standalone JWS crypto verifier. Trusted DI tests may
 use RS256 header/nonempty structural base64url signature with typed fake TLSExchange;
@@ -577,13 +634,15 @@ channel/pinned child stdio; login/refresh require guard keyword. Guard methods
 validate_current(*,deadline) check same captured live authority without reacquisition
 or native effects; final checks receive F. Validator before begin_enqueue calls BOTH
 guard validations; transport enqueue checks channelguard at write linearization.
-After the known
-transport outcome, both guards remain held through `guard.confirm()`, durable
-`finish_confirmed`, and coordinator.publish_delivery; any lost authority/error
-yields selected-account unknown quarantine, no stamp. `finish_confirmed` is inside
-the same one-second guard/operation budget and receives F. `begin_enqueue`, native
-write, `guard.confirm`, and `publish_delivery` also receive F; source/channel guards
-receive F at acquisition and each validation. No new lease or lock is acquired here.
+After the known transport outcome, both guards remain held through `guard.confirm()`,
+coordinator.publish_delivery, durable `finish_confirmed`, and `_complete_terminal`; any
+lost authority/error before terminal completion yields selected-account unknown
+quarantine and no usable stamp or Delivery. A later close/poison cannot rewrite a
+completion that already won its linearization point. `finish_confirmed` is inside the same one-second guard/operation budget and
+receives F. `begin_enqueue`, native write, `guard.confirm`, `publish_delivery`, and
+`_complete_terminal` also receives F; source/channel guards receive F at acquisition and
+each validation. No new source lease, channel guard, or external lock is acquired here;
+the leaf intent mutex is acquired for atomic transitions.
 Cleanup of guards cannot relaunch/reconnect/redeliver. None of these protocols
 accept deserialized dict/boolean/native path as authority.
 
@@ -593,8 +652,10 @@ no execution/channel/token fields enter account-wide scope. All coordinator
 open/check/delivery_guard calls receive this scope, not arbitrary AuthContext.
 Full per-validator context+execution_identity/channel checks remain independently
 required; equalaccount scope does not merge native sessions. Local publish_delivery
-requires begin_enqueue→confirm after a known transport outcome and successful
-durable `finish_confirmed`; synthetic confirm is caller-attested local-only.
+requires begin_enqueue→confirm after a known transport outcome; it creates only a
+provisional local stamp. Durable `finish_confirmed` follows that publication under the
+same guards, then the exact owning guard must successfully call `_complete_terminal`
+before the stamp may back a Delivery. Synthetic confirm is caller-attested local-only.
 `poison_intent` sets a monotonic per-account flag under a separate tiny intent mutex,
 without deadline, external work, or state-guard acquisition. Its linearization order
 relative to begin_enqueue is the winner: poison-first forbids enqueue; an already-
@@ -605,10 +666,16 @@ quarantine; production stays unsupported until that adapter is proven. Local RLo
 hold is a cooperating caller bounded obligation; no OS preemption guarantee.
 
 Global trusted lock order is coordinator refresh mutex → selected source refresh
-lease → coordinator state guard → source authority guard → channel guard. A writer
+lease → coordinator state guard → source authority guard → channel guard → per-account
+intent mutex. A writer
 that needs refresh locks acquires them before ANY state/source/channel guard.
 No component acquires either refresh lock while holding state/source/channel guard;
 revoke-only operations skip refresh locks and take the remaining guards in order.
+The intent mutex is the leaf lock when nested; no path acquires a state, source, or
+channel guard while holding it. `poison_intent` takes only the intent
+mutex and performs no callback, clock read, or I/O while holding it. Deadline and
+dependency preflight for `_complete_terminal` occurs before that mutex; its final
+locked section has no injected callbacks.
 Every wait shares caller absolute budget; mutation timeout is refusal, no assumed
 invalidation. Guards must not call back into coordinator.open or source.open_selected.
 
@@ -648,13 +715,18 @@ from source open through terminal finish and release it once in the operation
 worker. Every operation uses the same absolute deadline.
 
 Required sequence is: validate/capture; open selected authority; read selected
-refresh token; reserve and durably confirm `attempt_id` BEFORE calling OAuth; make
-one fixed exchange; validate the exact response and immutable principal; durably
+refresh token; atomically claim the exact reservation under the coordinator intent
+mutex; call source `reserve_attempt` without holding that mutex; record its durable
+success under the mutex; only then call OAuth. A close that wins before the claim
+prevents the source call; a claim that wins first makes a concurrent close poison the
+account and prevents OAuth. Then make one fixed exchange; validate the exact response
+and immutable principal; durably
 commit a returned rotated refresh token (if any); acquire the ordered local/source/
 channel delivery guards; validate all guards; claim `begin_enqueue`; perform exactly
-one native effect; classify its transport outcome; call `guard.confirm()`; durably
-`finish_confirmed` for this exact attempt; then publish the local delivery stamp and
-return the opaque Delivery while guards remain held. For initial `account/login/start`,
+one native effect; classify its transport outcome; call `guard.confirm()`; provisionally
+publish the local stamp; durably `finish_confirmed` for this exact attempt; call
+`_complete_terminal`; then construct and return the opaque Delivery while guards remain
+held. For initial `account/login/start`,
 the known outcome is the correlated successful JSON-RPC result with exact response
 type `chatgptAuthTokens`. For the refresh callback, the transport has no separate
 peer ACK: known outcome means the exact JSON-RPC response carrying the captured
@@ -669,24 +741,32 @@ uncertain reservation result sends no OAuth, sets poison intent, and returns
 any exchange failure without positive proof that no bytes were sent, any uncertain
 response, or any failure before terminal finish leaves the attempt unresolved and
 poisons the selected account. A failure or uncertain result from `finish_confirmed`
-occurs after the known transport outcome but before Delivery publication: it returns
-only `refresh_unknown`, publishes no stamp, never resends, and poisons the selected
-account. `finish_confirmed` is a required terminal state transition, never best-effort
-cleanup. Cleanup after a successfully finished and published operation is separate
-and cannot undo a known Delivery.
+occurs after the known transport outcome and provisional coordinator publication, but
+before any usable Delivery: it returns only `refresh_unknown`, never exposes the
+provisional stamp, never resends, and poisons the selected account before guard release.
+A failure or uncertainty from `_complete_terminal` has the same result and must poison
+even if durable finish already succeeded. `finish_confirmed` is a required terminal
+state transition, never best-effort cleanup. Cleanup after successful terminal
+completion and Delivery construction is separate and cannot undo a known Delivery.
 
 Poisoning has two deliberately distinct fences. First, before any bounded wait or
 external I/O, the shared local `AuthCoordinator` sets a monotonic, process-wide
 per-account poison intent through trusted internal `poison_intent(scope,code)`.
 Coordinator creation/check/guard/publication has one short per-account intent mutex.
 `begin_enqueue` takes that mutex, refuses if poison is already set, and otherwise
-records the one claimed external effect before releasing it. `poison_intent` takes
+records the one claimed external effect and terminal-pending owner before releasing it.
+`poison_intent` takes
 the same mutex, sets poison once, and returns without waiting for the state/source/
 channel delivery guards, refresh lock, operation deadline, or external I/O. Thus a
 begin claim ordered first may finish its single external effect; a poison ordered
-first prevents it. Every later open/check/guard/begin/publish path observes poison;
-publish rechecks it under the intent mutex and refuses any new stamp. No call clears
-the flag. Only after setting local intent may the validator attempt bounded durable
+first prevents it. Every ordinary open/check/guard/begin/publish/complete path observes
+poison. The already-begun matching guard may confirm its known bounded outcome after
+poison, but publish/complete recheck under the intent mutex and refuse any usable stamp.
+No call clears the poison flag. The exact successful `_complete_terminal` transition
+alone clears terminal-pending and the reserved-attempt record; failures never clear
+either. A `close()` racing a reservation-in-flight, durable reservation, or terminal
+operation sets local close and poison in one intent-mutex transition, so it linearizes
+against reservation and terminal completion. Only after setting local intent may the validator attempt bounded durable
 `quarantine_unknown`. If that write is uncertain, it still returns the closed
 `refresh_unknown` error and the process remains poisoned; it never reports durable
 quarantine or all-process invalidation as successful. New process/account admission
@@ -696,34 +776,54 @@ may have reached disk before reporting uncertainty. A pending refresh-slot head 
 itself is not claimed to cover every post-outcome terminal-write case.
 
 Do not classify ordinary guard/lease cleanup as a terminal source transition. For
-known success, require source terminal finish, coordinator publication, and Delivery
-construction before reporting success. If poison/close wins after begin_enqueue,
-skip finish if it has not started, keep the source attempt unresolved, best-effort
-persist quarantine, and return `refresh_unknown`. If poison/publication failure
-occurs after source finish, persist quarantine before releasing the source lease;
-return `refresh_unknown` and publish/return no new Delivery. If persistent poison
-cannot be proven, that state remains an explicit production integration blocker.
+known success, require coordinator provisional publication, source terminal finish,
+terminal completion, and Delivery construction before reporting success. If poison/close
+wins before `_complete_terminal`, skip finish if it has not started, keep the source
+attempt unresolved, best-effort persist quarantine, and return `refresh_unknown`. If
+poison or terminal-completion failure occurs after source finish, persist quarantine
+before releasing the source lease; return `refresh_unknown` and publish/return no new
+Delivery. If poison/close occurs after successful terminal completion, completion has
+already linearized success; it may invalidate future current checks but does not
+retroactively turn that operation into an unknown result. If persistent poison cannot
+be proven, that state remains an explicit production integration blocker.
 
 Expanded blind RED must prove: (1) reserve precedes the only OAuth call and a failed/
 uncertain reserve causes zero calls; (2) exact attempt id is threaded through source
-rotation and terminal finish; (3) login RPC success or complete callback-response
-write precedes `guard.confirm()`, which precedes finish and publication; callback
-write is never described as peer ACK; (4) finish timeout/failure after the known
-transport outcome returns no Delivery, never retries, and locally poisons every
-validator sharing the coordinator; (5) poison-vs-begin linearization has exactly one
-winner in both race orderings, poison-vs-publish refuses the stamp, and quarantine
-deadline failure cannot clear poison or authorize another call; (6) close/callback
-invalidation immediately before reserve stays local with zero exchange, while the
-same event immediately after durable reserve yields zero exchange plus account poison;
-(7) partial and full callback frame writes map to the specified outcomes; F expiry
-during terminal fsync while outer D remains future yields no stamp, no retry, and
-poison; (8) duplicate/
-replayed callback, second validator/channel, stale generation and +9s receipt cannot
-reserve/exchange; (9) reentrant close at pre-enqueue, write, receipt, finish and
-publication edges never creates a post-close stamp or second delivery; (10) source/
-channel/response typed objects cannot substitute for production provenance; and
-(11) tokens remain absent
-from repr, exceptions, logs and return values. Linux synthetic tests must assert the
-same order and outcomes. These tests exercise only injected fakes and synthetic
-identities; they do not close TLS, kernel view, owned stdio, durable quarantine,
-provider availability, or two-account production gates.
+rotation and terminal finish; a foreign, stale, abandoned, or not-yet-durable
+`ReservationGuard` cannot pass `begin_enqueue` or trigger native transport; (3) login RPC success or complete callback-response
+write precedes `guard.confirm()`, which precedes provisional publication, durable
+finish, terminal completion, and Delivery construction; callback write is never
+described as peer ACK; (4) finish timeout/failure after the known transport outcome
+returns no Delivery, never retries, and locally poisons every validator sharing the
+coordinator; (5) poison-vs-begin linearization has exactly one winner in both race
+orderings, a previously claimed effect may be confirmed after poison, poison-vs-publish/
+complete refuses a usable stamp when poison/close wins first; when completion wins
+first, a later poison/close cannot rewrite that result and future current checks refuse;
+both mutex orderings are tested, and quarantine deadline failure cannot clear poison
+or authorize another call; (6) terminal-pending is account-wide and denies ordinary
+same-thread reentrant current/check/open/guard paths and a second same-account validator
+until the exact owner completes, while account B remains independent; same-thread
+reentry from the source-finish callback after provisional publication also refuses;
+(7) the exact
+owner's publication yields an opaque provisional value unusable as Delivery input, and
+only successful durable finish plus exact `_complete_terminal` yields a final
+AuthorityStamp; wrong guard, provisional value, poison, close, or F expiry cannot clear
+the fence; (8) close or callback invalidation immediately before reservation claim stays
+local and prevents source reserve; close or callback invalidation after the claim
+(including while source reserve is pending) poisons and prevents OAuth; close after
+durable reserve but before OAuth yields zero exchange plus account poison; (9) partial and
+full callback frame writes map to the
+specified outcomes; F expiry during terminal fsync while outer D remains future yields
+no final stamp, no retry, and poison; (10) duplicate/replayed callback, second
+validator/channel, stale generation and +9s receipt cannot reserve/exchange; (11)
+reentrant close at pre-enqueue, write, receipt, finish and publication edges never
+allows success to linearize after close or creates a second delivery; (12) a crash before finish leaves the
+pending slot refusing restart, while a completed slot after finish never implies that
+a Delivery was returned or permits replay; and (13) source/channel/response typed
+objects cannot substitute for production provenance, while tokens remain absent from
+repr, exceptions, logs and return values. Linux synthetic tests must assert the same
+order and outcomes. These tests exercise only injected fakes and synthetic identities;
+they do not close TLS, kernel view, owned stdio, durable quarantine, provider
+availability, or two-account production gates. Persistent quarantine/recovery remains
+required for the finish-to-terminal-completion crash/uncertain-write gap before
+production support.
