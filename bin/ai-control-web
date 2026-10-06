@@ -121,10 +121,12 @@ def main():
         config['totp_state_path'] = str(private_path(args.totp_state))
         if Path(args.auth).absolute() == Path(config['totp_state_path']):
             raise ValueError('distinct authentication and replay paths required')
-        app = create_app(config, SocketBackend(args.socket))
+        app = create_app(config, SocketBackend(args.socket), owner_only=True)
         uvicorn.run(app, host=args.host, port=args.port, workers=1, proxy_headers=False, access_log=False, log_level='warning')
     else:
-        from _control_web_broker import RegistryBackend, serve_broker
+        from _control_web_broker import (RegistryBackend, serve_broker, OwnerProjectMap,
+            OwnerRegisteredGrants, RegistryAttentionView, RegistryAttentionSource)
+        from _control_web_attention import AttentionOverview
         from _control_web_sessions import InteractiveRPC, SessionChat
         from _codex_rc import socket_path
         rpc = InteractiveRPC(args.codex_socket if args.codex_socket is not None else socket_path())
@@ -135,10 +137,19 @@ def main():
         creator = ConfiguredSessionCreate(rpc, project_paths, project_names, args.session_receipts)
         sessions = SessionChat(rpc, project_paths, project_names, args.session_receipts,
                                configured_creator=creator)
+        config_path = os.environ.get('AI_RC_PROJECTS_FILE', str(Path.home() / '.ai-control/projects.yaml'))
+        attention_view = RegistryAttentionView(args.registry,
+            projects=OwnerProjectMap(os.path.abspath(config_path)), grants=OwnerRegisteredGrants(owner_only=True))
+        attention = AttentionOverview(RegistryAttentionSource(attention_view), view=attention_view,
+                                      activity_source=None, callback_source=None)
         try:
-            serve_broker(args.socket, RegistryBackend(args.registry, args.bin_dir, sessions=sessions, configured_creator=creator), args.allowed_uid)
+            serve_broker(args.socket, RegistryBackend(args.registry, args.bin_dir, sessions=sessions,
+                configured_creator=creator, attention=attention, owner_only=True), args.allowed_uid)
         finally:
-            rpc.close()
+            try:
+                attention_view.close()
+            finally:
+                rpc.close()
 
 
 if __name__ == '__main__':

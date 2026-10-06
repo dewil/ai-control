@@ -405,8 +405,11 @@ def _attention_json(data):
         if not math.isfinite(result):
             raise ValueError('nonfinite value')
         return result
-    return json.loads(data.decode('utf-8'), object_pairs_hook=pairs,
-                      parse_constant=constant, parse_float=floating)
+    try:
+        return json.loads(data.decode('utf-8'), object_pairs_hook=pairs,
+                          parse_constant=constant, parse_float=floating)
+    except RecursionError:
+        raise ValueError('invalid document') from None
 
 
 def _attention_yaml_runner(argv, *, input, capture_output, text, shell, timeout):
@@ -471,9 +474,12 @@ def _attention_document(raw, budget, runner, yaml=False):
         if not yaml:
             raise
         budget.consume(len(data))
-        result = runner(['yq', '-p=yaml', '-o=json', '.', '-'],
-                        input=data.decode('utf-8'), capture_output=True, text=True,
-                        shell=False, timeout=budget.check())
+        try:
+            result = runner(['yq', '-p=yaml', '-o=json', '.', '-'],
+                            input=data.decode('utf-8'), capture_output=True, text=True,
+                            shell=False, timeout=budget.check())
+        except subprocess.TimeoutExpired:
+            raise _AttentionLimit('limit') from None
         budget.check()
         if result.returncode != 0 or len(result.stdout.encode('utf-8')) > 65536:
             raise ValueError('invalid document')
@@ -513,7 +519,10 @@ class OwnerProjectMap:
     def _capture_budget(self, budget):
         if self._closed:
             raise RuntimeError('unavailable')
-        self._release()
+        # Keep old incarnations alive until their successor anchors are open,
+        # so unlink/recreate cannot recycle an inode in a capture gap.
+        previous_anchors, previous_config_fd = self._anchors, self._config_fd
+        self._anchors, self._config_fd, self._capture = [], None, None
         self._budget = budget
         try:
             raw = _attention_bytes(None, self.path, budget)
@@ -555,6 +564,11 @@ class OwnerProjectMap:
         except Exception:
             self._release()
             raise RuntimeError('unavailable') from None
+        finally:
+            for _, fd in previous_anchors:
+                os.close(fd)
+            if previous_config_fd is not None:
+                os.close(previous_config_fd)
 
     def current(self, capture, *, deadline):
         try:
@@ -935,7 +949,7 @@ class RegistryAttentionSource:
         if records or snapshot['complete']:
             now = self.wall_clock()
             if type(now) in (int, float) and math.isfinite(now) and now > 0:
-                snapshot['observed_at'] = int(now * 1000)
+                snapshot['observed_at'] = int(now)
             else:
                 snapshot.update(observed_at=None, records=[], complete=False, state='unavailable', reason='unavailable')
                 coverage['global_complete'] = False
@@ -950,13 +964,180 @@ class RegistryAttentionSource:
         return snapshot
 
 
+def attention_result(result):
+    """Validate the entire compact export; never sanitize an arbitrary raw DTO."""
+    failure = {'error': 'unavailable'}
+    if type(result) is not dict:
+        return failure
+    if 'error' in result:
+        return {'error': 'forbidden'} if result == {'error': 'forbidden'} else failure
+    def exact(value, fields):
+        if type(value) is not dict or set(value) != set(fields.split()):
+            raise ValueError()
+    def integer(value, minimum=0):
+        if type(value) is not int or value < minimum:
+            raise ValueError()
+    def hexadecimal(value, length=64):
+        if type(value) is not str or not re.fullmatch('[0-9a-f]{%d}' % length, value):
+            raise ValueError()
+    def enum(value, choices):
+        if type(value) is not str or value not in choices.split():
+            raise ValueError()
+    def label(value):
+        if not _attention_text(value, 120) or redact(value) != value:
+            raise ValueError()
+    def alias(value):
+        if type(value) is not str or not PROJECT.fullmatch(value):
+            raise ValueError()
+    def ids(value, cap):
+        if type(value) is not list or len(value) > cap:
+            raise ValueError()
+        for item in value:
+            hexadecimal(item)
+        if len(value) != len(set(value)):
+            raise ValueError()
+    try:
+        exact(result, 'schema epoch revision observed_at complete truncated sources pool sessions reasons unlinked_tasks')
+        integer(result['schema'], 1)
+        if result['schema'] != 1:
+            raise ValueError()
+        hexadecimal(result['epoch'], 32)
+        integer(result['revision'])
+        integer(result['observed_at'], 1)
+        if type(result['complete']) is not bool or type(result['truncated']) is not bool or result['complete'] and result['truncated']:
+            raise ValueError()
+        exact(result['sources'], 'task_registry activity native_callbacks')
+        for source in result['sources'].values():
+            exact(source, 'state complete observed_at reason')
+            enum(source['state'], 'fresh incomplete unavailable unsupported stale')
+            if type(source['complete']) is not bool:
+                raise ValueError()
+            if source['observed_at'] is not None:
+                integer(source['observed_at'], 1)
+            if source['reason'] is not None:
+                enum(source['reason'], 'unavailable disconnected binding_incomplete unsupported limit invalid_source')
+            if source['complete'] and (source['state'] != 'fresh' or source['observed_at'] is None or source['reason'] is not None):
+                raise ValueError()
+        if result['complete'] and any(not s['complete'] or s['state'] != 'fresh' for s in result['sources'].values()):
+            raise ValueError()
+        exact(result['pool'], 'known_sessions running decision question completed')
+        for value in result['pool'].values():
+            integer(value)
+        if (type(result['sessions']) is not list or len(result['sessions']) > 256
+                or type(result['unlinked_tasks']) is not list or len(result['unlinked_tasks']) > 128
+                or type(result['reasons']) is not list or len(result['reasons']) > 512):
+            raise ValueError()
+        sessions, tasks, reasons = {}, {}, {}
+        for row in result['sessions']:
+            exact(row, 'session_key project sid vendor context_label label activity_state primary_state reason_ids')
+            hexadecimal(row['session_key'])
+            alias(row['project'])
+            if not valid_qid(row['sid']) or row['vendor'] != 'codex':
+                raise ValueError()
+            label(row['context_label'])
+            label(row['label'])
+            enum(row['activity_state'], 'running waiting idle unknown stale')
+            enum(row['primary_state'], 'decision question running completed idle unknown')
+            ids(row['reason_ids'], 512)
+            if row['session_key'] in sessions:
+                raise ValueError()
+            sessions[row['session_key']] = row
+        for row in result['unlinked_tasks']:
+            exact(row, 'task_key project label engine reason_ids')
+            hexadecimal(row['task_key'])
+            alias(row['project'])
+            label(row['label'])
+            enum(row['engine'], 'codex claude')
+            ids(row['reason_ids'], 512)
+            if not row['reason_ids'] or row['task_key'] in tasks:
+                raise ValueError()
+            tasks[row['task_key']] = row
+        for row in result['reasons']:
+            exact(row, 'reason_id session_key task_key kind source state target')
+            hexadecimal(row['reason_id'])
+            enum(row['kind'], 'decision question completed delivery_pending')
+            enum(row['source'], 'task_registry native_callbacks')
+            enum(row['state'], 'pending stale unknown')
+            if row['reason_id'] in reasons:
+                raise ValueError()
+            target = row['target']
+            if row['session_key'] is not None:
+                hexadecimal(row['session_key'])
+                if row['task_key'] is not None or row['session_key'] not in sessions:
+                    raise ValueError()
+                exact(target, 'kind project sid')
+                owner = sessions[row['session_key']]
+                if target != dict(kind='session', project=owner['project'], sid=owner['sid']):
+                    raise ValueError()
+            else:
+                hexadecimal(row['task_key'])
+                if row['task_key'] not in tasks or row['source'] != 'task_registry':
+                    raise ValueError()
+                exact(target, 'kind agent task_key qid result_generation')
+                owner = tasks[row['task_key']]
+                if target['kind'] != 'task' or not valid_agent(target['agent']) or target['task_key'] != row['task_key']:
+                    raise ValueError()
+                if row['kind'] == 'completed':
+                    if target['qid'] is not None:
+                        raise ValueError()
+                    hexadecimal(target['result_generation'], 8)
+                elif not valid_qid(target['qid']) or target['result_generation'] is not None:
+                    raise ValueError()
+            if row['reason_id'] not in owner['reason_ids']:
+                raise ValueError()
+            reasons[row['reason_id']] = row
+        used = []
+        expected = dict(known_sessions=len(sessions), running=0, decision=0, question=0, completed=0)
+        for row in list(sessions.values()) + list(tasks.values()):
+            for rid in row['reason_ids']:
+                if rid not in reasons:
+                    raise ValueError()
+                reason = reasons[rid]
+                if (reason['session_key'] != row.get('session_key') or reason['task_key'] != row.get('task_key')):
+                    raise ValueError()
+                used.append(rid)
+            if 'session_key' in row:
+                expected['running'] += row['activity_state'] == 'running'
+                kinds = {reasons[rid]['kind'] for rid in row['reason_ids']}
+                for kind in ('decision', 'question', 'completed'):
+                    expected[kind] += kind in kinds
+                primary = ('decision' if 'decision' in kinds else 'question' if 'question' in kinds
+                           else 'running' if row['activity_state'] == 'running'
+                           else 'completed' if 'completed' in kinds else 'idle' if row['activity_state'] == 'idle' else 'unknown')
+                if row['primary_state'] != primary:
+                    raise ValueError()
+        if len(used) != len(set(used)) or set(used) != set(reasons) or result['pool'] != expected:
+            raise ValueError()
+        wire = json.dumps(result, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8')
+        if len(wire) > LIMIT:
+            raise ValueError()
+        return _attention_json(wire)
+    except (ValueError, TypeError, KeyError, UnicodeError):
+        return failure
+
+
 class RegistryBackend:
-    def __init__(self, registry, bin_dir, runner=None, sessions=None, configured_creator=None):
+    def __init__(self, registry, bin_dir, runner=None, sessions=None, configured_creator=None,
+                 attention=None, owner_only=True):
         self.registry = os.path.abspath(registry)
         self.bin_dir = os.path.abspath(bin_dir)
         self.runner = runner or subprocess.run
         self.sessions = sessions
         self.configured_creator = configured_creator
+        self.attention, self.owner_only = attention, owner_only
+        self._attention_lock = threading.Lock()
+
+    def attention_snapshot(self):
+        if self.owner_only is not True:
+            return {'error': 'forbidden'}
+        if self.attention is None or not self._attention_lock.acquire(blocking=False):
+            return {'error': 'unavailable'}
+        try:
+            return attention_result(self.attention.snapshot())
+        except Exception:
+            return {'error': 'unavailable'}
+        finally:
+            self._attention_lock.release()
 
     def _session(self, request):
         if not _valid_session(request):
@@ -1093,6 +1274,33 @@ class RegistryBackend:
                 'answered': saved, 'pending_delivery': saved and not published,
                 'saved_answer': saved_answer, 'saved_decision': saved_decision}
 
+    def _optional_task_key(self, root, fd, name, spec, control):
+        """Separate local proof; never touches attention capture or its lock."""
+        try:
+            budget = _AttentionBudget(time.monotonic() + 5, time.monotonic)
+            _attention_anchor(root, self.registry)
+            _attention_anchor(fd, name, root)
+            raw = _attention_bytes(fd, 'control.json', budget)
+            current = _attention_document(raw, budget, None)
+            _attention_control(current)
+            if current != control or spec.get('type') != 'task':
+                return None
+            spec_raw = _attention_bytes(fd, 'spec.yaml', budget)
+            if _attention_document(spec_raw, budget, _attention_yaml_runner, True) != spec:
+                return None
+            if (_attention_bytes(fd, 'control.json', budget) != raw
+                    or _attention_bytes(fd, 'spec.yaml', budget) != spec_raw):
+                return None
+            _attention_anchor(fd, name, root)
+            _attention_anchor(root, self.registry)
+            info = os.fstat(root)
+            registry_id = _attention_digest(dict(kind='attention_registry', root=os.path.realpath(self.registry),
+                                                dev=info.st_dev, ino=info.st_ino))
+            return _attention_digest(dict(kind='attention_task', registry_id=registry_id,
+                                          agent=name, incarnation=current['incarnation']))
+        except Exception:
+            return None
+
     def _task(self, root, name):
         fd = _dir(root, name)
         try:
@@ -1139,10 +1347,14 @@ class RegistryBackend:
                 result = {'generation': hashlib.sha256(('done-gen:' + key + ':' + commit).encode()).hexdigest()[:8],
                           'state': redact(_field(done, 'state')), 'summary': redact(_field(done, 'summary')),
                           'commit_sha': commit, 'finalized': done.get('finalized') is True}
-            return {'agent': name, 'name': redact(_field(spec, 'name', name)), 'engine': engine,
+            task = {'agent': name, 'name': redact(_field(spec, 'name', name)), 'engine': engine,
                     'state': redact(_field(state, 'phase', 'unknown')), 'summary': redact(_field(state, 'status_line')),
                     'status_line': redact(_field(state, 'status_line')),
                     'questions': questions, 'result': result}
+            task_key = self._optional_task_key(root, fd, name, spec, control)
+            if task_key is not None:
+                task['task_key'] = task_key
+            return task
         finally:
             os.close(fd)
 
@@ -1287,7 +1499,7 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
     slots = threading.BoundedSemaphore(4)
     workers = set()
     workers_lock = threading.Lock()
-    fields = {'snapshot': {'op'}, 'answer': {'op', 'agent', 'qid', 'decision', 'text'},
+    fields = {'snapshot': {'op'}, 'attention_snapshot': {'op'}, 'answer': {'op', 'agent', 'qid', 'decision', 'text'},
               'verdict': {'op', 'agent', 'generation', 'decision', 'comment'}, **SESSION_FIELDS}
 
     def reply(conn, result):
@@ -1303,6 +1515,8 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                     op = request['op']
                     if op == 'snapshot':
                         result = backend.snapshot()
+                    elif op == 'attention_snapshot':
+                        result = attention_result(backend.attention_snapshot())
                     elif op == 'answer':
                         result = backend.answer(request['agent'], request['qid'], request['decision'], request['text'])
                     elif op == 'verdict':
@@ -1370,7 +1584,7 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                             or (set(request) != fields[request['op']] and not (
                                 request['op'] == 'session_send'
                                 and set(request) == fields[request['op']] | {'selection'}))):
-                        result = {'error': 'invalid_request' if type(request) is dict and request.get('op') == 'session_project_summary' else 'invalid_or_stale'}
+                        result = {'error': 'invalid_request' if type(request) is dict and request.get('op') in ('session_project_summary', 'attention_snapshot') else 'invalid_or_stale'}
                     elif request['op'] in SESSION_FIELDS and not _valid_session(request):
                         result = {'error': 'invalid_request'}
                     elif slots.acquire(blocking=False):
@@ -1382,6 +1596,11 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                     else:
                         result = {'error': 'unavailable'}
                 reply(conn, result)
+            except ValueError as exc:
+                try:
+                    reply(conn, {'error': 'invalid_request' if str(exc) == 'duplicate field' else 'unavailable'})
+                except OSError:
+                    pass
             except Exception:
                 try:
                     conn.sendall(b'{"error":"unavailable"}\n')
@@ -1421,6 +1640,9 @@ class SocketBackend:
 
     def snapshot(self):
         return self._call({'op': 'snapshot'})
+
+    def attention_snapshot(self):
+        return attention_result(self._call({'op': 'attention_snapshot'}))
 
     def answer(self, agent, qid, decision, text):
         return self._call(dict(op='answer', agent=agent, qid=qid, decision=decision, text=text))
