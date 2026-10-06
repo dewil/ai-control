@@ -68,7 +68,7 @@ class UnavailableHistoryReceipts(unittest.TestCase):
         config = {'origin': ORIGIN, 'password_hash': self.web.hash_password(PASSWORD),
                   'totp_secret': SECRET, 'session_ttl': 60, 'secure_cookie': True}
         self.client = TestClient(self.web.create_app(config, backend, clock=lambda: now), base_url=ORIGIN)
-        login = self.client.post('/api/login', json={'password': PASSWORD,
+        login = self.client.post('/api/login', json={'username': 'owner', 'password': PASSWORD,
             'totp': self.web.totp_code(SECRET, now)}, headers={'Origin': ORIGIN})
         self.assertEqual(login.status_code, 200, login.text)
 

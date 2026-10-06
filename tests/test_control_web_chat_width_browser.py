@@ -97,6 +97,7 @@ class ChatWidthBrowserContract(unittest.TestCase):
         cls.page = cls.context.new_page()
         cls.page.set_default_timeout(5000)
         cls.page.goto(cls.url)
+        cls.page.locator('#username').fill('owner')
         cls.page.locator('input[type=password]').fill(PASSWORD)
         cls.page.get_by_role('textbox', name=re.compile('TOTP|код|однораз', re.I)).fill(totp())
         cls.page.get_by_role('button', name=re.compile('^Войти$', re.I)).click()

@@ -139,12 +139,35 @@ sudo systemctl daemon-reload
 
 ```bash
 sudo -u ai-panel /opt/ai-control-web/venv/bin/python /opt/ai-control-web/bin/ai-control-web init-auth \
+  --username dwl \
   --origin "$CONTROL_WEB_ORIGIN" \
   --output /var/lib/ai-control-web/auth.json \
   --totp-state /var/lib/ai-control-web/totp-state.json
 ```
 
 Пароль вводится через скрытый терминальный prompt дважды; минимум12 символов. CLI создаёт новые auth/state файлы0600 в owner-only каталоге0700 и не печатает пароль или TOTP secret. Только локально откройте auth-файл разрешённым приватным редактором и добавьте `totp_secret` в свой аутентификатор. Не копируйте файл в чат, облачные заметки, git или `/data`. Два файла должны иметь разные пути. Не удаляйте state для «починки» кода: это разрешит replay. Сброс enrollment — отдельная локальная ротация credentials.
+
+Логин case-sensitive, без обрезки пробелов: `[a-z][a-z0-9_-]{1,31}`.
+Новый enrollment сохраняет `--username` (по умолчанию `owner`). Старый private
+config без поля `username` принимает только логин `owner`. Для этого хоста
+выбран `dwl`; после настройки `username="dwl"` логин `owner` не принимается.
+
+Перед установкой версии с обязательным логином назначенный оператор меняет
+существующий `/var/lib/ai-control-web/auth.json` локальным приватным редактором:
+добавляет или заменяет только строковое поле `username` значением `dwl`.
+До изменения проверяет regular file, отсутствие symlink, владельца `ai-panel`
+и mode0600; каталог должен сохранять mode0700. После изменения локально
+проверяет валидный JSON, сохранность всех остальных полей (включая hash,
+TOTP secret, origin и существующий session_ttl10800), владельца и прав файла.
+Не выводить содержимое файла или credentials в терминал, чат или артефакты;
+не вызывать `init-auth` поверх существующего enrollment. Replay state не
+изменять и не удалять. Изменение private config выполняется до поставки strict
+source, а не как повторный enrollment.
+
+После поставки принятого immutable source перезапустить только frontend
+`ai-control-web.service`: потребуется новый вход с логином, текущим паролем
+и свежим TOTP. Broker, native runtime и provider credentials не менять и не
+перезапускать. Три часа абсолютного срока сессии сохраняются без продления.
 
 ```bash
 sudo systemd-analyze verify /etc/systemd/system/ai-control-web.service /etc/systemd/system/ai-control-web-broker.service

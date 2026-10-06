@@ -52,7 +52,7 @@ class WebContract(unittest.TestCase):
             totp_secret=SECRET, session_ttl=60, secure_cookie=True)
         self.client = TestClient(self.web.create_app(self.config, self.backend, clock=lambda: self.now), base_url=ORIGIN)
     def login(self):
-        r = self.client.post('/api/login', json={'password': PASSWORD, 'totp': self.web.totp_code(SECRET, self.now)}, headers={'Origin': ORIGIN})
+        r = self.client.post('/api/login', json={'username': 'owner', 'password': PASSWORD, 'totp': self.web.totp_code(SECRET, self.now)}, headers={'Origin': ORIGIN})
         self.assertEqual(r.status_code, 200, r.text)
         self.csrf = r.json()['csrf']
         self.assertTrue(self.csrf)
@@ -76,7 +76,7 @@ class WebContract(unittest.TestCase):
         self.assertTrue(self.web.verify_password(PASSWORD, self.config['password_hash']))
         self.assertFalse(self.web.verify_password('wrong', self.config['password_hash']))
         for password, totp in [('wrong', self.web.totp_code(SECRET, self.now)), (PASSWORD, 'invalid')]:
-            self.safe_error(self.client.post('/api/login', json=dict(password=password, totp=totp), headers={'Origin': ORIGIN}), 401)
+            self.safe_error(self.client.post('/api/login', json=dict(username='owner', password=password, totp=totp), headers={'Origin': ORIGIN}), 401)
         self.assertEqual(self.backend.calls, [])
 
     def test_INV_WEB_01_unauthenticated_never_reaches_backend(self):
@@ -88,8 +88,8 @@ class WebContract(unittest.TestCase):
 
     def test_INV_WEB_01_totp_replay_and_rate_limit(self):
         self.login()
-        self.safe_error(self.client.post('/api/login', json={'password': PASSWORD, 'totp': self.web.totp_code(SECRET, self.now)}, headers={'Origin': ORIGIN}), 401)
-        statuses = [self.client.post('/api/login', json={'password': 'wrong', 'totp': '000000'}, headers={'Origin': ORIGIN}).status_code for _ in range(100)]
+        self.safe_error(self.client.post('/api/login', json={'username': 'owner', 'password': PASSWORD, 'totp': self.web.totp_code(SECRET, self.now)}, headers={'Origin': ORIGIN}), 401)
+        statuses = [self.client.post('/api/login', json={'username': 'owner', 'password': 'wrong', 'totp': '000000'}, headers={'Origin': ORIGIN}).status_code for _ in range(100)]
         self.assertIn(429, statuses)
 
     def test_INV_WEB_02_cookie_expiry_logout(self):
@@ -116,7 +116,7 @@ class WebContract(unittest.TestCase):
         first = self.csrf
         second = TestClient(self.client.app, base_url=ORIGIN)
         self.now += 30
-        r = second.post('/api/login', json={'password': PASSWORD, 'totp': self.web.totp_code(SECRET, self.now)}, headers={'Origin': ORIGIN})
+        r = second.post('/api/login', json={'username': 'owner', 'password': PASSWORD, 'totp': self.web.totp_code(SECRET, self.now)}, headers={'Origin': ORIGIN})
         self.assertEqual(r.status_code, 200)
         self.assertNotEqual(first, r.json()['csrf'])
         self.safe_error(second.post('/api/answer', json=self.answer(), headers={'Origin': ORIGIN, 'X-CSRF-Token': first}), 403)
