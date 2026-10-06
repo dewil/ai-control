@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from collections import OrderedDict
 import copy
+import ctypes
 import fcntl
 import functools
 import hashlib
@@ -437,9 +438,14 @@ class RenameStore(_Receipts):
             self._check(fd, deadline)
             _need(self._pin(os.fstat(fd)) == self._pin(os.stat(temp, dir_fd=base, follow_symlinks=False)))
             if previous is None:
-                # Atomic no-replace reserve, never overwrite another receipt.
-                os.link(temp, name, src_dir_fd=base, dst_dir_fd=base, follow_symlinks=False)
-                os.unlink(temp, dir_fd=base)
+                # Linux atomic no-replace keeps the published receipt at nlink=1,
+                # including a process crash before directory fsync.
+                renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
+                renameat2.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+                renameat2.restype = ctypes.c_int
+                if renameat2(base, os.fsencode(temp), base, os.fsencode(name), 1) != 0:
+                    code = ctypes.get_errno()
+                    raise OSError(code, os.strerror(code))
             else:
                 _need(self._pin(os.stat(name, dir_fd=base, follow_symlinks=False)) == self._pin(previous))
                 os.replace(temp, name, src_dir_fd=base, dst_dir_fd=base)
@@ -1307,7 +1313,7 @@ class SessionChat:
 
 class InteractiveRPC:
     """One receiver per connection; never responds to native server requests."""
-    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/resume', 'turn/start', 'model/list'}
+    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set'}
 
     def __init__(self, socket_path, timeout=25):
         if type(socket_path) is not str or type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 55:
