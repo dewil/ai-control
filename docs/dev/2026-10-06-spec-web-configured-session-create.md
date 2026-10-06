@@ -34,7 +34,8 @@ Native mutation ровно thread/start({cwd: canonical_project_root}). Друг
 ephemeral, seed/title и settings отсутствуют. Native inherit применяется к уже
 настроенному context; обещания reset его settings нет. Нет turn/start, resume,
 name/set, auth RPC или hidden greeting. Первый message — отдельный existing send.
-Fixed InteractiveRPC allowlist расширяется только thread/start.
+Fixed InteractiveRPC allowlist расширяется только thread/start и read-only
+thread/loaded/list; последний не является operation correlation или account proof.
 
 ## Exact owner / transport seams
 
@@ -106,7 +107,8 @@ handle с recursively immutable `.record`; это не native admission.
 
 Store переиспользует reviewed RenameStore private FS/anchored directory helpers
 в новом module, без редактирования bound CreateStore/ExecutionContext и без их
-fake instance. Record grammar независима от bound R/C/A/B. Shared helper extraction
+fake instance. Record grammar независима от bound R/C/A/B; configured I ниже — origin,
+не account binding. Shared helper extraction
 возможна лишь как separately reviewed change с exact existing-byte regression;
 данная specification не требует extraction и не обещает текущий deployment scope.
 
@@ -114,19 +116,22 @@ Public methods, под stable namespace directory flock:
 - `locked(deadline, create=False)` contextmanager возвращает held directory FD
   или None при absent read-only namespace; create=True writer provisions safely.
 - `lookup(base, project, operation_id, deadline)` → frozen handle или None; bounded
-  named R/C/A reads, no native/scan/creation. Partial chain возвращает effective unknown.
+  named R/C/A/I reads, no native/scan/creation. Partial chain возвращает effective unknown.
 - `reserve(base, project, context_id, root, operation_id, deadline)` → handle;
   exact replay возвращает matching chain, conflicting payload invalid_request,
   corrupt/unsafe state unavailable. R published before native effects.
 - `candidate(base, reservation, sid, deadline)` → handle; only exact correlated SID,
   already matching SID idempotent; different SID invalid_request. No native effects.
-- `accept(base, reservation, deadline)` → handle; candidate required, matching replay
-  idempotent, without C invalid_request. Caller owner has independently fresh native
+- `origin(base, reservation, deadline)` → handle; candidate required, публикует
+  immutable I ниже; matching replay idempotent, collision unavailable.
+- `accept(base, reservation, deadline)` → handle; candidate+matching I required, matching replay
+  idempotent, without C/I invalid_request. Caller owner has independently fresh native
   proof before this method; store does not pretend to provide it.
 
 Handle input revalidated against current exact chain and parent commitments.
 A known accepted handle whose A is now missing is unavailable, never downgraded.
-Receipt-aware replay accepted validates all R/C/A. Stateless absent A cannot prove
+Receipt-aware replay accepted validates all R/C/A/I; accepted with missing I
+unavailable, never downgrade or replay start. Stateless absent A cannot prove
 historical absence; unknown lookup never authorizes native retry. Removing all
 historical witnesses is not promised detectable; no implicit tamper ledger.
 
@@ -145,8 +150,8 @@ configured_create_candidate, configured_create_accepted for R/C/A respectively.
 No context/root in locator: same project/opUUID under changed transport identity
 cannot accidentally reserve again in another namespace. R is plain record.
 C exact wrapper `{schema:1,kind:'configured_create_candidate',record,parent}`;
-parent commits R. A exact `{schema:1,kind:'configured_create_accepted',record,parent}`;
-parent commits C, and C commits R. No binding B because this explicit legacy mode
+parent commits R. A exact `{schema:1,kind:'configured_create_accepted',record,parent,origin}`;
+parent commits C, and C commits R; origin commits I. No binding B because this explicit legacy mode
 does not claim account ownership. Parent exact `{filename,dev,ino,ctime_ns,sha256}`:
 filename derived known parent locator, nonnegative exact ints, SHA exact bytes of
 held safe parent FD; before/after file identity checks required. Foreign/missing/
@@ -165,14 +170,14 @@ no pathname cleanup that could unlink foreign inode. No automatic orphan sweep.
 Unsupported syscall/FS capability unavailable, no permissive fallback.
 
 Minimal concurrency boundary: same stable namespace directory flock serializes
-lookup→reserve→native dispatch→C→proof→A for creates, with total deadline. Status
+lookup→reserve→native dispatch→C→I→proof→A for creates, with total deadline. Status
 uses same lock. This holds no catalog write lock and cannot wait on a second
 operation/binding lock; no lock inversion. Other operations may time out safely.
 Native calls bounded by remaining deadline. No unlocked capacity check or scan-based
 SID inference. Read-only absent namespace does not create it.
 
-Crash visibility: R only→unknown with no SID forever/manual unresolved; R+C→manual
-status may prove this exact candidate and publish A; R+C+A→terminal accepted with
+Crash visibility: R only→unknown with no SID forever/manual unresolved; R+C (possibly prepared I)→manual
+status may prove this exact candidate, publish/recover I then A; R+C+I+A→terminal accepted with
 fresh safe metadata. Temp-only orphan is not a receipt; capacity counts it. A crash
 between ACK and durable C loses correlation: unknown, never infer from notification,
 list rows/timestamp/title/model or retry. Native JSON-RPC ID is not idempotency.
@@ -192,13 +197,13 @@ Validate ACK thread cwd as absolute/canonical root; invalid/missing ACK id or cw
 RPC error, timeout/disconnect/store uncertainty→delivery_unknown. A usable correlated
 SID with valid ACK root is persisted C before additional metadata read. Then
 same-generation thread/read({threadId:sid,includeTurns:false}), exact ID/root and
-fresh grant/context equality. Publish A only after that proof. Native response
+fresh grant/context equality. Publish/recover I, then A only after that proof. Native response
 extra effective settings are neither returned nor reused as user-selected overrides.
 A null native name is valid for a new empty session; no naming mutation follows.
 
 Repeat POST same UUID is receipt replay and NEVER sends start, even unknown; R+C
 POST replay remains unknown and does not perform reconciliation writer. Manual GET
-status may reprove persisted C SID and publish A; without C stays unknown and does
+status may reprove persisted C SID, publish/recover I and A; without C stays unknown and does
 not call thread/list/read searching a candidate. Accepted POST/status fresh reads
 only exact stored SID, without model/list/resume/start. Context reconnect generation
 is newly captured for read-only reconciliation, with identical stable context_id,
@@ -206,6 +211,113 @@ root and current capability; never dispatched start on a recovered connection.
 Context/root change denies, no replay into another current transport. Empty thread
 may be unavailable after native restart because no rollout was materialized: preserve
 accepted receipt, return safe unavailable, never recreate it or claim history exists.
+
+## Confirmed-origin I, loaded empties и первый explicit send
+
+Own isolated offline Codex0.160 experiment (network disabled, fresh synthetic home,
+no account claim) established: cwd-only start returns zero-turn empty thread;
+initial read succeeds, thread/loaded/list contains SID, ordinary thread/list omits
+it; resume(excludeTurns:true) fails no_rollout_found. After native restart read
+fails and normal list still omits it. Existing sender's unconditional resume is
+therefore not usable for the first explicit message. No hidden turn/name/seed
+may repair this. Native experiment is usability evidence, not account admission.
+
+Origin I locator SHA256 canonical JSON
+`{kind:'configured_session_origin',context_id,root,sid}`+'.json'.
+Same private namespace as R/C/A, with same no-replace/capacity/flock/orphan policies.
+I exact record:
+`{schema:1,kind:'configured_session_origin',project,operation_id,context_id,root,sid,created,parent}`.
+parent commits exact C filename/dev/ino/ctime_ns/sha256; C commits R. created equals
+R.created; all identities must equal effective C. A.origin exact commitment to I.
+I is prepared before A; I has no parent A, so there is no circular commitment.
+Authority is I→C→R plus matching A→C and A→I. Index never changes provider/account
+and does not manufacture bound ExecutionContext/session_ref.
+
+`ConfiguredCreateStore.origin_lookup(base,context_id,root,sid,deadline)` returns
+accepted frozen reservation or None if I absent or complete matching pair is only
+prepared (A absent); existing I with missing/corrupt/mismatched C/R/A is unavailable,
+except stateless absent A is permitted prepared/unresolved. A present malformed
+never means prepared. Same SID/index key with another operation/context payload
+is collision unavailable, no overwrite. Receipt-aware known accepted missing A/I
+refuses. I absence is not proof of no historical creation and never authorizes start.
+
+`origins(base,project,context_id,root,deadline)` returns exact
+`{records:tuple[ConfiguredCreateReservation,...],truncated:bool}`. Bounded≤10000
+namespace entries, strict safe leaves≤4096B, validates only named origin records and
+then their bounded parent chains; no scan to correlate unknown operation. Select
+at most128 newest accepted matching origins by created desc, SID stable tie;
+truncated true if more eligible entries. Unsafe/malformed relevant origin unavailable,
+not silently missing; foreign project/context records not exported. No native calls.
+Directory scans are allowed only for this accepted origin overlay, never lost-ACK
+reconciliation. All R/C/A/I/temp entries count capacity; four-stage publication may
+exhaust capacity after native ACK: retain unknown, no unsafe rollback/retry.
+
+`ConfiguredSessionCreate.overlay(project)` returns exact
+`{sessions:[safe accepted session DTO,...],truncated:boolean}`. Fresh grants/root,
+approved stable context and captured generations first. Origins bound to this
+project/context/root only; one same-generation thread/loaded/list scan, ≤4pages,
+limit100/page, ≤400 strict fullUUID IDs, finite strict response, opaque cursor≤4096,
+no duplicate IDs/cursor loop. If scan truncated, overlay truncated true; membership
+outside observed IDs never guessed. This scan does not assign SID to an operation.
+For each of at most128 accepted-origin observed loaded SIDs, fenced thread/read
+includeTurns:false confirms fullUUID/root and current context. Only freshly proved
+rows are visible; missing native thread is omitted, grants/context/store error is
+unavailable. No metadata-only row is claimed usable. Deadline partial scan must
+return unavailable rather than export unchecked rows. No history turns required.
+
+Owner session list merges ordinary native/registry rows and this confirmed loaded
+origin overlay BEFORE output pagination, full canonical(root,SID) dedup; existing
+native row preferred for metadata if it is already authoritative. New empty rows
+are local display with title fallback, not persisted rollout claims. Project
+cloud/count/activity includes deduplicated eligible overlay rows only when complete
+native metadata and overlay membership are proved; truncated/unavailable evidence
+makes count/activity unknown/stale, never guessed or partial number. Existing cache
+key includes context_id+transport/context generations+allowed roots+origin
+namespace held-FD dev/ino/mtime_ns/ctime_ns snapshot; existing TTL is not extended;
+creation A publication invalidates original project views. Overlay reproof on refresh
+or page reload restores accepted loaded empties without needing browser operationUUID.
+This indexes accepted origins, not private unresolved receipts, auth or histories.
+
+New optional trusted SessionChat constructor argument configured_creator=None;
+no request body/global env selects it. `ConfiguredSessionCreate.loaded_origin(project,sid)`
+returns None if no I, or frozen `ConfiguredLoadedOrigin` with exact immutable
+attributes reservation/context/session (accepted handle, seven-field captured
+context, safe session DTO) after accepted pair, fresh loaded membership+ID/root
+proof. For a valid indexed SID outside loaded membership it returns None only
+after fresh ordinary persistent fullSID/root metadata proof; unavailable disappeared
+empty raises safe unavailable, not an unindexed fallback. Invalid indexed authority raises safe unavailable/stale,
+never treated as ordinary unindexed session. This private witness is not account
+admission, never browser serializable. Bound contexts are rejected before lookup.
+Current grants/context/parent commitments must still match immediately before send.
+
+Existing send schema2 receipt lookup/replay remains FIRST, prior to any new native
+writer; matching accepted/unknown send never resends regardless origin. For a new
+message, a proved configured-origin currently-loaded thread allows direct fenced
+turn/start without thread/resume. This applies to inherit and explicit model selection;
+catalog identity/model wire map/effort validation, immutable send digest, input caps,
+root grants, captured generation, reserve-before-turn and unknown behavior remain
+unchanged. Only already-correlated accepted origin grants the loaded bypass: a random
+native loaded SID or client flag does not. Revalidate origin/context/loaded/root proof
+under the existing message lock before reserve; call turn/start in same generation
+after schema2 reserve. Native/account drift or uncertainty leaves unknown/no retry.
+
+Indexed thread not currently loaded does not get this bypass; existing persistent
+resume path allowed only after separate fresh authoritative normal native metadata
+fullSID/root proof. A disappeared unmaterialized empty refuses send, preserves draft
+and accepted create receipt, never recreates or seeds it. Ordinary unindexed legacy
+send keeps existing behavior; malformed/missing parent of existing I does not permit
+fallback. There is no first-message title requirement or automatic user message.
+
+Lock order: creation/overlay origin namespace never acquires message receipt lock.
+Send releases initial origin lookup before entering message lock; under message
+lock it may acquire origin namespace for bounded proof, then release before turn.
+No origin→message wait is allowed. New origin metadata cannot extend send authority
+into another project/root/context. Same-host offline explicit first-send usability
+proof with dummy input is required separately before activated available UI; it must
+show initial thread/turns/list empty page (existing history reader), no resume,
+one explicit turn, expected SID/root, history after that turn and existing send
+receipt replay. Origin alone must never fabricate an empty history page.
+No account/network entitlement or real user history is claimed by an offline fixture.
 
 ## INV-WSESS-36: HTTP / broker exact contracts
 
@@ -269,8 +381,10 @@ close after explicit selection, not added to transient send status slot.
 
 Source-blind immutable RED precedes implementation: exact schemas/auth/Origin/CSRF,
 root/grants/context/generation, fixed real transport thread/start allowed, reserve
-before one dispatch, ACK correlation/fullUUID/root, no hidden turn/name/resume,
-unknown once-only/no guessing, partial C recovery/A corruption/parent loss, restart,
+before one dispatch, ACK correlation/fullUUID/root, no create-time turn/name/resume,
+unknown once-only/no guessing, partial C/I recovery/A corruption/parent loss, origin collision/index privacy,
+loaded-only overlay/native dedup/reload/unknown counts, explicit controlled-origin
+first-send without resume and ordinary-SID no bypass, restart,
 namespace capacity concurrency, foreign inode/temp protection, exact DTO privacy,
 UI project/A→B→A/no retry/close retention/unsupported vendor and legacy regressions.
 Separate different-model design/source review, exact CI and controlled own-fixture
