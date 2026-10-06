@@ -267,8 +267,13 @@ class ConfiguredCreateBrowser(unittest.TestCase):
         self.assertEqual(completed.value.status, 200)
         dto = completed.value.json()
         self.assertEqual(dto.get('status'), 'accepted')
-        self.assertEqual(dto.get('session', {}).get('sid'), CREATED)
+        session = dto.get('session', {})
+        self.assertEqual((session.get('sid'), session.get('project'), session.get('vendor'),
+                          session.get('context_mode')), (CREATED, 'demo', 'codex', 'configured'))
         self.page.get_by_role('heading', name='Новая сессия', exact=True).wait_for(state='visible')
+        selected_row = self.page.get_by_role('button').filter(has_text='Новая сессия').filter(has_text='Codex')
+        self.assertEqual(selected_row.count(), 1,
+                         'Accepted session row shows the local title fallback and Codex vendor badge')
         self.page.get_by_text('История пока недоступна', exact=True).wait_for(state='visible')
         self.assertEqual(self.page.locator('textarea').count(), 1,
                          'Only the explicit-message composer is available for the accepted empty thread')
@@ -317,9 +322,12 @@ class ConfiguredCreateBrowser(unittest.TestCase):
         alpha = self.page.get_by_role('button', name=re.compile('Alpha synthetic session'))
         self.assertEqual(alpha.count(), 1)
         alpha.click()
+        self.page.get_by_role('heading', name='Alpha synthetic session', exact=True).wait_for(state='visible')
         private_json(self.evidence / 'release-create.json', {'release': True})
         self.page.wait_for_timeout(150)
         self.assertEqual(alpha.count(), 1, 'Late A response must not replace the reselected session')
+        self.assertEqual(self.page.get_by_role('heading', name='Alpha synthetic session', exact=True).count(), 1)
+        self.assertEqual(self.page.get_by_role('heading', name='Новая сессия', exact=True).count(), 0)
         self.assertEqual(len([r for r in self.network if r.method == 'POST' and '/api/session-create' in r.url]), 1)
         self.assertEqual([c for c in self.calls() if c['method'] == 'create'][0]['operation_id'], payload['operation_id'])
 
