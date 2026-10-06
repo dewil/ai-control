@@ -21,6 +21,9 @@ OTHER = "22222222-2222-4222-8222-222222222222"
 UNKNOWN = "33333333-3333-4333-8333-333333333333"
 MALICIOUS = "44444444-4444-4444-8444-444444444444"
 NONSTRING = "55555555-5555-4555-8555-555555555555"
+CONSTRUCTOR = "66666666-6666-4666-8666-666666666666"
+PROTO = "77777777-7777-4777-8777-777777777777"
+TOSTRING = "88888888-8888-4888-8888-888888888888"
 
 
 class NativeRPC:
@@ -92,6 +95,9 @@ def browser_rows():
         {"sid": MALICIOUS, "title": "Malicious vendor metadata", "status": "idle",
          "vendor": '<img src=x onerror="window.__vendorProbe=1">'},
         {"sid": NONSTRING, "title": "Non-string vendor metadata", "status": "idle", "vendor": ["claude"]},
+        {"sid": CONSTRUCTOR, "title": "Prototype key constructor", "status": "idle", "vendor": "constructor"},
+        {"sid": PROTO, "title": "Prototype key proto", "status": "idle", "vendor": "__proto__"},
+        {"sid": TOSTRING, "title": "Prototype key toString", "status": "idle", "vendor": "toString"},
     ]
 
 
@@ -202,13 +208,14 @@ class SessionVendorBadgeBrowser(unittest.TestCase):
     def test_INV_WSESS_28_badges_are_allowlisted_and_do_not_change_selection_or_pagination(self):
         self.assertEqual(self.list_payload["has_more"], True)
         self.assertEqual([row["sid"] for row in self.list_payload["rows"]],
-                         [SID, OTHER, UNKNOWN, MALICIOUS, NONSTRING])
+                         [SID, OTHER, UNKNOWN, MALICIOUS, NONSTRING, CONSTRUCTOR, PROTO, TOSTRING])
         choices = self.page.locator(".session-choice")
         choices.first.wait_for()
-        self.assertEqual(choices.count(), 5)
+        self.assertEqual(choices.count(), 8)
         badges = self.page.locator(".session-choice .session-vendor-badge")
-        self.assertEqual(badges.count(), 5, "Each session choice needs a separate vendor badge span")
-        expected = ["Codex", "Claude", "Вендор неизвестен", "Вендор неизвестен", "Вендор неизвестен"]
+        self.assertEqual(badges.count(), 8, "Each session choice needs a separate vendor badge span")
+        expected = ["Codex", "Claude", "Вендор неизвестен", "Вендор неизвестен", "Вендор неизвестен",
+                    "Вендор неизвестен", "Вендор неизвестен", "Вендор неизвестен"]
         self.assertEqual([badge.inner_text() for badge in badges.all()], expected)
         self.assertTrue(all(badge.evaluate("el => el.tagName === 'SPAN'") for badge in badges.all()))
         malicious = choices.nth(3)
@@ -218,7 +225,7 @@ class SessionVendorBadgeBrowser(unittest.TestCase):
         self.assertIn("Malicious vendor metadata", malicious.inner_text())
         self.assertIn("Unknown synthetic provider", choices.nth(2).inner_text())
         self.assertEqual([choice.get_attribute("aria-pressed") for choice in choices.all()],
-                         ["false"] * 5)
+                         ["false"] * 8)
 
         self.page.wait_for_timeout(100)
         list_calls = [json.loads(line) for line in (self.evidence / "calls.jsonl").read_text().splitlines()]
