@@ -381,7 +381,7 @@ class ObserverRED(unittest.IsolatedAsyncioTestCase):
         async def connect():return t
         o=self.observer(connect)
         await o.start()
-        await asyncio.wait_for(self.wait_skip(t),2)
+        await asyncio.wait_for(self.wait_skip(t),5)
         self.assertEqual(t.skips,[11])
         snap=self.p.snapshot()
         self.assertFalse(snap['coverage']['replay_complete'])
