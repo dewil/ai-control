@@ -59,6 +59,13 @@ def stage_name(stage, project, operation_id):
     return token + '.json'
 
 
+def origin_name(context_id, root, sid):
+    return hashlib.sha256(canonical_json({
+        'kind': 'configured_session_origin', 'context_id': context_id,
+        'root': root, 'sid': sid,
+    })).hexdigest() + '.json'
+
+
 class FakeRPC:
     def __init__(self):
         self.context = {
@@ -100,6 +107,8 @@ class FakeRPC:
                 raise self.start_error
             root = params.get('cwd')
             return self.start_result or {'thread': {'id': SID, 'cwd': root}}
+        if method == 'thread/loaded/list':
+            return {'data': [SID], 'nextCursor': None}
         if method == 'thread/read':
             if self.read_results:
                 result = self.read_results.pop(0)
@@ -204,12 +213,18 @@ class ConfiguredCreateModuleContract(unittest.TestCase):
             'sid': SID, 'project': PROJECT, 'vendor': 'codex',
             'context_mode': 'configured', 'title': None,
         })
-        self.assertEqual(self.rpc.calls, [
-            ('thread/start', {'cwd': str(self.root)}, 7, 3),
-            ('thread/read', {'threadId': SID, 'includeTurns': False}, 7, 3),
-        ])
+        methods = [method for method, *_ in self.rpc.calls]
+        self.assertEqual(methods.count('thread/start'), 1)
+        self.assertEqual(methods.count('thread/loaded/list'), 1)
+        self.assertEqual(methods.count('thread/read'), 1)
+        self.assertTrue(all((transport, context) == (7, 3)
+                            for _, _, transport, context in self.rpc.calls))
+        self.assertIn(('thread/start', {'cwd': str(self.root)}, 7, 3), self.rpc.calls)
+        self.assertIn(('thread/read', {'threadId': SID, 'includeTurns': False}, 7, 3),
+                      self.rpc.calls)
         directory, records = self._records()
-        self.assertEqual(set(records), {stage_name(k, PROJECT, OPERATION) for k in 'RCA'})
+        self.assertEqual(set(records), {stage_name(k, PROJECT, OPERATION) for k in 'RCA'}
+                         | {origin_name(CONTEXT_ID, str(self.root), SID)})
         r = records[stage_name('R', PROJECT, OPERATION)]
         self.assertEqual(set(r), {'schema', 'kind', 'project', 'operation_id', 'context_id',
                                   'root', 'digest', 'status', 'sid', 'created'})
@@ -224,7 +239,7 @@ class ConfiguredCreateModuleContract(unittest.TestCase):
         c = records[stage_name('C', PROJECT, OPERATION)]
         a = records[stage_name('A', PROJECT, OPERATION)]
         self.assertEqual(set(c), {'schema', 'kind', 'record', 'parent'})
-        self.assertEqual(set(a), {'schema', 'kind', 'record', 'parent'})
+        self.assertEqual(set(a), {'schema', 'kind', 'record', 'parent', 'origin'})
         self.assertEqual((c['schema'], c['kind']), (1, 'configured_create_candidate'))
         self.assertEqual((a['schema'], a['kind']), (1, 'configured_create_accepted'))
         self.assertEqual(c['record']['status'], 'unknown')
@@ -235,6 +250,14 @@ class ConfiguredCreateModuleContract(unittest.TestCase):
             self.assertEqual(c['record'][field], r[field])
             self.assertEqual(a['record'][field], r[field])
         self.assertEqual(a['record']['sid'], SID)
+        origin = records[origin_name(CONTEXT_ID, str(self.root), SID)]
+        self.assertEqual(set(origin), {'schema', 'kind', 'project', 'operation_id',
+                                       'context_id', 'root', 'sid', 'created', 'parent'})
+        self.assertEqual((origin['schema'], origin['kind']), (1, 'configured_session_origin'))
+        self.assertEqual(origin['created'], r['created'])
+        self.assertEqual(origin['parent']['filename'], stage_name('C', PROJECT, OPERATION))
+        self.assertEqual(set(a['origin']), {'filename', 'dev', 'ino', 'ctime_ns', 'sha256'})
+        self.assertEqual(a['origin']['filename'], origin_name(CONTEXT_ID, str(self.root), SID))
         for stage, wrapper, parent_stage in (('C', c, 'R'), ('A', a, 'C')):
             parent = wrapper['parent']
             self.assertEqual(set(parent), {'filename', 'dev', 'ino', 'ctime_ns', 'sha256'})
@@ -327,7 +350,8 @@ class ConfiguredCreateModuleContract(unittest.TestCase):
             self.assertIsNotNone(replay)
             self.assertEqual(replay.record, reservation.record)
             candidate = store.candidate(base, reservation, SID, deadline)
-            accepted = store.accept(base, candidate, deadline)
+            store.origin(base, reservation, deadline)
+            accepted = store.accept(base, reservation, deadline)
             self.assertEqual(accepted.record['status'], 'accepted')
             self.assertEqual(accepted.record['sid'], SID)
             with self.assertRaises((AttributeError, TypeError)):
@@ -337,16 +361,21 @@ class ConfiguredCreateModuleContract(unittest.TestCase):
             self.assertNotIn(str(store_path), repr(accepted))
         files = {path.name: json.loads(path.read_text(encoding='utf-8'))
                  for path in store_path.glob('*.json')}
-        self.assertEqual(set(files), {stage_name(k, PROJECT, OPERATION) for k in 'RCA'})
+        self.assertEqual(set(files), {stage_name(k, PROJECT, OPERATION) for k in 'RCA'}
+                         | {origin_name(CONTEXT_ID, root, SID)})
         self.assertEqual(files[stage_name('R', PROJECT, OPERATION)]['digest'],
                          expected_digest(PROJECT, OPERATION, CONTEXT_ID, root))
         c = files[stage_name('C', PROJECT, OPERATION)]
         a = files[stage_name('A', PROJECT, OPERATION)]
+        origin = files[origin_name(CONTEXT_ID, root, SID)]
         self.assertEqual(c['record']['status'], 'unknown')
         self.assertEqual(c['record']['sid'], SID)
         self.assertEqual(a['record']['status'], 'accepted')
         self.assertEqual(a['parent']['filename'], stage_name('C', PROJECT, OPERATION))
         self.assertEqual(c['parent']['filename'], stage_name('R', PROJECT, OPERATION))
+        self.assertEqual(origin['created'], files[stage_name('R', PROJECT, OPERATION)]['created'])
+        self.assertEqual(origin['parent']['filename'], stage_name('C', PROJECT, OPERATION))
+        self.assertEqual(a['origin']['filename'], origin_name(CONTEXT_ID, root, SID))
         self.assertTrue(all(stat.S_IMODE(path.stat().st_mode) == 0o600
                             for path in store_path.glob('*.json')))
 
@@ -371,7 +400,8 @@ class ConfiguredCreateModuleContract(unittest.TestCase):
             self.error_code(lambda: store.reserve(
                 base, PROJECT, 'd' * 64, str(self.root), OPERATION, deadline), 'invalid_request')
             candidate = store.candidate(base, reservation, SID, deadline)
-            accepted = store.accept(base, candidate, deadline)
+            store.origin(base, reservation, deadline)
+            accepted = store.accept(base, reservation, deadline)
         (store_path / stage_name('C', PROJECT, OPERATION)).unlink()
         with store.locked(time.monotonic() + 4) as base:
             self.error_code(lambda: store.accept(base, accepted, time.monotonic() + 4),
@@ -438,11 +468,13 @@ class ConfiguredTransportContract(unittest.TestCase):
             'clientInfo': {'name': 'ai_control_web', 'version': '0.1'},
             'capabilities': {'experimentalApi': True},
         }), ('thread/start', {'cwd': root})])
-        forbidden = ('thread/resume', 'thread/name/set', 'turn/start', 'account/read',
-                     'config/read', 'thread/list')
-        self.assertTrue(set(forbidden).isdisjoint(InteractiveRPC.METHODS))
-        with self.assertRaises(ValueError):
-            rpc.call('thread/resume', {'threadId': SID}, timeout=1)
+        existing_methods = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list',
+                            'thread/resume', 'turn/start', 'model/list', 'thread/name/set'}
+        self.assertEqual(set(InteractiveRPC.METHODS), existing_methods | {
+            'thread/start', 'thread/loaded/list'})
+        for unsupported in ('account/read', 'config/read'):
+            with self.assertRaises(ValueError):
+                rpc.call(unsupported, {}, timeout=1)
 
 
 if __name__ == '__main__':
