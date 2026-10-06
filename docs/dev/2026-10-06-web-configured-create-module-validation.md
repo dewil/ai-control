@@ -39,6 +39,8 @@ socket0600, missing-status sentinel and identity-error expectations. Test SHAs:
 Existing socket15/model19/rename21 and transport/crash2 PASS; packaging106 assertions,
 0FAIL; git diff --check PASS. Existing source bytes stayed unchanged through final
 new-module hardening, so those relevant regression proofs remain applicable.
+Separate root frozen-snapshot check:23 PASS (2.237s) + transport2 PASS (0.161s);
+source and all five relevant test-file SHA guards unchanged before/after.
 Fixtures private /var/tmp, isolated venv; author did not access real native/auth/
 config/account/user history. Separate independent QA and exact CI remain gates.
 
