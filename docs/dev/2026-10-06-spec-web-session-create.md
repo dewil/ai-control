@@ -1,8 +1,10 @@
 # Создание пустой сессии из веб-панели
 
 Owner CONTROL-WEB-SESSIONS; account admission — CONTROL-PROVIDER-ACCOUNTS.
-Статус: draft, docs-only. Production create capability BLOCKED до доказанного
-account-bound interactive adapter/host; independent RED и реализация не начаты.
+Статус полного create: DRAFT/unverified. Production create capability BLOCKED до
+доказанного account-bound interactive adapter/host. Чистый storage foundation
+реализован по independent RED и прошёл different-model source review; [validation](2026-10-06-web-create-store-validation.md).
+HTTP/UI/host/native create и activation не реализованы этим foundation срезом.
 Общий исходный инвариант INV-WSESS-29 сохраняется; детализация резервирует
 INV-WSESS-31..33. Наличие кнопки/каталога не объявляет создание работающим.
 
