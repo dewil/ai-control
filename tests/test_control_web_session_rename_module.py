@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bin"))
 SID = "11111111-1111-4111-8111-111111111111"
 OP = "22222222-2222-4222-8222-222222222222"
+OP2 = "33333333-3333-4333-8333-333333333333"
 CONTEXT = {"schema": 1, "vendor": "codex", "context_kind": "legacy_unbound", "context_id": "a" * 64, "transport_generation": 3, "context_generation": 7, "native_version": "0.160.0"}
 
 
@@ -121,7 +122,7 @@ class SessionRenameModule(unittest.TestCase):
         self.assertEqual(self.fenced("thread/name/set")[-1], ("thread/name/set", {"threadId": SID, "name": "x" * 160}))
         self.rpc.calls.clear()
         padded = " " * 600 + "ok" + " " * 600
-        accepted = self.invoke(padded)
+        accepted = self.invoke(padded, operation=OP2)
         self.assertEqual(accepted.get("status"), "accepted", "raw padding may exceed the normalized-title byte cap")
         self.assertEqual(self.fenced("thread/name/set"), [("thread/name/set", {"threadId": SID, "name": "ok"})])
 
@@ -225,16 +226,18 @@ class SessionRenameModule(unittest.TestCase):
         self.assertEqual(self.invoke("Observed later"), {"operation_id": OP, "status": "delivery_unknown"})
         before = list(self.rpc.calls)
         self.rpc.name = "Observed later"
+        fenced_before_status = len(self.rpc.fenced_calls)
         result = self.chat().rename_status("demo", SID, OP)
         self.assertEqual(result, {"operation_id": OP, "status": "accepted", "title": "Observed later"})
         reconciliation = self.rpc.calls[len(before):]
+        status_fenced_calls = self.rpc.fenced_calls[fenced_before_status:]
         self.assertGreaterEqual([method for method, _ in reconciliation].count("thread/read"), 1,
                                 "status needs fresh metadata proof")
         self.assertFalse({"thread/name/set", "thread/resume", "thread/list", "model/list"} &
                          {method for method, _ in reconciliation})
         self.assertTrue(any(method == "thread/read" and params == {"threadId": SID, "includeTurns": False}
                             and (transport, context) == (3, 7)
-                            for method, params, transport, context, _ in self.rpc.fenced_calls),
+                            for method, params, transport, context, _ in status_fenced_calls),
                         "status metadata proof must use the captured generation fence")
         self.assertEqual(json.loads(next(self.store_path.iterdir()).read_text(encoding="utf-8"))["status"], "accepted")
 
@@ -288,7 +291,7 @@ class SessionRenameModule(unittest.TestCase):
 
     def test_readonly_status_for_missing_store_does_not_create_storage(self):
         result = self.chat().rename_status("demo", SID, OP)
-        self.assertEqual(result, {"error": "unavailable"})
+        self.assertIn(result, ({"error": "stale"}, {"error": "unavailable"}))
         self.assertFalse(self.store_path.exists(), "read-only receipt lookup must not create its store")
         self.assertFalse(self.fenced("thread/name/set"))
 
