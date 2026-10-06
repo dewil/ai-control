@@ -32,6 +32,7 @@ Native observer, account attestation, session linkage, UI и writers не вхо
 
 ```
 OwnerProjectMap(config_path, *, runner=None, monotonic=None)
+OwnerRegisteredGrants(*, owner_only=True)
 RegistryAttentionView(registry, *, projects, grants, monotonic=None)
 RegistryAttentionSource(view, *, monotonic=None, wall_clock=None)
 ```
@@ -52,15 +53,21 @@ identity — opaque64lowerhex digest текущего config snapshot; entries �
 `current` возвращает exact bool, подтверждая ту же карту, все root identities и
 её pathname binding. Capture сам по себе не grant и не native proof.
 
-`grants` реализует `capture(*, deadline)` и `current(capture, *, deadline)`.
-Frozen capture: exact `principal, owner_only, epoch, revision, projects`;
-principal в этом срезе ровно `owner`, owner_only exact True, epoch32lowerhex,
-revision plain int>=0, projects — immutable уникальные registered aliases.
-Лишь trusted owner wiring может выдавать этот capture из нынешней single-owner
-конфигурации и current allowed-project policy. Foreign/delegate capture и отсутствие
-доказательства single-owner deployment отвергаются. Caller не может передать
-principal/owner flag/grant. Это новая authority seam, не существующий multiuser API.
-Изменение grants увеличивает revision; `current` проверяет действующую authority.
+`grants` реализует `capture(project_capture, *, deadline)` и
+`current(grant_capture, project_capture, *, deadline)`. Используется ТОТ ЖЕ
+immutable project capture; никаких второго map parse или дополнительных FS reads.
+Frozen grant capture: exact `principal, owner_only, epoch, revision, projects`;
+epoch32lowerhex, revision plain int>=0, projects — immutable sorted unique aliases.
+Default `OwnerRegisteredGrants(owner_only=True)` выдаёт principal='owner', exact
+owner_only=True, epoch/revision из project_capture, projects=все CURRENT validated
+registered aliases из entries. Это ровно нынешняя legacy single-owner политика
+SessionChat._names, НЕ воображаемые subscriptions/user ACL. `current` сравнивает
+переданные captures, owner mode и alias set; live map/root revocation проверяет
+view.current через projects.current. False owner mode даёт non-owner denial,
+не permission fallback. Trusted fake grants могут моделировать изменение grant
+revision/subset и revocation через тот же capture/current interface.
+Caller не может передать principal/owner flag/grant; новая dependency seam не
+создаёт multiuser API, native/account proof или новую группу пользователей.
 
 View реализует принятый composer protocol:
 `snapshot(*,deadline)`, `resolve_project(project,view_snapshot,*,deadline)`,
@@ -75,15 +82,24 @@ safe unavailable: никаких wait, retry, fresh timeout или source/view �
 GET: fresh instance на каждый запрос запрещён, иначе потеряются epoch/revision/retention.
 Чистый AttentionOverview API не меняется; его mutable fields не объявляются thread-safe.
 
-Private view capture имеет guard identity текущей admitted operation (и thread),
-не HTTP token. Его нельзя автоматически обновить или переиспользовать другой
-операцией. Source получает только тот же view и текущий guarded capture, без
-независимого map выбора. View/source direct synthetic вызовы требуют того же
-admitted-operation guard; штатный публичный способ fixture — drive вызова через
-RegistryBackend.attention_snapshot с injected dependencies. Вызов вне guard или
-из чужой operation немедленно safe unavailable без FS/capture mutation; отдельный
-view.snapshot не является admission. Внутреннее представление guard не меняет
-ViewSnapshot DTO и не даёт native/auth authority.
+View/source методы — TRUSTED DI, не HTTP endpoints. Production publisher только
+RegistryBackend под whole-call lock; другой production caller не меняет capture.
+Sequential synthetic `view.snapshot(deadline=d)` затем `source.snapshot(deadline=d)`
+разрешены с тем же active capture и ещё живым shared deadline/budget. Source не
+начинает новый capture и не делает автоматический view.snapshot. Если capture нет,
+source возвращает unavailable diagnostic без FS reads. Скрытый admission API,
+thread tokens и обязательный private guard не вводятся.
+
+VIEW-FIRST порядок: projects capture, registry root anchor и grants authority
+валидируются до вызова task_source. Missing/invalid map, registry authority failure
+или grants IO/validation failure => view raises safe RuntimeError без raw details;
+composer возвращает {'error':'unavailable'}, HTTP503; source НЕ вызывается.
+Explicit foreign/delegate/non-owner grant capture => denied validated view,
+composer internal view=None => {'error':'forbidden'}, HTTP403; source НЕ вызывается.
+Для существующего pure composer denial кодируется exact ViewSnapshot с
+owner_only=False (остальные поля valid), не literal snapshot return None: текущий
+composer сначала валидирует DTO и лишь затем сводит non-owner view к None.
+View/grants отказ не маскируется source incomplete/coverage.scope=none.
 
 `resolve_project` принимает registered alias, возвращает exact ProjectBinding либо
 None. `authorize` exact bool подтверждает alias/root из той же карты и grants;
@@ -195,15 +211,18 @@ invalid_source). Нельзя адаптировать полный task DTO и�
 Optional отсутствие questions/done — допустимо; malformed существующий файл не
 считается отсутствующим. Недоступная root/map/grant authority отказывает целиком.
 
-Source error snapshot сохраняет exact schema1 source=task_registry, records=[],
-epoch=None/revision=0 до получения registry anchor; если map capture отсутствует,
-coverage.scope=none и registry_epoch/registry_revision=None;
-complete=False, coverage.global_complete=False, observed_at=None; state/reason
-unavailable/unavailable для authority/read failure, incomplete/limit для budget,
+После VALID admitted view registry-reader failure может вернуть schema1
+source=task_registry, scope=task_registry с registry epoch/revision из valid map,
+records=[], complete=False, coverage.global_complete=False, observed_at=None;
+state/reason unavailable/unavailable для read failure, incomplete/limit для budget,
 incomplete/binding_incomplete для excluded provenance, incomplete/invalid_source
-для malformed record. Если валидные другие записи прочитаны в coherent capture,
-они допускаются при incomplete и fresh observed_at, но не как полный итог.
-Нельзя смешивать записи разных source epochs.
+для malformed record. Source epoch берётся из уже закреплённого registry anchor.
+Если валидные другие записи прочитаны в coherent capture, они допускаются при
+incomplete и fresh observed_at, но не как полный итог. Нельзя смешивать source epochs.
+Только прямой trusted diagnostic source call БЕЗ active view capture допускает
+scope=none, epoch=None/revision=0 и registry_epoch/registry_revision=None,
+records=[], observed_at=None, unavailable/unavailable. Это НЕ endpoint outcome
+для missing/invalid map: endpoint прекращается на view-first gate выше.
 
 Coverage: scope=task_registry, registry epoch/revision из project map,
 context_ids=[], route_ids=[], session_set_revision=None, supported_methods=[].
@@ -229,9 +248,10 @@ source incomplete/limit либо safe unavailable; никакой silent complet
 
 ## Broker, HTTP и точная навигация
 
-`RegistryBackend(..., attention=None)` — optional trusted DI; отсутствие даёт
+`RegistryBackend(..., attention=None, owner_only=True)` — optional trusted DI; отсутствие даёт
 `{'error':'unavailable'}`. `attention_snapshot()` вызывает лишь настроенный
-AttentionOverview, не обычный full snapshot. `SocketBackend.attention_snapshot()`
+persistent AttentionOverview, не обычный full snapshot; owner_only должен быть
+exact True, иначе forbidden до projection/source. `SocketBackend.attention_snapshot()`
 посылает exact `{'op':'attention_snapshot'}`. Extra/duplicate keys, native selectors,
 principal/project/path/context flags — invalid_request до dispatch. Ответ проверяется
 по strict safe schema composer (включая caps/unique IDs/count consistency), ошибка
@@ -244,7 +264,14 @@ foreign Origin/foreign-or-delegate principal403 forbidden, invalid schema/absenc
 configured capability503 unavailable. Read-only GET не требует mutation CSRF и
 не меняет старые mutation gates. Broker peer UID остаётся exact allowed_uid,
 но peer UID сам НЕ web principal. Нынешний frontend имеет одну owner credential;
-операция допустима только при этом owner-only wiring. Если появится delegate/multiuser
+операция допустима только при этом owner-only wiring. Current password+TOTP —
+одна owner credential, не user ACL. Planned signature:
+`create_app(config, backend, clock=None, *, owner_only=True)`; trusted flag должен
+быть exact True для attention, login private session record получает principal='owner'.
+GET проверяет current session principal exact 'owner' И owner_only exact True до
+backend; иначе403. HTTP не принимает principal/flag в query/body/header. Остальные
+маршруты/login gates сохраняются; False mode отключает attention, не превращает
+его в delegate capability. Если появится delegate/multiuser
 контур, endpoint обязан отказать до forwarding, пока отдельная principal-forwarding
 граница не реализована/проверена. Нет request-controlled owner flag или bypass.
 
@@ -259,6 +286,27 @@ capture вне attention lock. Concurrent task snapshot не подменяет 
 match запрещён. Mismatch/missing current key — stale, никогда focus recreated agent.
 Чтение/переход не отвечает на вопрос и не принимает result. UI будет отдельным RED.
 
+## Конкретная owner CLI wiring и provisioning
+
+В owner broker CLI создаётся ОДИН комплект map → grants → view → source →
+persistent AttentionOverview(task_source, view=view, activity_source=None,
+callback_source=None) → RegistryBackend(..., attention=overview, owner_only=True).
+Внутри attention_snapshot backend держит whole-call nonblocking lock. Нет new
+composer per GET и нет отдельного pre-capture вне пятисекундного composer budget.
+Frontend create_app имеет trusted owner_only=True только в нынешней single-owner
+wiring; будущий delegate mode MUST выключить capability до principal bridge.
+
+Config pathname выбирается owner-side ровно из AI_RC_PROJECTS_FILE, если переменная
+задана, иначе Path.home()/'.ai-control/projects.yaml'; абсолютный путь получается
+existing owner cwd resolution (os.path.abspath). Browser/broker request не выбирает
+его; env/config contents не печатаются. Captured pathname binding и current FD
+проверки остаются обязательны, leaf symlink/writable config fail closed.
+Root read-only metadata evidence: нынешний server default projects.yaml — owner
+regular file mode0664. Без чтения contents это означает, что attention default map
+пока откажет по mode&0o022. Обычный OWNER provisioning chmod0644 требуется ПЕРЕД
+attention activation; этот документ не выполняет chmod/SSH и не заявляет installation.
+Нынешний configured session create не меняется и не закрывается этим attention gate.
+
 ## Проверки и незакрытые зависимости
 
 До реализации: different-model DESIGN; independent immutable synthetic RED для
@@ -271,7 +319,11 @@ source; второй attention call сразу unavailable, source/view call cou
 первого не изменяются, deadline не продлевается; первый затем выдаёт валидный
 снимок. Concurrent /api/tasks task_key calculation не изменяет attention capture.
 Последующий uncontended GET использует тот же composer epoch/version/retention,
-exception освобождает admission lock, direct unguarded view/source calls отказывают.
+exception освобождает admission lock. Sequential direct synthetic view/source
+с valid capture работает; source без capture — diagnostic unavailable без IO.
+Missing/invalid map/registry/grant authority —503 и zero source calls;
+explicit non-owner —403 и zero source calls. Default owner grants включают ровно
+current registered aliases, без второго map parse; revocation mid-read убирает labels.
 Затем GREEN, scoped regressions, actual different-model SOURCE и exact CI.
 Ни adapter source, ни installed acceptance этим draft не подтверждены.
 

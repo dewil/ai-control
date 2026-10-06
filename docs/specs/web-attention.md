@@ -36,7 +36,9 @@ Atomic registered map/root/current owner grants и явная Control incarnatio
 обязательны; private projection context/route не являются native identity.
 Production broker сериализует ВЕСЬ persistent composer.snapshot неблокирующим
 process-local lock: contention немедленно unavailable без нового deadline;
-/api/tasks task_key не меняет attention capture. Peer UID не заменяет web principal; foreign/delegate requests отказывают до
+/api/tasks task_key не меняет attention capture. View-first authority failure —503
+до source; явный non-owner —403 до source. Default owner grants — все current
+registered aliases одной captured карты, не user ACL. Peer UID не заменяет web principal; foreign/delegate requests отказывают до
 отдельного principal-forwarding контракта. Installation требует отдельной
 reviewed signed-helper closure, composer вне текущего fixed14 allowlist. INV-WSESS-31..33 сюда
 не входят и сохранены для отдельного создания сессий.
