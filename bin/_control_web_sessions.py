@@ -925,8 +925,13 @@ class SessionChat:
                 page_projection = []
                 for entry in page['data']:
                     self._remaining()
-                    _need(type(entry) is dict and set(entry) == {'turnId', 'item'}
+                    _need(type(entry) is dict and {'turnId', 'item'} <= set(entry)
+                          <= {'turnId', 'item', 'startedAtMs', 'completedAtMs'}
                           and entry['turnId'] == turn['id'])
+                    for timing in ('startedAtMs', 'completedAtMs'):
+                        value = entry.get(timing)
+                        _need(value is None or type(value) is int
+                              and -(2 ** 63) <= value < 2 ** 63)
                     item = entry['item']
                     _need(type(item) is dict and _identity(item.get('id'))
                           and item['id'] not in item_ids and type(item.get('type')) is str)
