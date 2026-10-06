@@ -130,9 +130,13 @@ def main():
         rpc = InteractiveRPC(args.codex_socket if args.codex_socket is not None else socket_path())
         # Provision the private owner-local parent before start; the receipt leaf
         # is lazy. Owner credentials/history never enter the frontend account.
-        sessions = SessionChat(rpc, ProjectPaths(), ProjectNames(), args.session_receipts)
+        from _control_web_configured_create import ConfiguredSessionCreate
+        project_paths, project_names = ProjectPaths(), ProjectNames()
+        creator = ConfiguredSessionCreate(rpc, project_paths, project_names, args.session_receipts)
+        sessions = SessionChat(rpc, project_paths, project_names, args.session_receipts,
+                               configured_creator=creator)
         try:
-            serve_broker(args.socket, RegistryBackend(args.registry, args.bin_dir, sessions=sessions), args.allowed_uid)
+            serve_broker(args.socket, RegistryBackend(args.registry, args.bin_dir, sessions=sessions, configured_creator=creator), args.allowed_uid)
         finally:
             rpc.close()
 
