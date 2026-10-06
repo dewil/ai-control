@@ -808,16 +808,16 @@ async function attentionFetch(){
   attentionNavigation++;if(attentionNavFlight){attentionNavFlight.abort();attentionNavFlight=null;}if(attentionTimer!==null)clearTimeout(attentionTimer);attentionTimer=null;
   const auth=chatAuthGeneration,scope=attentionScope,sequence=++attentionSequence,controller=new AbortController();attentionFlight=controller;
   const current=()=>Boolean(csrf&&auth===chatAuthGeneration&&scope===attentionScope&&sequence===attentionSequence&&attentionFlight===controller&&document.visibilityState==='visible');
-  const focused=attentionFocusKey();const timeout=setTimeout(()=>controller.abort(),6000);$('attention-refresh').disabled=true;$('attention-status').textContent='Обновляем обзор…';attentionControls();
+  const focused=attentionFocusKey();let renderedFocus=null,focusMoved=false;const focusChanged=()=>{focusMoved=true;};document.addEventListener('focusin',focusChanged);const timeout=setTimeout(()=>controller.abort(),6000);$('attention-refresh').disabled=true;$('attention-status').textContent='Обновляем обзор…';attentionControls();
   try{const response=await fetch('/api/attention',{credentials:'same-origin',signal:controller.signal});if(!current())return;if(response.status===401){signedOut();return;}if(!response.ok)throw Error('unavailable');const data=attentionValid(await attentionRaw(response));if(!current()||controller.signal.aborted)return;const projection=attentionIdentity(data),old=attentionData;
     if(old&&old.epoch===data.epoch&&(data.revision<old.revision||(data.revision===old.revision&&projection!==attentionProjection)))throw Error('revision');
     const changed=!old||old.epoch!==data.epoch||old.revision!==data.revision;
     if(old&&old.epoch!==data.epoch){for(const group of Object.keys(attentionLimits))attentionLimits[group]=6;const focused=document.activeElement;if($('attention-overview').contains(focused))focused.blur();}
-    attentionData=data;attentionProjection=projection;attentionAccepted=performance.now();if(changed)attentionRender(focused);
+    document.removeEventListener('focusin',focusChanged);if(changed)renderedFocus=attentionFocusKey()||(!focusMoved?focused:null);attentionData=data;attentionProjection=projection;attentionAccepted=performance.now();if(changed)attentionRender(renderedFocus);
     $('attention-source-status').textContent=(data.sources.task_registry.state==='fresh'?'Задачи: свежие данные':'Задачи: некоторые данные пока недоступны')+' · Наблюдение за сессиями пока недоступно · Сигналы сессий пока недоступны';
     $('attention-status').textContent='Показаны доступные данные'+(Object.values(data.sources).some(s=>['stale','incomplete','unavailable'].includes(s.state))?' · Некоторые данные пока недоступны':'');attentionAge();
   }catch(_){if(current()){attentionClear();$('attention-status').textContent='Обзор пока недоступен';}}
-  finally{clearTimeout(timeout);if(current()){attentionFlight=null;$('attention-refresh').disabled=false;attentionControls();attentionRestoreFocus(focused);attentionTimer=setTimeout(attentionFetch,5000);}}
+  finally{document.removeEventListener('focusin',focusChanged);clearTimeout(timeout);if(current()){attentionFlight=null;$('attention-refresh').disabled=false;attentionControls();attentionRestoreFocus(renderedFocus||(!focusMoved?focused:null));attentionTimer=setTimeout(attentionFetch,5000);}}
 }
 async function attentionNavigate(reason,button){
   if(button.disabled||!attentionFresh()||attentionFlight||attentionNavFlight)return;
