@@ -137,8 +137,8 @@ class PoisonIntentContract(unittest.TestCase):
                 lease, self.scope, deadline=110.0
             ) as guard:
                 guard.begin_enqueue()  # The one claimed external effect is local only.
-                guard.confirm()  # Synthetic known outcome; no native transport.
                 self.poison_on_other_thread_while_guard_held()
+                guard.confirm()  # Claimed effect may record its known outcome.
                 self.denied(lambda: self.coordinator.publish_delivery(
                     lease, guard=guard, deadline=110.0
                 ))
