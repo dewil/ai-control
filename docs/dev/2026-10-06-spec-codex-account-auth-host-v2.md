@@ -364,6 +364,14 @@ placed in Delivery/context, or included in exceptions/metrics.
 - `ReservationGuard(attempt_id,validator_id,lease)` is an opaque one-attempt capability
   created before the source reserve call. It remains active until proved pre-write
   abandonment or successful terminal completion.
+- `ReserveOutcome(attempt_id,disposition)` is an opaque synthetic source result with
+  exactly three dispositions: `reserved`, `not_written`, or `unknown`. The first means
+  the exact attempt record is durable after successful file and directory fsync;
+  `not_written` means positive proof that journal publication/replace was never
+  attempted and could not have occurred; `unknown` covers every outcome where
+  publication may have occurred without confirmed durability, including rename success
+  followed by directory-fsync failure. Any raised exception or malformed/mismatched
+  result is treated as `unknown`, regardless of its text.
 - `Delivery(delivery_id,context,channel,stamp)` is an opaque in-process capability,
   never a public DTO. Only the validator-owned delivery factory constructs it, using
   the exact final `AuthorityStamp` returned by terminal completion; the provisional
@@ -384,7 +392,8 @@ min(caller deadline, receipt+9s); initial admission is min(caller deadline, now+
 
 Trusted dependency protocols use the same absolute deadline: source methods are
 `open_selected(ctx,*,deadline)`, `validate_current(ctx,lease,*,deadline)`,
-`read_refresh(lease,*,deadline)`, `reserve_attempt(lease,ctx,attempt_id,*,deadline)`,
+`read_refresh(lease,*,deadline)`,
+`reserve_attempt(lease,ctx,attempt_id,*,deadline)->ReserveOutcome`,
 `commit_rotation(lease,ctx,attempt_id,new_refresh_token,*,deadline)`,
 `finish_confirmed(lease,ctx,attempt_id,*,deadline)`,
 `quarantine_unknown(lease,ctx,attempt_id,code,*,deadline)`, and
@@ -470,12 +479,21 @@ Lease opaque repr=False, same owner account key/reference/principal/generation.
 `claim_reservation(lease,validator_id,attempt_id,*,deadline)->ReservationGuard`
 atomically records reservation-in-flight under the intent mutex before source
 `reserve_attempt`; it releases that mutex before source I/O. A proved definitely-not-
-written reserve calls `abandon_reservation(lease,*,guard)` to clear only that in-flight
-record; uncertain outcomes poison and retain it. A successful reserve is marked durable
-by `mark_reservation_durable(lease,*,guard)` under the mutex before OAuth may start.
-This transition refuses if close/poison already won. Close before the claim remains local and
-prevents source reserve. Close after the claim poisons because durable reserve may have
-reached disk, even if its return is pending. Poison remains monotonic.
+written source result is handled by `abandon_reservation(lease,*,guard,outcome)->None`;
+it accepts only a matching `ReserveOutcome(...,not_written)`, which proves publication
+was never attempted, atomically clears only the in-flight marker if close/poison has not
+won, and never clears poison. A matching `ReserveOutcome(...,reserved)` is marked durable by
+`mark_reservation_durable(lease,*,guard,outcome)->None` under the mutex; it requires the
+same attempt id and `reserved` disposition and refuses if close/poison already won.
+Unknown, malformed, mismatched, or exceptional results poison and retain the claimed
+attempt. `begin_exchange(lease,validator_id,*,guard,deadline)->None` then atomically
+claims the one OAuth exchange for that exact active durable guard under the intent mutex and
+releases it before network I/O. If close/poison wins before this claim, no OAuth starts;
+if the exchange claim wins first, a concurrent close poisons the account but permits
+only that already-claimed exchange to reach its bounded outcome. Poison remains monotonic
+and blocks rotation commit and every native effect. Close before reservation claim stays
+local and prevents source reserve. Close after reservation claim but before the exchange
+claim poisons, including while source reserve is pending.
 `publish_delivery(lease,*,guard,deadline)->ProvisionalPublication`: after a known
 transport outcome, provisionally increments credential_generation under the exact active
 terminal guard and, under the per-account intent mutex, atomically checks poison and
@@ -511,7 +529,9 @@ explicit recovery/persistent coordinator wiring requires separate reviewed slice
 | --- | --- | --- | --- | --- |
 | Before reservation claim: stale/expired callback or authority | authority_stale | No | offending channel fails; other current survives | no source reserve/exchange; fresh valid scope allowed |
 | Lock budget exhausted before reservation claim | refresh_busy | No | existing valid retained | fresh explicit call allowed |
-| After reservation claim or durable reserve but before OAuth send, including close/stale/deadline | refresh_unknown | Yes | all local deliveries fail; source attempt unresolved | refuse; no retry |
+| Matching `not_written` result and successful abandonment, with no close/poison race | refresh_busy | No | existing valid retained | fresh explicit call allowed |
+| Unknown/malformed/mismatched/exceptional reserve result, or close/poison after claim before exchange claim | refresh_unknown | Yes | all local deliveries fail; source attempt unresolved | refuse; no retry |
+| Durable reserve followed by stale authority/deadline before exchange claim | refresh_unknown | Yes | all local deliveries fail; source attempt unresolved | refuse; no retry |
 | Provider definitely rejected grant | auth_expired or auth_unavailable | Yes | all account deliveries invalid | refused; no retry |
 | OAuth may be sent, lost response/body/deadline | refresh_unknown | Yes | all invalid | refused |
 | 2xx malformed/missing ID/oversize/invalid JWT | auth_response_invalid | Yes | all invalid; no native delivery | refused |
@@ -607,11 +627,13 @@ claimed effect without successful terminal completion sets poison intent BEFORE 
 bounded durable quarantine attempt and before unlock; current/future writers are denied
 locally even if that attempt times out. Repeated close is idempotent.
 Never extend deadline. RED: close before reservation claim stays local and prevents
-source reserve; claim-first/close-second poisons and prevents OAuth even if source
-reserve is still returning; close after durable reserve and before OAuth yields zero
-OAuth plus poison; close-before-completion refuses, while completion-before-close may
-return a Delivery that is already non-current; no success linearizes after close; no
-duplicate delivery; A/B independent.
+source reserve; close after reservation claim while source reserve is pending poisons,
+so every later reserve outcome causes zero OAuth; close after durable reserve and before
+the atomic exchange claim yields zero OAuth plus poison. If the exchange claim wins
+first, close poisons while only that bounded exchange resolves and every later effect is
+refused. Close-before-completion refuses, while completion-before-close may return a
+Delivery that is already non-current; no success linearizes after close; no duplicate
+delivery; A/B independent.
 FIRST unit parses JWT claims/header from SAME fresh directly authenticated TLS
 response under OIDC3.1.3.7, no standalone JWS crypto verifier. Trusted DI tests may
 use RS256 header/nonempty structural base64url signature with typed fake TLSExchange;
@@ -718,8 +740,9 @@ or supported/admit flag in this codeunit.
 
 Add one UUIDv4 `attempt_id` per initial admission or captured refresh callback.
 Exact source protocol is `open_selected(ctx,*,deadline)`, `validate_current(ctx,lease,
-*,deadline)`, `read_refresh(lease,*,deadline)`, `reserve_attempt(lease,ctx,attempt_id,
-*,deadline)`, `commit_rotation(lease,ctx,attempt_id,new_refresh_token,*,deadline)`,
+*,deadline)`, `read_refresh(lease,*,deadline)`,
+`reserve_attempt(lease,ctx,attempt_id,*,deadline)->ReserveOutcome`,
+`commit_rotation(lease,ctx,attempt_id,new_refresh_token,*,deadline)`,
 `finish_confirmed(lease,ctx,attempt_id,*,deadline)`, `quarantine_unknown(lease,ctx,
 attempt_id,code,*,deadline)`, and `close_selected(lease)`. An adapter to the existing
 refresh slot maps these operations to `reserve_attempt`, `commit_rotation`, and
@@ -730,10 +753,26 @@ worker. Every operation uses the same absolute deadline.
 
 Required sequence is: validate/capture; open selected authority; read selected
 refresh token; atomically claim the exact reservation under the coordinator intent
-mutex; call source `reserve_attempt` without holding that mutex; record its durable
-success under the mutex; only then call OAuth. A close that wins before the claim
-prevents the source call; a claim that wins first makes a concurrent close poison the
-account and prevents OAuth. Then make one fixed exchange; validate the exact response
+mutex; call source `reserve_attempt` without holding that mutex and require a typed
+`ReserveOutcome` with the same attempt id. A matching `not_written` outcome may be
+abandoned only if that transition wins against close/poison; it returns `refresh_busy`,
+does no OAuth, and permits a later explicit attempt. If close/poison wins first,
+abandonment refuses, retains the attempt and poison, and returns `refresh_unknown`. A
+matching `reserved` outcome must be marked durable under the intent mutex. `unknown`,
+exception, malformed value, wrong attempt id, or wrong disposition poisons and retains
+the attempt, returns `refresh_unknown`, and performs no OAuth. The source adapter may
+produce `reserved` only after successful file and directory fsync of the exact attempt
+record and may produce `not_written` only with positive proof that journal
+publication/replace was never attempted and could not have occurred; it must never infer
+`not_written` from exception text. A rename followed by a directory-fsync error, or
+any other visibility/durability ambiguity, is `unknown`. Every exception and untyped or
+mismatched result is `unknown`. After marking the reservation durable, revalidate the
+selected authority and atomically claim the exact one-time OAuth exchange with
+`begin_exchange` under the same intent mutex. A close/poison that wins before
+`begin_exchange` prevents OAuth and returns `refresh_unknown`; if `begin_exchange` wins
+first, a concurrent close poisons the account but permits only that already-claimed
+exchange to reach a bounded outcome, with no rotation commit or native effect after
+poison. Then make one fixed exchange; validate the exact response
 and immutable principal; durably
 commit a returned rotated refresh token (if any); acquire the ordered local/source/
 channel delivery guards; validate all guards; claim `begin_enqueue`; perform exactly
@@ -748,10 +787,12 @@ request ID was fully accepted by the same pinned stdio writer (all frame bytes
 written); this is not a claim that the native process parsed/applied it. A partial,
 failed, timed-out, or uncorrelated write is `refresh_unknown`; never resend it.
 
-A definitely-not-written reservation failure sends no OAuth and may return only its
-closed pre-send error if the source proves no durable reservation occurred. Any
-uncertain reservation result sends no OAuth, sets poison intent, and returns
-`refresh_unknown`; there is no automatic reservation retry. After reservation,
+A matching definitely-not-written reservation result that is atomically abandoned
+sends no OAuth and returns the fixed closed code `refresh_busy`, unless close/poison
+won first, in which case it returns `refresh_unknown` and retains poison. Any
+uncertain, exceptional, malformed, or mismatched reservation result sends no OAuth,
+sets poison intent, and returns `refresh_unknown`; there is no automatic reservation
+retry. After a durable reservation,
 any exchange failure without positive proof that no bytes were sent, any uncertain
 response, or any failure before terminal finish leaves the attempt unresolved and
 poisons the selected account. A failure or uncertain result from `finish_confirmed`
@@ -767,15 +808,21 @@ Poisoning has two deliberately distinct fences. First, before any bounded wait o
 external I/O, the shared local `AuthCoordinator` sets a monotonic, process-wide
 per-account poison intent through trusted internal `poison_intent(scope,code)`.
 Coordinator creation/check/guard/publication has one short per-account intent mutex.
-`begin_enqueue` takes that mutex, refuses if poison is already set, and otherwise
-records the one claimed external effect and terminal-pending owner before releasing it.
+`begin_exchange` and `begin_enqueue` take that mutex, refuse if poison is already set,
+and otherwise record their exact one-time external effect claim before releasing it;
+`begin_enqueue` also records the terminal-pending owner. Thus a poison ordered first
+prevents either effect, while a previously claimed OAuth exchange may reach only its
+bounded outcome and cannot commit rotation or start a native effect after poison.
 `poison_intent` takes
 the same mutex, sets poison once, and returns without waiting for the state/source/
 channel delivery guards, refresh lock, operation deadline, or external I/O. Thus a
-begin claim ordered first may finish its single external effect; a poison ordered
-first prevents it. Every ordinary open/check/guard/begin/publish/complete path observes
-poison. The already-begun matching guard may confirm its known bounded outcome after
-poison, but publish/complete recheck under the intent mutex and refuse any usable stamp.
+claim ordered first may finish only its single bounded external effect; a poison ordered
+first prevents it. Every ordinary open/check/guard/publication/completion path and
+every unclaimed `begin_exchange`/`begin_enqueue` observes poison. The already-begun
+matching exchange may record its bounded outcome, and the already-begun delivery guard
+may confirm its known bounded outcome after poison, but rotation commit and every later
+effect are refused; publication/completion recheck under the intent mutex and refuse
+any usable stamp.
 No call clears the poison flag. The exact successful `_complete_terminal` transition
 alone clears terminal-pending and the reserved-attempt record; failures never clear
 either. A `close()` racing a reservation-in-flight, durable reservation, or terminal
@@ -801,8 +848,20 @@ already linearized success; it may invalidate future current checks but does not
 retroactively turn that operation into an unknown result. If persistent poison cannot
 be proven, that state remains an explicit production integration blocker.
 
-Expanded blind RED must prove: (1) reserve precedes the only OAuth call and a failed/
-uncertain reserve causes zero calls; (2) exact attempt id is threaded through source
+Expanded blind RED reservation cases must prove that only matching `reserved` permits
+durable marking, only matching `not_written` permits abandonment, and that wrong
+attempt id, wrong disposition, malformed/untyped results, and every exception
+(including text claiming not-written) cause zero OAuth, retain the claimed attempt and
+set poison. A close that wins against a returned `not_written` result must preserve
+poison; uncontested abandonment returns `refresh_busy` without quarantine. Both
+`begin_exchange`/close orderings must prove zero OAuth if close wins and exactly one
+bounded exchange if `begin_exchange` wins, with no later effect after poison. Model a
+failure before any publication/replace attempt as `not_written`, but model rename
+success followed by
+directory-fsync failure as `unknown`, poison, and zero OAuth. A foreign, stale, or
+abandoned guard must also fail `begin_exchange` without OAuth.
+The remaining expanded blind RED must prove: (1) reserve precedes the only OAuth call
+and a failed/uncertain reserve causes zero calls; (2) exact attempt id is threaded through source
 rotation and terminal finish; a foreign, stale, abandoned, or not-yet-durable
 `ReservationGuard` cannot pass `begin_enqueue` or trigger native transport; (3) login RPC success or complete callback-response
 write precedes `guard.confirm()`, which precedes provisional publication, durable
@@ -823,9 +882,11 @@ owner's publication yields an opaque provisional value unusable as Delivery inpu
 only successful durable finish plus exact `_complete_terminal` yields a final
 AuthorityStamp; wrong guard, provisional value, poison, close, or F expiry cannot clear
 the fence; (8) close or callback invalidation immediately before reservation claim stays
-local and prevents source reserve; close or callback invalidation after the claim
-(including while source reserve is pending) poisons and prevents OAuth; close after
-durable reserve but before OAuth yields zero exchange plus account poison; (9) partial and
+local and prevents source reserve; either one after reservation claim but before
+`begin_exchange` poisons and prevents OAuth, including while source reserve is pending;
+if `begin_exchange` wins first, a later close or callback invalidation poisons while
+only that bounded exchange resolves and blocks all later effects; close after durable
+reserve but before the exchange claim yields zero exchange plus account poison; (9) partial and
 full callback frame writes map to the
 specified outcomes; F expiry during terminal fsync while outer D remains future yields
 no final stamp, no retry, and poison; (10) duplicate/replayed callback, second
