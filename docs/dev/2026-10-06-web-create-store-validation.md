@@ -25,7 +25,9 @@ Final focused41 методов PASS,0 failures,0 errors:29 public contracts,8 im
 stage/parent/crash cases,2 publication races,2 distinct-operation capacity races.
 Existing rename32 и profile/context20 PASS; их исходники byte-unchanged при
 последнем исправлении только нового module, эти proof остаются применимыми.
-`git diff --check` PASS. Отдельный повтор независимого focused QA — следующий gate.
+`git diff --check` PASS. Отдельный independent focused QA:41 PASS,0 failures,
+0 errors (13.670s); source/test byte guards confirmed. Exact CI и installed
+acceptance этой foundation не заявлены.
 Fixtures private `/var/tmp`, `umask077`, отдельный venv; реальный provider/native,
 auth/config/history и пользовательские сессии не использовались.
 
