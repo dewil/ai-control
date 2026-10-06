@@ -129,6 +129,8 @@ class ItemMessageTimesBrowser(unittest.TestCase):
                   'timestamp': NOW - 120, 'time_precision': 'item'}]
         browser_fixture.private_json(self.evidence / 'control.json', {'items': items})
         self.open()
+        self.assertEqual(self.page.locator('.chat-items time').count(), 2,
+                         'known item precision needs semantic time for both message roles')
         assistant = self.bubble('Time assistant 0')
         user = self.bubble('Time user 0')
         self.assertIn('1 мин. назад', assistant.inner_text())
