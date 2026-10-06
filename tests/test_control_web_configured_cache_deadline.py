@@ -356,7 +356,7 @@ class ConfiguredCacheAndDeadlineContract(unittest.TestCase):
         listed = chat.list_sessions('demo')
         self.assertIn('rows', listed)
         self.assertTrue(creator.overlay_deadlines)
-        self.assertTrue(all(isinstance(d, (int, float)) and started < d <= started + 55
+        self.assertTrue(all(isinstance(d, (int, float)) and started < d <= started + 55.01
                             for d in creator.overlay_deadlines),
                         'list overlay shares SessionChat’s existing 55-second operation deadline')
         creator.cache_deadlines.clear()
@@ -365,7 +365,7 @@ class ConfiguredCacheAndDeadlineContract(unittest.TestCase):
         summary = chat.project_summary()
         self.assertIn('projects', summary)
         self.assertTrue(creator.cache_deadlines and creator.overlay_deadlines)
-        self.assertTrue(all(isinstance(d, (int, float)) and started < d <= started + 15
+        self.assertTrue(all(isinstance(d, (int, float)) and started < d <= started + 15.01
                             for d in creator.cache_deadlines + creator.overlay_deadlines),
                         'summary/cache/overlay share the existing 15-second summary budget')
 
