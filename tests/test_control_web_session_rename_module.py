@@ -203,7 +203,7 @@ class SessionRenameModule(unittest.TestCase):
         self.assertEqual(record["digest"], hashlib.sha256(canonical).hexdigest())
         self.assertEqual(record["title_hash"], hashlib.sha256("Private title".encode("utf-8")).hexdigest())
         self.assertNotIn("Private title", raw)
-        self.assertNotIn("Private title", json.dumps(result))
+        self.assertEqual(result, {"operation_id": OP, "status": "accepted", "title": "Private title"})
         self.assertEqual(self.rpc.calls.count(("thread/name/set", {"threadId": SID, "name": "Private title"})), 1)
 
     def test_ack_without_raw_name_proof_is_unknown_and_preview_never_confirms(self):
@@ -245,9 +245,20 @@ class SessionRenameModule(unittest.TestCase):
         self.rpc.set_updates_name = False
         self.invoke("Wanted")
         before = list(self.rpc.calls)
+        fenced_before_status = len(self.rpc.fenced_calls)
         self.rpc.name = "Different"
-        self.assertEqual(self.chat().rename_status("demo", SID, OP), {"operation_id": OP, "status": "delivery_unknown"})
-        self.assertEqual(self.rpc.calls[len(before):], [])
+        result = self.chat().rename_status("demo", SID, OP)
+        self.assertEqual(result, {"operation_id": OP, "status": "delivery_unknown"})
+        reconciliation = self.rpc.calls[len(before):]
+        status_fenced_calls = self.rpc.fenced_calls[fenced_before_status:]
+        self.assertGreaterEqual([method for method, _ in reconciliation].count("thread/read"), 1,
+                                "status mismatch still requires fresh metadata proof")
+        self.assertFalse({"thread/name/set", "thread/resume", "thread/list", "model/list"} &
+                         {method for method, _ in reconciliation})
+        self.assertTrue(any(method == "thread/read" and params == {"threadId": SID, "includeTurns": False}
+                            and (transport, context) == (3, 7)
+                            for method, params, transport, context, _ in status_fenced_calls),
+                        "status mismatch proof must use the captured generation fence")
         self.assertEqual(json.loads(next(self.store_path.iterdir()).read_text(encoding="utf-8"))["status"], "unknown")
 
     def test_replay_conflict_and_corrupt_receipt_fail_closed_without_second_set(self):
