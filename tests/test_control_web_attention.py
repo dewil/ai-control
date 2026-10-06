@@ -63,13 +63,17 @@ class FakeSource:
     def __init__(self, records, *, state="fresh", complete=True, epoch=I32,
                  revision=1, reason=None, source="task_registry", coverage=None):
         self.calls = 0
+        bindings = [r.get("session_binding") for r in records
+                    if isinstance(r, dict) and r.get("session_binding")]
         self.value = {
             "schema": 1, "source": source, "epoch": epoch,
             "revision": revision, "observed_at": NOW if epoch else None,
             "state": state, "complete": complete, "reason": reason,
             "coverage": coverage or {
                 "scope": "task_registry", "registry_epoch": I32,
-                "registry_revision": 1, "context_ids": [], "route_ids": [],
+                "registry_revision": 1,
+                "context_ids": sorted({b["context_id"] for b in bindings}),
+                "route_ids": sorted({b["route_id"] for b in bindings}),
                 "session_set_revision": None, "global_complete": True,
                 "supported_methods": [],
             },
@@ -135,9 +139,10 @@ class AttentionOverviewContractTests(unittest.TestCase):
             "AttentionOverview contract RED: bin/_control_web_attention.py is missing")
         return make_overview(*args, **kwargs)
 
-    def test_view_grant_is_checked_before_any_source_export(self):
+    def test_non_owner_view_is_rejected_before_any_source_export(self):
         source = FakeSource([task(questions=[question()])])
-        view = FakeView(allowed=False)
+        view = FakeView()
+        view.snapshot_value["owner_only"] = False
         overview, _, _ = self.overview([], view=view, task_source=source)
         result = overview.snapshot()
         self.assertEqual(source.calls, 0, "denied view must fail before source export")
@@ -205,14 +210,14 @@ class AttentionOverviewContractTests(unittest.TestCase):
         overview, _, _ = self.overview([], task_source=source)
         first = overview.snapshot()
         self.assertEqual(len(first["reasons"]), 1)
-        source.value.update(state="disconnected", complete=False,
+        source.value.update(state="stale", complete=False,
                             reason="disconnected", records=[])
         second = overview.snapshot()
         self.assertEqual({r["reason_id"] for r in second["reasons"]},
                          {r["reason_id"] for r in first["reasons"]})
         self.assertEqual(second["reasons"][0]["state"], "stale")
         self.assertFalse(second["complete"])
-        self.assertEqual(second["sources"]["task_registry"]["state"], "disconnected")
+        self.assertEqual(second["sources"]["task_registry"]["state"], "stale")
         source.value.update(state="fresh", complete=True, reason=None,
                             records=[])
         third = overview.snapshot()
