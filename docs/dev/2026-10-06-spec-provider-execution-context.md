@@ -278,8 +278,15 @@ contextless TASK. Для уже поддержанного paused binding non-Co
 guard проверяет fresh catalog grant под тем же producer lock, не читает Codex profile
 и не объявляет native/profile capability. Non-None unsupported-provider reference
 отклоняется. Это совместимость прежнего paused/unverified create, не native routing
-другого vendor. Отказ guard сохраняет cleanup TASK/spool/worktree; native host/credentials
-по-прежнему недоступны.
+другого vendor. Отказ guard до atomic rename сохраняет cleanup TASK/spool/worktree; native host/credentials
+по-прежнему недоступны. После подтверждённого atomic TASK rename операция committed:
+обычная post-body validation/IO ошибка producer guard не превращает созданную TASK
+в ответ «не опубликовано» и не запускает повторное создание. Проверки, способные
+отклонить TASK publication, выполняются до rename под удерживаемым lock. Это не
+отменяет отдельную норму registration выше: post-publication validation/one-shot IO
+failure registration откатывает собственную leaf, а устойчивый отказ rollback
+возвращает profile_unsafe/unknown. Общий guard не должен обходить этот rollback
+и возвращать registration failure с оставленной собственной leaf при обычной ошибке.
 
 Каждый будущий resolve/admission/replay/resume/native status/history/registry/
 collector/recovery сравнивает и identity leaf, и exact byte commitment с TASK
