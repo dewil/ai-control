@@ -257,6 +257,7 @@ class AttentionOverview:
         self._scope = None
         self._revision = 0
         self._versions = {}
+        self._identity = None
 
     def _check(self):
         if self._monotonic() >= self._deadline:
@@ -412,6 +413,14 @@ class AttentionOverview:
                     sources[name] = self._source(name, None)
                     sources[name].update(state="unavailable", reason="unavailable")
             result, new_cache = self._compose(sources)
+            projection = {k: v for k, v in result.items()
+                          if k not in ("revision", "observed_at", "sources")}
+            projection["sources"] = {
+                n: {k: v for k, v in s.items() if k != "observed_at"}
+                for n, s in result["sources"].items()}
+            identity = _digest({"view": self._vs, "projection": projection,
+                                "sources": {n: {k: s[k] for k in ("epoch", "revision", "coverage")}
+                                            for n, s in sources.items()}})
             self._check()
             if self._call(self._view, "current", self._vs) is not True:
                 self._cache = {name: {} for name in _SOURCES}
@@ -420,7 +429,10 @@ class AttentionOverview:
             for name, src in sources.items():
                 if src["epoch"] is not None:
                     self._versions[name] = (src["epoch"], src["revision"])
-            self._revision += 1
+            if identity != self._identity:
+                self._revision += 1
+                self._identity = identity
+            result["revision"] = self._revision
             return result
         except _Invalid:
             return {"error": "invalid_source"}
@@ -468,7 +480,9 @@ class AttentionOverview:
                     raise _Invalid()
                 records[key] = {"record": record, "coverage": coverage, "observed_at": src["observed_at"],
                                 "fresh": src["state"] in ("fresh", "incomplete")}
-            retained = {} if src["state"] == "fresh" and src["complete"] else dict(self._cache[name])
+            previous = self._versions.get(name)
+            epoch_changed = previous is not None and src["epoch"] is not None and src["epoch"] != previous[0]
+            retained = {} if epoch_changed or (src["state"] == "fresh" and src["complete"]) else dict(self._cache[name])
             # Cached reason metadata is reauthorized against the current view;
             # stale activity is never cached as execution proof.
             for key, item in list(retained.items()):
