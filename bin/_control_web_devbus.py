@@ -66,6 +66,89 @@ def _timestamp(value):
         return None, None
 
 
+_PEM_BEGIN = re.compile(r'-----BEGIN ((?:[A-Z]{1,16} ){0,4}PRIVATE KEY)-----')
+_ASSIGNMENT = re.compile(r"(?i)\b(token|password|api_key|secret|authorization)(?:\\*[\"'])?\s*[:=]\s*")
+
+
+def _scrub_pem(text):
+    parts, cursor = [], 0
+    while True:
+        match = _PEM_BEGIN.search(text, cursor)
+        if match is None:
+            parts.append(text[cursor:])
+            return ''.join(parts)
+        parts.extend((text[cursor:match.start()], '***'))
+        end_marker = '-----END ' + match.group(1) + '-----'
+        end = text.find(end_marker, match.end())
+        if end < 0:
+            # Truncated producer output still contains private key material.
+            return ''.join(parts)
+        cursor = end + len(end_marker)
+
+
+def _assignment_end(text, start, authorization):
+    # Scan each matched value once, including JSON escaped quote wrappers.
+    opening = start
+    while opening < len(text) and text[opening] == '\\':
+        opening += 1
+    if opening < len(text) and text[opening] in ('"', "'"):
+        quote, wrapper = text[opening], opening-start
+        slashes = 0
+        for index in range(opening+1, len(text)):
+            char = text[index]
+            if char == '\\':
+                slashes += 1
+                continue
+            # Plain/once/twice JSON encoding has wrapper counts 0/1/3.
+            # Escaped interior quotes have a different slash remainder.
+            if char == quote and slashes % (2*(wrapper+1)) == wrapper:
+                return index+1
+            slashes = 0
+        return len(text)
+    end = start
+    separators = '\r\n,;' if authorization else ' \t\r\n,;'
+    while end < len(text) and text[end] not in separators:
+        end += 1
+    return end
+
+
+def _scrub_urls(text):
+    parts, cursor, search = [], 0, 0
+    scheme_chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-'
+    while True:
+        separator = text.find('://', search)
+        if separator < 0:
+            parts.append(text[cursor:])
+            return ''.join(parts)
+        start = separator
+        while start > cursor and text[start-1] in scheme_chars:
+            start -= 1
+        search = separator+3
+        if start == separator or text[start] not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ':
+            continue
+        authority_end = search
+        while authority_end < len(text) and not text[authority_end].isspace() and text[authority_end] != '/':
+            authority_end += 1
+        if '@' not in text[search:authority_end]:
+            continue
+        end = authority_end
+        while end < len(text) and not text[end].isspace():
+            end += 1
+        parts.extend((text[cursor:start], '***'))
+        cursor = search = end
+
+
+def _scrub_assignments(text):
+    parts, cursor = [], 0
+    while True:
+        match = _ASSIGNMENT.search(text, cursor)
+        if match is None:
+            parts.append(text[cursor:])
+            return ''.join(parts)
+        parts.extend((text[cursor:match.start()], '***'))
+        cursor = _assignment_end(text, match.end(), match.group(1).lower() == 'authorization')
+
+
 class Projection:
     def __init__(self, limits=Limits(), clock=time.time, secrets=()):
         self.limits, self.clock = limits, clock
@@ -118,12 +201,12 @@ class Projection:
             self.issue('local_eviction')
 
     def _scrub(self, text):
+        text = _scrub_pem(text)
+        text = _scrub_assignments(text)
+        text = re.sub(r'(?i)\bBearer\s+[^\s,;]+', 'Bearer ***', text)
+        text = _scrub_urls(text)
         for secret in sorted(self._secrets, key=len, reverse=True):
             text = text.replace(secret, '***')
-        text = re.sub(r'-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----', '***', text, flags=re.S)
-        text = re.sub(r'(?i)\bBearer\s+[^\s,;]+', 'Bearer ***', text)
-        text = re.sub(r'(?i)\b(?:token|password|api_key|secret|authorization)[\"\x27]?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|\x27(?:\\.|[^\x27\\])*\x27|[^\s,;]+)', '***', text)
-        text = re.sub(r'(?i)\b[a-z][a-z0-9+.-]*://[^\s/@]+@[^\s]+', '***', text)
         return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
 
     def ingest(self, data, subject, sequence):
@@ -269,6 +352,7 @@ class Observer:
                 await asyncio.wait_for(worker, self.timeout*2 + .1)
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
+            self.projection.connection('disconnected')
 
     async def _close(self):
         transport, self._transport = self._transport, None
