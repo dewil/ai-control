@@ -170,15 +170,17 @@ class BoundSessionStore:
                   or (info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)))
         return info
 
-    def _anchors(self, held):
-        _need(held.active and held.thread is threading.current_thread())
-        chain = held.chain
+    def _chain_fences(self, chain, uid, *, namespace=False):
         for index, (name, fd, original) in enumerate(chain):
-            current = self._dir_info(fd, held.uid, namespace=index == len(chain) - 1)
+            current = self._dir_info(fd, uid, namespace=namespace and index == len(chain) - 1)
             _need(_directory_pin(current) == original)
             named = (os.stat('/', follow_symlinks=False) if index == 0 else
                      os.stat(name, dir_fd=chain[index - 1][1], follow_symlinks=False))
             _need(_directory_pin(named) == original)
+
+    def _anchors(self, held):
+        _need(held.active and held.thread is threading.current_thread())
+        self._chain_fences(held.chain, held.uid, namespace=True)
 
     def _tick(self, base, deadline):
         held = self._base(base)
@@ -229,6 +231,16 @@ class BoundSessionStore:
                     if index != len(parts) - 1:
                         raise
                     if not create:
+                        self._remaining(deadline)
+                        self._chain_fences(chain, uid)
+                        # Recheck absence under the freshly fenced parent, with
+                        # no clock callback between this witness and None.
+                        try:
+                            os.stat(name, dir_fd=parent, follow_symlinks=False)
+                        except FileNotFoundError:
+                            pass
+                        else:
+                            _need(False)
                         for _, owned, _ in reversed(chain):
                             os.close(owned)
                         return None, None
@@ -297,19 +309,29 @@ class BoundSessionStore:
         self._remaining(deadline)
         return self._codec.prepare_create(reference, project, root, session_ref, operation_id, created)
 
-    def _listing(self, held, limit=10000):
-        names = os.listdir(held.directory)
-        _need(len(names) <= limit)
-        for name in names:
-            _need(not name.startswith(('BI-', 'BS-'))
-                  and not (name.startswith('BC-') and ('.C' in name or '.A' in name)))
+    def _listing(self, base, deadline, limit=10000):
+        held = self._tick(base, deadline)
+        # R+G starts at <=9998 entries and has one active temp at a time,
+        # so this slice never needs to consume more than the 10001st witness.
+        limit = min(limit, 10000)
+        epoch = os.fstat(held.directory)
+        original = (epoch.st_mtime_ns, epoch.st_ctime_ns, epoch.st_size)
+        names = []
+        with os.scandir(held.directory) as entries:
+            for entry in entries:
+                _need(len(names) < limit)
+                self._tick(base, deadline)
+                name = entry.name
+                _need(not name.startswith(('BI-', 'BS-'))
+                      and not (name.startswith('BC-') and ('.C' in name or '.A' in name)))
+                names.append(name)
+        self._tick(base, deadline)
+        current = os.fstat(held.directory)
+        _need((current.st_mtime_ns, current.st_ctime_ns, current.st_size) == original)
         return names
 
     def _entries(self, base, deadline):
-        held = self._tick(base, deadline)
-        names = self._listing(held)
-        self._anchors(held)
-        return names
+        return self._listing(base, deadline)
 
     def _leaf_info(self, fd, uid):
         info = os.fstat(fd)
@@ -365,15 +387,20 @@ class BoundSessionStore:
             os.close(fd)
             raise
 
-    def _final_fences(self, base, pins):
-        held = self._base(base)
+    def _final_fences(self, base, pins, deadline, *, pair=()):
+        held = self._tick(base, deadline)
         # Bound descriptor use even for a namespace containing thousands of Gs.
-        # The first R/G pair remains held together during its final byte check.
-        for offset in range(0, len(pins), 2):
+        # Keep an explicit final R/G pair together after the historical pass.
+        groups = [pins[offset:offset + 2] for offset in range(0, len(pins), 2)]
+        if pair:
+            groups.append(pair)
+        for group in groups:
+            self._tick(base, deadline)
             opened = []
             try:
-                for pin in pins[offset:offset + 2]:
+                for pin in group:
                     opened.append((pin, *self._fence_leaf(held, pin)))
+                self._tick(base, deadline)
                 for pin, fd, info, raw in opened:
                     os.lseek(fd, 0, os.SEEK_SET)
                     _need(os.read(fd, 4097) == raw and os.read(fd, 1) == b'')
@@ -424,8 +451,8 @@ class BoundSessionStore:
             _need(not matched)
             self._entries(base, deadline)
             held = self._tick(base, deadline)
-            _need(set(self._listing(held)) == set(names))
-            self._final_fences(base, tuple(pin for _, pin in history.values()))
+            _need(set(self._listing(base, deadline)) == set(names))
+            self._final_fences(base, tuple(pin for _, pin in history.values()), deadline)
             return None
         _need(len(matched) == 1)
         g, g_pin = matched[0]
@@ -439,8 +466,9 @@ class BoundSessionStore:
             receipt = dto.BoundCreateReceipt(checked.record, 'unknown', parents)
             self._entries(base, deadline)
             held = self._tick(base, deadline)
-            _need(set(self._listing(held)) == set(names))
-            self._final_fences(base, (r_pin, g_pin) + tuple(pin for _, pin in history.values()))
+            _need(set(self._listing(base, deadline)) == set(names))
+            self._final_fences(base, tuple(pin for _, pin in history.values()),
+                               deadline, pair=(r_pin, g_pin))
             return receipt
         except Exception:
             raise AccountError('store_unavailable') from None
@@ -470,7 +498,7 @@ class BoundSessionStore:
         fd = None
         try:
             self._tick(base, deadline)
-            _need(set(self._listing(held)) == set(names))
+            _need(set(self._listing(base, deadline)) == set(names))
             fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=held.directory)
             os.fchmod(fd, 0o600)
             view = memoryview(raw)
@@ -482,12 +510,12 @@ class BoundSessionStore:
             self._tick(base, deadline)
             os.fsync(fd)
             self._tick(base, deadline)
-            _need(set(self._listing(held, 10002)) == set(names) | {temp})
+            _need(set(self._listing(base, deadline, 10002)) == set(names) | {temp})
             info = self._leaf_info(fd, held.uid)
             _need(_pin(info) == _pin(os.stat(temp, dir_fd=held.directory, follow_symlinks=False)))
             # No callbacks between final anchor/cap/leaf fences and NOREPLACE.
             self._anchors(held)
-            self._final_fences(base, parents)
+            self._final_fences(base, parents, deadline)
             for missing in absent:
                 try:
                     os.stat(missing, dir_fd=held.directory, follow_symlinks=False)
@@ -535,7 +563,7 @@ class BoundSessionStore:
         # A callback cannot silently change R between reservation stages.
         _, fresh_r = self._read(base, _r_name(record), deadline)
         _need(fresh_r == r_pin)
-        self._publish_leaf(base, _g_name(record['session_ref']), g, deadline, parents=(r_pin,) + historical_pins,
+        self._publish_leaf(base, _g_name(record['session_ref']), g, deadline, parents=historical_pins + (r_pin,),
                            names=tuple(names) + (_r_name(record),))
         final = self._lookup(base, reference, record['project'], record['root'],
                              record['operation_id'], deadline, self._history(base, deadline))
