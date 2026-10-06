@@ -21,6 +21,7 @@ SESSION_FIELDS = {
     'session_project_summary': {'op'},
     'session_list': {'op', 'project', 'page'},
     'session_history': {'op', 'project', 'sid', 'cursor'},
+    'session_models': {'op', 'project', 'sid'},
     'session_send': {'op', 'project', 'sid', 'message_id', 'text'},
     'session_send_status': {'op', 'project', 'sid', 'message_id'},
 }
@@ -166,6 +167,8 @@ class RegistryBackend:
                 result = self.sessions.list_sessions(request['project'], request['page'])
             elif op == 'session_history':
                 result = self.sessions.history(request['project'], request['sid'], request['cursor'])
+            elif op == 'session_models':
+                result = self.sessions.models(request['project'], request['sid'])
             elif op == 'session_send':
                 result = self.sessions.send(request['project'], request['sid'], request['message_id'], request['text'])
             else:
@@ -185,6 +188,9 @@ class RegistryBackend:
 
     def session_history(self, project, sid, cursor):
         return self._session(dict(op='session_history', project=project, sid=sid, cursor=cursor))
+
+    def session_models(self, project, sid):
+        return self._session(dict(op='session_models', project=project, sid=sid))
 
     def session_send(self, project, sid, message_id, text):
         return self._session(dict(op='session_send', project=project, sid=sid, message_id=message_id, text=text))
@@ -466,6 +472,8 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = backend.session_list(request['project'], request['page'])
                     elif op == 'session_history':
                         result = backend.session_history(request['project'], request['sid'], request['cursor'])
+                    elif op == 'session_models':
+                        result = backend.session_models(request['project'], request['sid'])
                     elif op == 'session_send':
                         result = backend.session_send(request['project'], request['sid'], request['message_id'], request['text'])
                     else:
@@ -572,6 +580,9 @@ class SocketBackend:
 
     def session_history(self, project, sid, cursor):
         return self._session(dict(op='session_history', project=project, sid=sid, cursor=cursor))
+
+    def session_models(self, project, sid):
+        return self._session(dict(op='session_models', project=project, sid=sid))
 
     def session_send(self, project, sid, message_id, text):
         return self._session(dict(op='session_send', project=project, sid=sid, message_id=message_id, text=text))
