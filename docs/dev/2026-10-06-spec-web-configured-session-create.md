@@ -1,7 +1,9 @@
 # Новая сессия в текущем настроенном Codex context
 
-Owner CONTROL-WEB-SESSIONS. Статус DRAFT: design review, independent RED,
-full integration, exact CI и installed acceptance впереди. INV-WSESS-34..37.
+Owner CONTROL-WEB-SESSIONS. Статус DRAFT: source implementation прошла независимые
+SOURCE review и focused tests; exact CI и installed acceptance впереди. INV-WSESS-34..37.
+HTTP/owner/UI actual SOURCE PASS, HTTP8 и browser8 GREEN:
+[validation](2026-10-06-web-configured-create-http-ui-validation.md).
 Phase1 private module/storage + fixed transport implemented; actual independent
 SOURCE PASS и focused23 GREEN: [validation](2026-10-06-web-configured-create-module-validation.md).
 Это отдельный explicit configured режим existing legacy Codex transport;

@@ -1,8 +1,9 @@
 # Configured session creation: HTTP, owner wiring and UI validation
 
-Status: source candidate frozen at `8b073240eb31daa33a8e592b5207d022b2caedaa`;
-actual different-model source review and final independent browser fixture check
-are pending. This records source verification, not installed acceptance.
+Status: runtime source frozen at `bde441c63c9072b58c4b58aa299c5030c613d2c9`;
+actual different-model6-sol/medium SOURCE PASS, final HTTP8 and browser8 PASS.
+Test-only corrections and documentation preserve those reviewed runtime bytes.
+This records source verification, not installed acceptance; exact CI is pending.
 
 The owner constructs one ConfiguredSessionCreate from the same RPC, project/root
 providers and receipt root used by SessionChat, then injects that instance into
@@ -21,7 +22,7 @@ Frozen source SHA256:
 | `bin/_control_web.py` | `7f319bd6e254aabf01887f15d49973cb22c5fd3d2f73292ac0188c4eaba38bca` |
 | `bin/_control_web_broker.py` | `eae0b3c1fae88ec1cd24bafcd85865d7458767381a0bedff2cfc8cae824e580a` |
 | `bin/ai-control-web` | `d92e9d565c825a59aff76d5113b96aeca2afd3cf3a10483c6c5ecfc59782da42` |
-| `bin/_control_web.js` | `55a526132fb6ef04abe595e69d6de74411d198be9d574ff51efc9636915a7d03` |
+| `bin/_control_web.js` | `3e9636f22022f11fbf3c754f7125c903c08ea70b5ab2c72afcf0b295e6654e11` |
 | `bin/_control_web.html` | `ee109d869ade60fb8a02d5efecf79f1671620621a2b85eaa34019255039bcec2` |
 | `bin/_control_web.css` | `ef5b8526733fac5b0a32c61c2c6ace574707e7f79e672e69c7d0371613d53e98` |
 
@@ -37,15 +38,22 @@ complete origin paging beyond the bounded128-record overlay is separate work.
 Independent immutable HTTP tests first reproduced7 methods/19 semantic failures,
 0 errors, before implementation. The targeted rejected-receipt boundary test
 reproduced1 semantic failure/0 errors before its strict rejected+None fix.
-Current final HTTP8 passed in2.007s, including malformed rejected nonnull-turn
-refusal. Before the receipt correction, combined HTTP/broker36 passed in6.171s.
-Independent UI6 first reproduced6 semantic failures/0 errors before asset edits;
-then6 passed in5.938s. Existing rename/model browser16 passed in22.585s. The new
-seventh UI case needs an independent bounded wait for subsequent history rendering;
-final UI7 verification remains pending. Test authors own all fixture changes.
+Final HTTP8 passed in2.153s, including malformed rejected nonnull-turn refusal.
+Before the receipt correction, combined HTTP/broker36 passed in6.171s.
+Independent UI6 first reproduced6 semantic failures/0 errors before asset edits.
+The targeted opening-race case reproduced1 semantic failure/0 errors in7.745s:
+an older available response replaced a newer unavailable result after close/reopen.
+Per-opening epoch/auth/project/selection/open-dialog fences now protect success,
+error and finally updates without discarding a pending operation UUID. Rejected
+receipts remain visible with their strict null turn ID. Final browser8 passed
+in7.076s,0 failures/0 errors; existing rename/model browser16 passed in22.585s.
+All eight runtime hashes matched before/after final verification and main integration.
+Independent authors corrected observable-render waits and unrelated-fixture defaults;
+no author test edits or source timing workaround. Test authors own all fixture changes.
 The UI tests are independent UI tests; their author inspected some backend baseline
 code, so they are not claimed wholly source-blind across backend implementation.
-JavaScript syntax and git diff whitespace checks passed.
+Actual final source review closed the rejected-receipt and opening-race findings;
+no new scoped blocker. JavaScript syntax and git diff whitespace checks passed.
 
 Private synthetic fixtures only: no real user native/auth/config/history reads or
 calls. Ordinary send/model/rename interfaces remain; no account selection,
