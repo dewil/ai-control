@@ -80,12 +80,15 @@ def serve(root, evidence):
         def session_create_options(self, project):
             nonlocal options_token, options_count
             data = settings()
-            with options_lock:
-                if data.get('options_token') != options_token:
-                    options_token = data.get('options_token')
-                    options_count = 0
-                options_count += 1
-                index = options_count
+            if data.get('options_token') is None:
+                index = 1
+            else:
+                with options_lock:
+                    if data.get('options_token') != options_token:
+                        options_token = data.get('options_token')
+                        options_count = 0
+                    options_count += 1
+                    index = options_count
             event = {'method': 'options', 'project': project}
             if data.get('options_token') is not None:
                 event['index'] = index
