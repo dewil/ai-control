@@ -19,3 +19,7 @@ Public clarification b06a600 BEFORE independent fault RED. Original implementati
 unchanged pending committed Linux fault tests and actual Ubuntu baseline evidence.
 No fixed14/server/profile/credential/native changes. Full C/I/A/stop stages,
 auth host, owned launcher/kernel view, actual two accounts and signed package remain.
+
+Independent Linux fault RED9a472f3 committed after publicb06a600, before any fix.
+Mac4explicitLinuxSKIP/0errors does NOT establish RED. Actual Ubuntu baseline
+required before author fix; original module SHA remains c89d9bf.
