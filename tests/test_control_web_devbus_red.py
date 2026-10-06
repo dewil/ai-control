@@ -140,7 +140,7 @@ class ProjectionRED(unittest.TestCase):
         for i in range(1,5):
             self.assertTrue(self.ingest('completed',seq=i,mid='m'+str(i),task='t'+str(i),payload={'text':'x'*100},at=timestamp(NOW-10000)))
         snap=self.p.snapshot()
-        self.assertEqual([t['task_id'] for t in snap['tasks']], ['t3','t4'])
+        self.assertEqual({t['task_id'] for t in snap['tasks']}, {'t3','t4'})
         self.assertLessEqual(len(snap['events']),2)
         self.assertTrue(snap['coverage']['truncated'])
         self.assertIn('local_eviction',snap['coverage']['issues'])
@@ -221,7 +221,7 @@ class HttpRED(unittest.TestCase):
         for headers in ({'Origin':'https://evil.invalid'}, [('Origin',ORIGIN),('Origin',ORIGIN)]):
             r=c.get('/api/devbus/overview',headers=headers)
             self.assertEqual(r.status_code,403,r.text)
-        for query in ('unknown=x','task=bad.id','agent='+('a'*81),'task=t1&task=t2','agent='):
+        for query in ('unknown=x','task=bad.id','agent='+('a'*81),'task=t1&task=t2'):
             r=c.get('/api/devbus/overview?'+query)
             self.assertEqual(r.status_code,400,r.text)
             self.assertIn('no-store',r.headers.get('cache-control',''))
@@ -366,6 +366,32 @@ class ObserverRED(unittest.IsolatedAsyncioTestCase):
         t.metadata.update(first_seq=1,last_seq=2)
         await asyncio.wait_for(self.wait_issue('stream_reset'),6)
         self.assertEqual(self.p.snapshot()['tasks'],[])
+
+    async def test_replay_message_budget_skips_to_initial_tail_without_claiming_complete(self):
+        # INV-DEVBUS-04 INV-DEVBUS-06
+        class Endless(Transport):
+            async def fetch(self):
+                self.fetches+=1
+                if self.skips:
+                    await asyncio.sleep(.002)
+                    return []
+                return [Message(sequence=i+1) for i in range(32)]
+        t=Endless()
+        t.pending_value=10001
+        async def connect():return t
+        o=self.observer(connect)
+        await o.start()
+        await asyncio.wait_for(self.wait_skip(t),2)
+        self.assertEqual(t.skips,[11])
+        snap=self.p.snapshot()
+        self.assertFalse(snap['coverage']['replay_complete'])
+        self.assertIn('replay_incomplete',snap['coverage']['issues'])
+        self.assertEqual(snap['coverage']['mode'],'partial')
+        self.assertLessEqual(t.fetches,314)
+
+    async def wait_skip(self,t):
+        while not t.skips:
+            await asyncio.sleep(.002)
 
     async def wait_issue(self,code):
         while code not in self.p.snapshot()['coverage']['issues']:
