@@ -147,6 +147,63 @@ class SignedDeploy(unittest.TestCase):
   self.assertFalse(self.state.exists())
   self.assertEqual((self.target/NEW_LEAF).read_bytes(),NEW_PAYLOAD)
 
+ def test_literal_legacy_journal1_checkpoint13_recovers_before_signed14(self):
+  # Captured legacy schema-1 layout: flat checkpoint basenames plus accepted.json.
+  checkpoint_name='release-legacy13a'
+  checkpoint=self.checkpoints/checkpoint_name
+  checkpoint.mkdir(mode=0o700)
+  for relative,data in self.base.items():
+   self.write(checkpoint/Path(relative).name,data,0o600)
+  self.write(checkpoint/'accepted.json',self.initial_state,0o600)
+  after_files=dict(self.base);after_files['bin/_control_web.css']+=b'\n/* legacy journal fixture */\n'
+  after={'schema':1,'release_id':1,'manifest_sha256':'c'*64,'files':self.hashes(after_files)}
+  before=json.loads(self.initial_state)
+  journal={'schema':1,'before':before,'after':after,'checkpoint':checkpoint_name}
+  self.write(self.checkpoints/'pending.json',json.dumps(journal,separators=(',',':')).encode(),0o600)
+  self.release(1,self.changed())
+  self.accepted(dict(result='installed',release_id=1))
+  self.assertEqual(self.tree(),self.current | {'bin/_control_web.css':self.current['bin/_control_web.css']+b'\n/* owned signed future release */\n'})
+  self.assertFalse((self.checkpoints/'pending.json').exists())
+
+ def test_checkpoint_directory_entry_is_fsynced_before_pending_publish(self):
+  self.release(1,self.changed())
+  event_path=self.root/'owned-fsync-events.jsonl'
+  event_path.touch(mode=0o600)
+  pid=os.fork()
+  if pid==0:
+   def log(event):
+    fd=os.open(event_path,os.O_WRONLY|os.O_APPEND)
+    try:os.write(fd,json.dumps(event,separators=(',',':')).encode()+b'\n')
+    finally:os.close(fd)
+   real_fsync=os.fsync;real_replace=os.replace
+   def observed_fsync(fd):
+    try:path=os.readlink('/proc/self/fd/'+str(fd))
+    except OSError:path=''
+    log({'kind':'fsync','path':path})
+    return real_fsync(fd)
+   def observed_replace(source,destination,*args,**kwargs):
+    destination_path=Path(destination)
+    if not destination_path.is_absolute() and kwargs.get('dst_dir_fd') is not None:
+     destination_path=Path(os.readlink('/proc/self/fd/'+str(kwargs['dst_dir_fd'])))/destination_path
+    if destination_path==self.checkpoints/'pending.json':log({'kind':'pending_publish'})
+    return real_replace(source,destination,*args,**kwargs)
+   original_runner=self.runner
+   def stop_after_publish(args):
+    if args[1]=='stop':os._exit(73)
+    return original_runner(args)
+   self.runner=stop_after_publish
+   with patch('os.fsync',side_effect=observed_fsync),patch('os.replace',side_effect=observed_replace):
+    try:self.deploy().run()
+    except BaseException:os._exit(75)
+   os._exit(74)
+  waited,status=os.waitpid(pid,0);self.assertEqual(waited,pid)
+  self.assertTrue(os.WIFEXITED(status));self.assertEqual(os.WEXITSTATUS(status),73,'Child did not reach pending-journal boundary')
+  events=[json.loads(line) for line in event_path.read_text().splitlines()]
+  publication=next((index for index,event in enumerate(events) if event['kind']=='pending_publish'),None)
+  self.assertIsNotNone(publication,'No pending journal publication was observed')
+  durable_dirs={Path(event['path']).resolve() for event in events[:publication] if event['kind']=='fsync' and event['path']}
+  self.assertIn(self.checkpoints.resolve(),durable_dirs,'Checkpoint directory entry was not fsynced before pending publication')
+
  def test_real_ed25519_verifier_accepts_exact_bytes_and_refuses_forgery(self):
   self.release();manifest=(self.stage/'release.json').read_bytes();sig=(self.stage/'release.sig').read_bytes();key=self.key.read_bytes()
   self.assertIs(self.api.verify_ed25519(manifest,sig,key),True)
@@ -305,6 +362,18 @@ class SignedDeploy(unittest.TestCase):
   retained_hashes={sha(path.read_bytes()) for directory in retained for path in directory.rglob('*') if path.is_file()}
   self.assertTrue(set(self.hashes(self.base).values()) <= retained_hashes,'Failed deployment lost its durable previous13 snapshots')
 
+ def test_rollback_restores_noncanonical_before_state_byte_exactly(self):
+  state=json.loads(self.initial_state)
+  raw=json.dumps(state,ensure_ascii=False,indent=2).encode()+b'\n'
+  self.state.write_bytes(raw)
+  self.release(1,self.changed());self.fail_starts=1
+  try:self.deploy().run()
+  except (self.api.Rejected,RuntimeError):pass
+  else:self.fail('Synthetic start failure unexpectedly completed deployment')
+  self.assertTrue(any(call[1]=='stop' for call in self.calls),'Deployment refused before reaching rollback')
+  self.assertEqual(self.tree(),self.base)
+  self.assertEqual(self.state.read_bytes(),raw,'Rollback normalized or rewrote the accepted before-state bytes')
+
  def test_rollback_refuses_unknown_new_leaf_bytes_without_overwrite(self):
   self.release(1,self.changed());self.fail_starts=1
   injected=b'unknown owned synthetic bytes'
@@ -373,6 +442,7 @@ class SignedDeploy(unittest.TestCase):
       destination=Path(destination)
       if not destination.is_absolute() and kwargs.get('dst_dir_fd') is not None:
        destination=Path(os.readlink('/proc/self/fd/'+str(kwargs['dst_dir_fd'])))/destination
+      if boundary=='new_leaf_installed' and destination==self.target/NEW_LEAF:os._exit(73)
       if boundary=='mixed_tree' and destination==self.target/'bin/_control_web.css':os._exit(73)
       if boundary=='state_published' and destination==self.state and self.state.read_bytes()!=self.initial_state:os._exit(73)
       return result
@@ -407,6 +477,18 @@ class SignedDeploy(unittest.TestCase):
   with self.assertRaises(self.api.Rejected):self.deploy().run()
   self.assertEqual(self.tree(),self.base);self.assertEqual(self.state.read_bytes(),self.initial_state)
   self.assertEqual(self.observations[0],self.hashes(self.base))
+
+ def test_recovery_refuses_unknown_old_leaf_before_removing_known_new_leaf(self):
+  files=self.changed();self.release(1,files);self.child_crash('new_leaf_installed')
+  leaf=self.target/NEW_LEAF
+  self.assertEqual(leaf.read_bytes(),files[NEW_LEAF])
+  old_leaf=self.target/'bin/_control_web.css';old_leaf.write_bytes(b'unknown old-scope drift')
+  before=self.tree();state=self.state.read_bytes();pending=(self.checkpoints/'pending.json').read_bytes()
+  with self.assertRaises(self.api.Rejected):self.deploy().run()
+  self.assertEqual(self.tree(),before)
+  self.assertEqual(self.state.read_bytes(),state)
+  self.assertEqual((self.checkpoints/'pending.json').read_bytes(),pending)
+  self.assertEqual(leaf.read_bytes(),files[NEW_LEAF],'Recovery removed the known after-leaf before checking old-scope drift')
 
  def test_crash_after_state_publish_recognizes_committed_tree_without_restart(self):
   files=self.changed();self.release(1,files);self.child_crash('state_published')
