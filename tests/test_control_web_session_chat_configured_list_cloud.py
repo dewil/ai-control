@@ -5,6 +5,7 @@ and CodexSessions implementations are used only as stable baseline context; all
 native metadata and creator overlays are synthetic.
 """
 import copy
+from dataclasses import dataclass
 import importlib
 import inspect
 import json
@@ -12,6 +13,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from types import MappingProxyType
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,18 +30,35 @@ SID6 = '66666666-6666-4666-8666-666666666666'
 SID7 = '77777777-7777-4777-8777-777777777777'
 SID8 = '88888888-8888-4888-8888-888888888888'
 SID9 = '99999999-9999-4999-8999-999999999999'
+CONTEXT = {
+    'schema': 1, 'vendor': 'codex', 'context_kind': 'legacy_unbound',
+    'context_id': 'a' * 64, 'transport_generation': 3,
+    'context_generation': 7, 'native_version': '0.160.0',
+}
+
+
+@dataclass(frozen=True)
+class FakeCacheIdentity:
+    context: object
+    namespace: object
 
 
 class FakeCreator:
     def __init__(self, response):
         self.response = response
         self.calls = []
+        self.deadlines = []
 
-    def overlay(self, project):
+    def overlay(self, project, *, deadline=None):
         self.calls.append(project)
+        self.deadlines.append(('overlay', deadline))
         if isinstance(self.response, BaseException):
             raise self.response
         return copy.deepcopy(self.response)
+
+    def cache_identity(self, *, deadline=None):
+        self.deadlines.append(('cache_identity', deadline))
+        return FakeCacheIdentity(MappingProxyType(dict(CONTEXT)), None)
 
 
 class SyntheticRPC:
