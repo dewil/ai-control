@@ -28,7 +28,10 @@ PreparedBoundCreate; samples wall_ns once only AFTER valid syntax and live deadl
 then codec.prepare_create. No FS.
 `publish_create(base,context_ref,prepared,deadline)` requires active base; validates
 prepared same exact store scope BEFORE IO; returns unknown fresh R+G receipt only
-after both durable/fenced. Matching existing R+G is immutable replay data only;
+after both durable/fenced. Existing R+G replay requires freshly validated stored R
+to equal the entire prepared record (including created and digest), and G parent
+to equal its fresh R commitment. Different prepared data refuses; no substitution
+of an old receipt. Matching existing R+G is immutable replay data only;
 R-only/G-only/conflicting/foreign global G refuses, no reconstruction/repair.
 No other fullstore API or accepted-session capability in this slice.
 
@@ -75,11 +78,15 @@ permission to retry any native effect.
 
 Namespace directory flock serializes trusted readers/writers/cap/temp/NOREPLACE/
 fsync. Count ALL physical entries including malformed/temp/orphans. Maximum10000
-retained leaves,10002 incl transients; reserve capacity for BOTH new leaves before
-writing. Recheck cap/anchors through operation; no payloads filtered out of count.
+retained leaves,10002 incl transients. Before new R+G publication physical count
+MUST be <=9998, reserving both permanent leaves. Count/recheck at every publication
+step, including temporary files; transient count never exceeds10002. Recheck cap/anchors through operation; no payloads filtered out of count.
 First slice refuses namespaces containing recognized future C/I/A/stop-stage leaves
-(any BC-*.C/A.json, BI-*.json, BS-*.json); no partial acceptance/downgrade. This
-availability restriction is intentional until corresponding fullstore stages exist.
+(any BC-*.C/A.json, BI-*.json, BS-*.json), BEFORE lookup absence/replay or
+publication. Malformed recognized future-stage names also refuse when they could
+conceal a stage. This globally includes associated I_native checks; no partial
+acceptance/downgrade. Availability restriction is intentional until fullstore stages
+exist.
 
 R exact parent record schema from pure codec and K SHA256 canonical
 {context_ref,project,root,operation_id}; name BC-K.R.json. G exact
@@ -88,7 +95,21 @@ operation_id,r_parent}, name BG-S-session_ref.json. Both fullref/project/root/
 session/op identities match; r_parent exact fresh R commitment, role filename
 checked by codec. G permanent global UUID reservation, no delete/reassign.
 
-Under same lock initial publication checks R and global G absence. Write R then G
+Under the same namespace lock, BEFORE returning absence from lookup or publishing
+any new R, boundedly scan ALL recognized G leaves, strictly validating each fresh
+leaf and its identity/parent metadata. Match historical operation by exact
+{context_ref,project,root,operation_id} and corresponding BC-K.R.json parent name,
+even when caller proposes a different session_ref. Matching G with missing R makes
+that operation permanently store_unavailable: never return None, reconstruct R,
+or admit a new session UUID. Malformed/unreadable recognized G leaves fail closed
+because they could conceal this operation. Scan counts ALL physical entries and
+must complete within the original shared deadline/cap; never partial absence.
+Stored G parent role/name must agree with its operation K even before R is read.
+Existing R with missing G remains permanently unavailable. Existing R+G must be
+freshly validated together; this scan grants no native admission or dispatch.
+
+Under same lock initial publication checks operation history AND target global G
+absence BEFORE R creation. Write R then G
 via owner0600 O_EXCL/no-follow temp, file fsync, Linux RENAME_NOREPLACE, directory
 fsync; capture commitments AFTER rename. If R becomes visible without durable G,
 operation permanently unavailable: no reconstruction even with matching R. If both
@@ -101,7 +122,8 @@ Independent DESIGN then frozen blind RED, implementation unchanged tests, distin
 SOURCE and exact complete Ubuntu CI. Synthetic positive Linux tests must use actual
 NOREPLACE/FD/flock; Mac unsupported is reported honestly, not Linux success. Test
 fullref-first, no constructor/prepare IO, opaque/thread/lifetime, cap/orphans/temp,
-R/G corruption/conflict/globalUUID across accounts, actual no-replace, R-only
-crash unrecoverable, inode/path replacement/finalfences, replay no clock/no writes,
+R/G corruption/conflict/globalUUID across accounts, actual no-replace, R-only/G-only
+crash unrecoverable (including same operation with different proposed UUID), malformed
+G cannot hide history, exact replay including created,9998 capacity boundary, inode/path replacement/finalfences, replay no clock/no writes,
 shared deadline/busy and strict leaf schemas. No real credentials/project files or
 server account/runtime operations. Full C/I/A/stop/native/auth gates remain separate.
