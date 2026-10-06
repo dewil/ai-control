@@ -53,7 +53,14 @@ unavailable до отдельного UI contract. Unlinked label/project/engine
 как server-safe text, engine badge Codex/Claude; textContent/escaping, не HTML.
 Question/answer/summary/transcript/error/native payload из overview не читаются.
 
-Снимок заменяет DOM целиком, не append statuses/reasons. Same epoch revision
+Initial/new-epoch snapshot заменяет protected DOM атомарно, не append statuses/
+reasons. Routine SAMEepoch/revision/equalprojection success обновляет только status/
+observation/age, не заменяет rows, не теряет focus/expansion. Higher revision
+атомарно обновляет данные, сохраняя bounded expansion counts по stable view epoch:
+steps6/max512 group rows и max128 unlinked TASK; new count clamp к текущему array.
+Если focused stable task/reason остаётся, focus сохраняется на том же target;
+исчезнувший target не фокусирует другой элемент автоматически. New view epoch или
+auth/scope change очищает expansions/focus references. Same epoch revision
 не понижается; equal revision может обновить только top/source observed_at при том же
 validated projection content/health (отличие content без новой revision => unavailable).
 Новый epoch принимается только из CURRENT request generation и заменяет старый
@@ -74,6 +81,11 @@ future timestamp более300s относительно browser clock => «Вр
 successful fetch local freshness stale: «Обзор устарел. Обновите данные», reason
 navigation disabled; имеющиеся visible labels не становятся resolution/idle.
 Local age основан monotonic elapsed после accepted fetch, не wall-clock jumps.
+Routine polling в неизменном auth/scope может удержать только LAST validated DTO,
+не новый guessed server retention. Старые source health остаются видимы; successful
+GET сам не делает server-stale reason fresh. После15s локально устаревший snapshot
+может оставаться видимым с явной stale подписью и disabled navigation, но не как
+resolution/idle/fresh proof. Любой response failure очищает его, а не продлевает срок.
 Server state stale остаётся stale даже при только что завершённом GET.
 
 ## Компактность и доступность
@@ -154,8 +166,15 @@ current capture до render/status/enable-controls; stale completion никог�
 снимает loading нового запроса и не меняет revision/availability. A→B→A не совпадение
 identity generation. Abort не решает reason и не native mutation.
 
-Loading text «Обновляем обзор…», protected rows/counts/targets очищены; refresh
-button disabled пока current request inflight. Network/timeout/malformed/403/503
+Loading text «Обновляем обзор…», refresh button disabled пока current request
+inflight, ВСЕ navigation buttons disabled. First fetch, new auth/scope, revocation
+или loading без valid snapshot очищает protected rows/counts/targets. Routine poll
+в том же captured auth/scope при last fully validated locally fresh snapshot<=15s
+сохраняет labels/rows/health и expansion/focus; это presentation прежнего DTO, не
+server authority refresh. При locally stale existing snapshot можно оставить лишь
+явно stale display/navdisabled по правилу age; никаких fresh counts assertions.
+Новый response один допускает navigation вновь только после всех current/schema/
+epoch/revision/fresh checks; success/catch/finally старого request этого не делает. Network/timeout/malformed/403/503
 => «Обзор пока недоступен», protected rows/counts/targets очищены, manual refresh
 enabled после завершения текущего запроса.401 signedOut как существующий flow.
 Unavailable не empty-success; next scheduled GET допустим, native writers нет.
@@ -197,7 +216,11 @@ escaping; readonly clicks have zero POST/history calls. Current fullkey/qid/resu
 navigation focus succeeds; recreated sameagent/absentkey/changedgeneration refuses.
 Logout/401/grant refresh/selectionABA/visibility/olderepoch-revision late completion
 не resurrect rows и не downgrade controls нового request. Single inflight/6s timeout/
-5s nextpoll, no hidden polling, manual refresh no concurrent fetch; stale reason
+5s nextpoll, no hidden polling, manual refresh no concurrent fetch;
+routine unchanged-scope poll не blank rows и не сбрасывает expansion/focus, все
+navigation disabled in-flight; same revision/equalprojection не replaces rows,
+higher revision сохраняет bounded expansion по epoch, new epoch/scope очищает;
+любой failure очищает retained presentation; stale reason
 navigation disabled; accessibility labels/text/focus verified observable DOM.
 
 Разрешены synthetic mocked HTTP fixtures, не native/auth/owner stores. Backend

@@ -56,4 +56,6 @@ proof, без navigation/fresh claims; current authority refusal/revocation clea
 Первый UI сохраняет INV-WATTN01..03: global allowed-project overview, native status
 недоступен, unlinked TASK с различимыми reason badges; fulltask_key/qid/result
 переход только после current GET/tasks. Auth/scope/request generations и single
-inflight polling запрещают resurrect/downgrade после late response; никаких writers.
+inflight polling запрещают resurrect/downgrade после late response. Routine same-scope
+poll сохраняет last valid display/expansion/focus без active navigation; response
+failure или auth/scope change очищает protected rows. Никаких writers.
