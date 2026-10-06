@@ -110,6 +110,11 @@ class PreparedLifecycle(LifecycleReservation):
         _need(self.r_parent is None and self.record['status'] == 'unknown', 'invalid_request')
 
 
+class _NamespaceHandle:
+    """Identity only: directory descriptor and lock lifetime stay store-owned."""
+    __slots__ = ()
+
+
 class LifecycleStore(RenameStore):
     """Reuse anchored private FS and immutable publication, with lifecycle schemas."""
     _read = ConfiguredCreateStore._read
@@ -132,14 +137,16 @@ class LifecycleStore(RenameStore):
         _need(type(create) is bool, 'invalid_request')
         try:
             with super().locked(deadline, create=create) as base:
+                handle = None
                 if base is not None:
                     info = os.fstat(base)
-                    self._active[base] = (threading.get_ident(), info.st_dev, info.st_ino)
+                    handle = _NamespaceHandle()
+                    self._active[handle] = (base, threading.get_ident(), info.st_dev, info.st_ino)
                 try:
-                    yield base
+                    yield handle
                 finally:
-                    if base is not None:
-                        self._active.pop(base, None)
+                    if handle is not None:
+                        self._active.pop(handle, None)
         except _DomainError:
             raise
         except Exception:
@@ -147,14 +154,21 @@ class LifecycleStore(RenameStore):
 
     def _held(self, base, deadline):
         _deadline(deadline)
-        _need(type(base) is int and base in self._active)
-        info = os.fstat(base)
-        _need(self._active[base] == (threading.get_ident(), info.st_dev, info.st_ino))
-        self._anchor(base, deadline)
+        _need(type(base) is _NamespaceHandle and base in self._active)
+        fd, owner, dev, ino = self._active[base]
+        _need(owner == threading.get_ident())
+        info = os.fstat(fd)
+        _need((dev, ino) == (info.st_dev, info.st_ino))
+        self._anchor(fd, deadline)
+        return fd
 
     @_safe
     def capacity(self, base, deadline):
-        self._held(base, deadline)
+        # Private publication primitive receives the store-owned FD, never a caller FD.
+        _need(type(base) is int and any(
+            state[0] == base and state[1] == threading.get_ident()
+            for state in self._active.values()))
+        self._anchor(base, deadline)
         # SIMPLIFIED: one held namespace flock covers all stages and capacity.
         # Count every orphan/unknown entry; no cleanup or per-operation lock order.
         count = 0
@@ -175,7 +189,7 @@ class LifecycleStore(RenameStore):
         self._anchor(base, deadline)
 
     def _chain(self, base, context_id, root, sid, operation_id, deadline):
-        self._held(base, deadline)
+        base = self._held(base, deadline)
         key = _key(context_id, root, sid, operation_id)
         r_name, a_name = 'L-' + key + '.R.json', 'L-' + key + '.A.json'
         r_value, r_parent = self._read(base, r_name, deadline)
@@ -243,7 +257,8 @@ class LifecycleStore(RenameStore):
         def published():
             current = self.lookup(base, *identity, deadline)
             _need(current is not None and dict(current.record) == record)
-        self._publish(base, _name(record, 'R'), record, deadline, absent, published)
+        self._publish(self._held(base, deadline), _name(record, 'R'), record,
+                      deadline, absent, published)
         return self.lookup(base, *identity, deadline)
 
     @_safe
@@ -280,6 +295,6 @@ class LifecycleStore(RenameStore):
         identity = tuple(record[key] for key in ('context_id', 'root', 'sid', 'operation_id'))
         value = {'schema': 1, 'kind': 'session_lifecycle_accepted',
                  'record': record | {'status': 'accepted'}, 'parent': dict(current.r_parent)}
-        self._publish(base, _name(record, 'A'), value, deadline,
+        self._publish(self._held(base, deadline), _name(record, 'A'), value, deadline,
                       lambda: self._current(base, current, deadline))
         return self.lookup(base, *identity, deadline)
