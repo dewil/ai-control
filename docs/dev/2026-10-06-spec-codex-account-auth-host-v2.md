@@ -522,7 +522,7 @@ alg none/other reject, at_hash verified. No production TLS/JWS claim or local JW
 Coordinator delivery_guard alone proves LOCAL account-state serialization, never
 external profile/channel authority. Production final delivery additionally nests
 profile_source.delivery_guard(ctx,lease,*,deadline) then
-owned_transport.delivery_guard(channel,ctx,*,deadline), AFTER coordinator state
+owned_transport.delivery_guard(channel,ctx,*,source_guard,deadline), AFTER coordinator state
 guard in that fixed order. These trusted guards must capture pinned selected
 registration/grants/profile authority and exact owned stdio channel, and serialize
 ALL cooperating mutations/revocation/reconnect/drain until enqueue+publication.
@@ -552,3 +552,23 @@ result, both guards remain held and current through coordinator.publish_delivery
 any lost authority/error yields selected-account unknown quarantine, no stamp.
 Cleanup of guards cannot relaunch/reconnect/redeliver. None of these protocols
 accept deserialized dict/boolean/native path as authority.
+
+Coordinator integration mapping: full AuthStateValidator constructs AuthScope from
+ctx.reference and ctx.expected_native_principal via the same exact V2 validation;
+no execution/channel/token fields enter account-wide scope. All coordinator
+open/check/delivery_guard calls receive this scope, not arbitrary AuthContext.
+Full per-validator context+execution_identity/channel checks remain independently
+required; equalaccount scope does not merge native sessions. Local publish_delivery
+requires begin_enqueue→confirm after actual correlated write ACK; synthetic confirm
+is caller-attested local-only. Coordinator quarantine takes the SAME absolute
+operation deadline and can return refresh_busy/no mutation on guard timeout; a
+failed invalidation is never treated as completed production revoke/drain. Local
+RLock hold is cooperating caller bounded obligation; no OS preemption guarantee.
+
+Global trusted lock order is coordinator refresh mutex → selected source refresh
+lease → coordinator state guard → source authority guard → channel guard. A writer
+that needs refresh locks acquires them before ANY state/source/channel guard.
+No component acquires either refresh lock while holding state/source/channel guard;
+revoke-only operations skip refresh locks and take the remaining guards in order.
+Every wait shares caller absolute budget; mutation timeout is refusal, no assumed
+invalidation. Guards must not call back into coordinator.open or source.open_selected.
