@@ -73,7 +73,12 @@ class SessionVendorProjection(unittest.TestCase):
         ], "has_more": False}, repr(self.rpc.calls))
         self.assertEqual(self.resolved, ["demo"])
         self.assertEqual([method for method, _ in self.rpc.calls],
-                         ["thread/list", "thread/read", "thread/list", "thread/read"])
+                         ["thread/list", "thread/list", "thread/read", "thread/read"])
+        list_params = {"cwd": str(self.root), "limit": 100,
+                       "sourceKinds": ["cli", "vscode", "appServer"],
+                       "sortKey": "updated_at", "sortDirection": "desc"}
+        self.assertEqual([params for method, params in self.rpc.calls if method == "thread/list"],
+                         [list_params, {**list_params, "cursor": "opaque-next-page"}])
         self.assertEqual([params for method, params in self.rpc.calls if method == "thread/read"],
                          [{"threadId": SID, "includeTurns": False},
                           {"threadId": OTHER, "includeTurns": False}])
