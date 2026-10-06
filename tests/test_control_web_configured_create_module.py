@@ -289,7 +289,13 @@ class ConfiguredCreateModuleContract(unittest.TestCase):
         created = self.owner().create(PROJECT, OPERATION, 'configured', 'codex')
         self.assertEqual(created, {'operation_id': OPERATION, 'status': 'delivery_unknown'})
         methods_before = [method for method, *_ in self.rpc.calls]
-        self.assertEqual(methods_before, ['thread/start', 'thread/read'])
+        self.assertEqual(methods_before.count('thread/start'), 1)
+        self.assertEqual(methods_before.count('thread/read'), 1)
+        self.assertTrue(set(methods_before) <= {
+            'thread/start', 'thread/read', 'thread/loaded/list'})
+        directory, records = self._records()
+        self.assertEqual(set(records), {
+            stage_name('R', PROJECT, OPERATION), stage_name('C', PROJECT, OPERATION)})
         checked = self.owner().status(PROJECT, OPERATION, 'configured', 'codex')
         self.assertEqual(checked, {
             'operation_id': OPERATION, 'status': 'accepted',
@@ -298,6 +304,10 @@ class ConfiguredCreateModuleContract(unittest.TestCase):
         })
         self.assertEqual([method for method, *_ in self.rpc.calls].count('thread/start'), 1)
         self.assertEqual([method for method, *_ in self.rpc.calls].count('thread/read'), 2)
+        self.assertGreaterEqual([method for method, *_ in self.rpc.calls].count('thread/loaded/list'), 1)
+        directory, records = self._records()
+        self.assertEqual(set(records), {stage_name(k, PROJECT, OPERATION) for k in 'RCA'}
+                         | {origin_name(CONTEXT_ID, str(self.root), SID)})
 
     def test_invalid_selector_or_operation_id_fails_before_rpc_or_storage(self):
         owner = self.owner()
