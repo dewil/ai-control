@@ -7,6 +7,7 @@ import pathlib
 import socket
 import sys
 import unittest
+from collections.abc import Mapping
 from unittest import mock
 
 
@@ -31,9 +32,19 @@ def fullref(account="alpha"):
     }
 
 
+def plain_fixture(value):
+    """Snapshot frozen DTO mappings for independent expected JSON encoding."""
+    if isinstance(value, Mapping):
+        return {key: plain_fixture(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [plain_fixture(item) for item in value]
+    return value
+
+
 def canonical(value):
     return json.dumps(
-        value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        plain_fixture(value), sort_keys=True, ensure_ascii=False,
+        separators=(",", ":"), allow_nan=False,
     ).encode("utf-8")
 
 
