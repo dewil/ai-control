@@ -709,7 +709,8 @@ class SessionChat:
         for row in result['rows']:
             thread = self._proof(root, row['sid'])
             _need(type(row['title']) is str and _identity(row['status']))
-            export = {'sid': row['sid'], 'title': redact(row['title'])[:500], 'status': redact(row['status'])[:500]}
+            export = {'sid': row['sid'], 'title': redact(row['title'])[:500], 'status': redact(row['status'])[:500],
+                      'vendor': 'codex'}
             if _attention(thread):
                 export['needs_native_attention'] = True
             rows.append(export)
