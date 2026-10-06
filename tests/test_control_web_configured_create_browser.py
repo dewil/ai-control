@@ -325,9 +325,11 @@ class ConfiguredCreateBrowser(unittest.TestCase):
     def test_explicit_create_posts_exact_snapshot_and_honest_accepted_result(self):
         dialog = self.open_dialog()
         self.assertEqual(dialog.get_by_role('button', name='Создать', exact=True).count(), 1)
-        with self.page.expect_request(lambda r: r.method == 'POST' and '/api/session-create' in r.url) as captured:
+        with self.page.expect_response(lambda response: response.request.method == 'POST' and
+                                       '/api/session-create' in response.url) as completed:
             dialog.get_by_role('button', name='Создать', exact=True).click()
-        request = captured.value
+        self.assertEqual(completed.value.status, 200)
+        request = completed.value.request
         payload = json.loads(request.post_data)
         self.assertEqual(set(payload), {'project', 'operation_id', 'context_mode', 'provider_id'})
         self.assertEqual(payload['project'], 'demo')
