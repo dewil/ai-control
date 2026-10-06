@@ -7,6 +7,7 @@ import copy
 import json
 from pathlib import Path
 import re
+import time
 import unittest
 
 import test_control_web_project_cloud_browser as cloud
@@ -268,6 +269,9 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
         self.assertEqual(self.tile('loww').get_attribute('aria-pressed'), 'true')
 
     def test_logout_before_unknown_summary_response_never_dispatches_retry(self):
+        # Real logout invalidates the shared synthetic cookie. Restore with a
+        # fresh TOTP step (the public fixture intentionally prevents replay).
+        self.addCleanup(self.restore_synthetic_authentication)
         held = []
         self.page.route('**/api/session-project-summary*', lambda route: held.append(route))
         self.page.get_by_role('button', name='Обновить проекты', exact=True).click()
@@ -279,6 +283,13 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
         self.page.wait_for_timeout(250)
         self.assertEqual(len(held), 1)
         self.assertEqual(self.page.get_by_role('button', name='Обновить проекты', exact=True).count(), 0)
+
+    def restore_synthetic_authentication(self):
+        self.page.unroute('**/api/session-project-summary*')
+        self.page.goto(self.url)
+        self.page.locator('input[type=password]').wait_for()
+        self.page.wait_for_timeout((30 - time.time() % 30) * 1000 + 150)
+        self.login()
 
     def test_auth_failure_summary_has_no_retry_and_cleans_deadline(self):
         calls = self.route_sequence('session-project-summary', [(401, {'error': 'unauthorized'})])
