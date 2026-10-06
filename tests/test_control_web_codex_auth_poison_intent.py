@@ -66,6 +66,27 @@ class PoisonIntentContract(unittest.TestCase):
         self.assertTrue(callable(method), "AuthCoordinator.poison_intent is required")
         return method
 
+    def arm_clock_poison(self, method):
+        fired, completed, errors = [], [], []
+
+        def inject():
+            fired.append(True)
+            done = threading.Event()
+
+            def worker():
+                try:
+                    method(self.scope, "refresh_unknown")
+                except BaseException as exc:
+                    errors.append(exc)
+                finally:
+                    done.set()
+
+            threading.Thread(target=worker, daemon=True).start()
+            completed.append(done.wait(1.0))
+
+        self.clock.once = inject
+        return fired, completed, errors
+
     def denied(self, call):
         with self.assertRaises(self.auth.AuthError) as raised:
             call()
@@ -148,15 +169,13 @@ class PoisonIntentContract(unittest.TestCase):
             with self.coordinator.delivery_guard(
                 lease, self.scope, deadline=110.0
             ) as guard:
-                fired = []
-
-                def inject():
-                    fired.append(True)
-                    poison(self.scope, "refresh_unknown")
-
-                self.clock.once = inject
+                guard_detail = self.coordinator._guards[guard]
+                fired, completed, errors = self.arm_clock_poison(poison)
                 self.denied(guard.begin_enqueue)
                 self.assertEqual(fired, [True], "begin did not sample the injected clock")
+                self.assertEqual(completed, [True], "poison waited inside begin's clock")
+                self.assertEqual(errors, [])
+                self.assertIs(guard_detail.begun, False)
                 # A denied begin has no claimed effect to confirm or publish.
                 self.denied(guard.confirm)
                 self.denied(lambda: self.coordinator.publish_delivery(
@@ -185,17 +204,17 @@ class PoisonIntentContract(unittest.TestCase):
             ) as guard:
                 guard.begin_enqueue()
                 guard.confirm()
-                fired = []
-
-                def inject():
-                    fired.append(True)
-                    poison(self.scope, "refresh_unknown")
-
-                self.clock.once = inject
+                account = self.coordinator._leases[lease].account
+                generation_before = account.credential_generation
+                self.assertEqual(generation_before, 1)
+                fired, completed, errors = self.arm_clock_poison(poison)
                 self.denied(lambda: self.coordinator.publish_delivery(
                     lease, guard=guard, deadline=110.0
                 ))
                 self.assertEqual(fired, [True], "publish did not sample the injected clock")
+                self.assertEqual(completed, [True], "poison waited inside publish's clock")
+                self.assertEqual(errors, [])
+                self.assertEqual(account.credential_generation, generation_before)
                 self.assertEqual(first.credential_generation, 1)
         finally:
             self.clock.once = None
