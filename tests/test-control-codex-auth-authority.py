@@ -308,9 +308,11 @@ class AuthorityContract(unittest.TestCase):
         lease = self.open_a()
         changed = self.auth.AuthScope(reference(), principal("auth0|bob"))
         try:
-            self.error("authority_stale", lambda: self.coordinator.delivery_guard(
-                lease, changed, deadline=110.0
-            ).__enter__())
+            def enter_changed_scope():
+                with self.coordinator.delivery_guard(lease, changed, deadline=110.0):
+                    pass
+
+            self.error("authority_stale", enter_changed_scope)
             with self.coordinator.delivery_guard(lease, self.scope_a, deadline=100.25) as guard:
                 guard.begin_enqueue()
                 guard.confirm()
