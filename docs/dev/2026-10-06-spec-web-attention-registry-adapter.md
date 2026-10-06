@@ -255,7 +255,9 @@ exact True, иначе forbidden до projection/source. `SocketBackend.attentio
 посылает exact `{'op':'attention_snapshot'}`. Extra/duplicate keys, native selectors,
 principal/project/path/context flags — invalid_request до dispatch. Ответ проверяется
 по strict safe schema composer (включая caps/unique IDs/count consistency), ошибка
-safe forbidden/unavailable; никакой fallback к TASK/native RPC.
+safe forbidden/unavailable; internal composer error stale нормализуется broker
+в unavailable/HTTP503, не raw passthrough и не успешный snapshot; protected UI
+данные очищаются при таком отказе. Никакой fallback к TASK/native RPC.
 
 GET `/api/attention`: authenticated current single-owner cookie, Origin exact-match
 если header присутствует; query params и request body запрещены (duplicate/extra
