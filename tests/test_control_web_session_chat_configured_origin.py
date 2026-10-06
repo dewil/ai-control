@@ -132,15 +132,18 @@ class FakeConfiguredCreator:
         self.loaded_error = {}
         self.history_error = {}
         self.history_none = set()
+        self.deadlines = []
 
-    def loaded_origin(self, project, sid):
+    def loaded_origin(self, project, sid, *, deadline=None):
+        self.deadlines.append(('loaded_origin', deadline))
         self.loaded_calls.append((project, sid))
         error = self.loaded_error.get(sid)
         if error is not None:
             raise error
         return self.origins.get(sid)
 
-    def unavailable_history(self, project, sid):
+    def unavailable_history(self, project, sid, *, deadline=None):
+        self.deadlines.append(('unavailable_history', deadline))
         self.history_calls.append((project, sid))
         error = self.history_error.get(sid)
         if error is not None:
@@ -151,7 +154,8 @@ class FakeConfiguredCreator:
             return None
         return witness(sid, self.root, attention=True)
 
-    def overlay(self, project):
+    def overlay(self, project, *, deadline=None):
+        self.deadlines.append(('overlay', deadline))
         return self.overlay_result
 
 
@@ -214,7 +218,8 @@ class SessionChatConfiguredOrigin(unittest.TestCase):
         self.assertEqual(starts[0]['model'], 'gpt-wire')
         self.assertEqual(starts[0]['effort'], 'low')
         self.assertNotIn('thread/resume', self.rpc.methods())
-        self.assertIn('thread/start', self.rpc.methods())
+        self.assertNotIn('thread/start', self.rpc.methods(),
+                         'sending to an existing loaded thread starts only a turn')
 
     def test_unindexed_random_loaded_sid_keeps_existing_resume_path(self):
         self.creator.origins.pop(OTHER, None)
