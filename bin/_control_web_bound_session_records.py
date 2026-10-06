@@ -4,7 +4,7 @@ from functools import wraps
 import hashlib
 import json
 import re
-from types import MappingProxyType
+from collections.abc import Mapping
 
 
 class BoundRecordError(ValueError):
@@ -30,9 +30,55 @@ def _require(condition, code='invalid_request'):
         raise BoundRecordError(code)
 
 
+@dataclass(frozen=True, slots=True, repr=False, init=False, eq=False)
+class _FrozenMap(Mapping):
+    _items: tuple
+
+    def __init__(self, captured):
+        object.__setattr__(self, '_items', tuple(
+            (key, _freeze(value)) for key, value in captured.items()))
+
+    def __getitem__(self, key):
+        return _owned_values(self)[key]
+
+    def __iter__(self):
+        return iter(_owned_values(self))
+
+    def __len__(self):
+        return len(_owned_values(self))
+
+
+def _owned_values(value, code='invalid_request'):
+    # Inspect fixed primitive slots before invoking any retained object method.
+    try:
+        items = object.__getattribute__(value, '_items')
+    except AttributeError:
+        raise BoundRecordError(code) from None
+    _require(type(items) is tuple, code)
+    result = {}
+    for pair in items:
+        _require(type(pair) is tuple and len(pair) == 2, code)
+        key, child = pair
+        _require(type(key) is str and key not in result, code)
+        _require(type(child) in (str, int, type(None), _FrozenMap), code)
+        if type(child) is _FrozenMap:
+            _owned_values(child, code)
+        result[key] = child
+    return result
+
+
 def _mapping(value, code='invalid_request'):
-    _require(type(value) in (dict, MappingProxyType), code)
-    _require(all(type(key) is str for key in value), code)
+    _require(type(value) in (dict, _FrozenMap), code)
+    captured = dict.copy(value) if type(value) is dict else _owned_values(value, code)
+    _require(all(type(key) is str for key in captured), code)
+    return captured
+
+
+def _capture(value, code='invalid_request'):
+    if type(value) in (dict, _FrozenMap):
+        shallow = _mapping(value, code)
+        return {key: _capture(child, code) for key, child in shallow.items()}
+    _require(type(value) in (str, int, type(None)), code)
     return value
 
 
@@ -59,6 +105,7 @@ def _hex(value, count=64, code='invalid_request'):
 
 def _reference(value):
     code = 'context_invalid'
+    value = _capture(value, code)
     _keys(value, 'schema provider_id account_id profile_instance_id adapter_revision registration_snapshot', code)
     _require(type(value['schema']) is int and value['schema'] == 2, code)
     for key, expected in (('provider_id', 'codex'), ('adapter_revision', 'codex-chatgpt-external-auth-host-v2')):
@@ -93,11 +140,12 @@ def _digest(value):
 
 def _freeze(value):
     if type(value) is dict:
-        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+        return _FrozenMap(value)
     return value
 
 
 def _commitment(value, expected=None, pattern=None):
+    value = _capture(value)
     _keys(value, 'filename dev ino ctime_ns sha256')
     filename = value['filename']
     _require(type(filename) is str)
@@ -112,11 +160,15 @@ def _commitment(value, expected=None, pattern=None):
 
 
 def _record(value, stop, expected_ref=None):
-    _mapping(value)
+    value = _mapping(value)
     _require('context_ref' in value)
+    # Unsupported nested mapping representations are record-shape errors.
+    _require(type(value['context_ref']) in (dict, _FrozenMap))
     ref = _reference(value['context_ref'])
     if expected_ref is not None:
         _require(ref == expected_ref, 'context_drift')
+    value['context_ref'] = ref
+    value = _capture(value)
     common = 'schema kind context_ref root session_ref operation_id created digest'
     _keys(value, common + (' host_id invocation_id origin_parent' if stop else ' project'))
     _require(type(value['schema']) is int and value['schema'] == 1)
@@ -145,6 +197,7 @@ def _record(value, stop, expected_ref=None):
 def _parents(record, status, parents, stop):
     _require(type(status) is str and status in ('unknown', 'accepted'))
     roles = ('S', 'T') if stop else ('R', 'G', 'C', 'I_session', 'I_native', 'A')
+    parents = _capture(parents)
     _keys(parents, ' '.join(roles))
     fields = ('context_ref', 'root', 'session_ref', 'operation_id') if stop else ('context_ref', 'project', 'root', 'operation_id')
     key = _digest({field: record[field] for field in fields})
