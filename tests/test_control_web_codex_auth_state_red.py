@@ -74,12 +74,16 @@ class Clock:
 
 
 class FakeGuard:
-    def __init__(self, events, label):
+    def __init__(self, events, label, hook=None):
         self.events = events
         self.label = label
+        self.hook = hook
 
     def validate_current(self, *, deadline):
         self.events.append((self.label + ".validate", deadline))
+        if self.hook is not None:
+            hook, self.hook = self.hook, None
+            hook()
 
 
 class FakeSource:
@@ -94,6 +98,8 @@ class FakeSource:
         self.finish_failure = None
         self.quarantine_failure = None
         self.close_hook = None
+        self.guard_validate_hook = None
+        self.completed_attempts = []
 
     def open_selected(self, ctx, *, deadline):
         self.events.append(("source.open", deadline))
@@ -137,7 +143,7 @@ class FakeSource:
         assert lease is self.lease
         self.events.append(("source.guard.enter", deadline))
         try:
-            yield FakeGuard(self.events, "source.guard")
+            yield FakeGuard(self.events, "source.guard", self.guard_validate_hook)
         finally:
             self.events.append(("source.guard.exit", deadline))
 
@@ -148,6 +154,7 @@ class FakeSource:
             self.finish_hook()
         if self.finish_failure is not None:
             raise self.auth.AuthError(self.finish_failure)
+        self.completed_attempts.append(attempt_id)
 
     def quarantine_unknown(self, lease, ctx, attempt_id, code, *, deadline):
         assert lease is self.lease
@@ -199,9 +206,17 @@ class FakeTransport:
         self.ctx = None
         self.callbacks = {}
         self.callback_ids = {}
+        self.capture_owner = None
+        self.callback_failure = None
+        self.login_write_hook = None
+        self.login_receipt_hook = None
+        self.write_refresh_hook = None
 
     def capture(self, ctx, *, validator_id, deadline):
         self.events.append(("transport.capture", deadline))
+        if self.capture_owner is not None and validator_id != self.capture_owner:
+            raise self.auth.AuthError("owned_host_unproven")
+        self.capture_owner = validator_id
         self.ctx = ctx
         self.channel = self.auth.OwnedChannel(
             ctx, "123e4567-e89b-42d3-a456-426614174001",
@@ -210,7 +225,8 @@ class FakeTransport:
         return self.channel
 
     def validate_current(self, channel, ctx, *, deadline):
-        assert channel is self.channel
+        if channel is not self.channel:
+            raise self.auth.AuthError("authority_stale")
         self.events.append(("transport.validate", deadline))
 
     def capture_callback(self, channel, request_id, params, *, deadline):
@@ -225,7 +241,8 @@ class FakeTransport:
         return self.callbacks[key]
 
     def validate_callback(self, callback, channel, *, deadline):
-        assert channel is self.channel
+        if channel is not self.channel or self.callback_failure is not None:
+            raise self.auth.AuthError(self.callback_failure or "authority_stale")
         request_id = self.callback_ids[id(callback)]
         assert callback is self.callbacks[(id(channel), request_id)]
         self.events.append(("transport.callback.validate", request_id))
@@ -246,6 +263,8 @@ class FakeTransport:
         sent = str(uuid.uuid4())  # Transport owns the JSON-RPC correlation id.
         self.sent_login_ids.append(sent)
         self.events.append(("transport.login", sent))
+        if self.login_write_hook is not None:
+            self.login_write_hook()
         if self.receipt_mode in ("duplicate", "late"):
             raise self.auth.AuthError("refresh_unknown")
         response = sent
@@ -263,9 +282,13 @@ class FakeTransport:
                 "123e4567-e89b-42d3-a456-426614174001",
                 "123e4567-e89b-42d3-a456-426614174003", 2,
             )
-        return self.auth.LoginReceipt(
+        receipt = self.auth.LoginReceipt(
             receipt_channel, sent, response, "chatgptAuthTokens"
         )
+        self.events.append(("transport.login.receipt", response))
+        if self.login_receipt_hook is not None:
+            self.login_receipt_hook()
+        return receipt
 
     def write_refresh(self, channel, callback, *, guard, deadline):
         assert channel is self.channel
@@ -273,6 +296,8 @@ class FakeTransport:
         request_id = self.callback_ids[id(callback)]
         self.write_count += 1
         self.events.append(("transport.write_refresh", request_id))
+        if self.write_refresh_hook is not None:
+            self.write_refresh_hook()
         accepted = 64 if self.write_mode == "valid" else 63
         return self.auth.WriteReceipt(channel, request_id, 64, accepted)
 
@@ -294,6 +319,10 @@ class AuthStateContract(unittest.TestCase):
         self.exchange_after_hook = None
         self.complete_before_hook = None
         self.complete_after_hook = None
+        self.publish_before_hook = None
+        self.publish_after_hook = None
+        self.last_provisional = None
+        self.last_authority_lease = None
         self.source = FakeSource(self.auth, self.events)
         self.oauth = FakeOAuth(self.auth, self.events, self.clock)
         self.transport = FakeTransport(self.auth, self.events, self.clock)
@@ -302,6 +331,11 @@ class AuthStateContract(unittest.TestCase):
         owner = self
 
         class RecordingCoordinator(authority.AuthCoordinator):
+            def open(self, *args, **kwargs):
+                result = super().open(*args, **kwargs)
+                owner.last_authority_lease = result
+                return result
+
             def claim_reservation(self, *args, **kwargs):
                 events.append(("coordinator.claim", None))
                 return super().claim_reservation(*args, **kwargs)
@@ -328,8 +362,16 @@ class AuthStateContract(unittest.TestCase):
                 return result
 
             def publish_delivery(self, *args, **kwargs):
+                if owner.publish_before_hook is not None:
+                    owner.publish_before_hook()
+                detail = self._guards[kwargs["guard"]]
+                owner.assertIs(detail.confirmed, True)
+                events.append(("guard.confirmed", None))
                 result = super().publish_delivery(*args, **kwargs)
                 events.append(("coordinator.publish", None))
+                owner.last_provisional = result
+                if owner.publish_after_hook is not None:
+                    owner.publish_after_hook()
                 return result
 
             def _complete_terminal(self, *args, **kwargs):
@@ -377,6 +419,8 @@ class AuthStateContract(unittest.TestCase):
             ("oauth.exchange", "source.rotation"),
             ("source.rotation", "transport.login"),
             ("transport.login", "coordinator.publish"),
+            ("transport.login.receipt", "guard.confirmed"),
+            ("guard.confirmed", "coordinator.publish"),
             ("coordinator.publish", "source.finish"),
             ("source.finish", "coordinator.complete"),
         ):
@@ -444,8 +488,20 @@ class AuthStateContract(unittest.TestCase):
         self.source.reserve_failure = "refresh_unknown"
         self.denied("refresh_unknown", self.admit)
         self.assertEqual(self.codes().count("source.reserve"), 1)
+        self.assertNotIn("coordinator.abandon", self.codes())
+        self.assertNotIn("coordinator.durable", self.codes())
         self.assertNotIn("oauth.exchange", self.codes())
         self.assertNotIn("transport.login", self.codes())
+        second = self.auth.AuthStateValidator(
+            profile_source=self.source, oauth_client=self.oauth,
+            owned_transport=FakeTransport(self.auth, self.events, self.clock),
+            coordinator=self.coordinator, clock=self.clock,
+            wall_clock=lambda: 1000.0,
+        )
+        self.denied(
+            "authority_stale", lambda: second.admit(self.ctx, deadline=125.0)
+        )
+        self.assertEqual(self.codes().count("source.reserve"), 1)
 
     def test_matching_not_written_abandons_without_oauth_or_poison(self):
         self.source.reserve_mode = "not_written"
@@ -577,6 +633,105 @@ class AuthStateContract(unittest.TestCase):
         finally:
             self.coordinator.release(lease)
 
+    def test_terminal_completion_requires_exact_guard_publication_and_live_f(self):
+        scope = self.authority.AuthScope(reference(), principal())
+        scope_b = self.authority.AuthScope(reference("beta"), principal())
+        lease = self.coordinator.open(scope, deadline=125.0)
+        lease_b = self.coordinator.open(scope_b, deadline=125.0)
+        validator_id = str(uuid.uuid4())
+        attempt_id = str(uuid.uuid4())
+        try:
+            reservation = self.coordinator.claim_reservation(
+                lease, validator_id, attempt_id, deadline=125.0
+            )
+            self.coordinator.mark_reservation_durable(
+                lease, guard=reservation,
+                outcome=self.auth.ReserveOutcome(attempt_id, "reserved"),
+            )
+            self.coordinator.begin_exchange(
+                lease, validator_id, guard=reservation, deadline=125.0
+            )
+            with self.coordinator.delivery_guard(
+                lease, scope, deadline=125.0
+            ) as guard:
+                guard.begin_enqueue(
+                    reservation_guard=reservation, deadline=101.0
+                )
+                guard.confirm()
+                provisional = self.coordinator.publish_delivery(
+                    lease, guard=guard, deadline=101.0
+                )
+                self.assertNotIsInstance(provisional, self.authority.AuthorityStamp)
+                with self.assertRaises((self.auth.AuthError, TypeError, ValueError)):
+                    self.auth.Delivery(
+                        str(uuid.uuid4()), self.ctx,
+                        self.auth.OwnedChannel(
+                            self.ctx,
+                            "123e4567-e89b-42d3-a456-426614174001",
+                            "123e4567-e89b-42d3-a456-426614174002", 1,
+                        ),
+                        provisional,
+                    )
+                self.denied("authority_stale", lambda: self.coordinator._complete_terminal(
+                    lease, guard=guard, publication=object(), deadline=101.0
+                ))
+                with self.coordinator.delivery_guard(
+                    lease_b, scope_b, deadline=125.0
+                ) as foreign:
+                    self.denied("authority_stale", lambda: self.coordinator._complete_terminal(
+                        lease, guard=foreign, publication=provisional, deadline=101.0
+                    ))
+                self.clock.now = 101.01  # F expired; D=125 has not.
+                self.denied("authority_stale", lambda: self.coordinator._complete_terminal(
+                    lease, guard=guard, publication=provisional, deadline=101.0
+                ))
+                self.denied("authority_stale", lambda: self.coordinator.check(
+                    lease, scope, deadline=125.0
+                ))
+        finally:
+            self.coordinator.release(lease)
+            self.coordinator.release(lease_b)
+
+    def test_poison_vs_enqueue_both_orders_preserve_one_claim(self):
+        for order in ("poison_first", "begin_first"):
+            with self.subTest(order=order):
+                self.fresh_fixture()
+                scope = self.authority.AuthScope(reference(), principal())
+                lease = self.coordinator.open(scope, deadline=125.0)
+                validator_id = str(uuid.uuid4())
+                attempt_id = str(uuid.uuid4())
+                try:
+                    reservation = self.coordinator.claim_reservation(
+                        lease, validator_id, attempt_id, deadline=125.0
+                    )
+                    self.coordinator.mark_reservation_durable(
+                        lease, guard=reservation,
+                        outcome=self.auth.ReserveOutcome(attempt_id, "reserved"),
+                    )
+                    self.coordinator.begin_exchange(
+                        lease, validator_id, guard=reservation, deadline=125.0
+                    )
+                    with self.coordinator.delivery_guard(
+                        lease, scope, deadline=125.0
+                    ) as guard:
+                        if order == "poison_first":
+                            self.coordinator.poison_intent(scope, "refresh_unknown")
+                            self.denied("authority_stale", lambda: guard.begin_enqueue(
+                                reservation_guard=reservation, deadline=101.0
+                            ))
+                            self.assertIs(self.coordinator._guards[guard].begun, False)
+                        else:
+                            guard.begin_enqueue(
+                                reservation_guard=reservation, deadline=101.0
+                            )
+                            self.coordinator.poison_intent(scope, "refresh_unknown")
+                            guard.confirm()  # The claimed effect may report known outcome.
+                            self.denied("authority_stale", lambda: self.coordinator.publish_delivery(
+                                lease, guard=guard, deadline=101.0
+                            ))
+                finally:
+                    self.coordinator.release(lease)
+
     def test_finish_failure_after_known_receipt_never_returns_delivery(self):
         self.source.finish_failure = "refresh_unknown"
         self.denied("refresh_unknown", self.admit)
@@ -589,6 +744,27 @@ class AuthStateContract(unittest.TestCase):
         self.assertEqual(len(self.oauth.requests), 1)
         self.denied("authority_stale", self.admit)
         self.assertEqual(len(self.oauth.requests), 1)
+
+    def test_quarantine_deadline_failure_cannot_clear_local_poison(self):
+        self.source.finish_failure = "refresh_unknown"
+        self.source.finish_hook = lambda: setattr(self.clock, "now", 126.0)
+        self.source.quarantine_failure = "refresh_busy"
+        self.denied("refresh_unknown", self.admit)
+        self.clock.now = 100.0  # Fresh caller budget cannot undo prior poison.
+        second = self.auth.AuthStateValidator(
+            profile_source=self.source, oauth_client=self.oauth,
+            owned_transport=FakeTransport(self.auth, self.events, self.clock),
+            coordinator=self.coordinator, clock=self.clock,
+            wall_clock=lambda: 1000.0,
+        )
+        self.denied(
+            "authority_stale", lambda: second.admit(self.ctx, deadline=125.0)
+        )
+        self.assertEqual(len(self.oauth.requests), 1)
+        scope_b = self.authority.AuthScope(reference("beta"), principal())
+        lease_b = self.coordinator.open(scope_b, deadline=125.0)
+        self.coordinator.check(lease_b, scope_b, deadline=125.0)
+        self.coordinator.release(lease_b)
 
     def test_bad_login_receipt_is_unknown_with_no_retry(self):
         for mode in ("malformed", "mismatched", "stale", "wrong_channel", "duplicate", "late"):
@@ -654,9 +830,101 @@ class AuthStateContract(unittest.TestCase):
         self.assertEqual(len(self.oauth.requests), 1)
         self.assertEqual(self.transport.write_count, 0)
 
+    def test_callback_invalidation_before_claim_is_local_and_sends_nothing(self):
+        initial = self.admit()
+        callback = self.validator.capture_callback(
+            initial, 82,
+            {"reason": "unauthorized", "previousAccountId": WORKSPACE},
+            deadline=125.0,
+        )
+        self.transport.callback_failure = "authority_stale"
+        before_reserve = self.codes().count("source.reserve")
+        self.denied(
+            "authority_stale",
+            lambda: self.validator.refresh(initial, callback, deadline=125.0),
+        )
+        self.assertEqual(self.codes().count("source.reserve"), before_reserve)
+        self.assertEqual(len(self.oauth.requests), 1)
+        self.assertEqual(self.transport.write_count, 0)
+        self.validator.current(initial, self.ctx, deadline=125.0)
+
+    def test_callback_invalidation_after_claim_poisons_before_exchange(self):
+        initial = self.admit()
+        callback = self.validator.capture_callback(
+            initial, 83,
+            {"reason": "unauthorized", "previousAccountId": WORKSPACE},
+            deadline=125.0,
+        )
+        self.source.reserve_hook = lambda: setattr(
+            self.transport, "callback_failure", "authority_stale"
+        )
+        self.denied(
+            "refresh_unknown",
+            lambda: self.validator.refresh(initial, callback, deadline=125.0),
+        )
+        self.assertEqual(len(self.oauth.requests), 1)
+        self.assertEqual(self.transport.write_count, 0)
+
+    def test_callback_invalidation_after_exchange_claim_blocks_later_effects(self):
+        initial = self.admit()
+        callback = self.validator.capture_callback(
+            initial, 86,
+            {"reason": "unauthorized", "previousAccountId": WORKSPACE},
+            deadline=125.0,
+        )
+        self.oauth.before_return_hook = lambda: setattr(
+            self.transport, "callback_failure", "authority_stale"
+        )
+        self.denied(
+            "refresh_unknown",
+            lambda: self.validator.refresh(initial, callback, deadline=125.0),
+        )
+        self.assertEqual(len(self.oauth.requests), 2)  # Initial + one claimed refresh.
+        self.assertEqual(self.transport.write_count, 0)
+        self.assertEqual(self.codes().count("source.rotation"), 1)
+
+    def test_second_validator_cannot_capture_existing_channel(self):
+        self.admit()
+        second = self.auth.AuthStateValidator(
+            profile_source=self.source, oauth_client=self.oauth,
+            owned_transport=self.transport, coordinator=self.coordinator,
+            clock=self.clock, wall_clock=lambda: 1000.0,
+        )
+        before_read = self.codes().count("source.read")
+        self.denied(
+            "owned_host_unproven", lambda: second.admit(self.ctx, deadline=125.0)
+        )
+        self.assertEqual(self.codes().count("source.read"), before_read)
+        self.assertEqual(len(self.oauth.requests), 1)
+
+    def test_stale_channel_generation_refuses_current_and_refresh(self):
+        initial = self.admit()
+        callback = self.validator.capture_callback(
+            initial, 84,
+            {"reason": "unauthorized", "previousAccountId": WORKSPACE},
+            deadline=125.0,
+        )
+        self.transport.channel = self.auth.OwnedChannel(
+            self.ctx,
+            "123e4567-e89b-42d3-a456-426614174001",
+            "123e4567-e89b-42d3-a456-426614174002", 2,
+        )
+        self.denied(
+            "authority_stale",
+            lambda: self.validator.current(initial, self.ctx, deadline=125.0),
+        )
+        self.denied(
+            "authority_stale",
+            lambda: self.validator.refresh(initial, callback, deadline=125.0),
+        )
+        self.assertEqual(len(self.oauth.requests), 1)
+        self.assertEqual(self.transport.write_count, 0)
+
     def test_deadline_during_terminal_finish_refuses_result(self):
-        self.source.finish_hook = lambda: setattr(self.clock, "now", 126.0)
+        # F is at most guard entry +1s; outer D=125 remains well in the future.
+        self.source.finish_hook = lambda: setattr(self.clock, "now", 101.01)
         self.denied("refresh_unknown", self.admit)
+        self.assertLess(self.clock.now, 125.0)
         self.assertEqual(len(self.transport.sent_login_ids), 1)
         self.assertIn("source.finish", self.codes())
         self.assertNotIn("coordinator.complete", self.codes())
@@ -694,22 +962,69 @@ class AuthStateContract(unittest.TestCase):
         exposed = repr(raised.exception) + str(raised.exception)
         for value in (ACCESS_MARKER, REFRESH_MARKER, SUBJECT):
             self.assertNotIn(value, exposed)
+            self.assertNotIn(value, repr(self.events))
         self.assertNotIn(ACCESS_MARKER, repr(self.ctx))
         self.assertNotIn(REFRESH_MARKER, repr(self.ctx))
+        self.assertFalse(hasattr(self.validator, "supported"))
 
     def test_finish_callback_cannot_reenter_same_account_while_pending(self):
         observations = []
         scope = self.authority.AuthScope(reference(), principal())
 
         def during_finish():
-            with self.assertRaises(self.authority.AuthError) as raised:
-                self.coordinator.open(scope, deadline=100.25)
+            lease = self.last_authority_lease
+
+            def enter_guard():
+                with self.coordinator.delivery_guard(
+                    lease, scope, deadline=100.25
+                ):
+                    pass
+
+            for call in (
+                lambda: self.coordinator.check(lease, scope, deadline=100.25),
+                lambda: self.coordinator.open(scope, deadline=100.25),
+                enter_guard,
+            ):
+                with self.assertRaises(self.authority.AuthError) as raised:
+                    call()
+                observations.append(raised.exception.code)
+            before = len(self.oauth.requests)
+            second = self.auth.AuthStateValidator(
+                profile_source=self.source, oauth_client=self.oauth,
+                owned_transport=FakeTransport(self.auth, self.events, self.clock),
+                coordinator=self.coordinator, clock=self.clock,
+                wall_clock=lambda: 1000.0,
+            )
+            with self.assertRaises(self.auth.AuthError) as raised:
+                second.admit(self.ctx, deadline=100.25)
             observations.append(raised.exception.code)
+            self.assertEqual(len(self.oauth.requests), before)
 
         self.source.finish_hook = during_finish
         delivery = self.admit()
-        self.assertEqual(observations, ["authority_stale"])
+        self.assertEqual(observations, ["authority_stale"] * 4)
         self.assertIsInstance(delivery, self.auth.Delivery)
+
+    def test_refresh_finish_callback_denies_same_thread_current(self):
+        initial = self.admit()
+        callback = self.validator.capture_callback(
+            initial, 81,
+            {"reason": "unauthorized", "previousAccountId": WORKSPACE},
+            deadline=125.0,
+        )
+        observations = []
+
+        def during_refresh_finish():
+            with self.assertRaises(self.auth.AuthError) as raised:
+                self.validator.current(initial, self.ctx, deadline=100.25)
+            observations.append(raised.exception.code)
+
+        self.source.finish_hook = during_refresh_finish
+        self.assertIsInstance(
+            self.validator.refresh(initial, callback, deadline=125.0),
+            self.auth.Delivery,
+        )
+        self.assertEqual(observations, ["authority_stale"])
 
     def test_other_account_is_independent_during_terminal_pending(self):
         observations = []
@@ -734,6 +1049,48 @@ class AuthStateContract(unittest.TestCase):
         self.assertEqual(self.codes().count("source.finish"), 1)
         self.assertIn("source.quarantine", self.codes())
         self.assertEqual(len(self.oauth.requests), 1)
+
+    def test_reentrant_close_at_pre_enqueue_write_receipt_and_publication(self):
+        for stage in (
+            "pre_enqueue", "write", "receipt", "publication_before",
+            "publication_after",
+        ):
+            with self.subTest(stage=stage):
+                self.fresh_fixture()
+                if stage == "pre_enqueue":
+                    self.source.guard_validate_hook = self.validator.close
+                elif stage == "write":
+                    self.transport.login_write_hook = self.validator.close
+                elif stage == "receipt":
+                    self.transport.login_receipt_hook = self.validator.close
+                elif stage == "publication_before":
+                    self.publish_before_hook = self.validator.close
+                else:
+                    self.publish_after_hook = self.validator.close
+                self.denied("refresh_unknown", self.admit)
+                self.assertNotIn("coordinator.complete", self.codes())
+                self.assertEqual(len(self.oauth.requests), 1)
+                self.assertLessEqual(self.codes().count("transport.login"), 1)
+                if stage == "pre_enqueue":
+                    self.assertNotIn("transport.login", self.codes())
+                if stage == "publication_after":
+                    self.assertIn("coordinator.publish", self.codes())
+                    self.assertNotIn("source.finish", self.codes())
+
+    def test_callback_write_close_does_not_create_second_delivery(self):
+        initial = self.admit()
+        callback = self.validator.capture_callback(
+            initial, 85,
+            {"reason": "unauthorized", "previousAccountId": WORKSPACE},
+            deadline=125.0,
+        )
+        self.transport.write_refresh_hook = self.validator.close
+        self.denied(
+            "refresh_unknown",
+            lambda: self.validator.refresh(initial, callback, deadline=125.0),
+        )
+        self.assertEqual(self.transport.write_count, 1)
+        self.assertNotIn("coordinator.complete", self.codes()[self.codes().index("transport.write_refresh") + 1:])
 
     def test_close_first_at_terminal_completion_refuses_delivery(self):
         self.complete_before_hook = self.validator.close
@@ -783,6 +1140,33 @@ class AuthStateContract(unittest.TestCase):
             "refresh_unknown", lambda: restarted.admit(self.ctx, deadline=125.0)
         )
         self.assertIn("source.pending_restart", self.codes())
+        self.assertEqual(len(self.oauth.requests), first_count)
+
+    def test_finish_to_completion_gap_is_not_a_replayable_delivery(self):
+        def fail_after_durable_finish():
+            raise self.auth.AuthError("refresh_unknown")
+
+        self.complete_before_hook = fail_after_durable_finish
+        self.denied("refresh_unknown", self.admit)
+        self.assertEqual(len(self.source.completed_attempts), 1)
+        self.assertNotIn("coordinator.complete", self.codes())
+        first_count = len(self.oauth.requests)
+
+        def completed_gap_open(ctx, *, deadline):
+            self.events.append(("source.completed_gap_restart", deadline))
+            raise self.auth.AuthError("refresh_unknown")
+
+        self.source.open_selected = completed_gap_open
+        restarted = self.auth.AuthStateValidator(
+            profile_source=self.source, oauth_client=self.oauth,
+            owned_transport=FakeTransport(self.auth, self.events, self.clock),
+            coordinator=self.authority.AuthCoordinator(clock=self.clock),
+            clock=self.clock, wall_clock=lambda: 1000.0,
+        )
+        self.denied(
+            "refresh_unknown", lambda: restarted.admit(self.ctx, deadline=125.0)
+        )
+        self.assertIn("source.completed_gap_restart", self.codes())
         self.assertEqual(len(self.oauth.requests), first_count)
 
 
