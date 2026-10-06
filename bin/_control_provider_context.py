@@ -296,10 +296,12 @@ class ProviderProfiles:
                 for index, entry in enumerate(directories.entries):
                     if entry[2] == parent:
                         directories.entries[index] = (*entry[:3], os.fstat(parent))
-            yield
-            directories.check()
-            if _pin(os.stat('publication.lock', dir_fd=parent, follow_symlinks=False)) != _pin(before):
-                raise AccountError('profile_unsafe')
+            def check():
+                directories.check()
+                if (_pin(os.stat('publication.lock', dir_fd=parent, follow_symlinks=False)) != _pin(before)
+                        or _pin(os.fstat(lock)) != _pin(before)):
+                    raise AccountError('profile_unsafe')
+            yield check
         except OSError:
             raise AccountError('profile_unsafe') from None
         finally:
@@ -314,7 +316,7 @@ class ProviderProfiles:
         provider, account = binding['provider_id'], binding['account_id']
         self.accounts.resolve(provider, account, project)
         catalog = self.accounts.snapshot_identity
-        with self._producer():
+        with self._producer() as check_producer:
             self.accounts.resolve(provider, account, project)
             if self.accounts.snapshot_identity != catalog:
                 raise AccountError('catalog_unsafe')
@@ -333,6 +335,9 @@ class ProviderProfiles:
             self.accounts.resolve(provider, account, project)
             if self.accounts.snapshot_identity != catalog:
                 raise AccountError('catalog_unsafe')
+            # The body commits its TASK by atomic rename. Rejecting writer-lock
+            # and ancestry checks must precede that linearization point.
+            check_producer()
             yield
 
     @contextmanager
@@ -410,10 +415,10 @@ class ProviderProfiles:
 
     def register(self, provider_id, account_id, project, metadata_path):
         self._grant(provider_id, account_id, project)
-        with self._producer():
-            return self._register(provider_id, account_id, project, metadata_path)
+        with self._producer() as check_producer:
+            return self._register(provider_id, account_id, project, metadata_path, check_producer)
 
-    def _register(self, provider_id, account_id, project, metadata_path):
+    def _register(self, provider_id, account_id, project, metadata_path, check_producer):
         catalog = self._grant(provider_id, account_id, project)
         source = _Directories(self.uid)
         try:
@@ -441,6 +446,7 @@ class ProviderProfiles:
                     self._check_leaf(root, provider_id, account_id, snapshot)
                     if _snapshot(*_read_leaf(parent, path.name, self.uid)) != _snapshot(data, info):
                         raise AccountError('profile_unsafe')
+                    check_producer()
                     return self._dto(previous)
                 doc = {**metadata, 'provider_id': provider_id, 'account_id': account_id,
                        'profile_instance_id': str(uuid.uuid4()), 'profile_objects': objects}
@@ -462,6 +468,7 @@ class ProviderProfiles:
                     temp_data, temp_info = _read_leaf(root, temp, self.uid)
                     if temp_data != payload or _pin(os.fstat(fd)) != _pin(temp_info):
                         raise AccountError('profile_unsafe')
+                    check_producer()
                     # link is atomic no-replace; a concurrent leaf is never overwritten.
                     try:
                         os.link(temp, 'registration.json', src_dir_fd=root, dst_dir_fd=root,
@@ -482,6 +489,9 @@ class ProviderProfiles:
                     published, published_snapshot = self._registration(root, provider_id, account_id)
                     if published != doc or published_snapshot != _snapshot(payload, published_info):
                         raise AccountError('profile_unsafe')
+                    # A failed producer fence belongs inside owned-leaf rollback,
+                    # never after the registration transaction returned success.
+                    check_producer()
                     return self._dto(doc)
                 except BaseException:
                     # Keep the FD open through rollback: UUID/parsed JSON is not
