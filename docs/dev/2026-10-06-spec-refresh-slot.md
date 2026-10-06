@@ -127,7 +127,8 @@ fresh source unsupported_auth_profile; definite pre-reservation IO auth_unavaila
 lock timeout refresh_busy; pending/corrupt attempt, poisoned lease, any uncertain
 post-reservation mutation/finish refresh_unknown. Invalid token/attempt inputs before
 reservation authority_stale; after reservation refresh_unknown. No OS/path/token/
-cause/decoder text or secret repr/dataclass/asdict/output/logs.
+cause/decoder text or secret repr/dataclass/asdict/public HTTP/UI output/logs.
+The private read_refresh return is explicitly only for trusted host request assembly.
 
 Independent repeat DESIGN required before freeze/RED/author. Previous terminal
 unlink finding replaced with durable ready/pending/completed head protocol, exact
@@ -135,7 +136,8 @@ read source capture, anchored identity locking and post-reservation error preced
 Then source-blind committed RED, implementation unchanged tests, distinct SOURCE,
 exact complete Ubuntu CI. Synthetic A/B independent, same-root exclusion, fullscope
 first/noIOconstructor, opaque lifecycle, owner/mode/nlink/symlinks/aliases, strictJSON,
-realNOREPLACE, generation/rotation durability fault injection, pendingrestart denial,
+actual anchored atomic replacement, generation/rotation durability fault injection,
+pendingrestart denial,
 terminalcompletion crash outcome, no credential migration/provider/native effects.
 Grants resolver guard, private kernel view, fresh fixed verifiedTLS request/response
 association, pinned exclusive owned native stdio, actual two accounts remain gates.
