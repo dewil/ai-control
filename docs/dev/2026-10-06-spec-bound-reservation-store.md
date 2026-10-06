@@ -146,3 +146,28 @@ absence/receipt or permitting a publication. Exhaustion during those passes is
 store_unavailable, no new R/normal receipt. Deadline callbacks retain existing
 base/anchor revalidation obligation before effects; no renewed budget or successful
 late result. Actual Linux fault RED precedes fixing these SOURCE findings.
+
+## DESIGN correction: callback-free terminal fence window
+
+The injected `monotonic_clock` is a caller-supplied callback and may re-enter or
+mutate the synthetic namespace. It MUST NOT be invoked between the final complete
+namespace/leaf/ancestor consistency pass and a return or publication. For every
+operation, retain the minimum remaining budget observed from all valid injected
+clock samples; a backward or otherwise inconsistent sample MUST NOT renew it.
+
+Immediately before the terminal fence window, sample the injected clock once and
+revalidate the active base and anchors. Then capture a trusted callback-free
+`time.monotonic_ns()` baseline and perform a complete bounded namespace count/name
+and absence recheck plus every required held-FD/current-name/metadata/byte fence.
+Do not invoke injected clocks or other user callbacks during this pass. Charge the
+entire pass to the remaining shared budget using only callback-free monotonic time;
+fail `store_unavailable` if it reaches the retained budget. Check it immediately
+before returning absence/receipt or publishing. A successful publication must
+also be checked after file and directory fsync. Timeout or uncertainty after a
+rename is an unknown published outcome and never permits retry/redispatch.
+
+This provides conservative observed-deadline semantics: the injected clock is
+authoritative at its last sample, and the callback-free final pass must fit in the
+remaining budget measured then. It makes no claim about an adversarial injected
+clock that jumps asynchronously after its final sample; calling it again would
+reopen the callback race. This DESIGN correction precedes the new blind fault RED.
