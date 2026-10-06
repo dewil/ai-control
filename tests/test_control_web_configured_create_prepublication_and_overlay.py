@@ -93,8 +93,27 @@ class ConfiguredCreatePublicationAndOverlay(unittest.TestCase):
     def require_feature(self):
         self.assertIsNotNone(self.feature,
                              'INV-WSESS-35 requires the public configured-create module')
-        self.assertTrue(callable(getattr(self.feature, 'ConfiguredCreateStore', None)))
-        self.assertTrue(callable(getattr(self.feature, 'ConfiguredSessionCreate', None)))
+        for name in ('ConfiguredCreateStore', 'ConfiguredCreateReservation',
+                     'ConfiguredPreparedCreate', 'ConfiguredSessionCreate'):
+            self.assertTrue(callable(getattr(self.feature, name, None)),
+                            'public configured-create type is required: ' + name)
+        for name in ('locked', 'lookup', 'prepare_reservation', 'publish_reservation',
+                     'reserve', 'candidate', 'origin', 'accept'):
+            self.assertTrue(callable(getattr(self.feature.ConfiguredCreateStore, name, None)),
+                            'public configured store method is required: ' + name)
+        for name in ('create', 'overlay'):
+            self.assertTrue(callable(getattr(self.feature.ConfiguredSessionCreate, name, None)),
+                            'public configured owner method is required: ' + name)
+
+    def invoke(self, function, *, allowed_errors=()):
+        try:
+            return function()
+        except Exception as exc:
+            code = getattr(exc, 'code', None)
+            if code in allowed_errors:
+                return {'error': code}
+            self.fail('public contract method raised instead of returning its specified result '
+                      f'(exception={type(exc).__name__}, code={code!r})')
 
     def store(self, path, clock=None):
         kwargs = {} if clock is None else {'clock': clock}
@@ -123,16 +142,16 @@ class ConfiguredCreatePublicationAndOverlay(unittest.TestCase):
         path = self.base / 'pure-clock-store'
         store = self.store(path, clock=clock)
         deadline = time.monotonic() + 20
-        prepared = store.prepare_reservation(
-            'demo', CONTEXT['context_id'], str(self.root), OP_A, deadline)
+        prepared = self.invoke(lambda: store.prepare_reservation(
+            'demo', CONTEXT['context_id'], str(self.root), OP_A, deadline))
         self.assertIsInstance(prepared, self.feature.ConfiguredPreparedCreate)
         self.assertEqual(prepared.record['created'], 1700000000000000000)
         self.assertEqual(samples, [1700000000000000000])
         self.assertFalse(path.exists(), 'preparation must not provision or write the store')
         with store.locked(deadline, create=True) as base:
-            published = store.publish_reservation(base, prepared, deadline)
-            replay = store.reserve(base, 'demo', CONTEXT['context_id'],
-                                   str(self.root), OP_A, deadline)
+            published = self.invoke(lambda: store.publish_reservation(base, prepared, deadline))
+            replay = self.invoke(lambda: store.reserve(base, 'demo', CONTEXT['context_id'],
+                                                       str(self.root), OP_A, deadline))
         self.assertEqual(replay.record, published.record)
         self.assertEqual(samples, [1700000000000000000],
                          'replay cannot request a second timestamp sample')
@@ -140,8 +159,9 @@ class ConfiguredCreatePublicationAndOverlay(unittest.TestCase):
         bad_path = self.base / 'invalid-clock-store'
         bad_store = self.store(bad_path, clock=lambda: 0)
         rpc = SyntheticRPC(self.root)
-        result = self.creator(rpc, bad_store).create(
-            'demo', OP_CLOCK, context_mode='configured', provider_id='codex')
+        result = self.invoke(lambda: self.creator(rpc, bad_store).create(
+            'demo', OP_CLOCK, context_mode='configured', provider_id='codex'),
+            allowed_errors=('invalid_request',))
         self.assertEqual(result, {'error': 'invalid_request'})
         self.assertFalse(any(method == 'thread/start' for method, *_ in rpc.calls),
                          'invalid clock cannot permit native creation')
@@ -154,8 +174,8 @@ class ConfiguredCreatePublicationAndOverlay(unittest.TestCase):
         store = self.store(self.base / 'uncertain-store', clock=lambda: 1700000000000000000)
         rpc = SyntheticRPC(self.root)
         with patch.object(store, 'publish_reservation', side_effect=OSError('synthetic write uncertainty')) as publish:
-            result = self.creator(rpc, store).create(
-                'demo', OP_CLOCK, context_mode='configured', provider_id='codex')
+            result = self.invoke(lambda: self.creator(rpc, store).create(
+                'demo', OP_CLOCK, context_mode='configured', provider_id='codex'))
         self.assertEqual(result, {'operation_id': OP_CLOCK, 'status': 'delivery_unknown'})
         publish.assert_called_once()
         self.assertFalse(any(method == 'thread/start' for method, *_ in rpc.calls),
@@ -170,7 +190,7 @@ class ConfiguredCreatePublicationAndOverlay(unittest.TestCase):
         rpc = SyntheticRPC(self.root, loaded_scans=([SID_A, SID_B, SID_C], [SID_B]),
                            outcomes={SID_A: web_sessions.RPCRejected('synthetic code'),
                                      SID_C: web_sessions.RPCRejected('synthetic code')})
-        result = self.creator(rpc, store).overlay('demo')
+        result = self.invoke(lambda: self.creator(rpc, store).overlay('demo'))
         self.assertEqual(result, {'sessions': [{
             'sid': SID_B, 'project': 'demo', 'vendor': 'codex',
             'context_mode': 'configured', 'title': 'Synthetic title',
@@ -198,7 +218,8 @@ class ConfiguredCreatePublicationAndOverlay(unittest.TestCase):
                 self.accept(store, OP_B, SID_B)
                 rpc = SyntheticRPC(self.root, loaded_scans=([SID_A, SID_B], confirmation),
                                    outcomes=outcomes)
-                result = self.creator(rpc, store).overlay('demo')
+                result = self.invoke(lambda: self.creator(rpc, store).overlay('demo'),
+                                     allowed_errors=('unavailable', 'stale', 'forbidden'))
                 self.assertEqual(result, {'error': 'unavailable'})
 
 
