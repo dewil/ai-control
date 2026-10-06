@@ -148,6 +148,14 @@ def _pin(info):
                                           'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
 
 
+def _close_fd(fd):
+    """Cleanup is not validation; never retry a possibly released FD number."""
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
 class _Directories:
     """Keep the full no-follow ancestor chain open, then recheck its links."""
     def __init__(self, uid):
@@ -155,9 +163,12 @@ class _Directories:
         self.base = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
 
     def close(self):
-        for _, _, fd, _ in reversed(self.entries):
-            os.close(fd)
-        os.close(self.base)
+        entries, base = self.entries, self.base
+        self.entries, self.base = [], None
+        for _, _, fd, _ in reversed(entries):
+            _close_fd(fd)
+        if base is not None:
+            _close_fd(base)
 
     def child(self, parent, name, private=False):
         fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -171,7 +182,7 @@ class _Directories:
             self.entries.append((parent, name, fd, info))
             return fd
         except BaseException:
-            os.close(fd)
+            _close_fd(fd)
             raise
 
     def walk(self, path):
@@ -219,7 +230,7 @@ def _read_leaf(directory, name, uid):
             raise AccountError('profile_unsafe')
         return b''.join(chunks), before
     finally:
-        os.close(fd)
+        _close_fd(fd)
 
 
 def _snapshot(data, info):
@@ -306,7 +317,7 @@ class ProviderProfiles:
             raise AccountError('profile_unsafe') from None
         finally:
             if lock is not None:
-                os.close(lock)
+                _close_fd(lock)
             directories.close()
 
     @contextmanager
@@ -379,7 +390,7 @@ class ProviderProfiles:
                         if stat.S_ISDIR(info.st_mode) and _identity(info) in objects.values():
                             raise AccountError('profile_unsafe')
                 finally:
-                    os.close(other_fd)
+                    _close_fd(other_fd)
             directories.check()
             yield directories, root, objects
         except FileNotFoundError:
@@ -513,7 +524,7 @@ class ProviderProfiles:
                         raise AccountError('profile_unsafe') from None
                     raise
                 finally:
-                    os.close(fd)
+                    _close_fd(fd)
         except FileNotFoundError:
             raise AccountError('profile_unconfigured') from None
         except OSError:
