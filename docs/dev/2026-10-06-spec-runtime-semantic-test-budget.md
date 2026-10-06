@@ -36,12 +36,12 @@ ample setup deadline with no forced expiry before the conflicting message is
 returned and rejected; assert its materialization milestone.
 
 For missing/wrong_type/wrong_thread resolution, the fake receive may advance its
-clock by 60 seconds only on a subsequent empty-queue receive after reply_approval
+clock by 60 seconds only on a subsequent empty-queue receive or thread/read after reply_approval
 and after all queued events have been delivered. Record an expiry milestone.
 Wrong_type/wrong_thread must record native_resolution_delivered before this
 expiry; missing must not invent a resolution. Ensure every scenario reached
 reply_approval exactly once. Immediate runtime rejection of a bad resolution
-before an empty receive is allowed: do not force or require expiry in that path.
+before an empty-queue probe is allowed: do not force or require expiry in that path.
 The test must prove delivery of the wrong resolution regardless of return path.
 
 Existing committed CI failures are the RED evidence; a new test mirroring these
@@ -51,3 +51,9 @@ run the three functions plus the complete103-test synthetic runtime suite, and
 obtain independent SOURCE review. Publish separately against main, full exact CI
 required before merge. Installer PR70 waits for accepted integration; no blanket
 deadline inflation, skips, ignored failures, assertion removal or runtime edits.
+
+Fixture correction before source acceptance: missing-resolution controller polls
+thread/read while its event queue is empty; it does not call receive on an empty
+queue. Therefore the clock trigger may run at the subsequent thread/read boundary
+with reply recorded and queue empty. This still occurs after prior queued events
+were delivered/processed and preserves the intended resolution counterexample.
