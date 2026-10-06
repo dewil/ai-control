@@ -45,5 +45,9 @@ reviewed signed-helper closure, composer вне текущего fixed14 allowli
 
 INV-WATTN-02/03 hardlink addendum: regular project-map/TASK metadata nlink==1
 на FD/path/read-final fences; unsafe map —503 до source, unsafe TASK — whole-entry
-exclude/incomplete invalid_source, unsafe spec/control — no legacy task_key.
+FRESH exclude/incomplete invalid_source, unsafe spec/control — no legacy task_key.
 Directories multiple-link count не запрещён; reader filesystem не меняет.
+
+Nlink failure не является grant revocation: unchanged composer может оставить
+ранее validated TASK только stale при current project/root/grants/registry-epoch
+proof, без navigation/fresh claims; current authority refusal/revocation clears all.

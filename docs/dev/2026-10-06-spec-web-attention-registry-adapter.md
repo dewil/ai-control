@@ -340,7 +340,18 @@ CONTROL-UNIVERSAL-DEPLOY, полный attention UI или CONTROL-WEB-SESSIONS.
 Hardlink acceptance addendum (после review; прежний draft nlink не задавал): regular
 project-map/TASK metadata files MUST st_nlink==1 на opened FD и pathname/read-final
 fences; directories с обычным multiple-link count не отказывают. Unsafe map — view
-unavailable/HTTP503 ДО source; unsafe TASK leaf исключает всю запись/labels/reasons/
-counts, source incomplete/invalid_source; optional legacy task_key отсутствует при
+unavailable/HTTP503 ДО source; unsafe TASK leaf исключает ВСЮ FRESH source запись
+и её новые labels/reasons/counts, source incomplete/invalid_source complete=False; optional legacy task_key отсутствует при
 unsafe control/spec, без attention capture. Reader не создаёт alias identity и не
 меняет filesystem; hardlink отказ не заменяется alternate path или normalization.
+
+Fresh-source exclusion НЕ инвалидирует автоматически historical composer cache:
+unchanged retention может оставить ранее validated TASK ТОЛЬКО STALE при CURRENT
+project-map/grants/root/registry-epoch authorization proof. Cached reasons state=stale,
+UI navigation disabled; никакого нового unsafe content/fresh/current/running/idle/
+resolved claim. Nlink failure сама не доказывает grant revocation. Current view/grant/
+root revocation или refusal очищает protected data по прежним правилам, без epoch
+hack/new invalidator/pure API change. Acceptance: warm valid→hardlink даёт только
+authorized stale retention/incomplete invalid_source без active navigation; затем
+grant/root revocation→никаких retained labels/reasons/counts. Cold unsafe source
+никогда не экспортирует TASK, даже если project по-прежнему разрешён.
