@@ -14,7 +14,7 @@ from types import MappingProxyType
 import uuid
 
 from _control_web_sessions import (RenameStore, SessionChat, _DomainError, _budget,
-                                   _need, _pairs, valid_project, valid_uuid)
+                                   RPCRejected, _need, _pairs, valid_project, valid_uuid)
 
 
 def _json(value):
@@ -113,6 +113,15 @@ class ConfiguredCreateReservation:
 
     def __post_init__(self):
         object.__setattr__(self, 'record', _freeze(_record(_plain(self.record))))
+
+
+@dataclass(frozen=True, repr=False)
+class ConfiguredPreparedCreate(ConfiguredCreateReservation):
+    """A validated timestamp/payload; no assertion that any receipt exists."""
+    def __post_init__(self):
+        super().__post_init__()
+        _need(self.record['status'] == 'unknown' and self.record['sid'] is None,
+              'invalid_request')
 
 
 @dataclass(frozen=True, repr=False)
@@ -295,6 +304,35 @@ class ConfiguredCreateStore(RenameStore):
         return self._chain(base, project, operation_id, deadline)[0]
 
     @_safe
+    def prepare_reservation(self, project, context_id, root, operation_id, deadline):
+        _budget(deadline)
+        _need(valid_project(project) and valid_uuid(operation_id)
+              and _hex(context_id) and _root(root), 'invalid_request')
+        created = self.clock()
+        _budget(deadline)
+        _need(type(created) is int and created > 0, 'invalid_request')
+        record = {'schema': 1, 'kind': 'configured_session_create', 'project': project,
+                  'operation_id': operation_id, 'context_id': context_id, 'root': root,
+                  'status': 'unknown', 'sid': None, 'created': created}
+        record['digest'] = _digest(record)
+        return ConfiguredPreparedCreate(record)
+
+    @_safe
+    def publish_reservation(self, base, prepared, deadline):
+        _need(type(prepared) is ConfiguredPreparedCreate, 'invalid_request')
+        record = _record(_plain(prepared.record))
+        project, operation_id = record['project'], record['operation_id']
+        previous, _ = self._chain(base, project, operation_id, deadline)
+        if previous is not None:
+            _need(previous.record['digest'] == record['digest'], 'invalid_request')
+            return previous
+        name = _name('R', project, operation_id)
+        self._publish(base, name, record, deadline,
+                      lambda: _need(self._read(base, name, deadline) == (None, None)),
+                      lambda: _need(self._read(base, name, deadline)[0] == record))
+        return self.lookup(base, project, operation_id, deadline)
+
+    @_safe
     def reserve(self, base, project, context_id, root, operation_id, deadline):
         _need(valid_project(project) and valid_uuid(operation_id)
               and _hex(context_id) and _root(root), 'invalid_request')
@@ -303,18 +341,8 @@ class ConfiguredCreateStore(RenameStore):
             _need(previous.record['root'] == root and previous.record['context_id'] == context_id,
                   'invalid_request')
             return previous
-        created = self.clock()
-        _need(type(created) is int and created > 0, 'invalid_request')
-        record = {'schema': 1, 'kind': 'configured_session_create', 'project': project,
-                  'operation_id': operation_id, 'context_id': context_id, 'root': root,
-                  'status': 'unknown', 'sid': None, 'created': created}
-        record['digest'] = _digest(record)
-        _record(record)
-        name = _name('R', project, operation_id)
-        self._publish(base, name, record, deadline,
-                      lambda: _need(self._read(base, name, deadline) == (None, None)),
-                      lambda: _need(self._read(base, name, deadline)[0] == record))
-        return self.lookup(base, project, operation_id, deadline)
+        prepared = self.prepare_reservation(project, context_id, root, operation_id, deadline)
+        return self.publish_reservation(base, prepared, deadline)
 
     def _current(self, base, reservation, deadline):
         _need(type(reservation) is ConfiguredCreateReservation, 'invalid_request')
@@ -593,9 +621,10 @@ class ConfiguredSessionCreate:
                     return self._unknown(operation_id)
                 self._fresh(project, root, context, deadline)
                 self.store.capacity(base, deadline)
+                prepared = self.store.prepare_reservation(project, context['context_id'], root,
+                                                           operation_id, deadline)
                 reserved = True
-                reservation = self.store.reserve(base, project, context['context_id'], root,
-                                                 operation_id, deadline)
+                reservation = self.store.publish_reservation(base, prepared, deadline)
                 self._fresh(project, root, context, deadline)
                 thread = self._call('thread/start', {'cwd': root}, context, deadline).get('thread')
                 _need(type(thread) is dict and valid_uuid(thread.get('id')))
@@ -668,12 +697,28 @@ class ConfiguredSessionCreate:
                 self._fresh(project, root, context, deadline)
                 return {'sessions': [], 'truncated': origins['truncated']}
             loaded, truncated = self._loaded(context, deadline)
-            sessions = []
+            sessions, proved, failed = [], [], set()
             for origin in origins['records']:
                 if origin.record['sid'] not in loaded:
                     continue
-                thread = self._proof(project, root, origin.record['sid'], context, deadline)
+                sid = origin.record['sid']
+                try:
+                    reply = self._call('thread/read', {'threadId': sid, 'includeTurns': False},
+                                       context, deadline)
+                except RPCRejected:
+                    self._fresh(project, root, context, deadline)
+                    failed.add(sid)
+                    continue
+                thread = reply.get('thread')
+                self._thread(thread, root, sid)
+                self._fresh(project, root, context, deadline)
                 sessions.append(self._overlay_session(origin.record, thread))
+                proved.append(origin)
+            if failed:
+                confirmed, incomplete = self._loaded(context, deadline)
+                _need(not incomplete and failed.isdisjoint(confirmed))
+            for origin in proved:
+                self.store._current(base, origin, deadline)
             self._fresh(project, root, context, deadline)
             return {'sessions': sessions, 'truncated': truncated or origins['truncated']}
 

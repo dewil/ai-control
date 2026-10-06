@@ -7,7 +7,7 @@ installed activation and account-bound capability are not implemented by this sl
 
 Frozen candidate source SHA256:
 
-- bin/_control_web_configured_create.py: `f55befcf8aba551b11c2a48e4b18ffddb94f247772bba17951e87c6dab51f5c5`.
+- bin/_control_web_configured_create.py: `020b3bf47bfab2400690b2bc8408e0259e66c0972c3441c48669c457415a5ef0`.
 - bin/_control_web_sessions.py: `454ccc1658b338da076dd96edb4313b5f6315a3acc0fc0825130dafa3156c980`.
 - scripts.manifest: `ac4a3a040429370a63b1e284d41480d7b6d6b446e3d4a2b2385b31c19014e8fe`.
 
@@ -38,8 +38,22 @@ Independent writer corrected the missing-status sentinel and explicitly protecte
 the owned socket with0600 permissions; author did not edit tests or relax runtime.
 Final focused18 PASS,0 failures,0 errors (1.548s), also with ambient process umask.
 Overlay2 test SHA256 `120c947d2e81e4d7bacf69b886e6091a019b377230eeaa3420f01acf3cc28ad6`.
-Sources remain byte-identical to the frozen overlay candidate. Source audit,
-independent QA and CI remain separate gates before merge/activation.
+Subsequent actual source review found two gaps: invalid clock reported unknown,
+and no proved omission after a loaded-row read rejection. Narrow b894 design
+amendment passed separate actual design review. New seam absent-source baseline4
+methods has4 semantic failures,0 errors; these initial failures are missing-type
+checks, not independent behavioral counterexamples.
+
+Patched candidate prepares one validated clock sample before publication uncertainty,
+publishes that exact prepared DTO, and retains unknown barrier before publisher
+entry. Overlay omissions require actual RPCRejected and one shared complete fresh
+same-generation loaded scan proving failed SIDs absent; generic/malformed/partial
+proof failures remain closed. All exported origins receive final parent/context/root
+checks. Current22 methods run has two known false subtest failures only: wrong-id/
+wrong-root test demands unavailable despite allowed correct stale. Independent
+fixture correction is pending;22 GREEN is not yet claimed. Existing sessions and
+manifest source bytes unchanged. Repeat source audit, independent QA and CI remain
+separate gates before merge/activation.
 
 Immutable R/C/I/A, parent commitments, no-replace publication, counted temp orphans,
 namespace-capacity locks and once-only correlated ACK creator are implemented.
