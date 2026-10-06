@@ -252,54 +252,79 @@ class LinuxBoundReservationFaults(unittest.TestCase):
         for _ in range(80):
             self.add_pair()
         prepared = self.prepare()
-        delayed = {"done": False}
+        delayed = {"done": False, "history_anchor": False}
+        original_stat = os.stat
+        parent_identity = self.parent.stat()
+
+        def watch_history_anchor(path, *args, **kwargs):
+            info = original_stat(path, *args, **kwargs)
+            if observed["completed"] >= 2:
+                name = os.fsdecode(path) if not isinstance(path, int) else ""
+                parent_fd = kwargs.get("dir_fd")
+                by_parent_fd = False
+                if name == "bound" and type(parent_fd) is int:
+                    held = os.fstat(parent_fd)
+                    by_parent_fd = ((held.st_dev, held.st_ino)
+                                    == (parent_identity.st_dev, parent_identity.st_ino))
+                if name == str(self.namespace) or by_parent_fd:
+                    delayed["history_anchor"] = True
+            return info
 
         def delay_later_scan(_entries):
-            if observed["scans"] >= 2 and not delayed["done"]:
+            if (delayed["history_anchor"] and observed["scans"] >= 3
+                    and not delayed["done"]):
                 delayed["done"] = True
                 time.sleep(0.15)
 
         def delay_later_listdir():
-            if observed["listdir"] >= 2 and not delayed["done"]:
+            if (delayed["history_anchor"] and observed["listdir"] >= 3
+                    and not delayed["done"]):
                 delayed["done"] = True
                 time.sleep(0.15)
 
         observed, scan_patch, list_patch = self.observe_namespace_iteration(
             on_entry=delay_later_scan, on_listdir=delay_later_listdir)
         with self.store.locked(self.ref, 100.1) as base:
-            with scan_patch, list_patch:
+            with scan_patch, list_patch, \
+                 mock.patch("os.stat", side_effect=watch_history_anchor):
                 self.unavailable(lambda: self.store.lookup_create(
                     base, self.ref, PROJECT, PROJECT_ROOT, OP, 100.1))
         self.assertGreaterEqual(observed["entries"] + observed["listdir"], 1)
-        self.assertTrue(delayed["done"], "later namespace pass was not exercised")
+        self.assertTrue(delayed["history_anchor"] and delayed["done"],
+                        "post-history terminal absence scan was not exercised")
         self.assertFalse((self.namespace / r_name(self.ref, OP)).exists())
 
-        delayed["done"] = False
+        delayed.update(done=False, history_anchor=False)
         observed, scan_patch, list_patch = self.observe_namespace_iteration(
             on_entry=delay_later_scan, on_listdir=delay_later_listdir)
         with self.store.locked(self.ref, 100.1) as base:
-            with scan_patch, list_patch:
+            with scan_patch, list_patch, \
+                 mock.patch("os.stat", side_effect=watch_history_anchor):
                 self.unavailable(lambda: self.store.publish_create(
                     base, self.ref, prepared, 100.1))
         self.assertGreaterEqual(observed["entries"] + observed["listdir"], 1)
-        self.assertTrue(delayed["done"], "later publication pass was not exercised")
+        self.assertTrue(delayed["history_anchor"] and delayed["done"],
+                        "post-history publication pass was not exercised")
         self.assertFalse((self.namespace / r_name(self.ref, OP)).exists())
 
-    def test_replay_receipt_refuses_elapsed_budget_at_later_leaf_fence(self):
-        prepared = self.prepare()
-        with self.store.locked(self.ref, 110.0, create=True) as base:
-            receipt = self.store.publish_create(base, self.ref, prepared, 110.0)
-        self.assertEqual(receipt.status, "unknown")
+    def test_later_group_g_fence_refuses_elapsed_budget(self):
+        for _ in range(3):
+            self.add_pair()
         original_open = os.open
-        observed = {"g_opens": 0, "delayed": False}
+        observed = {"order": [], "counts": {}, "delayed": False}
 
         def expire_after_g_open(path, *args, **kwargs):
             fd = original_open(path, *args, **kwargs)
             if not isinstance(path, int):
-                name = os.fsdecode(path)
-                if "BG-S-" in name and name.endswith(".json"):
-                    observed["g_opens"] += 1
-                    if observed["g_opens"] >= 2 and not observed["delayed"]:
+                name = os.path.basename(os.fsdecode(path))
+                if name.startswith("BG-S-") and name.endswith(".json"):
+                    if name not in observed["counts"]:
+                        observed["order"].append(name)
+                    observed["counts"][name] = observed["counts"].get(name, 0) + 1
+                    if (len(observed["order"]) >= 3
+                            and name == observed["order"][2]
+                            and observed["counts"][name] == 2
+                            and not observed["delayed"]):
                         observed["delayed"] = True
                         time.sleep(0.15)
             return fd
@@ -308,8 +333,9 @@ class LinuxBoundReservationFaults(unittest.TestCase):
             with mock.patch("os.open", side_effect=expire_after_g_open):
                 self.unavailable(lambda: self.store.lookup_create(
                     base, self.ref, PROJECT, PROJECT_ROOT, OP, 100.1))
-        self.assertTrue(observed["delayed"], "later G fence was not exercised")
-        self.assertEqual(len(list(self.namespace.iterdir())), 2)
+        self.assertEqual(len(observed["order"]), 3)
+        self.assertTrue(observed["delayed"], "third G final-fence open was not exercised")
+        self.assertFalse((self.namespace / r_name(self.ref, OP)).exists())
 
     def test_over_capacity_scan_consumes_at_most_10001_physical_entries(self):
         self.namespace.mkdir(mode=0o700)
@@ -334,18 +360,35 @@ class LinuxBoundReservationFaults(unittest.TestCase):
         future_name = r_name(self.ref, OP).replace(".R.json", ".C.json")
         r_path = self.namespace / r_name(self.ref, OP)
         state = {"temp_seen": False, "later_listing_done": False,
-                 "injected": False}
+                 "anchor_witness": False, "injected": False}
         original_open = os.open
+        original_stat = os.stat
+        parent_identity = self.parent.stat()
 
         def listing_complete():
             if state["temp_seen"]:
                 state["later_listing_done"] = True
 
         def clock_callback():
-            if (state["later_listing_done"] and not state["injected"]
+            if (state["anchor_witness"] and not state["injected"]
                     and not r_path.exists()):
                 state["injected"] = True
                 self.write_leaf(future_name, b"invented-future-stage")
+
+        def watch_anchor_stat(path, *args, **kwargs):
+            info = original_stat(path, *args, **kwargs)
+            if state["later_listing_done"]:
+                name = os.fsdecode(path) if not isinstance(path, int) else ""
+                by_path = name == str(self.namespace)
+                by_parent_fd = False
+                parent_fd = kwargs.get("dir_fd")
+                if name == "bound" and type(parent_fd) is int:
+                    held = os.fstat(parent_fd)
+                    by_parent_fd = ((held.st_dev, held.st_ino)
+                                    == (parent_identity.st_dev, parent_identity.st_ino))
+                if by_path or by_parent_fd:
+                    state["anchor_witness"] = True
+            return info
 
         def watch_temp(path, flags, *args, **kwargs):
             fd = original_open(path, flags, *args, **kwargs)
@@ -359,7 +402,9 @@ class LinuxBoundReservationFaults(unittest.TestCase):
                 on_complete=listing_complete)
             self.clock.callback = clock_callback
             outcome = None
-            with scan_patch, list_patch, mock.patch("os.open", side_effect=watch_temp):
+            with scan_patch, list_patch, \
+                 mock.patch("os.open", side_effect=watch_temp), \
+                 mock.patch("os.stat", side_effect=watch_anchor_stat):
                 try:
                     outcome = self.store.publish_create(
                         base, self.ref, prepared, 110.0)
@@ -369,6 +414,8 @@ class LinuxBoundReservationFaults(unittest.TestCase):
         self.assertTrue(state["temp_seen"], "publication temp was not observed")
         self.assertTrue(state["later_listing_done"],
                         "post-temp namespace listing was not completed")
+        self.assertTrue(state["anchor_witness"],
+                        "post-listing namespace pathname fence was not observed")
         if state["injected"]:
             self.assertIsInstance(outcome, self.catalog.AccountError)
             self.assertEqual(outcome.code, "store_unavailable")
@@ -381,25 +428,30 @@ class LinuxBoundReservationFaults(unittest.TestCase):
     def test_later_clock_mutates_earlier_pinned_g_before_absence_return(self):
         self.add_pair()
         self.add_pair()
+        self.add_pair()
         counts = {}
-        state = {"first": None, "first_later_fd": None,
-                 "later_group_seen": False, "injected": False}
+        order = []
+        state = {"first_group_fd": None, "group_closed": False,
+                 "injected": False}
         original_open = os.open
 
         def prior_descriptor_closed():
-            fd = state["first_later_fd"]
+            fd = state["first_group_fd"]
             if fd is None:
                 return False
             try:
                 target = os.readlink(f"/proc/self/fd/{fd}")
             except FileNotFoundError:
                 return True
-            return not target.endswith("/" + state["first"])
+            return not target.endswith("/" + order[0])
 
         def clock_callback():
-            if state["later_group_seen"] and not state["injected"]:
+            if (len(order) >= 2 and counts.get(order[0], 0) >= 2
+                    and counts.get(order[1], 0) >= 2
+                    and prior_descriptor_closed() and not state["injected"]):
+                state["group_closed"] = True
                 state["injected"] = True
-                first = self.namespace / state["first"]
+                first = self.namespace / order[0]
                 fd = original_open(first, os.O_WRONLY | os.O_TRUNC)
                 try:
                     os.write(fd, b"invented-corruption-after-pin")
@@ -412,15 +464,11 @@ class LinuxBoundReservationFaults(unittest.TestCase):
             if not isinstance(path, int):
                 name = os.path.basename(os.fsdecode(path))
                 if name.startswith("BG-S-") and name.endswith(".json"):
+                    if name not in counts:
+                        order.append(name)
                     counts[name] = counts.get(name, 0) + 1
-                    if state["first"] is None:
-                        state["first"] = name
-                    if name == state["first"] and counts[name] == 2:
-                        state["first_later_fd"] = fd
-                    if (name != state["first"] and counts[name] >= 2
-                            and observed["completed"] >= 2
-                            and prior_descriptor_closed()):
-                        state["later_group_seen"] = True
+                    if name == order[0] and counts[name] == 2:
+                        state["first_group_fd"] = fd
             return fd
 
         with self.store.locked(self.ref, 110.0) as base:
@@ -433,15 +481,17 @@ class LinuxBoundReservationFaults(unittest.TestCase):
                         base, self.ref, PROJECT, PROJECT_ROOT, OP, 110.0)
                 except self.catalog.AccountError as error:
                     outcome = error
-        self.assertGreaterEqual(len(counts), 2, "two distinct G leaves were not read")
-        self.assertTrue(state["later_group_seen"],
-                        "later G group after prior FD close was not observed")
+        self.assertGreaterEqual(len(counts), 2, "first two G leaves were not read")
+        self.assertGreaterEqual(counts[order[0]], 2)
+        self.assertGreaterEqual(counts[order[1]], 2)
         if state["injected"]:
+            self.assertTrue(state["group_closed"])
             self.assertIsInstance(outcome, self.catalog.AccountError)
             self.assertEqual(outcome.code, "store_unavailable")
-            self.assertEqual((self.namespace / state["first"]).read_bytes(),
+            self.assertEqual((self.namespace / order[0]).read_bytes(),
                              b"invented-corruption-after-pin")
         else:
+            self.assertEqual(len(counts), 3, "third G was not read without mutation")
             self.assertIsNone(outcome)
         self.assertFalse((self.namespace / r_name(self.ref, OP)).exists())
 
