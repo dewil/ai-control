@@ -14,7 +14,7 @@ Python/static панель не компилируется: «Собрано» �
 - INV-WBUILD-04: Stamp utility работает только с известным локальным HTML source leaf, не вызывает native/broker/auth/network/deploy. Невалидный release id, timestamp или отсутствующие/дублирующиеся footer markers отказывают без изменения source. Установка остаётся signedfixed14/noarghelper без расширения привилегий.
 
 ## Публичный контракт
-Утилита deployment/build-web-info.py запускается Python3.11+: --release-id <positive integer>, optional --built-at <aware ISO8601 timestamp>, optional --branch <captured branch>. По умолчанию clock берётся однократно UTC, ветка через git symbolic-ref --short HEAD из source checkout (detached fallback git rev-parse --short HEAD); только локальные Git metadata, без config/auth. Неизвестный Git context отказывает, не придумывает имя. Target — bin/_control_web.html относительно корня утилиты; она заменяет ровно один block <!-- BUILD-INFO:START -->...<!-- BUILD-INFO:END -->. HTML baseline содержит эти markers и honest «Версия сборки неизвестна» до первого stamp.
+Утилита deployment/build-web-info.py запускается Python3.11+: --release-id <positive integer>. CLI не имеет override для clock/branch: clock берётся однократно UTC, ветка через git symbolic-ref --short HEAD из source checkout (detached fallback git rev-parse --short HEAD); только локальные Git metadata, без config/auth. Неизвестный Git context отказывает, не придумывает имя. Target — bin/_control_web.html относительно корня утилиты; она заменяет ровно один block <!-- BUILD-INFO:START -->...<!-- BUILD-INFO:END -->. HTML baseline содержит эти markers и honest «Версия сборки неизвестна» до первого stamp.
 
 Публичная pure function render_build_info(release_id, built_at, branch) -> str принимает positive exact int, aware datetime, непустое имя без управляющих символов. Возвращает <footer id="build-info" class="build-info" data-release-id="N"> с текстом версии rN, <time datetime="canonical UTC ISO"> и необязательной веткой. Никаких shell/HTML executing fragments. stdout CLI только краткое подтверждение release id, не конфиги.
 
@@ -29,3 +29,6 @@ Cactus/Hiddify; account provisioning; helper/state schema/scope; смена ав
 
 ## Проверки и трассируемость
 Independent DESIGN, source-blind tests tests/test_control_web_build_info.py (pure generator + temporary checkout/HTML fixture; no current auth), existing web/browser regressions, distinct SOURCE, exact fullCI, coordinated installation and HTTPS byte equality. Теги INV-WBUILD-01..04.
+
+## Уточнение DESIGN06.10
+Actual gpt-6-sol/medium DESIGN01a11127 отметил возможность произвольных CLI timestamp/branch overrides. Они исключены из CLI: только captured local Git + single UTC clock. Pure render arguments остаются для deterministic synthetic tests, не runtime endpoint/packaging override. Production сборка использует только --release-id; root packaging проверяет frozenrelease-id и branch capture evidence до подписания.
