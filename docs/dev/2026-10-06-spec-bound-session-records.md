@@ -1,6 +1,6 @@
 # Pure bound-session record preparation and DTO validation
 
-DRAFT for independent DESIGN. Parent: bound-session-store contract; no production
+Frozen for blind RED after independent DESIGN READY ea7b3be. Parent: bound-session-store contract; no production
 routing, persistence, auth, clocks, native effects or Linux proof in this slice.
 Module `bin/_control_web_bound_session_records.py`, standard library only.
 
@@ -90,3 +90,13 @@ and stage rules, diagnostic R-only, changed account/operation/session/root, and
 no clock/FS/network constructor/method side effects. Distinct source/security
 review and exact complete CI required. None of these tests proves actual origin,
 Linux isolation, auth, owned process, publication or native admission.
+
+## Integration boundary clarification
+
+Store lookup may not have a caller-supplied session_ref. It must establish the
+expected session_ref from freshly fenced matching R+G under fullref BEFORE using
+that value as an expected codec identity; absence/missing/corrupt G refuses lookup
+replay. This codec never performs that lookup or synthesizes a trusted identity.
+Store integration explicitly maps BoundRecordError context_invalid/context_drift/
+invalid_request into its AccountError vocabulary, and maps corrupt disk data to
+store_unavailable. This source slice imports no store and changes no existing error API.
