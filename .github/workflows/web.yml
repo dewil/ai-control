@@ -38,6 +38,14 @@ jobs:
           python tests/test-provider-account-binding.py
           python tests/test-provider-account-config-pointer.py
           python tests/test-provider-account-lower-admission.py
+          python tests/test-provider-profile-registration.py
+          python tests/test-provider-profile-publication.py
+          python tests/test-provider-profile-capture-reference.py
+          python tests/test-provider-profile-sticky-ancestor.py
+          python tests/test-provider-profile-cli.py
+          python tests/test-provider-task-publication-guard.py
+          python tests/test-provider-publication-committed-outcome.py
+          bash tests/test-agent-io.sh
           python tests/test-codex-task-runtime.py
       - name: Signed deployment boundary and recovery
         run: |

@@ -68,7 +68,7 @@ cmd_create() {
   check_name "$name"
   local spec="" mission="" role="" reviewer_role="" base_commit=""
   local h_sid="" h_pid="" h_pid_start="" h_cwd="" h_expires_min=10
-  local provider="" account="" provider_seen=0 account_seen=0 binding_check=""
+  local provider="" account="" provider_seen=0 account_seen=0 binding_check="" provider_context="null"
   local handoff_seen=0   # любой --handoff-* (вкл. -expires-min, у него дефолт)
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -92,7 +92,7 @@ cmd_create() {
   [[ -e "$AGENTS_DIR/$name" ]] && fail "agent '$name' already exists" 4
   command -v yq >/dev/null || fail "yq v4 required"
 
-  [[ "$(yq -r 'has("provider_binding") or has("provider_id") or has("account_id") or has("account") or has("provider")' "$spec")" == "false" ]] \
+  [[ "$(yq -r 'has("provider_binding") or has("provider_id") or has("account_id") or has("account") or has("provider") or has("provider_context") or has("execution_context")' "$spec")" == "false" ]] \
     || fail "reserved provider binding fields in spec"
   if [[ $provider_seen -eq 1 ]]; then
     [[ $handoff_seen -eq 0 && "$(yq -r '.type' "$spec")" == event \
@@ -336,6 +336,7 @@ sys.exit(0 if ok else 1)
     flock -x "$binding_lockfd"
     [[ ! -e "$AGENTS_DIR/$name" ]] || fail "agent '$name' already exists" 4
     [[ "$(python3 "$BIN_DIR/_control_provider_accounts.py" create-check "$provider" "$account" "$s_project")" == "$binding_check" ]] || fail "catalog_invalid"
+    provider_context=$(python3 "$BIN_DIR/_control_provider_task_context.py" capture "$provider" "$account" "$s_project_name") || return 2
   fi
 
   # --- atomic registry: fill tmp dir, single rename (§4.2) ---
@@ -390,8 +391,8 @@ sys.exit(0 if ok else 1)
   fi
   python3 - "$mission_base" "$mission_base_branch" "$h_sid" "$h_pid" "$h_pid_start" "$h_cwd" \
       "$h_expires_min" "${AI_AGENT_TEST_INCARNATION:-}" "$s_project_name" "$provider" "$account" \
-      <<'PY' | "$IO" durable-write "$tmp/control.json"
-import json, sys, time, secrets
+      3<<<"$provider_context" <<'PY' | "$IO" durable-write "$tmp/control.json"
+import json, os, sys, time, secrets
 from datetime import datetime, timedelta, timezone
 base, base_branch, sid, pid, pid_start, cwd, exp_min, test_inc, proj_name = sys.argv[1:10]
 handoff = None
@@ -405,6 +406,7 @@ if sid:
 # incarnation ТОЛЬКО для проверки коллизии ветки task/<name>-<inc8>; в проде
 # переменная не выставляется.
 print(json.dumps({
+  **({"provider_context": context} if (context := json.load(os.fdopen(3))) is not None else {}),
   **({"provider_binding": {"schema": 1, "provider_id": sys.argv[10], "account_id": sys.argv[11]}} if sys.argv[10] else {}),
   "schema": 1, "seq": 0, "desired": "paused", "generation": 0,
   "incarnation": test_inc or secrets.token_hex(16),
@@ -538,11 +540,12 @@ PY
   # alert()/alert_clear()); spool - под producer-локом (иначе torn write с
   # параллельным spool-put). tmux-сокеты/юниты защищены сами (socket_busy). ---
   local rcdir="${AI_RECONCILER_DIR:-$HOME/.ai-control/reconciler}"
-  mkdir -p "$rcdir/cache"
-  rm -f "$rcdir/cache/$name.flags"
   if [[ $provider_seen -eq 1 ]]; then
     [[ "$(python3 "$BIN_DIR/_control_provider_accounts.py" create-check "$provider" "$account" "$s_project")" == "$binding_check" ]] || fail "catalog_invalid"
+    printf '%s' "$provider_context" | python3 "$BIN_DIR/_control_provider_task_context.py" check "$provider" "$account" "$s_project_name" "$tmp/control.json" || return 2
   fi
+  mkdir -p "$rcdir/cache"
+  rm -f "$rcdir/cache/$name.flags"
   # alerts-state - под общим с reconciler fcntl-локом (bash flock Linux-only)
   python3 - "$rcdir/cache/alerts-state.json" "$rcdir/cache/alerts.lock" "$name" <<'PY'
 import json, os, sys, fcntl
@@ -617,9 +620,11 @@ PYMARKER
 
   if [[ $provider_seen -eq 1 ]]; then
     [[ "$(python3 "$BIN_DIR/_control_provider_accounts.py" create-check "$provider" "$account" "$s_project")" == "$binding_check" ]] || fail "catalog_invalid"
+    printf '%s' "$provider_context" | python3 "$BIN_DIR/_control_provider_task_context.py" publish "$provider" "$account" "$s_project_name" "$tmp/control.json" "$AGENTS_DIR/$name" "$binding_check" || return 2
+  else
+    mv "$tmp" "$AGENTS_DIR/$name"
   fi
-  # --- атомарная публикация: единый mv (реестр + worktree вместе) ---
-  mv "$tmp" "$AGENTS_DIR/$name"
+  # Bound TASK rename occurs inside the metadata producer guard.
   trap - EXIT   # опубликовано - staging больше не откатывается
   if [[ "$s_type" == "mission" \
         || ( "$s_type" == "event" && "$s_workspace" == "worktree" ) ]]; then
