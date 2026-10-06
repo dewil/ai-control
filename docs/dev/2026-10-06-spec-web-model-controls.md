@@ -304,7 +304,10 @@ HTTP и broker обновляются согласованно: старый bro
 
 ## INV-WSESS-27: draft, гонки и честные controls
 
-Рядом с draft два accessible labelled controls: «Модель: наследовать текущую» или
+Рядом с draft два native select с accessible names «Модель» и
+«Уровень размышления» (labels/aria-labelledby, без зависимости теста от CSS/ID).
+Модель содержит вариант «Наследовать текущую»; effort placeholder «Выберите уровень размышления».
+Два accessible labelled controls показывают «Модель: наследовать текущую» или
 row.label; при explicit модели «Выберите уровень размышления» либо exact
 supported effort. Submit explicit выбора запрещён до выбора effort. Default catalog
 metadata не является effective thread state.
