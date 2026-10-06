@@ -49,3 +49,10 @@ rollback в13 восстанавливает исходные state bytes и о�
 создавать скрытым smoke test. Следующий подписанный14→14 релиз использует тот
 же helper и base из принятого schema2. Root bootstrap, два controlled релиза
 и installed browser acceptance остаются отдельными эксплуатационными гейтами.
+
+
+## Версия панели и дата сборки (06.10.2026)
+
+Перед фиксацией новой signedfixed14 поставки подготовьте footer: `python3 deployment/build-web-info.py --release-id N`, где N — следующий подписываемый release_id. Утилита сама фиксирует UTC clock и локальную исходную ветку, отображает время в МСК. «Собрано» означает подготовку артефакта, а не завершение CI или старт процесса. Ветка main/origin/origin/main скрывается; detached показывается честно.
+
+Затем закоммитьте точные HTML/CSS bytes, пройдите независимое review и полный CI этой ревизии. При упаковке проверьте единственный `footer#build-info[data-release-id]` и совпадение с release_id signedmanifest; сверяйте HTML/CSS hash с принятой ревизией. Повторный stamp после CI меняет артефакт и требует новой фиксации/проверки. Для новой поставки старый stamp не переиспользуется. Deployment helper/trust/schema/scope не меняются; utility не устанавливается в /opt и не читает root-private state или авторизацию.
