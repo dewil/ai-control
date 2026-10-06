@@ -58,3 +58,7 @@ INV-WEB-12: В явно включённом multiuser режиме administrato
 Известная дыра multiuser: текущий owner-only contract не имеет per-user policy/authentication/project filtering и writer fence guards. Multiuser нельзя включать до закрытия всех корней; первый policy-only корень сам по себе доступов не выдаёт.
 
 Трассируемость policy-only части INV-WEB-12: tests/test_control_web_access_policy.py (21 independent methods; owner-bypass и same-root/wrong-alias sensitivity controls). Брокерная/writer/auth часть остаётся известной дырой до следующих корней.
+
+
+## Идентичность поставки
+INV-WBUILD-01..04: footer — frozen identity/time/source branch доставляемого артефакта, безопасный текст и mobile layout, без runtime Git/auth/state access. Контракт: ../dev/2026-10-06-spec-web-build-info.md; source/tests/installation pending.
