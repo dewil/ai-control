@@ -255,3 +255,15 @@ navigation disabled; accessibility labels/text/focus verified observable DOM.
 source review/CI/installed gate отдельны; этот spec не расширяет native sources,
 accounts, multiuser, package closure или activation. UI code только после DESIGN,
 immutable browser RED и accepted backend source/HTTP GREEN.
+
+## Existing message-age fixture scope
+
+Message-age timers and local recomputation on visible return remain local: no
+history/session/provider request is caused by labels. The independently specified
+attention visible-return lifecycle above may issue exactly one GET /api/attention;
+it does not fetch history or change timestamp provenance. Existing global-network
+age fixture must distinguish that fixed attention GET from age-driven requests:
+all other network equality and timestamp/hidden-tab assertions stay exact, and
+any allowed attention request must be that GET with no query/body, at most one
+for the single visibility transition. This is a test integration clarification,
+not permission for extra age polling, history calls, POST, or duplicate refresh.
