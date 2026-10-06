@@ -229,27 +229,45 @@ class PageNavigationBrowserContract(unittest.TestCase):
         # Browser-delivered wheel/End is trusted user input. Keep focus on the
         # navigation button so End scrolls the document rather than a textarea.
         events = []
+        wheel_targets = []
         self.page.expose_function('navigationInputEvidence', lambda kind, trusted: events.append((kind, trusted)))
+        self.page.expose_function('navigationWheelEvidence', lambda target: wheel_targets.append(target))
         self.page.evaluate("""() => {
             for (const kind of ['keydown','wheel']) document.addEventListener(kind,
                 event => window.navigationInputEvidence(kind,event.isTrusted), {capture:true});
+            document.addEventListener('wheel', event => {
+                const el=event.target;
+                window.navigationWheelEvidence({trusted:event.isTrusted,tag:el.tagName,id:el.id,
+                    editable:el instanceof Element && (el.isContentEditable || !!el.closest('input,textarea,select'))});
+            }, {capture:true});
         }""")
         if input_kind == 'End':
             self.buttons('up').first.focus()
             self.page.keyboard.press('End')
         else:
-            self.page.mouse.move(1100, 500)
+            # A coordinate inside the workspace can retarget the composer as
+            # footer/layout changes move content during scrolling. The left
+            # document gutter stays outside editable controls at this viewport.
+            self.page.mouse.move(5, 500)
+            self.assertFalse(self.page.evaluate("""() => {
+                const el=document.elementFromPoint(5,500);
+                return el && (el.isContentEditable || !!el.closest('input,textarea,select'));
+            }"""), 'Document-wheel pointer must start outside editable controls')
             self.page.mouse.wheel(0, self.metrics()['max'] + 900)
         self.assert_extreme('down')
         self.assertIn(('keydown' if input_kind == 'End' else 'wheel', True), events,
                       'Manual return must use trusted browser input')
+        if input_kind == 'wheel':
+            self.assertTrue(wheel_targets, 'Must observe the actual browser-delivered wheel target')
+            self.assertTrue(all(target['trusted'] and not target['editable'] for target in wheel_targets),
+                            'Manual document wheel must not retarget the draft: ' + repr(wheel_targets))
         before_requests = len(self.history_requests())
         private_json(self.evidence / 'control.json', {'delay': 0, 'count': 28})
         self.page.get_by_text('LATEST message 27', exact=True).wait_for(state='attached', timeout=8500)
         self.page.wait_for_timeout(250)
         self.assertGreater(len(self.history_requests()), before_requests, 'Must observe a real polling update')
         result = self.metrics()
-        private_json(self.evidence / ('manual-return-' + input_kind + '.json'), {'input': input_kind, 'events': events, **result})
+        private_json(self.evidence / ('manual-return-' + input_kind + '.json'), {'input': input_kind, 'events': events, 'wheel_targets': wheel_targets, **result})
         self.assertLessEqual(result['max']-result['y'], 80,
                              'INV-WSESS-15: trusted manual return restores follow without explicit down: ' + repr(result))
 
