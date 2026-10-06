@@ -139,7 +139,8 @@ class ProxyFaultContract(unittest.TestCase):
         backing = ReadTrap(fullref())
         record["context_ref"] = MappingProxyType(backing)
         backing.reads = 0
-        self.assert_code("invalid_request", lambda: self.records.PreparedBoundCreate(record))
+        # f74a7cd: an existing context_ref field is a malformed fullref.
+        self.assert_code("context_invalid", lambda: self.records.PreparedBoundCreate(record))
         self.assertEqual(backing.reads, 0, "nested foreign reference backing was read")
 
     def test_fullref_precedence_survives_malformed_nested_data(self):
