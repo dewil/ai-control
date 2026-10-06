@@ -334,10 +334,16 @@ class AttentionUIBrowserRED(unittest.TestCase):
 
         card_reason.evaluate('el => el.focus()')
         self.assertTrue(card_reason.evaluate('el => document.activeElement === el'))
-        higher = _attention_fixture(questions_per_task=18, revision=self.payload['revision'] + 1,
+        # Keep the exact synthetic reason set stable; only advance its revision.
+        higher = _attention_fixture(questions_per_task=15, revision=self.payload['revision'] + 1,
                                     epoch=self.payload['epoch'])
         self.raw_attention = json.dumps(higher, ensure_ascii=False, separators=(',', ':'))
         self.refresh()
+
+        same_card_reason = self.page.locator(
+            f'#attention-unlinked [data-attention-task-key="{task_key}"] button[data-attention-reason-id="{reason_id}"]')
+        self.assertEqual(same_card_reason.count(), 1,
+                         'higher revision must retain the same eligible reason in its original card')
 
         active = self.page.evaluate("""() => {
           const el = document.activeElement;
