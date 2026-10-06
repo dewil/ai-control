@@ -40,7 +40,8 @@ class ItemPagingRPC(RPC):
             if params.get('itemsView') == 'notLoaded':
                 metadata = [{k: v for k, v in row.items() if k != 'items'} | {'items': []}
                             for row in self.turns]
-                return {'data': metadata, 'nextCursor': self.turn_cursor}
+                next_cursor = None if params.get('cursor') is not None else self.turn_cursor
+                return {'data': metadata, 'nextCursor': next_cursor}
             if params.get('itemsView') == 'full':
                 # Same synthetic source data for legacy send_status/full-history behavior.
                 return {'data': self.turns, 'nextCursor': self.turn_cursor}
@@ -52,6 +53,8 @@ class ItemPagingRPC(RPC):
         if method == 'thread/list':
             return self.list_response
         if method == 'turn/start':
+            if self.start_error:
+                raise self.start_error
             return self.start_response
         raise AssertionError('Unexpected synthetic RPC: ' + method)
 
@@ -161,12 +164,12 @@ class SessionChatItemsPaging(unittest.TestCase):
         self.assertEqual(self.chat(rpc).history('demo', SID), {'error': 'unavailable'})
         self.assertTrue(any(m == 'thread/turns/list' and p.get('itemsView') == 'notLoaded'
                             for m, p in rpc.calls))
-        rpc = ItemPagingRPC(self.project, [native_turn(TURN, [])])
-        self.assertEqual(self.chat(rpc).history('demo', SID, 'malformed'), {'error': 'unavailable'})
+        rpc = ItemPagingRPC(self.project, [native_turn(TURN, [])], turn_cursor=4)
+        self.assertEqual(self.chat(rpc).history('demo', SID), {'error': 'unavailable'})
 
     def test_send_status_still_uses_full_items_to_find_steering_client_id(self):
         rpc = ItemPagingRPC(self.project, [native_turn(TURN, [
-            user('steer', 'client-steer-7', 'steering text')])])
+            user('steer', '22222222-2222-4222-8222-222222222222', 'steering text')])])
         rpc.start_error = TimeoutError()
         chat = self.chat(rpc)
         chat.send('demo', SID, '22222222-2222-4222-8222-222222222222', 'steering text')
