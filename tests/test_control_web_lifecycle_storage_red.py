@@ -1,12 +1,14 @@
 """Independent synthetic RED for the public lifecycle receipt-store contract."""
-import hashlib
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
+import operator
 from pathlib import Path
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 import uuid
@@ -318,6 +320,132 @@ class LifecycleStorageRed(unittest.TestCase):
         self.assertEqual(observed, ("error:unavailable", "error:unavailable", True, 0),
                          "same-thread/same-inode FD reuse must fail closed before lookup, "
                          "reservation publication, or clock sampling")
+
+    def test_locked_namespace_handle_is_opaque_and_keeps_flock_store_owned(self):
+        store = self.store()
+        observations = {}
+        probe_fd = None
+        with store.locked(deadline(), create=True) as handle:
+            observations["not_integer"] = type(handle) is not int
+            observations["no_fileno"] = not callable(getattr(handle, "fileno", None))
+            try:
+                operator.index(handle)
+                index_refused = False
+            except TypeError:
+                index_refused = True
+            observations["no_index"] = index_refused
+            observations["repr_hides_path"] = str(self.store_path) not in repr(handle)
+
+            # Avoid passing any integer-capable object to these destructive APIs.
+            if index_refused:
+                try:
+                    os.close(handle)
+                    observations["close_refused"] = False
+                except (TypeError, OSError):
+                    observations["close_refused"] = True
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+                    observations["flock_refused"] = False
+                except (TypeError, OSError):
+                    observations["flock_refused"] = True
+            else:
+                observations["close_refused"] = False
+                observations["flock_refused"] = False
+
+            probe_fd = os.open(self.store_path, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                observations["blocked_while_active"] = False
+                fcntl.flock(probe_fd, fcntl.LOCK_UN)
+            except BlockingIOError:
+                observations["blocked_while_active"] = True
+        try:
+            try:
+                fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                observations["released_after_exit"] = True
+            except BlockingIOError:
+                observations["released_after_exit"] = False
+        finally:
+            try:
+                fcntl.flock(probe_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(probe_fd)
+        self.assertEqual(observations, {
+            "not_integer": True, "no_fileno": True, "no_index": True,
+            "repr_hides_path": True, "close_refused": True, "flock_refused": True,
+            "blocked_while_active": True, "released_after_exit": True,
+        }, "namespace flock stays store-owned behind an opaque non-FD handle")
+
+    def test_foreign_raw_stale_and_cross_thread_handles_fail_before_reservation_effects(self):
+        calls = []
+        store = self.store(clock=lambda: calls.append("store-clock") or 123456789)
+        foreign = _lifecycle.LifecycleStore(
+            str(self.store_path), clock=lambda: calls.append("foreign-clock") or 123456789)
+        results = {}
+        raw_fd = None
+        before = after_active = after_stale = None
+
+        def outcome(call):
+            try:
+                return call()
+            except _DomainError as error:
+                return "error:" + error.code
+
+        with store.locked(deadline(), create=True) as handle:
+            raw_fd = os.open(self.store_path, os.O_RDONLY | os.O_DIRECTORY)
+            before = sorted(path.name for path in self.store_path.iterdir())
+            results["valid"] = outcome(lambda: store.lookup(
+                handle, CONTEXT, ROOT_PATH, SID, OP, deadline()))
+            results["raw_lookup"] = outcome(lambda: store.lookup(
+                raw_fd, CONTEXT, ROOT_PATH, SID, OP, deadline()))
+            results["raw_reserve"] = outcome(lambda: store.reserve(
+                raw_fd, CONTEXT, ROOT_PATH, SID, OP,
+                "unarchive", "restore_target", deadline()))
+            results["foreign_lookup"] = outcome(lambda: foreign.lookup(
+                handle, CONTEXT, ROOT_PATH, SID, OP, deadline()))
+            results["foreign_reserve"] = outcome(lambda: foreign.reserve(
+                handle, CONTEXT, ROOT_PATH, SID, OP,
+                "unarchive", "restore_target", deadline()))
+
+            thread_result = {}
+            worker = threading.Thread(target=lambda: thread_result.update(
+                lookup=outcome(lambda: store.lookup(
+                    handle, CONTEXT, ROOT_PATH, SID, OP, deadline())),
+                reserve=outcome(lambda: store.reserve(
+                    handle, CONTEXT, ROOT_PATH, SID, OP,
+                    "unarchive", "restore_target", deadline()))), daemon=True)
+            worker.start()
+            worker.join(1.0)
+            results["thread_finished"] = not worker.is_alive()
+            results["thread_lookup"] = thread_result.get("lookup", "missing")
+            results["thread_reserve"] = thread_result.get("reserve", "missing")
+            after_active = sorted(path.name for path in self.store_path.iterdir())
+            results["clock_calls_active"] = len(calls)
+            os.close(raw_fd)
+            raw_fd = None
+
+        results["stale_lookup"] = outcome(lambda: store.lookup(
+            handle, CONTEXT, ROOT_PATH, SID, OP, deadline()))
+        results["stale_reserve"] = outcome(lambda: store.reserve(
+            handle, CONTEXT, ROOT_PATH, SID, OP,
+            "unarchive", "restore_target", deadline()))
+        results["clock_calls_stale"] = len(calls)
+        after_stale = sorted(path.name for path in self.store_path.iterdir())
+        self.assertEqual(results, {
+            "valid": None,
+            "raw_lookup": "error:unavailable", "raw_reserve": "error:unavailable",
+            "foreign_lookup": "error:unavailable", "foreign_reserve": "error:unavailable",
+            "thread_finished": True,
+            "thread_lookup": "error:unavailable", "thread_reserve": "error:unavailable",
+            "clock_calls_active": 0,
+            "stale_lookup": "error:unavailable", "stale_reserve": "error:unavailable",
+            "clock_calls_stale": 0,
+        }, "only exact active same-store/thread handle is authority")
+        self.assertEqual((after_active, after_stale), (before, before),
+                         "rejected handles must not publish or replace receipt entries")
+        if raw_fd is not None:
+            os.close(raw_fd)
 
 
 if __name__ == "__main__":
