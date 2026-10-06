@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from test_control_web_session_chat_contract import RPC, SID, feature
+from test_control_web_session_chat_contract import RPC, SID, TURN, feature
 from test_control_web_session_chat_history_tail import agent, native_turn, encoded, LIMIT
 
 
@@ -24,9 +24,12 @@ class CompactHistoryContract(unittest.TestCase):
             self.assertIn('turns', self.chat.history('demo', SID, page))
         expected = []
         for page, limit in ((None, 4), (None, 4), (cursor, 8)):
-            params = {'threadId': SID, 'itemsView': 'full', 'sortDirection': 'desc', 'limit': limit}
+            params = {'threadId': SID, 'itemsView': 'notLoaded', 'sortDirection': 'desc', 'limit': limit}
             if page is not None: params['cursor'] = page
-            expected += [('thread/read', {'threadId': SID, 'includeTurns': False}), ('thread/turns/list', params)]
+            expected += [('thread/read', {'threadId': SID, 'includeTurns': False}),
+                         ('thread/turns/list', params),
+                         ('thread/items/list', {'threadId': SID, 'turnId': TURN,
+                                                'sortDirection': 'desc', 'limit': 32})]
         self.assertEqual(self.rpc.calls, expected)
         self.assertFalse(self.rpc.starts())
 
@@ -34,17 +37,27 @@ class CompactHistoryContract(unittest.TestCase):
         items = [agent(i) for i in range(160)]
         self.rpc.pages[None] = {'data': [native_turn(0, items)], 'nextCursor': 'exact-next/界'}
         self.rpc.pages['older-fixture'] = self.rpc.pages[None]
+        before_latest = len(self.rpc.calls)
         latest = self.chat.history('demo', SID)
+        latest_item_requests = [params for method, params in self.rpc.calls[before_latest:]
+                                if method == 'thread/items/list']
+        before_older = len(self.rpc.calls)
         older = self.chat.history('demo', SID, 'older-fixture')
+        older_item_requests = [params for method, params in self.rpc.calls[before_older:]
+                               if method == 'thread/items/list']
         for result in (latest, older):
             self.assertIn('turns', result)
             self.assertIs(result['truncated'], True)
             self.assertEqual(result['next_cursor'], 'exact-next/界')
             self.assertLessEqual(len(encoded(result)), LIMIT)
         self.assertEqual([i['id'] for i in older['turns'][0]['items']], [f'item-{i}' for i in range(32, 160)])
-        # Discarding an older native item does not bypass validation on either path.
+        for requests in (latest_item_requests, older_item_requests):
+            self.assertLessEqual(len(requests), 4)
+            self.assertTrue(all(params['limit'] == 32 for params in requests))
+        # An invalid native item within the bounded newest128 scan fails closed.
         for cursor in (None, 'older-fixture'):
-            self.rpc.pages[cursor] = {'data': [native_turn(0, [agent('invalid', 7)] + items)], 'nextCursor': None}
+            tail = items[:33] + [agent('invalid', 7)] + items[33:]
+            self.rpc.pages[cursor] = {'data': [native_turn(0, tail)], 'nextCursor': None}
             self.assertEqual(self.chat.history('demo', SID, cursor), {'error': 'unavailable'})
         self.assertEqual([i['id'] for i in latest['turns'][0]['items']], [f'item-{i}' for i in range(136, 160)])
 

@@ -42,6 +42,7 @@ class RPC:
         self.root = root
         self.calls = []
         self.pages = {None: {'data': [turn()], 'nextCursor': None}}
+        self.item_sources = {}
         self.list_response = {'data': [{'id': SID, 'cwd': str(root), 'name': 'Synthetic session', 'status': {'type': 'idle'}}], 'nextCursor': None}
         self.read_id = SID
         self.resume_root = None
@@ -60,7 +61,30 @@ class RPC:
         if method == 'thread/list':
             return self.list_response
         if method == 'thread/turns/list':
-            return self.pages[params.get('cursor')]
+            response = self.pages[params.get('cursor')]
+            if params.get('itemsView') != 'notLoaded':
+                return response
+            if not isinstance(response, dict) or not isinstance(response.get('data'), list):
+                return response
+            rows = response['data']
+            if any(not isinstance(row, dict) or not isinstance(row.get('items'), list)
+                   or not isinstance(row.get('id'), str) for row in rows):
+                return response
+            metadata = []
+            for row in rows:
+                self.item_sources[row['id']] = list(row['items'])
+                metadata.append({key: value for key, value in row.items() if key != 'items'} | {'items': []})
+            return {'data': metadata, 'nextCursor': response.get('nextCursor')}
+        if method == 'thread/items/list':
+            items = list(reversed(self.item_sources[params['turnId']]))
+            cursor = params.get('cursor')
+            prefix = f"items:{params['turnId']}:"
+            offset = int(cursor[len(prefix):]) if isinstance(cursor, str) and cursor.startswith(prefix) else 0
+            batch = items[offset:offset + params['limit']]
+            next_offset = offset + len(batch)
+            next_cursor = f'{prefix}{next_offset}' if next_offset < len(items) else None
+            return {'data': [{'turnId': params['turnId'], 'item': item} for item in batch],
+                    'nextCursor': next_cursor}
         if method == 'turn/start':
             if self.before_start:
                 self.before_start()
@@ -203,15 +227,23 @@ class SessionChatContract(unittest.TestCase):
             {'id': 'a', 'role': 'assistant', 'text': 'answer', 'truncated': False, 'timestamp': None, 'time_precision': 'unknown'}]}],
             'next_cursor': 'opaque-next', 'truncated': False, 'recent_sends': []})
         # 05.10 compact policy intentionally changes latest native limit8 to limit4.
+        # History uses metadata-only turns before fetching their supported text items.
         self.assertEqual(self.rpc.calls, [('thread/read', {'threadId': SID, 'includeTurns': False}),
-            ('thread/turns/list', {'threadId': SID, 'itemsView': 'full', 'sortDirection': 'desc', 'limit': 4})])
+            ('thread/turns/list', {'threadId': SID, 'itemsView': 'notLoaded', 'sortDirection': 'desc', 'limit': 4}),
+            ('thread/items/list', {'threadId': SID, 'turnId': TURN, 'sortDirection': 'desc', 'limit': 32})])
 
     def test_INV_WSESS_03_pagination_preserves_server_order(self):
-        self.rpc.pages['opaque'] = {'data': [turn(turn_id=OTHER), turn()], 'nextCursor': None}
+        turns = [turn(turn_id=OTHER), turn()]
+        # Positive cross-turn history fixture needs private, globally unique item IDs.
+        for turn_index, native_turn in enumerate(turns):
+            for item_index, item in enumerate(native_turn['items']):
+                item['id'] = f'positive-pagination-{turn_index}-{item_index}'
+        self.rpc.pages['opaque'] = {'data': turns, 'nextCursor': None}
         result = self.chat.history('demo', SID, 'opaque')
         self.assertEqual([t['id'] for t in result['turns']], [OTHER, TURN])
         self.assertIsNone(result['next_cursor'])
-        self.assertEqual(self.rpc.calls[-1][1], {'threadId': SID, 'itemsView': 'full',
+        turn_requests = [params for method, params in self.rpc.calls if method == 'thread/turns/list']
+        self.assertEqual(turn_requests[-1], {'threadId': SID, 'itemsView': 'notLoaded',
             'sortDirection': 'desc', 'limit': 8, 'cursor': 'opaque'})
 
     def test_INV_WSESS_03_redaction_then_unicode_clipping(self):
@@ -227,8 +259,12 @@ class SessionChatContract(unittest.TestCase):
 
     def test_INV_WSESS_03_total_encoded_budget_is_honest(self):
         # 05.10 compact latest requests4 turns; Older retains this8-turn budget fixture.
-        self.rpc.pages['older-budget-fixture'] = {'data': [turn('界'*8000, turn_id=f'{i:08x}-1111-4111-8111-111111111111')
-                                        for i in range(8)], 'nextCursor': 'older'}
+        turns = [turn('界'*8000, turn_id=f'{i:08x}-1111-4111-8111-111111111111') for i in range(8)]
+        # Positive cross-turn history fixture needs private, globally unique item IDs.
+        for turn_index, native_turn in enumerate(turns):
+            for item_index, item in enumerate(native_turn['items']):
+                item['id'] = f'positive-budget-{turn_index}-{item_index}'
+        self.rpc.pages['older-budget-fixture'] = {'data': turns, 'nextCursor': 'older'}
         result = self.chat.history('demo', SID, 'older-budget-fixture')
         self.assertLessEqual(len(json.dumps(result, ensure_ascii=False, separators=(',', ':')).encode('utf-8')), 96*1024)
         self.assertTrue(result['truncated'])
@@ -502,6 +538,8 @@ class InteractiveRPCContract(unittest.TestCase):
             except Exception as error:
                 self.server_errors.append(error)
         server = unix_serve(safe_handler, self.socket)
+        # Keep the fake owned transport socket private under any process umask.
+        os.chmod(self.socket, 0o600)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
         self.addCleanup(worker.join, 2)
