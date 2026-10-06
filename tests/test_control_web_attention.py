@@ -267,6 +267,34 @@ class AttentionOverviewContractTests(unittest.TestCase):
         self.assertEqual(stale_view, {"error": "stale"})
         self.assertNotIn("reasons", stale_view)
 
+    def test_unchanged_get_does_not_advance_projection_revision(self):
+        source = FakeSource([task(questions=[question()])])
+        wall_times = iter((NOW, NOW + 1))
+        self.assertIsNotNone(_module,
+            "AttentionOverview contract RED: bin/_control_web_attention.py is missing")
+        overview = _module.AttentionOverview(
+            source, view=FakeView(), monotonic=lambda: 0.0,
+            wall_clock=lambda: next(wall_times),
+        )
+        first, second = overview.snapshot(), overview.snapshot()
+        self.assertEqual(first["epoch"], second["epoch"])
+        self.assertEqual(first["revision"], second["revision"],
+                         "GET alone must not create a new projection revision")
+
+    def test_new_source_epoch_drops_cached_protected_reasons(self):
+        source = FakeSource([task(questions=[question()],
+                                  label="Old epoch private synthetic label")])
+        overview, _, _ = self.overview([], task_source=source)
+        first = overview.snapshot()
+        self.assertEqual(len(first["reasons"]), 1)
+        source.value.update(epoch="d" * 32, state="incomplete", complete=False,
+                            reason="unavailable", records=[])
+        second = overview.snapshot()
+        self.assertEqual(second["reasons"], [])
+        self.assertEqual(second["unlinked_tasks"], [])
+        self.assertEqual(second["pool"]["known_sessions"], 0)
+        self.assertNotIn("Old epoch private synthetic label", repr(second))
+
 
 if __name__ == "__main__":
     unittest.main()
