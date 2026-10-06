@@ -117,7 +117,7 @@ terminal receipt status не понижается; текущий title може
 
 Pending snapshot immutable project/fullsid/context/operationUUID/normalizedtitle;
 input и submit заблокированы. Смена выбранного чата/проекта не перепривязывает
-operation и late result не меняет новый чат. Rename state только session-local,
+operation и late result не меняет новый чат. Selection generation также закрепляется: в A→B→A исходный POST response не меняет текущие heading/list после возврата к A. Сохраняются исходные UUID/draft; после завершения старого запроса предлагается manual «Проверить название», без нового POST или автоматического retry. Только fresh GET в текущем selection generation подтверждает title для переоткрытого A. Rename state только session-local,
 без browser durable storage. Unknown сохраняет draft/UUID, показывает «Проверить
 название», блокирует повтор mutation; manual status POST не делает. Ошибка до reserve
 сохраняет ввод и допускает исправление/явную новую попытку. Политика sameUUID меняемого
