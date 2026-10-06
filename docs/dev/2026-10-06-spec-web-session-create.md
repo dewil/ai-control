@@ -252,7 +252,8 @@ name, возвращает canonical existing absolute directory string. Он з
 и перед publication сравнивает его с captured reservation root; alias drift/stale
 не переназначает record. Project grammar existing `PROJECT_RE`, UUID canonical
 full form existing session validator. `clock` optional trusted callable возвращает
-positive exact int timestamp, default time.time_ns; bool/nonpositive отказ.
+positive exact int timestamp, default time.time_ns; bool/nonpositive/не-int output
+даёт `AccountError('invalid_request')` до reserve publication.
 
 Context аргумент reserve/lookup — exact existing
 `_control_provider_context.ExecutionContext`, не bool/dict/legacy context.
