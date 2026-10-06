@@ -311,75 +311,85 @@ Neither method creates/reassigns native thread ID or mutates account reference.
 V1 resolve signature/schema stays unchanged; no path-bearing public selector.
 
 
-## FIRST CODEUNIT: exact auth-state API (DESIGN/RED target, not runtime GO)
+## FIRST CODEUNIT: exact auth-state API (synthetic-only; not runtime GO)
 
-Only new `bin/_control_codex_auth.py`; stdlib only. No launch/CLI/HTTP/UI/register/
-resolver/file reader/network/admission implementation: adapters/host proofs next slices.
-Kernel bwrap/view proof currently UNSUPPORTED; no full profile-proof claim.
+The codeunit adds `bin/_control_codex_auth.py` (stdlib only) and one narrow change to
+`bin/_control_codex_auth_authority.py`: monotonic `poison_intent` serialized with
+begin-enqueue/publication and checked by every local authority path. No other authority
+behavior changes. No CLI/HTTP/UI/register/resolver/file-reader/TLS/native implementation,
+no production factory, and no production `supported/admit` flag. Kernel/private-view
+and owned-host proofs remain separate gates. The codeunit runs only against injected typed dependencies;
+their values are data for validation, never provenance or production authority.
 
-Exact exported constructors (all immutable values deep-copied, repr=False):
-`AuthContext(reference,expected_native_principal,execution_identity)` validates
-exact V2 schemas above; public trusted capture factory
-`capture_auth_context(reference,expected_native_principal,execution_identity)`
-returns syntactic AuthContext only; real resolver FIRST rechecks metadata/grants/root.
-`OAuthRequest(request_id,context,started_monotonic,started_wall,deadline)` carries
-UUIDv4/current AuthContext and finite clocks, no secret.
-`TLSExchange(request_id,context,endpoint,client_id,peer_hostname,ca_verified,
-redirected,proxy_used,status,body,received_monotonic,received_wall)` body=bytes;
-exact fixed endpoint/client/peer="auth.openai.com", CA=True, redirect/proxy=False.
-Trusted-client-only constructor, not JSON/input or self-authenticating attestation.
-`AuthError(code)` exposes only the closed error vocabulary above, str=code.
+Exact immutable values are `repr=False`; caller-owned data is deep-copied, and no
+public value contains secrets, paths, or FDs. `TLSExchange.body` is the sole private
+transient exception: it contains the bounded token-bearing OAuth response solely
+inside the validator/parser and must never be repr'd, serialized, logged, persisted,
+placed in Delivery/context, or included in exceptions/metrics.
+
+- `AuthContext(reference,expected_native_principal,execution_identity)` enforces the
+  exact V2 metadata/principal/execution schemas. `capture_auth_context(...)` is a
+  syntactic capture only; production resolver must independently revalidate
+  metadata/grants/root before creating it.
+- `OAuthRequest(attempt_id,context,started_monotonic,started_wall,deadline)` binds one
+  UUIDv4 durable attempt, exact context and absolute deadlines; it contains no token.
+- `TLSExchange(attempt_id,context,endpoint,client_id,peer_hostname,ca_verified,
+  redirected,proxy_used,status,body,received_monotonic,received_wall)` carries bounded
+  bytes and exact fixed endpoint/client/peer values. It is constructible in tests and
+  never self-authenticating; production TLS provenance remains a later adapter proof.
+- `OwnedChannel(context,invocation_id,channel_id,transport_generation)` and
+  `CapturedCallback(channel,request_id,params,received_monotonic)` are opaque typed
+  values. Callback receipt time is captured by the owned reader before scheduling;
+  web input cannot construct a trusted callback.
+- `LoginReceipt(channel,request_id,response_id,result_type)` and
+  `WriteReceipt(channel,request_id,frame_length,accepted_length)` are opaque typed
+  transport results. A login receipt is valid only for the captured channel, exact
+  JSON-RPC request id, matching response id, and result type `chatgptAuthTokens`.
+  A write receipt is valid only for that channel and callback request id, with a
+  positive bounded frame length and `accepted_length==frame_length`. The trusted
+  writer returns it only after the entire exact frame is accepted by the pinned
+  stream writer; this does not attest that the native peer parsed or applied it.
+  Receipts are forgeable test data and never production provenance.
+- `Delivery(delivery_id,context,channel,owner_generation,credential_generation)` is an
+  opaque in-process capability, never a public DTO. `AuthError(code)` exposes only
+  the frozen closed codes, and `str(error)` is exactly the code.
+
 `AuthStateValidator(*,profile_source,oauth_client,owned_transport,coordinator,
-clock=time.monotonic,wall_clock=time.time)` no optional bypass/verified/policy flags.
-Exact trusted dependency protocols, deadline always same absolute float:
-`profile_source.open_selected(ctx,*,deadline)->opaque source lease` acquires only
-peraccount refresh lock with500ms cap, captures selected anchored source directory.
-`profile_source.validate_current(ctx,lease,*,deadline)->None` rechecks current
-registration ref/inode/SHA, profile/grants/root; no secret reads during this method.
-`profile_source.read_refresh(lease,*,deadline)->str` secret ASCII1..16384, not logged.
-`profile_source.commit_rotation(lease,new_refresh_token,*,deadline)->None` returns
-ONLY after selected owned atomic write+fsync; uncertain outcome raises
-AuthError("refresh_unknown"), not caller-visible filesystem text.
-`profile_source.close_selected(lease)->None` releases account lock once; lease
-never retained across native session lifetime. Cleanup cannot redeliver tokens.
-`oauth_client.exchange(request,refresh_token,*,deadline)->TLSExchange` fixed JSON
-refresh grant only; adapter owns bounded TLS request/body and maps uncertain sent
-outcome to AuthError("refresh_unknown"). No constructor accepts credential paths.
-`OwnedChannel(context,invocation_id,channel_id,transport_generation)` frozen repr=False;
-invocation_id=32lowerhex, channel_id=UUIDv4, generation=int>=0 (no bool).
-`owned_transport.capture(ctx,*,validator_id,deadline)->OwnedChannel` syntax checked by validator;
-actual owned invocation/stdio/kernel proof remains next-slice dependency obligation.
-`owned_transport.validate_current(channel,ctx,*,deadline)->None` no reconnect.
-`owned_transport.login(channel,payload,*,guard,deadline)->dict` exact login response
-{"type":"chatgptAuthTokens"}; payload exact native login params above.
-`owned_transport.refresh(channel,request_id,payload,*,guard,deadline)->None` writes only
-captured auth callback response, cannot issue commands/answer other callbacks.
-Validator methods: `admit(ctx,*,deadline)->Delivery`; `capture_callback(delivery,
-request_id,params,*,deadline)->CapturedCallback`; `refresh(delivery,callback,
-*,deadline)->Delivery`; `current(delivery,ctx,*,deadline)->None`;
-`close()->None`. Refresh request_id int>=0 or nonempty ASCII string<=128; exact
-params reason="unauthorized", previousAccountId nullable-or-exact W. Delivery is
-opaque repr=False delivery_id UUIDv4/context/channel/owner_generation>=1/
-credential_generation>=1; not native Admission or serialized API DTO. admit gets token before login; refresh verifies SAME current context and
-callback channel, applies9s budget, sameowner increments credential generation.
-current validates local ownership/quarantine + dependency current fences, NO OAuth.
-open→validate→read→exchange→strict parse/claims→validate→commit if rotation→final
-source+channel fences→deliver; close lease in finally. Validate full principal
-BEFORE rotation commit/delivery. Response/request context IDs and times must match;
-postrequest unknown failures quarantine selected account, deny subsequent methods.
-After ambiguous login/response write, never repeat delivery automatically. Cleanup
-error after completed delivery does not claim token was undelivered; retains opaque
-Delivery state and emits no secret/error text. Pre-delivery cleanup failure denies.
-This unit returns validation/delivery contributions ONLY; production AuthProof
-supported/admit gate lives outside it: accepted issuer packet + proved view/owned
-host required; actual fresh ID availability checked by real admit, not permanent denial.
-Synthetic fixtures exercise SAME validation code with typed trusted dependencies;
-there is no synthetic native production capability or test-only activation switch.
-Independent selector tests/test_control_codex_auth_red.py must cover exact schemas,
-strict bodies/claims/TLS provenance mismatch, ordering/current-ref drift, deadlines,
-rotation/unknown/quarantine, sameowner refresh, A/B lock isolation, late generation,
-zero forbidden callbacks and no token in repr/errors. Tests can construct AuthContext
-via capture_auth_context and return typed TLSExchange through injected client.
+clock=time.monotonic,wall_clock=time.time)` has no `verified`, bypass, path or policy
+flags. Its exact methods are `admit(ctx,*,deadline)->Delivery`,
+`capture_callback(delivery,request_id,params,*,deadline)->CapturedCallback`,
+`refresh(delivery,callback,*,deadline)->Delivery`,
+`current(delivery,ctx,*,deadline)->None`, and `close()->None`. Callback request id is
+a nonnegative int or nonempty ASCII string <=128; params are exactly
+`reason="unauthorized"` and `previousAccountId` null or exact selected workspace W.
+`current` performs local/source/channel checks only; no credential read, OAuth,
+restart or reconnect. `refresh` budget starts at trusted reader receipt time and is
+min(caller deadline, receipt+9s); initial admission is min(caller deadline, now+30s).
+
+Trusted dependency protocols use the same absolute deadline: source methods are
+`open_selected(ctx,*,deadline)`, `validate_current(ctx,lease,*,deadline)`,
+`read_refresh(lease,*,deadline)`, `reserve_attempt(lease,ctx,attempt_id,*,deadline)`,
+`commit_rotation(lease,ctx,attempt_id,new_refresh_token,*,deadline)`,
+`finish_confirmed(lease,ctx,attempt_id,*,deadline)`,
+`quarantine_unknown(lease,ctx,attempt_id,code,*,deadline)`, and
+`close_selected(lease)`. OAuth exposes only
+`exchange(request,refresh_token,*,deadline)->TLSExchange` for the fixed request.
+Transport exposes `capture(ctx,*,validator_id,deadline)->OwnedChannel`,
+`capture_callback(channel,request_id,params,*,deadline)->CapturedCallback`,
+`validate_current(channel,ctx,*,deadline)`, `validate_callback(callback,channel,*,deadline)`,
+`login(channel,payload,*,guard,deadline)->LoginReceipt`, and
+`write_refresh(channel,callback,*,guard,deadline)->WriteReceipt`. The login payload
+and exact positive JSON-RPC result are fixed above; refresh writes only the captured
+callback response, on the same channel and request id. None of the injected protocols
+accept caller-supplied endpoint/path/token-verification switches.
+
+Duplicate capture for one live channel/request returns the same callback capability;
+completed callback replay returns the same Delivery without another exchange/write;
+failed/unknown callback replay returns the same closed failure with no new effects.
+One validator owns a channel generation. Same-account refresh uses owner-generation
+fencing while same-owner rotation increments credential generation. No value from
+this synthetic codeunit can create or select a native process or be serialized as
+public admission authority.
 
 
 ## Explicit draft amendment approved by root06.10 before code/review repeat
@@ -454,8 +464,9 @@ explicit recovery/persistent coordinator wiring requires separate reviewed slice
 
 | Stage/outcome | Closed code | Account quarantine | Delivery/current | New admit/callback |
 | --- | --- | --- | --- | --- |
-| Before OAuth, stale/expired callback or authority | authority_stale | No | offending channel fails; other current survives | no exchange; fresh valid scope allowed |
-| Lock budget exhausted before request | refresh_busy | No | existing valid retained | fresh explicit call allowed |
+| Before durable reserve: stale/expired callback or authority | authority_stale | No | offending channel fails; other current survives | no reserve/exchange; fresh valid scope allowed |
+| Lock budget exhausted before durable reserve | refresh_busy | No | existing valid retained | fresh explicit call allowed |
+| After durable reserve but before OAuth send, including close/stale/deadline | refresh_unknown | Yes | all local deliveries fail; source attempt unresolved | refuse; no retry |
 | Provider definitely rejected grant | auth_expired or auth_unavailable | Yes | all account deliveries invalid | refused; no retry |
 | OAuth may be sent, lost response/body/deadline | refresh_unknown | Yes | all invalid | refused |
 | 2xx malformed/missing ID/oversize/invalid JWT | auth_response_invalid | Yes | all invalid; no native delivery | refused |
@@ -465,7 +476,7 @@ explicit recovery/persistent coordinator wiring requires separate reviewed slice
 | Native login/response delivery ambiguous or failed | refresh_unknown | Yes | new Delivery not published; all invalid | refused, no redelivery |
 | Reentrant close after begin_enqueue | refresh_unknown | selected account on guard exit | native effect confirmed/unknown; NO new Delivery/stamp | refused, no resend |
 | Confirmed sameowner delivery | none | No | publish stamp; older sameowner current retained | fresh callback may refresh |
-| Cleanup error after confirmed delivery | none | No | return published Delivery; cleanup not undo | no automatic redelivery |
+| Cleanup error after terminal finish and publication | none | No | return published Delivery; cleanup not undo | no automatic redelivery |
 
 Unknown/failed exchange does NOT commit refresh rotation. Already published durable
 rotation cannot be silently rolled back after later delivery failure; selected account
@@ -473,11 +484,11 @@ quarantines. Root/profile metadata/ref immutable; no migrating or resuming under
 Duplicate callback capture returns existing captured capability without new reserve;
 second refresh of completed callback returns SAME Delivery without OAuth/response.
 Failed/unknown callback repeats same closed error, zero OAuth/token delivery. Callback
-abandoned before send is marked stale; cannot resurrect by constructing new object.
-close is idempotent: marks local validator/deliveries/callbacks closed; no native/
-auth request or quarantine clearing. If OAuth may already be sent and result not
-confirmed, close quarantines shared account as refresh_unknown. Before-send close
-only abandons local operation. Worker owning lease releases it exactly once in
+abandoned before durable reserve is local-stale and cannot be resurrected by
+constructing another object; an operation canceled after reserve is `refresh_unknown`
+and account-poisoned even if OAuth has not started. `close()` is idempotent and closes
+local validator/deliveries/callbacks without native/auth requests or quarantine
+clearing. Before-reserve close abandons only local work. Worker owning lease releases it exactly once in
 finally; close never releases another thread lock or authorizes delayed delivery.
 Other validators remain current unless shared account quarantined.
 Native host drains and durable quarantine/recovery remain next-slice obligations.
@@ -492,24 +503,42 @@ or OAuth, then releases. A released source lease is never reused as current proo
 
 `coordinator.delivery_guard(lease,scope,*,deadline)->context manager yielding opaque
 DeliveryGuard` holds peraccount reentrant state lock, exact live lease/thread/context.
-Guard budget min(caller remaining,1s) covers final source/channel/coordinator/local
-validator checks, `guard.begin_enqueue()`, bounded native login/response enqueue
-and confirmed result, then publish_delivery under SAME live guard. No OAuth/TLS,
-refresh-source secret read/rotation commit or refresh-mutex acquisition inside guard.
+Let D be the one absolute operation deadline; each operation receives min(D, its
+fixed local cap). The final absolute subdeadline is F=min(D, guard-entry monotonic
++1s). Pass F unchanged to every final source/channel/coordinator/local-validator
+check, `guard.begin_enqueue()`, bounded native login/callback write,
+`guard.confirm()`, durable `finish_confirmed`, and `publish_delivery`, all under the
+SAME live guards. The source terminal fsync consumes F; no step renews it. No
+OAuth/TLS, refresh-source secret read/rotation commit or refresh-mutex acquisition
+inside guard. If F expires while D remains in the future, no terminal finish or
+publication is accepted; after a native effect was claimed, outcome is
+`refresh_unknown` plus poison, never a later retry under D.
 begin_enqueue rechecks closed/generation/quarantine after dependency checks, marks attempt; stale/foreign guard refuses.
-`publish_delivery(lease,*,guard,deadline)` requires exact same active guard after
-confirmed native result; outsideguard refused, no stamp after ambiguous outcome.
-close/quarantine use SAME account state lock, never caller refresh lease release.
-Invalidation before begin_enqueue wins: no native enqueue/publication. After begin,
-enqueue wins: confirm and publish or partial/unknown quarantine; never later resend.
-Other-thread close waits only remaining bounded guard window (<=1s), not OAuth;
-after acquiring marks local closed before return, delivery can't publish afterward.
-Same-thread close/quarantine during preenqueue checks invalidates immediately;
-during enqueue close marks LOCAL closed immediately with reentrant state lock,
-without deadlock or claim to undo already linearized native attempt. Accounting
-retains known confirmed/unknown native outcome, but publish_delivery refuses NEW
-Delivery/stamp for closed validator. Guard exit quarantines selected account before
-unlock, never resends; current/future writers denied. Repeated close idempotent.
+`publish_delivery(lease,*,guard,deadline=F)` requires the exact same active guard
+after known transport outcome and durable `finish_confirmed`; outsideguard refused,
+no stamp after ambiguous outcome.
+After poison intent, bounded coordinator quarantine uses the account state lock;
+neither close nor quarantine releases another caller's refresh lease. Poison intent
+is linearized under a tiny per-account intent mutex, separate from the state/source/
+channel guards and never held across I/O. If poison linearizes before
+`begin_enqueue` claims the operation, poison wins and no native write begins. If
+`begin_enqueue` claims first, that one external attempt wins; a later poison intent
+blocks every new attempt and publication. The in-flight effect is allowed only to
+reach a bounded known outcome or `refresh_unknown`; it cannot publish a Delivery
+after poison. `guard.confirm()` records only the known transport outcome; it never
+overrides poison. No resend follows either outcome.
+Other-thread close first marks the validator locally closed. If it interrupts an
+operation after durable reserve or external-effect claim, it also sets account poison
+intent; idle/before-reserve close stays local. It then waits only the remaining
+bounded guard window (<=1s), never for OAuth; after acquiring it returns closed and
+publication is already refused. Same-thread
+close/quarantine during preenqueue checks invalidates immediately; during enqueue
+close marks LOCAL closed immediately with reentrant state lock, without deadlock or
+claim to undo an already-linearized native attempt. Accounting retains known
+transport outcome, but publish_delivery refuses NEW Delivery/stamp for a closed
+validator or poisoned account. Guard exit sets poison intent BEFORE any bounded
+durable quarantine attempt and before unlock; current/future writers are denied
+locally even if that attempt times out. Repeated close is idempotent.
 Never extend deadline. RED: close before/during/afterenqueue/secondthread, no fresh
 postclose Delivery/stamp or duplicate delivery; A/B independent.
 FIRST unit parses JWT claims/header from SAME fresh directly authenticated TLS
@@ -546,10 +575,15 @@ held by same thread/selected active lease/fullref. owned_transport.delivery_guar
 (channel,ctx,*,source_guard,deadline) yields opaque ChannelDeliveryGuard holding exact
 channel/pinned child stdio; login/refresh require guard keyword. Guard methods
 validate_current(*,deadline) check same captured live authority without reacquisition
-or native effects. Validator before begin_enqueue calls BOTH guard validations;
-transport enqueue checks channelguard at write linearization. After confirmed
-result, both guards remain held and current through coordinator.publish_delivery;
-any lost authority/error yields selected-account unknown quarantine, no stamp.
+or native effects; final checks receive F. Validator before begin_enqueue calls BOTH
+guard validations; transport enqueue checks channelguard at write linearization.
+After the known
+transport outcome, both guards remain held through `guard.confirm()`, durable
+`finish_confirmed`, and coordinator.publish_delivery; any lost authority/error
+yields selected-account unknown quarantine, no stamp. `finish_confirmed` is inside
+the same one-second guard/operation budget and receives F. `begin_enqueue`, native
+write, `guard.confirm`, and `publish_delivery` also receive F; source/channel guards
+receive F at acquisition and each validation. No new lease or lock is acquired here.
 Cleanup of guards cannot relaunch/reconnect/redeliver. None of these protocols
 accept deserialized dict/boolean/native path as authority.
 
@@ -559,11 +593,16 @@ no execution/channel/token fields enter account-wide scope. All coordinator
 open/check/delivery_guard calls receive this scope, not arbitrary AuthContext.
 Full per-validator context+execution_identity/channel checks remain independently
 required; equalaccount scope does not merge native sessions. Local publish_delivery
-requires begin_enqueue→confirm after actual correlated write ACK; synthetic confirm
-is caller-attested local-only. Coordinator quarantine takes the SAME absolute
-operation deadline and can return refresh_busy/no mutation on guard timeout; a
-failed invalidation is never treated as completed production revoke/drain. Local
-RLock hold is cooperating caller bounded obligation; no OS preemption guarantee.
+requires begin_enqueue→confirm after a known transport outcome and successful
+durable `finish_confirmed`; synthetic confirm is caller-attested local-only.
+`poison_intent` sets a monotonic per-account flag under a separate tiny intent mutex,
+without deadline, external work, or state-guard acquisition. Its linearization order
+relative to begin_enqueue is the winner: poison-first forbids enqueue; an already-
+claimed enqueue may finish once, but poison blocks its stamp and all later operations.
+Every check/begin/publish path reads this flag. A later bounded durable quarantine
+may time out without clearing it. Local poison does not imply persistent cross-process
+quarantine; production stays unsupported until that adapter is proven. Local RLock
+hold is a cooperating caller bounded obligation; no OS preemption guarantee.
 
 Global trusted lock order is coordinator refresh mutex → selected source refresh
 lease → coordinator state guard → source authority guard → channel guard. A writer
@@ -586,3 +625,105 @@ Thus duplicate callback cannot reach another validator under same channel; separ
 channels/accounts retain independent maps and shared coordinator accountgeneration.
 Actual owner capture registry/wire lifetime proof is future adapter gate, no
 production capability claim from pure local coordinator.
+
+## Auth-state DESIGN correction: durable attempt and fail-closed poison (pending independent review)
+
+The first auth-state codeunit is a synthetic-only orchestration state machine. It
+may call typed injected source, OAuth and native seams in tests; those calls prove
+ordering and fail-closed behavior only. A typed `TLSExchange`, `OwnedChannel`,
+local coordinator stamp or test double is never proof of authenticated TLS, native
+ownership, durable storage, or production admission. There is no production factory
+or supported/admit flag in this codeunit.
+
+Add one UUIDv4 `attempt_id` per initial admission or captured refresh callback.
+Exact source protocol is `open_selected(ctx,*,deadline)`, `validate_current(ctx,lease,
+*,deadline)`, `read_refresh(lease,*,deadline)`, `reserve_attempt(lease,ctx,attempt_id,
+*,deadline)`, `commit_rotation(lease,ctx,attempt_id,new_refresh_token,*,deadline)`,
+`finish_confirmed(lease,ctx,attempt_id,*,deadline)`, `quarantine_unknown(lease,ctx,
+attempt_id,code,*,deadline)`, and `close_selected(lease)`. An adapter to the existing
+refresh slot maps these operations to `reserve_attempt`, `commit_rotation`, and
+`finish_confirmed`; this auth-state contract does not pretend that those adapter or
+cross-process proofs already exist. Source methods keep the selected account lock
+from source open through terminal finish and release it once in the operation
+worker. Every operation uses the same absolute deadline.
+
+Required sequence is: validate/capture; open selected authority; read selected
+refresh token; reserve and durably confirm `attempt_id` BEFORE calling OAuth; make
+one fixed exchange; validate the exact response and immutable principal; durably
+commit a returned rotated refresh token (if any); acquire the ordered local/source/
+channel delivery guards; validate all guards; claim `begin_enqueue`; perform exactly
+one native effect; classify its transport outcome; call `guard.confirm()`; durably
+`finish_confirmed` for this exact attempt; then publish the local delivery stamp and
+return the opaque Delivery while guards remain held. For initial `account/login/start`,
+the known outcome is the correlated successful JSON-RPC result with exact response
+type `chatgptAuthTokens`. For the refresh callback, the transport has no separate
+peer ACK: known outcome means the exact JSON-RPC response carrying the captured
+request ID was fully accepted by the same pinned stdio writer (all frame bytes
+written); this is not a claim that the native process parsed/applied it. A partial,
+failed, timed-out, or uncorrelated write is `refresh_unknown`; never resend it.
+
+A definitely-not-written reservation failure sends no OAuth and may return only its
+closed pre-send error if the source proves no durable reservation occurred. Any
+uncertain reservation result sends no OAuth, sets poison intent, and returns
+`refresh_unknown`; there is no automatic reservation retry. After reservation,
+any exchange failure without positive proof that no bytes were sent, any uncertain
+response, or any failure before terminal finish leaves the attempt unresolved and
+poisons the selected account. A failure or uncertain result from `finish_confirmed`
+occurs after the known transport outcome but before Delivery publication: it returns
+only `refresh_unknown`, publishes no stamp, never resends, and poisons the selected
+account. `finish_confirmed` is a required terminal state transition, never best-effort
+cleanup. Cleanup after a successfully finished and published operation is separate
+and cannot undo a known Delivery.
+
+Poisoning has two deliberately distinct fences. First, before any bounded wait or
+external I/O, the shared local `AuthCoordinator` sets a monotonic, process-wide
+per-account poison intent through trusted internal `poison_intent(scope,code)`.
+Coordinator creation/check/guard/publication has one short per-account intent mutex.
+`begin_enqueue` takes that mutex, refuses if poison is already set, and otherwise
+records the one claimed external effect before releasing it. `poison_intent` takes
+the same mutex, sets poison once, and returns without waiting for the state/source/
+channel delivery guards, refresh lock, operation deadline, or external I/O. Thus a
+begin claim ordered first may finish its single external effect; a poison ordered
+first prevents it. Every later open/check/guard/begin/publish path observes poison;
+publish rechecks it under the intent mutex and refuses any new stamp. No call clears
+the flag. Only after setting local intent may the validator attempt bounded durable
+`quarantine_unknown`. If that write is uncertain, it still returns the closed
+`refresh_unknown` error and the process remains poisoned; it never reports durable
+quarantine or all-process invalidation as successful. New process/account admission
+is not production-supported until a separate adapter proves that an unknown terminal
+outcome is persistently quarantined, including the case where `finish_confirmed`
+may have reached disk before reporting uncertainty. A pending refresh-slot head by
+itself is not claimed to cover every post-outcome terminal-write case.
+
+Do not classify ordinary guard/lease cleanup as a terminal source transition. For
+known success, require source terminal finish, coordinator publication, and Delivery
+construction before reporting success. If poison/close wins after begin_enqueue,
+skip finish if it has not started, keep the source attempt unresolved, best-effort
+persist quarantine, and return `refresh_unknown`. If poison/publication failure
+occurs after source finish, persist quarantine before releasing the source lease;
+return `refresh_unknown` and publish/return no new Delivery. If persistent poison
+cannot be proven, that state remains an explicit production integration blocker.
+
+Expanded blind RED must prove: (1) reserve precedes the only OAuth call and a failed/
+uncertain reserve causes zero calls; (2) exact attempt id is threaded through source
+rotation and terminal finish; (3) login RPC success or complete callback-response
+write precedes `guard.confirm()`, which precedes finish and publication; callback
+write is never described as peer ACK; (4) finish timeout/failure after the known
+transport outcome returns no Delivery, never retries, and locally poisons every
+validator sharing the coordinator; (5) poison-vs-begin linearization has exactly one
+winner in both race orderings, poison-vs-publish refuses the stamp, and quarantine
+deadline failure cannot clear poison or authorize another call; (6) close/callback
+invalidation immediately before reserve stays local with zero exchange, while the
+same event immediately after durable reserve yields zero exchange plus account poison;
+(7) partial and full callback frame writes map to the specified outcomes; F expiry
+during terminal fsync while outer D remains future yields no stamp, no retry, and
+poison; (8) duplicate/
+replayed callback, second validator/channel, stale generation and +9s receipt cannot
+reserve/exchange; (9) reentrant close at pre-enqueue, write, receipt, finish and
+publication edges never creates a post-close stamp or second delivery; (10) source/
+channel/response typed objects cannot substitute for production provenance; and
+(11) tokens remain absent
+from repr, exceptions, logs and return values. Linux synthetic tests must assert the
+same order and outcomes. These tests exercise only injected fakes and synthetic
+identities; they do not close TLS, kernel view, owned stdio, durable quarantine,
+provider availability, or two-account production gates.

@@ -110,6 +110,8 @@ class _Account:
         self.scope = captured
         self.refresh = threading.Lock()
         self.state = threading.RLock()
+        self.intent = threading.Lock()
+        self.poisoned = False
         self.owner_generation = 1
         self.credential_generation = 0
         self.quarantined = False
@@ -178,45 +180,79 @@ class AuthCoordinator:
         return record
 
     @contextmanager
-    def _state(self, account, deadline, limit=1.0):
+    def _state(self, account, deadline, limit=1.0, *, deny_poison=True):
+        if deny_poison:
+            self._unpoisoned(account)
         if not account.state.acquire(timeout=min(self._remaining(deadline), limit)):
+            if deny_poison:
+                self._unpoisoned(account)
             raise AuthError('refresh_busy')
         try:
             self._remaining(deadline)
+            if deny_poison:
+                self._unpoisoned(account)
             yield
         finally:
             account.state.release()
 
-    def _live(self, record, scope):
-        captured = _snapshot(scope)
-        _require(record.active and not record.account.quarantined
-                 and record.account.scope == captured)
-
-    def open(self, scope, *, deadline):
-        self._remaining(deadline)
-        _require(type(scope) is AuthScope)
-        captured = _snapshot(scope)
+    def _account(self, captured):
         key = (captured[1], captured[2])
         with self._registry_lock:
             account = self._accounts.get(key)
             if account is None:
                 account = _Account(captured)
                 self._accounts[key] = account
+        return account
+
+    def poison_intent(self, scope, code):
+        _require(type(code) is str and code in _CODES)
+        captured = _snapshot(scope)
+        account = self._account(captured)
+        # No clock, state lock, or callback belongs in this short transition.
+        with account.intent:
+            _require(account.scope == captured)
+            account.poisoned = True
+
+    def _unpoisoned(self, account):
+        with account.intent:
+            _require(not account.poisoned)
+
+    def _live_captured(self, record, captured, *, allow_poison=False):
+        # Called under intent; captured contains only validated plain values.
+        _require(record.active and not record.account.quarantined
+                 and record.account.scope == captured
+                 and (allow_poison or not record.account.poisoned))
+
+    def _live(self, record, scope):
+        captured = _snapshot(scope)
+        with record.account.intent:
+            self._live_captured(record, captured)
+
+    def open(self, scope, *, deadline):
+        self._remaining(deadline)
+        captured = _snapshot(scope)
+        account = self._account(captured)
+        self._unpoisoned(account)
         if not account.refresh.acquire(timeout=min(self._remaining(deadline), 0.5)):
+            self._unpoisoned(account)
             raise AuthError('refresh_busy')
         try:
             with self._state(account, deadline):
-                _require(account.scope == _snapshot(scope) and not account.quarantined)
-                lease = AuthorityLease()
-                with self._registry_lock:
-                    self._leases[lease] = _LeaseRecord(account, threading.current_thread())
-                return lease
+                captured = _snapshot(scope)
+                with account.intent:
+                    _require(account.scope == captured and not account.quarantined
+                             and not account.poisoned)
+                    lease = AuthorityLease()
+                    with self._registry_lock:
+                        self._leases[lease] = _LeaseRecord(account, threading.current_thread())
+                    return lease
         except BaseException:
             account.refresh.release()
             raise
 
     def check(self, lease, scope, *, deadline):
         record = self._lease(lease)
+        self._unpoisoned(record.account)
         with self._state(record.account, deadline):
             self._live(record, scope)
 
@@ -230,7 +266,7 @@ class AuthCoordinator:
     def quarantine(self, lease, code, *, deadline):
         _require(type(code) is str and code in _CODES)
         record = self._lease(lease, released=True)
-        with self._state(record.account, deadline):
+        with self._state(record.account, deadline, deny_poison=False):
             if not record.account.quarantined:
                 record.account.quarantined = True
                 record.account.owner_generation += 1
@@ -238,16 +274,19 @@ class AuthCoordinator:
     @contextmanager
     def delivery_guard(self, lease, scope, *, deadline):
         record = self._lease(lease)
+        self._unpoisoned(record.account)
         with self._state(record.account, deadline):
             self._live(record, scope)
             guard = _DeliveryGuard(self)
             entry = deadline - self._remaining(deadline)
-            self._live(record, scope)
-            detail = _GuardRecord(lease, scope, deadline, min(deadline, entry + 1),
-                                  record.account.owner_generation)
-            with self._registry_lock:
-                self._guards[guard] = detail
-            record.guards += 1
+            captured = _snapshot(scope)
+            with record.account.intent:
+                self._live_captured(record, captured)
+                detail = _GuardRecord(lease, scope, deadline, min(deadline, entry + 1),
+                                      record.account.owner_generation)
+                with self._registry_lock:
+                    self._guards[guard] = detail
+                record.guards += 1
             try:
                 yield guard
             finally:
@@ -256,30 +295,38 @@ class AuthCoordinator:
                 with self._registry_lock:
                     del self._guards[guard]
 
-    def _guard(self, guard):
+    def _guard(self, guard, *, allow_poison=False):
         _require(type(guard) is _DeliveryGuard)
         with self._registry_lock:
             detail = self._guards.get(guard)
         _require(detail is not None and detail.active)
         record = self._lease(detail.lease)
         self._remaining(detail.window)
-        self._guard_live(detail, record)
+        captured = _snapshot(detail.scope)
+        with record.account.intent:
+            self._guard_live(detail, record, captured, allow_poison=allow_poison)
         return detail, record
 
-    def _guard_live(self, detail, record):
+    def _guard_live(self, detail, record, captured, *, allow_poison=False):
         _require(detail.active)
-        self._live(record, detail.scope)
+        self._live_captured(record, captured, allow_poison=allow_poison)
         _require(record.account.owner_generation == detail.generation)
 
     def _mark(self, guard, stage):
-        detail, _ = self._guard(guard)
-        _require(not detail.published)
-        if stage == 'begun':
-            _require(not detail.begun)
-            detail.begun = True
-        else:
-            _require(detail.begun and not detail.confirmed)
-            detail.confirmed = True
+        # A claimed effect may report its known outcome after poison. This does
+        # not grant another claim or permit publication.
+        confirming = stage == 'confirmed'
+        detail, record = self._guard(guard, allow_poison=confirming)
+        captured = _snapshot(detail.scope)
+        with record.account.intent:
+            self._guard_live(detail, record, captured, allow_poison=confirming)
+            _require(not detail.published)
+            if stage == 'begun':
+                _require(not detail.begun)
+                detail.begun = True
+            else:
+                _require(detail.begun and not detail.confirmed)
+                detail.confirmed = True
 
     def publish_delivery(self, lease, *, guard, deadline):
         detail, record = self._guard(guard)
@@ -287,8 +334,10 @@ class AuthCoordinator:
         self._remaining(deadline)
         _require(deadline <= detail.caller_deadline)
         self._remaining(min(deadline, detail.window))
-        self._guard_live(detail, record)
-        _require(not detail.published)
-        record.account.credential_generation += 1
-        detail.published = True
-        return AuthorityStamp(record.account.owner_generation, record.account.credential_generation)
+        captured = _snapshot(detail.scope)
+        with record.account.intent:
+            self._guard_live(detail, record, captured)
+            _require(not detail.published)
+            record.account.credential_generation += 1
+            detail.published = True
+            return AuthorityStamp(record.account.owner_generation, record.account.credential_generation)
