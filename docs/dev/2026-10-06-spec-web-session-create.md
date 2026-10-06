@@ -194,7 +194,8 @@ rewrite. Same tuple с другим operation/digest — conflict, no overwrite/
 
 Порядок locks: существующий profile publication/host-use authority guard →
 stable create operation lock → stable binding lock; release в обратном порядке.
-Operation lock адресован hash exact context/project/operationUUID. Candidate capture
+Operation lock адресован hash exact project/operationUUID; context закреплён
+digest/record и сравнивается до использования authority. Candidate capture
 берёт только operation lock; после correlated candidateSID вычисляется session_ref,
 после чего binding lock берётся для publish/accepted pair. До SID binding lock
 не существует. Metadata-only listing/resolve не берет operation lock и не создаёт
