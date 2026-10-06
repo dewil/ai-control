@@ -332,6 +332,10 @@ class SessionRenameBrowser(unittest.TestCase):
         self.assertEqual(first.status, 503,
                          'A delivery_unknown response is ambiguous at the HTTP boundary')
         body = json.loads(captured.value.post_data)
+        unknown_dto = first.json()
+        self.assertEqual(unknown_dto.get('status'), 'delivery_unknown')
+        self.assertEqual(unknown_dto.get('operation_id'), body['operation_id'])
+        self.assertNotIn('title', unknown_dto)
         self.assertEqual(body['title'], title)
         self.assertEqual(set(body), {'project', 'sid', 'operation_id', 'title'})
         check = self.page.get_by_role('button', name='Проверить название', exact=True)
@@ -461,10 +465,15 @@ class SessionRenameBrowser(unittest.TestCase):
         self.open_session(OTHER)
         self.open_session(SID)
         with self.page.expect_response(lambda response: response.request.method == 'POST' and
-                                      '/api/session-rename' in response.url):
+                                       '/api/session-rename' in response.url):
             private_json(self.evidence / 'release-rename.json', {'release': True})
         self.assert_title(OLD_TITLE)
-        check = self.page.get_by_role('button', name='Проверить название', exact=True)
+        # Explicitly reopen the action after the dialog was closed to switch chats.
+        dialog = self.dialog()
+        self.assertEqual(self.title_box(dialog).input_value(), title,
+                         'Reopening restores the original pending draft')
+        self.assertTrue(self.title_box(dialog).is_disabled())
+        check = dialog.get_by_role('button', name='Проверить название', exact=True)
         check.wait_for(state='visible')
         self.assertEqual(self.row(title).count(), 0,
                          'Late A result cannot update the reselected A generation or any other row')
