@@ -112,7 +112,7 @@ class SessionChatItemsPaging(unittest.TestCase):
         self.assertTrue(any(m == 'thread/turns/list' and p == {'threadId': SID,
             'itemsView': 'notLoaded', 'sortDirection': 'desc', 'limit': 8,
             'cursor': 'opaque/older?x=1'} for m, p in rpc.calls))
-        self.assertEqual(older['next_cursor'], 'opaque/older?x=1')
+        self.assertIsNone(older['next_cursor'], 'The older page terminates instead of returning a self cursor')
 
     def test_four_item_pages_with_continuation_report_truncated_tail(self):
         rpc = ItemPagingRPC(self.project, [native_turn(TURN, [])])
