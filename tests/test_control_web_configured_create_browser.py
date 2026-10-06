@@ -47,6 +47,10 @@ def serve(root, evidence):
         with (evidence / 'calls.jsonl').open('a', encoding='utf-8') as handle:
             handle.write(json.dumps(value) + '\n')
 
+    options_lock = threading.Lock()
+    options_token = None
+    options_count = 0
+
     class Backend:
         def snapshot(self): return {'tasks': []}
         def answer(self, *args): return {'error': 'unavailable'}
@@ -74,9 +78,24 @@ def serve(root, evidence):
             return {'status': 'accepted', 'message_id': message_id, 'turn_id': '33333333-3333-4333-8333-333333333333'}
         def session_send_status(self, *args): return {'error': 'stale'}
         def session_create_options(self, project):
-            record({'method': 'options', 'project': project})
+            nonlocal options_token, options_count
+            data = settings()
+            with options_lock:
+                if data.get('options_token') != options_token:
+                    options_token = data.get('options_token')
+                    options_count = 0
+                options_count += 1
+                index = options_count
+            record({'method': 'options', 'project': project, 'index': index})
+            if index == 1 and data.get('hold_first_options'):
+                deadline = time.monotonic() + 8
+                while not (evidence / 'release-options-first.json').exists() and time.monotonic() < deadline:
+                    time.sleep(.01)
+            outcomes = data.get('options_results', [True])
+            available = outcomes[index - 1] if index <= len(outcomes) else False
             return {'schema': 1, 'project': project, 'options': [
-                {'context_mode': 'configured', 'provider_id': 'codex', 'available': True, 'reason': None}]}
+                {'context_mode': 'configured', 'provider_id': 'codex', 'available': available,
+                 'reason': None if available else 'unavailable'}]}
         def session_create(self, project, operation_id, context_mode, provider_id):
             data = settings()
             record({'method': 'create', 'project': project, 'operation_id': operation_id,
@@ -137,7 +156,7 @@ class ConfiguredCreateBrowser(unittest.TestCase):
             prefix='control-configured-create-ui-', dir='/var/tmp'))
         cls.evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
         cls.evidence.chmod(0o700)
-        for name in ('ready.json', 'release-create.json', 'calls.jsonl'):
+        for name in ('ready.json', 'release-create.json', 'release-options-first.json', 'calls.jsonl'):
             (cls.evidence / name).unlink(missing_ok=True)
         cls.root = Path(os.environ.get('CONTROL_WEB_CREATE_UI_REPO', str(ROOT)))
         private_json(cls.evidence / 'control.json', {})
@@ -183,6 +202,7 @@ class ConfiguredCreateBrowser(unittest.TestCase):
     def setUp(self):
         private_json(self.evidence / 'control.json', {})
         (self.evidence / 'release-create.json').unlink(missing_ok=True)
+        (self.evidence / 'release-options-first.json').unlink(missing_ok=True)
         (self.evidence / 'calls.jsonl').unlink(missing_ok=True)
         self.network = []
         self.errors = []
@@ -244,6 +264,56 @@ class ConfiguredCreateBrowser(unittest.TestCase):
         self.assertTrue(create.is_enabled(), 'Fresh available server capability enables explicit create')
         self.assertEqual(dialog.get_by_role('textbox').count(), 0, 'Create dialog has no title or first-message field')
         self.assertEqual(self.calls().count({'method': 'options', 'project': 'demo'}), 1)
+
+    def test_late_options_for_closed_same_project_dialog_cannot_override_fresh_unavailable(self):
+        from playwright.sync_api import expect
+        token = str(time.monotonic_ns())
+        private_json(self.evidence / 'control.json', {
+            'options_token': token, 'options_results': [True, False], 'hold_first_options': True})
+        toolbar = self.page.get_by_role('button', name='Новая сессия', exact=True)
+        self.assertEqual(toolbar.count(), 1, 'INV-WSESS-37 exposes the project create action')
+        with self.page.expect_request(lambda request: request.method == 'GET' and
+                                      '/api/session-create-options' in request.url) as first_request:
+            toolbar.click()
+        first_url = first_request.value.url
+        dialog = self.page.get_by_role('dialog', name='Новая сессия', exact=True)
+        self.assertEqual(dialog.count(), 1)
+        self.assertEqual(dialog.get_by_role('button', name='Отмена', exact=True).count(), 1)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not any(
+                call.get('method') == 'options' and call.get('index') == 1 for call in self.calls()):
+            self.page.wait_for_timeout(20)
+        self.assertEqual([call.get('index') for call in self.calls() if call.get('method') == 'options'], [1],
+                         'First same-project options response is held by the synthetic backend')
+        dialog.get_by_role('button', name='Отмена', exact=True).click()
+        toolbar = self.page.get_by_role('button', name='Новая сессия', exact=True)
+        self.assertEqual(toolbar.count(), 1)
+        with self.page.expect_response(lambda response: response.request.method == 'GET' and
+                                       '/api/session-create-options' in response.url and
+                                       response.json().get('options', [{}])[0].get('available') is False,
+                                       timeout=5000) as current_response:
+            toolbar.click()
+        self.assertEqual(current_response.value.request.url, first_url,
+                         'Both opens request fresh options for the same project')
+        self.assertEqual(current_response.value.json()['options'][0], {
+            'context_mode': 'configured', 'provider_id': 'codex', 'available': False, 'reason': 'unavailable'})
+        dialog = self.page.get_by_role('dialog', name='Новая сессия', exact=True)
+        vendor = dialog.get_by_label('Вендор', exact=True)
+        codex = vendor.locator('option').filter(has_text='Codex')
+        create = dialog.get_by_role('button', name='Создать', exact=True)
+        expect(codex).to_be_disabled(timeout=3000)
+        expect(create).to_be_disabled(timeout=3000)
+        with self.page.expect_response(lambda response: response.request.url == first_url and
+                                       response.json().get('options', [{}])[0].get('available') is True,
+                                       timeout=5000) as stale_response:
+            private_json(self.evidence / 'release-options-first.json', {'release': True})
+        self.assertEqual(stale_response.value.status, 200)
+        expect(codex).to_be_disabled(timeout=5000,
+                                     message='Late options from the closed dialog cannot replace the fresh unavailable result')
+        expect(create).to_be_disabled(timeout=5000)
+        self.assertEqual(len([request for request in self.network if request.method == 'POST' and
+                              '/api/session-create' in request.url]), 0)
+        self.assertEqual([call.get('index') for call in self.calls() if call.get('method') == 'options'], [1, 2])
 
     def test_explicit_create_posts_exact_snapshot_and_honest_accepted_result(self):
         dialog = self.open_dialog()
