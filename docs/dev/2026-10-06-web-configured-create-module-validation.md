@@ -27,11 +27,11 @@ Existing socket15, model19, rename module21 PASS; regular packaging106 assertion
 0FAIL. git diff --check PASS. Fixtures private /var/tmp, umask077, isolated venv;
 no real native/auth/config/account/user-history calls in author checks.
 
-Known pending regression: rename transport/crash suite2 has crash case PASS, while
-its old transport test still forbids thread/start wire dispatch. New approved
-configured contract explicitly requires that fixed method. Independent correction
-is pending; this is recorded as one failing obsolete assertion, not a green suite.
-Source audit and remaining regression/CI gates must pass before merge/activation.
+Independent transport fixture corrected the obsolete thread/start prohibition,
+preserving rename/generation/arbitrary-RPC checks. Final rename transport/crash2
+PASS,0 failures,0 errors (0.156s); source bytes unchanged. Immutable test SHA256
+`30243f63a0ae8eb79c27b94aab7e95b0f09198d1f3988ab4726c77d7e3b5b2fd`.
+Source audit and CI gates remain open before merge/activation.
 
 Immutable R/C/I/A, parent commitments, no-replace publication, counted temp orphans,
 namespace-capacity locks and once-only correlated ACK creator are implemented.
