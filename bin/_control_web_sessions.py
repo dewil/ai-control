@@ -500,8 +500,9 @@ def _context_token(value):
 class SessionChat:
     def __init__(self, rpc, project_path, project_names, receipt_dir, *,
                  summary_clock=None, summary_wall_clock=None, summary_generation=None,
-                 model_context=None, model_clock=None, rename_store=None):
+                 model_context=None, model_clock=None, rename_store=None, configured_creator=None):
         self.rpc, self.project_path, self.project_names = rpc, project_path, project_names
+        self.configured_creator = configured_creator
         self.receipts = _Receipts(receipt_dir)
         self.renames = (rename_store if rename_store is not None else
                         RenameStore(os.path.join(os.path.dirname(self.receipts.path), 'web-rename-receipts')))
@@ -521,6 +522,77 @@ class SessionChat:
         self._model_clock = model_clock or time.monotonic
         self._model_lock = threading.Lock()
         self._model_cache = OrderedDict()
+
+    def _configured_call(self, method, *args):
+        self._remaining()
+        call = getattr(self.configured_creator, method, None)
+        _need(callable(call))
+        result = call(*args, deadline=self._local.deadline)
+        self._remaining()
+        if type(result) is dict and 'error' in result:
+            _need(False, result['error'] if result['error'] in
+                  ('invalid_request', 'forbidden', 'stale', 'unavailable') else 'unavailable')
+        return result
+
+    def _configured_identity(self):
+        if self.configured_creator is None:
+            return None
+        identity = self._configured_call('cache_identity')
+        context, namespace = dict(identity.context), identity.namespace
+        _need(set(context) == {'schema', 'vendor', 'context_kind', 'context_id',
+                              'transport_generation', 'context_generation', 'native_version'}
+              and self._catalog_reason(context) is None)
+        if namespace is not None:
+            namespace = dict(namespace)
+            _need(set(namespace) == {'dev', 'ino', 'mtime_ns', 'ctime_ns'}
+                  and all(type(v) is int and v >= 0 for v in namespace.values()))
+        return (tuple(sorted(context.items())),
+                None if namespace is None else tuple(sorted(namespace.items())))
+
+    def _configured_origin(self, method, project, root, sid):
+        if self.configured_creator is None:
+            return None
+        witness = self._configured_call(method, project, sid)
+        if witness is None:
+            return None
+        record, context, session = (dict(witness.reservation.record),
+                                    dict(witness.context), dict(witness.session))
+        _need(record.get('status') == 'accepted' and record.get('project') == project
+              and record.get('root') == root and record.get('sid') == sid
+              and valid_uuid(record.get('operation_id'))
+              and self._catalog_reason(context) is None
+              and record.get('context_id') == context.get('context_id')
+              and context == self._catalog_context(), 'stale')
+        _need(set(session) == {'sid', 'project', 'vendor', 'context_mode', 'title'}
+              and session['sid'] == sid and session['project'] == project
+              and session['vendor'] == 'codex' and session['context_mode'] == 'configured'
+              and (session['title'] is None or type(session['title']) is str))
+        _need(self._root(project) == root, 'stale')
+        if method == 'unavailable_history':
+            _need(type(witness.needs_native_attention) is bool)
+        return witness
+
+    def _configured_overlay(self, project):
+        result = self._configured_call('overlay', project)
+        _need(type(result) is dict and set(result) == {'sessions', 'truncated'}
+              and type(result['sessions']) is list and len(result['sessions']) <= 128
+              and type(result['truncated']) is bool)
+        seen = set()
+        for row in result['sessions']:
+            _need(type(row) is dict and set(row) in (
+                  {'sid', 'project', 'vendor', 'context_mode', 'title', 'status', 'updated_at'},
+                  {'sid', 'project', 'vendor', 'context_mode', 'title', 'status', 'updated_at',
+                   'needs_native_attention'})
+                  and valid_uuid(row['sid']) and row['sid'] not in seen
+                  and row['project'] == project and row['vendor'] == 'codex'
+                  and row['context_mode'] == 'configured'
+                  and (row['title'] is None or type(row['title']) is str)
+                  and row['status'] in ('notLoaded', 'idle', 'systemError', 'active')
+                  and type(row['updated_at']) in (int, float)
+                  and math.isfinite(row['updated_at']) and row['updated_at'] >= 0
+                  and ('needs_native_attention' not in row or row['needs_native_attention'] is True))
+            seen.add(row['sid'])
+        return result
 
     def _remaining(self):
         value = self._local.deadline - time.monotonic()
@@ -840,18 +912,21 @@ class SessionChat:
             _need(self._summary_clock() < deadline)
             self._remaining()
         budget()
-        names, roots = self._names(), {}
-        for name in names:
-            try:
-                budget()
-                root = self._provider(self.project_path, name)
-                _need(type(root) is str and os.path.isabs(root))
-                root = canonical(root)
-                _need(os.path.isdir(root))
-                budget()
-                roots[name] = root
-            except Exception:
-                budget()
+        def capture_roots():
+            names, roots = self._names(), {}
+            for name in names:
+                try:
+                    budget()
+                    root = self._provider(self.project_path, name)
+                    _need(type(root) is str and os.path.isabs(root))
+                    root = canonical(root)
+                    _need(os.path.isdir(root))
+                    budget()
+                    roots[name] = root
+                except Exception:
+                    budget()
+            return names, roots
+        names, roots = capture_roots()
         allowed = tuple(sorted(set(roots.values())))
         def export(cache, state):
             return {'projects': [dict(name=name,
@@ -863,15 +938,34 @@ class SessionChat:
         try:
             budget()
             generation = self._summary_generation()
+            try:
+                origin_identity = self._configured_identity()
+            except Exception:
+                self._summary_cache = None
+                return export(None, 'unknown')
+            def cache_key(current_generation):
+                return ((allowed, current_generation) if self.configured_creator is None else
+                        (allowed, current_generation, origin_identity))
+            def final_fence():
+                budget()
+                _need(capture_roots() == (names, roots), 'stale')
+                _need(self._configured_identity() == origin_identity, 'stale')
+                budget()
             cached = self._summary_cache
-            if cached and cached['key'] != (allowed, generation):
+            if cached and cached['key'] != cache_key(generation):
                 cached = None
                 self._summary_cache = None
             if not allowed:
                 return export(None, 'unknown')
             revision = self._summary_revision
             if cached and cached['revision'] == revision and self._summary_clock() - cached['at'] < 30:
-                return export(cached, 'fresh')
+                try:
+                    final_fence()
+                    _need(self._summary_generation() == generation)
+                    return export(cached, 'fresh')
+                except Exception:
+                    self._summary_cache = None
+                    return export(None, 'unknown')
             try:
                 values = {root: [0, None] for root in allowed}
                 identities, cursors = {}, set()
@@ -927,14 +1021,35 @@ class SessionChat:
                     cursors.add(cursor)
                 else:
                     raise _DomainError('unavailable')
+                if self.configured_creator is not None:
+                    overlay_ids = set()
+                    for project, root in roots.items():
+                        overlay = self._configured_overlay(project)
+                        _need(not overlay['truncated'])
+                        for row in overlay['sessions']:
+                            sid = row['sid']
+                            if sid in identities:
+                                _need(identities[sid][0] == root, 'stale')
+                                continue
+                            key = (root, sid)
+                            if key in overlay_ids:
+                                continue
+                            overlay_ids.add(key)
+                            values[root][0] += 1
+                            updated = row['updated_at']
+                            values[root][1] = updated if values[root][1] is None else max(values[root][1], updated)
+                final_fence()
                 budget()
                 _need(self._summary_generation() == scan_generation and self._summary_revision == revision)
-                good = dict(key=(allowed, scan_generation), values=values,
+                good = dict(key=cache_key(scan_generation), values=values,
                             at=self._summary_clock(), as_of=self._summary_wall_clock(), revision=revision)
                 self._summary_cache = good
                 return export(good, 'fresh')
             except Exception:
-                if self._summary_generation() != generation:
+                try:
+                    final_fence()
+                    _need(self._summary_generation() == generation)
+                except Exception:
                     cached = None
                     self._summary_cache = None
                 return export(cached, 'stale' if cached else 'unknown')
@@ -945,6 +1060,7 @@ class SessionChat:
     def list_sessions(self, project, page=0):
         _need(type(page) is int and page >= 0, 'invalid_request')
         root = self._root(project)
+        origin_identity = self._configured_identity()
         def checked_rpc(method, params):
             response = self._rpc(method, params)
             _need(type(response.get('data')) is list and 'nextCursor' in response
@@ -952,17 +1068,34 @@ class SessionChat:
             for thread in response['data']:
                 _need(type(thread) is dict and valid_uuid(thread.get('id')))
             return response
-        result = CodexSessions(checked_rpc, lambda alias: root).list_sessions(project, page)
+        service = CodexSessions(checked_rpc, lambda alias: root)
+        if self.configured_creator is None:
+            result = service.list_sessions(project, page)
+        else:
+            native = service._rows(root)
+            overlay = self._configured_overlay(project)
+            by_sid = {row['sid']: row for row in native}
+            for row in overlay['sessions']:
+                if row['sid'] not in by_sid:
+                    by_sid[row['sid']] = dict(row, title=row['title'] or 'Новая сессия',
+                                              mtime=row['updated_at'], _configured=True)
+            all_rows = sorted(by_sid.values(), key=lambda row: row['mtime'], reverse=True)
+            result = {'rows': all_rows[page * 8:(page + 1) * 8],
+                      'has_more': len(all_rows) > (page + 1) * 8 or overlay['truncated']}
+            _need(self._root(project) == root, 'stale')
         from _control_web_broker import redact
         rows = []
         for row in result['rows']:
-            thread = self._proof(root, row['sid'])
+            thread = None if row.get('_configured') else self._proof(root, row['sid'])
             _need(type(row['title']) is str and _identity(row['status']))
             export = {'sid': row['sid'], 'title': redact(row['title'])[:500], 'status': redact(row['status'])[:500],
                       'vendor': 'codex'}
-            if _attention(thread):
+            if row.get('needs_native_attention') is True or (thread is not None and _attention(thread)):
                 export['needs_native_attention'] = True
             rows.append(export)
+        if self.configured_creator is not None:
+            _need(self._root(project) == root
+                  and self._configured_identity() == origin_identity, 'stale')
         return {'rows': rows, 'has_more': result['has_more']}
 
     @_operation
@@ -971,7 +1104,21 @@ class SessionChat:
         context = self._receipt_context()
         root = self._root(project)
         thread = self._proof(root, sid)
-        page = self._page(sid, cursor, limit=4 if cursor is None else 8)
+        try:
+            page = self._page(sid, cursor, limit=4 if cursor is None else 8)
+        except RPCRejected:
+            if cursor is not None:
+                raise
+            witness = self._configured_origin('unavailable_history', project, root, sid)
+            _need(witness is not None)
+            _need(self._receipt_context() == context, 'stale')
+            with self.receipts.namespace(root, sid, self._local.deadline) as ns:
+                recent = self.receipts.recent(ns, root, sid, self._local.deadline, context['context_id'])
+            _need(self._root(project) == root and self._catalog_context() == dict(witness.context), 'stale')
+            result = {'history_state': 'unavailable', 'reason': 'unavailable', 'recent_sends': recent}
+            if witness.needs_native_attention:
+                result['needs_native_attention'] = True
+            return result
         from _control_web_broker import redact
         _need(self._receipt_context() == context, 'stale')
         with self.receipts.namespace(root, sid, self._local.deadline) as ns:
@@ -1223,6 +1370,7 @@ class SessionChat:
             record = self.receipts.read(ns, root, sid, message_id, self._local.deadline, context['context_id'])
             if record is not None:
                 return self._send_replay(record, context, root, sid, text, selection)
+        origin = self._configured_origin('loaded_origin', project, root, sid)
         choice = self._send_selection(selection, model_context) if selection is not None else None
         digest = _receipt_digest(context['context_id'], root, sid, text, choice)
         with self.receipts.namespace(root, sid, self._local.deadline, create=True) as ns:
@@ -1230,9 +1378,12 @@ class SessionChat:
             if record is not None:
                 return self._send_replay(record, context, root, sid, text, selection)
             _need(len(self.receipts.names(ns, self._local.deadline, reserve=True)) < RECEIPT_LIMIT)
-            if selection is None:
+            if origin is not None:
+                fresh_origin = self._configured_origin('loaded_origin', project, root, sid)
+                _need(fresh_origin is not None and fresh_origin == origin, 'stale')
+            if selection is None and origin is None:
                 self._proof(root, sid, 'thread/resume')
-            else:
+            elif selection is not None:
                 choice = self._send_selection(selection, model_context)
             _need(self._root(project) == root, 'stale')
             _need(self._receipt_context() == context, 'stale')
@@ -1244,18 +1395,27 @@ class SessionChat:
             try:
                 params = {'threadId': sid, 'input': [{'type': 'text', 'text': text}],
                           'clientUserMessageId': message_id}
-                if choice is not None:
+                if choice is not None and origin is None:
                     thread = self._send_fenced('thread/resume', {'threadId': sid, 'excludeTurns': True}, model_context).get('thread')
                     _need(type(thread) is dict and thread.get('id') == sid
                           and type(thread.get('cwd')) is str and os.path.isabs(thread['cwd'])
                           and canonical(thread['cwd']) == root, 'stale')
                     _need(self._root(project) == root, 'stale')
+                if choice is not None:
                     params.update(model=choice['wire_model'], effort=choice['effort'])
+                if origin is not None:
+                    _need(self._root(project) == root
+                          and self._catalog_context() == dict(origin.context), 'stale')
+                    response = self._send_fenced('turn/start', params, dict(origin.context))
+                elif choice is not None:
                     response = self._send_fenced('turn/start', params, model_context)
                 else:
                     response = self._rpc('turn/start', params)
                 turn = response.get('turn')
                 _need(type(turn) is dict and _identity(turn.get('id')))
+                if origin is not None:
+                    _need(self._root(project) == root
+                          and self._catalog_context() == dict(origin.context), 'stale')
                 record.update(status='accepted', turn_id=turn['id'])
                 self._summary_revision += 1
                 self.receipts.write(ns, record, self._local.deadline)
