@@ -531,9 +531,12 @@ Unknown, malformed, mismatched, or exceptional results poison and retain the cla
 attempt. `begin_exchange(lease,validator_id,*,guard,deadline)->None` then atomically
 claims the one OAuth exchange for that exact active durable guard under the intent mutex and
 releases it before network I/O. If close/poison wins before this claim, no OAuth starts;
-if the exchange claim wins first, a concurrent close poisons the account but permits
-only that already-claimed exchange to reach its bounded outcome. Poison remains monotonic
-and blocks rotation commit and every native effect. Close before reservation claim stays
+if the exchange claim wins first and close wins before any later source/native
+effect claim, close poisons but permits only that exchange to reach its bounded outcome.
+An already-claimed later source effect has its own bounded exception below. Poison remains monotonic
+and blocks every unclaimed rotation/finish/native effect. A source-effect claim
+that already won has the bounded resolution exception defined below; it never
+permits a subsequent effect or terminal completion. Close before reservation claim stays
 local and prevents source reserve. Close after reservation claim but before the exchange
 claim poisons, including while source reserve is pending.
 `publish_delivery(lease,*,guard,deadline)->ProvisionalPublication`: after a known
@@ -574,7 +577,7 @@ explicit recovery/persistent coordinator wiring requires separate reviewed slice
 | Matching `not_written` result and successful abandonment, with no close/poison race | refresh_busy | No | existing valid retained | fresh explicit call allowed |
 | Unknown/malformed/mismatched/exceptional reserve result, or close/poison after claim before exchange claim | refresh_unknown | Yes | all local deliveries fail; source attempt unresolved | refuse; no retry |
 | Durable reserve followed by stale authority/deadline before exchange claim | refresh_unknown | Yes | all local deliveries fail; source attempt unresolved | refuse; no retry |
-| Provider definitely rejected grant | auth_expired or auth_unavailable | Yes | all account deliveries invalid | refused; no retry |
+| Returned non-200 OAuth response; negative semantics are not frozen in this synthetic unit | refresh_unknown | Yes | all account deliveries invalid | refused; no retry |
 | OAuth may be sent, lost response/body/deadline | refresh_unknown | Yes | all invalid | refused |
 | 2xx malformed/missing ID/oversize/invalid JWT | auth_response_invalid | Yes | all invalid; no native delivery | refused |
 | 2xx wrong issuer/audience/subject/workspace | identity_mismatch | Yes | all invalid; no commit/delivery | refused |
@@ -671,9 +674,10 @@ locally even if that attempt times out. Repeated close is idempotent.
 Never extend deadline. RED: close before reservation claim stays local and prevents
 source reserve; close after reservation claim while source reserve is pending poisons,
 so every later reserve outcome causes zero OAuth; close after durable reserve and before
-the atomic exchange claim yields zero OAuth plus poison. If the exchange claim wins
-first, close poisons while only that bounded exchange resolves and every later effect is
-refused. Close-before-completion refuses, while completion-before-close may return a
+the atomic exchange claim yields zero OAuth plus poison. If exchange wins and close
+wins before any later source/native effect claim, only that bounded exchange resolves;
+already-claimed source operations retain their bounded exception. Every later
+unclaimed effect is refused. Close-before-completion refuses, while completion-before-close may return a
 Delivery that is already non-current; no success linearizes after close; no duplicate
 delivery; A/B independent.
 FIRST unit parses JWT claims/header from SAME fresh directly authenticated TLS
@@ -825,8 +829,9 @@ selected authority and atomically claim the exact one-time OAuth exchange with
 `begin_exchange` under the same intent mutex. A close/poison that wins before
 `begin_exchange` prevents OAuth and returns `refresh_unknown`; if `begin_exchange` wins
 first, a concurrent close poisons the account but permits only that already-claimed
-exchange to reach a bounded outcome, with no rotation commit or native effect after
-poison. Then make one fixed exchange; validate the exact response
+exchange to reach a bounded outcome, with no unclaimed rotation or native effect after
+poison. Already-claimed source operations have the bounded exception specified below.
+Then make one fixed exchange; validate the exact response
 and immutable principal; durably
 commit a returned rotated refresh token (if any); acquire the ordered local/source/
 channel delivery guards; validate all guards; claim `begin_enqueue`; perform exactly
@@ -866,7 +871,7 @@ Coordinator creation/check/guard/publication has one short per-account intent mu
 and otherwise record their exact one-time external effect claim before releasing it;
 `begin_enqueue` also records the terminal-pending owner. Thus a poison ordered first
 prevents either effect, while a previously claimed OAuth exchange may reach only its
-bounded outcome and cannot commit rotation or start a native effect after poison.
+bounded outcome and cannot claim a rotation or native effect after poison.
 `poison_intent` takes
 the same mutex, sets poison once, and returns without waiting for the state/source/
 channel delivery guards, refresh lock, operation deadline, or external I/O. Thus a
@@ -874,8 +879,9 @@ claim ordered first may finish only its single bounded external effect; a poison
 first prevents it. Every ordinary open/check/guard/publication/completion path and
 every unclaimed `begin_exchange`/`begin_enqueue` observes poison. The already-begun
 matching exchange may record its bounded outcome, and the already-begun delivery guard
-may confirm its known bounded outcome after poison, but rotation commit and every later
-effect are refused; publication/completion recheck under the intent mutex and refuse
+may confirm its known bounded outcome after poison. An already-claimed rotation or
+finish may resolve only that single bounded source operation; every unclaimed source
+or native effect is refused. Publication/completion recheck under the intent mutex and refuse
 any usable stamp.
 No call clears the poison flag. The exact successful `_complete_terminal` transition
 alone clears terminal-pending and the reserved-attempt record; failures never clear
@@ -893,7 +899,7 @@ itself is not claimed to cover every post-outcome terminal-write case.
 Do not classify ordinary guard/lease cleanup as a terminal source transition. For
 known success, require coordinator provisional publication, source terminal finish,
 terminal completion, and Delivery construction before reporting success. If poison/close
-wins before `_complete_terminal`, skip finish if it has not started, keep the source
+wins before `_complete_terminal`, skip finish if its atomic claim has not won, keep the source
 attempt unresolved, best-effort persist quarantine, and return `refresh_unknown`. If
 poison or terminal-completion failure occurs after source finish, persist quarantine
 before releasing the source lease; return `refresh_unknown` and publish/return no new
@@ -949,8 +955,9 @@ AuthorityStamp; wrong guard, provisional value, poison, close, or F expiry canno
 the fence; (8) close or callback invalidation immediately before reservation claim stays
 local and prevents source reserve; either one after reservation claim but before
 `begin_exchange` poisons and prevents OAuth, including while source reserve is pending;
-if `begin_exchange` wins first, a later close or callback invalidation poisons while
-only that bounded exchange resolves and blocks all later effects; close after durable
+if `begin_exchange` wins first and close or callback invalidation wins before any
+later source/native effect claim, only that bounded exchange resolves; already-claimed
+source operations retain their bounded exception, and every unclaimed effect is blocked. Close after durable
 reserve but before the exchange claim yields zero exchange plus account poison; (9) partial and
 full callback frame writes map to the
 specified outcomes; F expiry during terminal fsync while outer D remains future yields
@@ -967,3 +974,75 @@ they do not close TLS, kernel view, owned stdio, durable quarantine, provider
 availability, or two-account production gates. Persistent quarantine/recovery remains
 required for the finish-to-terminal-completion crash/uncertain-write gap before
 production support.
+
+## SOURCE-derived correction: atomic source effects and original capture baselines
+
+Ordinary authority preflight followed by an external source call is not a close
+fence. The strict coordinator adds two private, one-time source-effect claims:
+`_claim_rotation(lease,validator_id,*,reservation_guard,deadline)` and
+`_claim_finish(lease,*,guard,publication,deadline)`. These are validator bookkeeping,
+not public transport/provisioning APIs or independent durability proofs. Validate
+the exact active lease, validator/attempt/guard ownership, scope and deadline before
+the leaf intent mutex. Under that mutex recheck poison/local close and the exact
+stored capabilities, then atomically claim the one bounded source operation. Do
+not invoke clocks, dependency callbacks or I/O while holding the intent mutex.
+
+Rotation requires the exact active durable reservation and begun exchange, no
+native-enqueue claim, and no previous rotation claim. The validator claims it after
+all post-exchange preflight callbacks and before `commit_rotation`. Finish requires
+the exact confirmed terminal guard, its provisional publication and the live F,
+with no previous finish claim; claim it after all final preflight callbacks and
+before `finish_confirmed`. `_complete_terminal` additionally requires that matching
+finish claim, while the validator still attests that the exact source finish
+returned durable success. These claims never prove that source I/O succeeded.
+
+Close/poison first means zero new source operation. A rotation or finish claim that
+wins first permits only that already-claimed bounded source operation to resolve;
+close remains prompt and poison blocks every later effect/publication/completion.
+An already-claimed finish may reach disk after close, but no usable final stamp or
+Delivery follows. This refines 'skip finish if it has not started': its start
+linearizes at the private atomic claim, as with exchange and native enqueue. There
+is no rollback of a possibly published rotation and no retry of either effect.
+
+Every exception from the OAuth exchange call, including an optimistic closed
+`AuthError('auth_expired')`, is `refresh_unknown`; exception text/code cannot prove
+nonacceptance. This synthetic codeunit also classifies EVERY returned non-200 status
+as `refresh_unknown`, including bounded, ordered 400/401 with an apparent OAuth
+`invalid_grant` body. No negative-response predicate/parser is frozen here, and
+neither a status nor an error string proves nonacceptance. A future reviewed
+negative-response adapter may define definite rejection, but cannot change this
+unit through an injected optimistic exception. All statuses require bounded exact
+response bytes, finite captured times and ordered actual wall samples; negative
+statuses never bypass those caps/time checks. Definite `auth_response_invalid`,
+`identity_mismatch` or `auth_expired` response outcomes in this unit come from
+validation/parsing of a returned HTTP200 response, never exception text or a
+non-200 status/body.
+The accepted positive token parser remains byte-unchanged.
+
+Private registries retain original independent snapshots of full context plus
+execution identity; owned invocation/channel/generation; Delivery ID, exact context,
+channel, stamp and attempt association; and callback request-ID type/value, exact
+params and original reader receipt time. Revalidate public value fields against
+these originals before dependency I/O, after injected validation hooks, and before
+every effect claim and Delivery construction. Comparing two views of the same
+mutable alias does not suffice. Python `object.__setattr__` or a fabricated value
+cannot replace captured authority, borrow a prior stamp or renew a +9s callback
+budget. The deadline derives from the original captured reader time, never its
+current field. This is local syntactic/identity fencing, not production provenance.
+
+Capture the original OAuth request attempt ID, context identity/full snapshot,
+start monotonic/wall samples and fixed six-second absolute deadline into immutable
+locals BEFORE exchange. Pass and enforce that original deadline after the call;
+request-field alias mutation cannot renew it or replace pairing/timing evidence.
+Capture returned TLS envelope fields into validated immutable locals immediately
+on return, before injected clock/wall/parser callbacks; token-bearing bytes remain
+private transient locals only. After a source-effect claim's clock preflight,
+recheck the full context/channel snapshots before its I/O without undoing a close
+that lost to that claim. Native payload workspace derives the original capture.
+
+Independent regression RED covers optimistic OAuth exceptions; close after the
+last post-exchange check before rotation and after publication checks before finish;
+both source-effect claim winner orderings; full context/channel alias drift before
+current I/O and during OAuth; callback ID/params/time mutation; a borrowed real
+Delivery stamp; original OAuth deadline alias renewal; and malformed negative envelopes. Original 48 tests and accepted
+parser/legacy suites stay unchanged. No production capability is established.
