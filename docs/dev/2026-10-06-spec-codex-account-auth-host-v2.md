@@ -548,17 +548,22 @@ or OAuth, then releases. A released source lease is never reused as current proo
 
 `coordinator.delivery_guard(lease,scope,*,deadline)->context manager yielding opaque
 DeliveryGuard` holds peraccount reentrant state lock, exact live lease/thread/context.
+Its exact native-effect claim API is
+`DeliveryGuard.begin_enqueue(*,reservation_guard:ReservationGuard,deadline)->None`;
+the validator calls `guard.begin_enqueue(reservation_guard=attempt_guard,deadline=F)`.
+It accepts only that exact active, durable, unused, non-abandoned reservation guard
+owned by the same validator/account and binds the attempt to this delivery guard.
 Let D be the one absolute operation deadline; each operation receives min(D, its
 fixed local cap). The final absolute subdeadline is F=min(D, guard-entry monotonic
 +1s). Pass F unchanged to every final source/channel/coordinator/local-validator
-check, `guard.begin_enqueue()`, bounded native login/callback write,
+check, `guard.begin_enqueue(reservation_guard=attempt_guard,deadline=F)`, bounded native login/callback write,
 `guard.confirm()`, provisional `publish_delivery`, durable `finish_confirmed`, and
 `_complete_terminal`, all under the SAME live guards. The source terminal fsync consumes
 F; no step renews it. No OAuth/TLS, refresh-source secret read/rotation commit or
 refresh-mutex acquisition inside guard. If F expires while D remains in the future,
 no terminal finish or terminal completion is accepted; after a native effect was
 claimed, outcome is `refresh_unknown` plus poison, never a later retry under D.
-`begin_enqueue` requires the exact active `ReservationGuard` with a successful
+`begin_enqueue` requires the exact active `reservation_guard` with a successful
 `mark_reservation_durable` result. It rechecks closed/generation/poison after dependency checks, atomically
 marks the one native effect claimed and sets account-wide terminal-pending under the
 intent mutex; stale/foreign guard refuses. `guard.confirm()` may record a known bounded outcome
