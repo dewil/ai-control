@@ -70,3 +70,15 @@ mobile320/390 без overflow, workspace не сужен, DOM/поля/hidden/fo
 семантика прежние. Feature ../dev/done/2026-10-06-spec-web-compact-login.md;
 trace tests/test_control_web_compact_login_browser.py (3 independent browser checks).
 SOURCE/browser PASS; final exact CI and installed acceptance are release gates.
+
+## Логин владельца — решение06.10.2026
+INV-WEB-13: username/password/TOTP обязательны для нового owner login API;
+username проверяется сервером и не выбирает роль. В owner-only режиме session
+principal остаётся owner. Неизвестное имя не создаёт session/CSRF и не расходует
+TOTP replay; общая credential ошибка401, malformed request422. Rate-limit,
+password hash verification, CSRF/cookie/logout/absolute TTL сохраняются.
+Существующий enrollment не регенерируется при добавлении username=dwl;
+legacy config без имени имеет только логин owner, не password-only fallback.
+Feature: ../dev/2026-10-06-spec-web-login-name.md. Multiuser grants/writer
+admission остаются отдельным незавершённым корнем. Реализация/traceability и
+installed acceptance этого инварианта пока не завершены.
