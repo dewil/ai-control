@@ -12,6 +12,9 @@ const latestAttempts = new Map();
 let acceptedStatusTimer=null;
 const sendsInFlight = new Set();
 const statusChecks = new Set();
+const renames = new Map();
+let renameDialogScope=null;
+let renameStatusTimer=null;
 const historyData = new Map();
 const historyFlights = new Map();
 const messages = {invalid_code:'Код уже использован или неверен. Дождитесь нового кода.',unauthorized:'Сеанс завершён или код неверен. Войдите снова.',forbidden:'Запрос не подтверждён. Войдите снова.',rate_limited:'Слишком много попыток. Подождите минуту.',invalid_request:'Проверьте введённые данные.',invalid_or_stale:'Вопрос или результат изменился. Обновите задачи.',stale:'Эта карточка устарела. Обновите задачи.',saved_pending:'Ответ сохранён, доставка пока не завершена. Повторите позже.',unavailable:'Control временно недоступен. Попробуйте ещё раз.'};
@@ -129,7 +132,7 @@ function renderMarkdown(text){
 }
 function notice(text){$('notice').textContent=text;}
 async function api(path,body,signal,isCurrent=()=>true){let response;try{response=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',signal,headers:body===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});}catch(_){throw new Error(messages.unavailable);}let data;try{data=await response.json();}catch(_){throw new Error(messages.unavailable);}if(signal&&signal.aborted)throw new Error(messages.unavailable);if(!response.ok){if(response.status===401&&path!=='/api/login'&&isCurrent())signedOut();const error=new Error(messages[data.error]||messages.unavailable);error.code=data.error;error.status=response.status;error.data=data;throw error;}return data;}
-function signedOut(){chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();if(acceptedStatusTimer!==null){clearTimeout(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
+function signedOut(){closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();if(acceptedStatusTimer!==null){clearTimeout(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
 function field(parent,key,label,kind='textarea'){const wrap=node('label',label);const input=node(kind);input.maxLength=16000;input.value=drafts.get(key)||'';input.addEventListener('input',()=>drafts.set(key,input.value));wrap.append(input);parent.append(wrap);return input;}
 function button(parent,label,action,cls){const b=node('button',label,cls);b.type='button';b.addEventListener('click',action);parent.append(b);return b;}
 async function mutate(card,path,body){if(busy)return;busy=true;const controls=[...document.querySelectorAll('#tasks-panel button')];controls.forEach(b=>b.disabled=true);const status=card.querySelector('.message');status.textContent='Сохраняем…';try{const data=await api(path,body);status.textContent=data.status==='already'?'Решение уже было принято.':'Решение принято.';await refresh();}catch(err){status.textContent=err.message;if(err.code==='saved_pending'){await refresh();notice(err.message);}}finally{busy=false;controls.forEach(b=>b.disabled=false);}}
@@ -220,7 +223,7 @@ async function loadModelCatalog(){
   }catch(_){if(current()){state.catalog=null;state.expires=0;state.message='Список моделей недоступен. Можно наследовать текущие настройки и отправить сообщение.';}}
   finally{if(state.request===request)state.loading=false;if(current())syncCurrentSessionControls();}
 }
-function syncCurrentSessionControls(){const key=currentSessionKey();const historyBusy=Boolean(key&&historyFlights.has(key));const state=key&&historyData.get(key);const hasOlder=Boolean(state&&(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error)));$('chat-send').disabled=!csrf||currentTab!=='sessions'||!key||sendsInFlight.has(key)||hasUnknown(key)||!explicitModelReady(key);$('chat-refresh').disabled=!key||historyBusy;$('history-older').disabled=!key||historyBusy||!hasOlder;$('history-retry').hidden=!(state&&state.historyError);$('history-retry').disabled=!key||historyBusy;renderModelControls();renderCurrentSendStatus();}
+function syncCurrentSessionControls(){const key=currentSessionKey();const historyBusy=Boolean(key&&historyFlights.has(key));const state=key&&historyData.get(key);const hasOlder=Boolean(state&&(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error)));$('chat-send').disabled=!csrf||currentTab!=='sessions'||!key||sendsInFlight.has(key)||hasUnknown(key)||!explicitModelReady(key);$('chat-refresh').disabled=!key||historyBusy;$('history-older').disabled=!key||historyBusy||!hasOlder;$('history-retry').hidden=!(state&&state.historyError);$('history-retry').disabled=!key||historyBusy;renderModelControls();renderCurrentSendStatus();syncRenameControls();}
 function showTab(tab,load=true){currentTab=tab;const tasks=tab==='tasks';if(tasks)clearHistoryScrollSlack();$('tab-tasks').setAttribute('aria-selected',String(tasks));$('tab-sessions').setAttribute('aria-selected',String(!tasks));$('tasks-panel').hidden=!tasks;$('sessions-panel').hidden=tasks;syncCurrentSessionControls();if(tasks){stopPolling();if(load&&!taskLoaded)refresh();}else{if(load&&!projectNames.length)loadProjects();else if(load&&!selectedProject)loadSessionList(0,false);startPolling();}}
 function setSessionStatus(text){$('session-list-status').textContent=text;}
 function renderProjects(){
@@ -302,6 +305,80 @@ function clearHistoryScrollSlack(){historyScrollSlack=0;pinnedHistoryScope=null;
 function setHistoryScrollSlack(height){const bounded=Math.max(0,Math.min(window.innerHeight,Math.ceil(height)));historyScrollSlack=bounded;if(!bounded){clearHistoryScrollSlack();return;}if(!historyScrollSpacer){historyScrollSpacer=node('li',undefined,'history-scroll-slack');historyScrollSpacer.setAttribute('aria-hidden','true');historyScrollSpacer.append(document.createElementNS('http://www.w3.org/2000/svg','svg'));}const svg=historyScrollSpacer.firstElementChild;svg.setAttribute('width','0');svg.setAttribute('height',String(bounded));svg.setAttribute('focusable','false');const list=$('chat-items');if(historyScrollSpacer.parentNode!==list)list.append(historyScrollSpacer);}
 function clearHistoryView(){stopMessageAges();clearHistoryScrollSlack();historyData.delete(chatKey(selectedProject,selectedSession&&selectedSession.sid||''));$('chat-panel').hidden=true;$('history-new').hidden=true;$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-status').textContent='';$('history-retry').hidden=true;$('send-status').textContent='';$('history-truncated').hidden=true;$('native-attention').hidden=true;$('chat-draft').value='';}
 function openChat(row){if(!row||!UUID_RE.test(row.sid))return;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;selectedSession={sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;$('history-new').hidden=true;if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();loadHistory(false);loadModelCatalog();startPolling();}
+// INV-WSESS-30: rename receipts and drafts remain local to this authenticated page.
+function renameState(key){if(!renames.has(key))renames.set(key,{draft:selectedSession.title,status:'draft',operation:null,inFlight:false,message:''});return renames.get(key);}
+function closeRenameDialog(){if(renameStatusTimer!==null){clearTimeout(renameStatusTimer);renameStatusTimer=null;}$('rename-status').textContent='';renameDialogScope=null;if($('rename-dialog').open)$('rename-dialog').close();syncRenameControls();}
+function syncRenameControls(){
+  const key=currentSessionKey(),state=key&&renames.get(key);
+  if(renameDialogScope&&(!activeSelection(renameDialogScope.project,renameDialogScope.sid,renameDialogScope.generation)))closeRenameDialog();
+  const opened=$('rename-dialog').open;
+  $('rename-open').disabled=!activeSelection();
+  $('rename-current-check').hidden=!activeSelection()||opened||!state||state.status!=='delivery_unknown';
+  $('rename-current-check').disabled=Boolean(state&&state.inFlight);
+  if(!opened||!state)return;
+  $('rename-title').disabled=state.inFlight||['delivery_unknown','accepted'].includes(state.status);
+  $('rename-save').disabled=$('rename-title').disabled;
+  $('rename-check').hidden=state.status!=='delivery_unknown';
+  $('rename-check').disabled=state.inFlight;
+  const text=state.status==='accepted'&&Date.now()>=(state.acceptedUntil||0)?'':state.message;
+  if($('rename-status').textContent!==text)$('rename-status').textContent=text;
+}
+function openRenameDialog(){
+  if(!activeSelection())return;
+  const key=currentSessionKey();let state=renameState(key);
+  if(state.status==='accepted'){state={draft:selectedSession.title,status:'draft',operation:null,inFlight:false,message:''};renames.set(key,state);}
+  renameDialogScope={project:selectedProject,sid:selectedSession.sid,generation:selectionGeneration};
+  $('rename-title').value=state.draft;$('rename-dialog').show();syncRenameControls();
+}
+function trimRenameTitle(raw){return raw.replace(/^\p{White_Space}+|\p{White_Space}+$/gu,'');}
+function normalizedRenameTitle(raw){
+  const encoder=new TextEncoder();
+  // Reject invalid UTF-16 rather than silently UTF-8 encoding replacement characters.
+  if(/[\u0000-\u001f\u007f-\u009f]/u.test(raw)||[...raw].some(c=>c.length===1&&c.charCodeAt(0)>=0xd800&&c.charCodeAt(0)<=0xdfff)||[...raw].length>2048||encoder.encode(raw).length>8192)return null;
+  const title=trimRenameTitle(raw);return title&&[...title].length<=160&&encoder.encode(title).length<=1024?title:null;
+}
+function confirmedRename(state,data,operation,generation){
+  if(!data||data.operation_id!==operation.operation_id||data.status!=='accepted'||typeof data.title!=='string'||!trimRenameTitle(data.title)||[...data.title].length>500)return false;
+  if(!activeSelection(operation.project,operation.sid,generation))return false;
+  state.status='accepted';state.message='Название сессии сохранено.';state.acceptedUntil=Date.now()+5000;
+  selectedSession.title=data.title;$('chat-title').textContent=data.title;
+  sessionRows=sessionRows.map(row=>row&&row.sid===operation.sid?{...row,title:data.title}:row);renderSessions();
+  projectSummaries.delete(operation.project);renderProjects();
+  if(renameStatusTimer!==null)clearTimeout(renameStatusTimer);
+  if($('rename-dialog').open)renameStatusTimer=setTimeout(()=>{renameStatusTimer=null;syncRenameControls();},5000);
+  return true;
+}
+async function submitRename(event){
+  event.preventDefault();if(!activeSelection()||!renameDialogScope)return;
+  const key=currentSessionKey(),state=renameState(key);if(state.inFlight||['delivery_unknown','accepted'].includes(state.status))return;
+  state.draft=$('rename-title').value;const title=normalizedRenameTitle(state.draft);
+  if(title===null){state.message='Введите название от 1 до 160 символов без управляющих символов.';syncRenameControls();return;}
+  const operation=Object.freeze({project:selectedProject,sid:selectedSession.sid,operation_id:crypto.randomUUID(),title});
+  const generation=selectionGeneration,auth=chatAuthGeneration;state.operation=operation;state.status='pending';state.inFlight=true;state.message='Сохраняем название…';syncRenameControls();
+  try{
+    const data=await api('/api/session-rename',operation);
+    if(auth!==chatAuthGeneration||renames.get(key)!==state)return;
+    if(!confirmedRename(state,data,operation,generation)){state.status='delivery_unknown';state.message='Название пока не подтверждено. Проверьте его вручную.';}
+  }catch(err){
+    if(auth!==chatAuthGeneration||renames.get(key)!==state)return;
+    if(activeSelection(operation.project,operation.sid,generation)&&['invalid_request','forbidden','stale'].includes(err.code)){
+      state.status='refused';state.message='Название не сохранено. Исправьте ввод или обновите выбранную сессию.';
+    }else{state.status='delivery_unknown';state.message='Название пока не подтверждено. Проверьте его вручную.';}
+  }finally{state.inFlight=false;if(auth===chatAuthGeneration&&renames.get(key)===state)syncRenameControls();}
+}
+async function checkRename(){
+  if(!activeSelection())return;const key=currentSessionKey(),state=renames.get(key);
+  if(!state||state.inFlight||state.status!=='delivery_unknown'||!state.operation)return;
+  if(!$('rename-dialog').open)openRenameDialog();
+  const operation=state.operation,generation=selectionGeneration,auth=chatAuthGeneration;state.inFlight=true;state.message='Проверяем название…';syncRenameControls();
+  try{
+    const data=await api(queryPath('/api/session-rename-status',{project:operation.project,sid:operation.sid,operation_id:operation.operation_id}));
+    if(auth!==chatAuthGeneration||renames.get(key)!==state)return;
+    if(!confirmedRename(state,data,operation,generation)){state.status='delivery_unknown';state.message='Название пока не подтверждено. Повторите ручную проверку.';}
+  }catch(_){if(auth===chatAuthGeneration&&renames.get(key)===state){state.status='delivery_unknown';state.message='Проверка недоступна. Повторите ручную проверку названия.';}}
+  finally{state.inFlight=false;if(auth===chatAuthGeneration&&renames.get(key)===state)syncRenameControls();}
+}
+
 function normalizeHistoryState(key){if(!historyData.has(key))historyData.set(key,{turns:new Map(),order:[],olderAnchors:[],initialized:false,truncated:false,attention:false,paginationError:'',historyError:'',historyErrorOrigin:null,latestHistoryError:'',windowIds:null,windowOlder:false,pendingLatest:false});return historyData.get(key);}
 function validHistoryId(value){return typeof value==='string'&&value.length>0&&value.length<=500;}
 function mergeHistory(key,data,olderAnchor){const state=normalizeHistoryState(key);const incoming=Array.isArray(data.turns)?data.turns:[];const chronological=incoming.slice().reverse().filter(turn=>turn&&validHistoryId(turn.id));const incomingIds=new Set(chronological.map(turn=>turn.id));const existingIds=new Set(state.order);const hadOverlap=chronological.some(turn=>existingIds.has(turn.id));for(const turn of chronological){const previous=state.turns.get(turn.id);const itemMap=new Map();for(const item of (previous&&previous.items)||[])if(validHistoryId(item&&item.id))itemMap.set(item.id,item);for(const item of (Array.isArray(turn.items)?turn.items:[])){if(item&&validHistoryId(item.id))itemMap.set(item.id,item);}state.turns.set(turn.id,{...turn,items:[...itemMap.values()]});}
@@ -588,6 +665,16 @@ $('chat-latest').addEventListener('click',()=>{const project=selectedProject,sid
 document.querySelectorAll('[data-page-scroll]').forEach(button=>button.addEventListener('click',()=>{initialScrollTarget=null;clearHistoryScrollSlack();if(button.dataset.pageScroll==='up'){pageReaderScope={project:selectedProject,sid:selectedSession&&selectedSession.sid,generation:selectionGeneration};window.scrollTo(0,0);}else scrollToDocumentBottom();}));
 $('history-older').addEventListener('click',()=>loadHistory(true));
 $('send-check').addEventListener('click',()=>{const key=currentSessionKey(),attempt=key&&latestAttempts.get(key);if(attempt&&attempt.status==='delivery_unknown')checkDelivery(key,attempt.id);});
+$('rename-open').addEventListener('click',openRenameDialog);
+$('rename-form').addEventListener('submit',submitRename);
+$('rename-title').addEventListener('input',()=>{const key=currentSessionKey();if(key&&renameDialogScope)renameState(key).draft=$('rename-title').value;});
+$('rename-cancel').addEventListener('click',()=>{closeRenameDialog();$('rename-open').focus({preventScroll:true});});
+$('rename-dialog').addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();closeRenameDialog();$('rename-open').focus({preventScroll:true});}});
+// A text input sanitizes line breaks before exposing value; reject raw pasted controls first.
+$('rename-title').addEventListener('paste',event=>{const raw=event.clipboardData?.getData('text');if(typeof raw==='string'&&/[\u0000-\u001f\u007f-\u009f]/u.test(raw)){event.preventDefault();const key=currentSessionKey();if(key){renameState(key).message='Управляющие символы в названии запрещены.';syncRenameControls();}}});
+$('rename-dialog').addEventListener('cancel',event=>{event.preventDefault();closeRenameDialog();});
+$('rename-check').addEventListener('click',checkRename);
+$('rename-current-check').addEventListener('click',checkRename);
 $('chat-form').addEventListener('submit',submitMessage);
 $('chat-model').addEventListener('change',()=>{const key=currentSessionKey();if(!key||sendsInFlight.has(key)||hasUnknown(key))return;const state=modelDraft(key),row=state.catalog?.rows.find(row=>row.id===$('chat-model').value),previous=state.effort;state.modelId=$('chat-model').value;state.label=row?.label||'';if(!state.modelId||!row?.efforts.includes(previous)){state.effort='';state.message=previous&&state.modelId?'Выберите уровень размышления: прежний уровень недоступен для этой модели.':'';}else state.message='';syncCurrentSessionControls();});
 $('chat-effort').addEventListener('change',()=>{const key=currentSessionKey();if(!key||sendsInFlight.has(key)||hasUnknown(key))return;const state=modelDraft(key);state.effort=$('chat-effort').value;state.message='';syncCurrentSessionControls();});
