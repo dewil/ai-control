@@ -48,7 +48,9 @@ window; duplicate authority_stale; local marker only, DOES NOT send native.
 guard.confirm(): only after begin, once, checks same live authority/window; local
 caller-attested confirmed marker, not native proof. Duplicate/refused authority_stale.
 publish_delivery(lease,*,guard,deadline)->AuthorityStamp requires same active guard,
-begun+confirmed, once; deadline<=guard original window and strictlyfuture. Returns
+begun+confirmed, once; deadline<=guard original CALLER deadline and strictlyfuture; effective deadline is
+min(supplied deadline,guard internal1s window), so passing original caller budget
+does not extend guard. No public guarddeadline is needed. Returns
 frozen reprFalse stamp(owner_generation,credential_generation), increments account
 credential once only. Out-ofguard/foreign/expired/unconfirmed/duplicate rejects.
 An expired method can refuse but cannot force a stalled caller to release RLock.
