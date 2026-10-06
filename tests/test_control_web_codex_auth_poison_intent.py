@@ -35,8 +35,10 @@ def scope_data(account="alpha"):
 class Clock:
     def __init__(self):
         self.value = 100.0
+        self.calls = 0
 
     def __call__(self):
+        self.calls += 1
         return self.value
 
 
@@ -117,7 +119,12 @@ class PoisonIntentContract(unittest.TestCase):
     def test_poison_ignores_expired_operation_deadline_and_is_account_scoped(self):
         lease = self.coordinator.open(self.scope, deadline=110.0)
         self.clock.value = 111.0
+        calls_before_poison = self.clock.calls
         self.poison()  # No deadline argument, clock renewal, or state guard.
+        self.assertEqual(
+            self.clock.calls, calls_before_poison,
+            "poison_intent must not sample the operation clock",
+        )
         self.coordinator.release(lease)
         self.denied(lambda: self.coordinator.open(self.scope, deadline=120.0))
         other = self.auth.AuthScope(*scope_data("beta"))
