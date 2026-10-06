@@ -23,7 +23,7 @@ openat/O_DIRECTORY/O_NOFOLLOW, checks current uid or root and no group/other wri
 except root-owned sticky ancestors. Final root current uid/exact0700. Capture each
 heldFD/currentname dev/ino/mode/uid and revalidate before/final effects. No mkdir.
 Fixed children refresh-source.json, .refresh-slot.lock, refresh-attempt.json.
-All regular current uid/exact0600/nlink1/nofollow, strict duplicate-aware JSON<=32768
+All regular current uid/exact0600/nlink1/nofollow, strict duplicate-aware JSON<=65536
 UTF8 bytes, no extra keys/nonfinite/bool-for-int/surrogates. Lock leaf may be created
 O_EXCL0600; directory fsync, reopen existing safely, NEVER replace/unlink lock.
 Lock keyed by anchored root dev+ino (not pathname/object) in-process plus flock on Linux,
@@ -158,3 +158,7 @@ association, pinned exclusive owned native stdio, actual two accounts remain gat
 Independent refresh_slot_design repeat DESIGN READY d031e61 on 2026-10-06.
 Freeze precedes blind RED; editorial precedence above distinguishes foreign caller
 from detected external drift on a valid pending lease. No actual credential IO.
+
+Pre-RED byte-cap clarification:65536 bytes accommodates a maximally JSON-escaped
+16384-byte allowed ASCII token plus bounded fixed reference fields. Token length
+limit stays16384; no accepted token is rejected solely by its JSON escape expansion.
