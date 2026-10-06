@@ -631,8 +631,8 @@ async function loadHistory(older=false,manual=false){
   })();
   flight.promise=promise;syncCurrentSessionControls();return promise;
 }
-// INV-WSESS-20/21: only validated native turn starts supply dates; ages are local.
-function messageTimestamp(item){return item.time_precision==='turn'&&Number.isInteger(item.timestamp)&&item.timestamp>=0&&item.timestamp<=253402300799?item.timestamp:null;}
+// INV-WSESS-20/21: producer item starts are preferred; turn fallbacks are explicit.
+function messageTimestamp(item){return ['item','turn'].includes(item.time_precision)&&Number.isInteger(item.timestamp)&&item.timestamp>=0&&item.timestamp<=253402300799?item.timestamp:null;}
 function messageAge(timestamp){
   const age=Date.now()/1000-timestamp;
   if(!Number.isFinite(age)||age<0)return 'время неизвестно';
@@ -645,10 +645,11 @@ function messageTime(item){
   const timestamp=messageTimestamp(item);
   if(timestamp===null)return node('span','время неизвестно','message-time-unknown');
   const date=new Date(timestamp*1000);
-  const exact=new Intl.DateTimeFormat('ru-RU',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date)+' — начало хода';
+  const exact=new Intl.DateTimeFormat('ru-RU',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date)+(item.time_precision==='item'?' — начало сообщения':' — начало хода');
   const control=node('button',undefined,'message-time');control.type='button';
   control.setAttribute('aria-label',exact);control.setAttribute('aria-expanded','false');
   const time=node('time',messageAge(timestamp));time.dateTime=date.toISOString();time.dataset.timestamp=String(timestamp);
+  if(item.time_precision==='turn')control.append(node('span','Ход начат','message-time-precision'));
   control.append(time,node('span',exact,'message-time-detail'));
   control.addEventListener('click',()=>control.setAttribute('aria-expanded',String(control.getAttribute('aria-expanded')!=='true')));
   return control;
