@@ -12,6 +12,9 @@ const latestAttempts = new Map();
 let acceptedStatusTimer=null;
 const sendsInFlight = new Set();
 const statusChecks = new Set();
+const creates = new Map();
+let createDialogProject=null;
+let createDialogEpoch=0;
 const renames = new Map();
 let renameDialogScope=null;
 let renameStatusTimer=null;
@@ -132,7 +135,7 @@ function renderMarkdown(text){
 }
 function notice(text){$('notice').textContent=text;}
 async function api(path,body,signal,isCurrent=()=>true){let response;try{response=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',signal,headers:body===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});}catch(_){throw new Error(messages.unavailable);}let data;try{data=await response.json();}catch(_){throw new Error(messages.unavailable);}if(signal&&signal.aborted)throw new Error(messages.unavailable);if(!response.ok){if(response.status===401&&path!=='/api/login'&&isCurrent())signedOut();const error=new Error(messages[data.error]||messages.unavailable);error.code=data.error;error.status=response.status;error.data=data;throw error;}return data;}
-function signedOut(){closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();if(acceptedStatusTimer!==null){clearTimeout(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
+function signedOut(){closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();if(acceptedStatusTimer!==null){clearTimeout(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
 function field(parent,key,label,kind='textarea'){const wrap=node('label',label);const input=node(kind);input.maxLength=16000;input.value=drafts.get(key)||'';input.addEventListener('input',()=>drafts.set(key,input.value));wrap.append(input);parent.append(wrap);return input;}
 function button(parent,label,action,cls){const b=node('button',label,cls);b.type='button';b.addEventListener('click',action);parent.append(b);return b;}
 async function mutate(card,path,body){if(busy)return;busy=true;const controls=[...document.querySelectorAll('#tasks-panel button')];controls.forEach(b=>b.disabled=true);const status=card.querySelector('.message');status.textContent='Сохраняем…';try{const data=await api(path,body);status.textContent=data.status==='already'?'Решение уже было принято.':'Решение принято.';await refresh();}catch(err){status.textContent=err.message;if(err.code==='saved_pending'){await refresh();notice(err.message);}}finally{busy=false;controls.forEach(b=>b.disabled=false);}}
@@ -223,7 +226,7 @@ async function loadModelCatalog(){
   }catch(_){if(current()){state.catalog=null;state.expires=0;state.message='Список моделей недоступен. Можно наследовать текущие настройки и отправить сообщение.';}}
   finally{if(state.request===request)state.loading=false;if(current())syncCurrentSessionControls();}
 }
-function syncCurrentSessionControls(){const key=currentSessionKey();const historyBusy=Boolean(key&&historyFlights.has(key));const state=key&&historyData.get(key);const hasOlder=Boolean(state&&(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error)));$('chat-send').disabled=!csrf||currentTab!=='sessions'||!key||sendsInFlight.has(key)||hasUnknown(key)||!explicitModelReady(key);$('chat-refresh').disabled=!key||historyBusy;$('history-older').disabled=!key||historyBusy||!hasOlder;$('history-retry').hidden=!(state&&state.historyError);$('history-retry').disabled=!key||historyBusy;renderModelControls();renderCurrentSendStatus();syncRenameControls();}
+function syncCurrentSessionControls(){const key=currentSessionKey();const historyBusy=Boolean(key&&historyFlights.has(key));const state=key&&historyData.get(key);const hasOlder=Boolean(state&&(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error)));$('chat-send').disabled=!csrf||currentTab!=='sessions'||!key||Boolean(selectedSession?.created&&!state?.initialized&&!state?.confirmedOrigin)||sendsInFlight.has(key)||hasUnknown(key)||!explicitModelReady(key);$('chat-refresh').disabled=!key||historyBusy;$('history-older').disabled=!key||historyBusy||!hasOlder;$('history-retry').hidden=!(state&&state.historyError);$('history-retry').disabled=!key||historyBusy;renderModelControls();renderCurrentSendStatus();syncRenameControls();syncCreateControls();}
 function showTab(tab,load=true){currentTab=tab;const tasks=tab==='tasks';if(tasks)clearHistoryScrollSlack();$('tab-tasks').setAttribute('aria-selected',String(tasks));$('tab-sessions').setAttribute('aria-selected',String(!tasks));$('tasks-panel').hidden=!tasks;$('sessions-panel').hidden=tasks;syncCurrentSessionControls();if(tasks){stopPolling();if(load&&!taskLoaded)refresh();}else{if(load&&!projectNames.length)loadProjects();else if(load&&!selectedProject)loadSessionList(0,false);startPolling();}}
 function setSessionStatus(text){$('session-list-status').textContent=text;}
 function renderProjects(){
@@ -255,6 +258,7 @@ function renderProjects(){
   for(const button of existing.values())if(!retained.has(button))button.remove();
   if(retained.has(focused)&&!focused.disabled)focused.focus({preventScroll:true});
   if(window.scrollY!==y)window.scrollTo(0,y);
+  syncCreateControls();
 }
 function clearUnavailableProject(){stopPolling();selectionGeneration++;initialScrollTarget=null;selectedProject='';selectedSession=null;sessionRows=[];sessionPage=0;sessionsHaveMore=false;clearHistoryView();$('session-list').replaceChildren();$('sessions-more').hidden=true;updateUrl();syncCurrentSessionControls();renderProjects();}
 function projectChanged(name){
@@ -304,7 +308,76 @@ function chatError(err){if(err&&err.code==='stale')return 'Сессия уста
 function clearHistoryScrollSlack(){historyScrollSlack=0;pinnedHistoryScope=null;historyScrollIntent=false;historyTouchY=null;historyScrollbarStartY=null;if(historyScrollSpacer){historyScrollSpacer.remove();historyScrollSpacer=null;}}
 function setHistoryScrollSlack(height){const bounded=Math.max(0,Math.min(window.innerHeight,Math.ceil(height)));historyScrollSlack=bounded;if(!bounded){clearHistoryScrollSlack();return;}if(!historyScrollSpacer){historyScrollSpacer=node('li',undefined,'history-scroll-slack');historyScrollSpacer.setAttribute('aria-hidden','true');historyScrollSpacer.append(document.createElementNS('http://www.w3.org/2000/svg','svg'));}const svg=historyScrollSpacer.firstElementChild;svg.setAttribute('width','0');svg.setAttribute('height',String(bounded));svg.setAttribute('focusable','false');const list=$('chat-items');if(historyScrollSpacer.parentNode!==list)list.append(historyScrollSpacer);}
 function clearHistoryView(){stopMessageAges();clearHistoryScrollSlack();historyData.delete(chatKey(selectedProject,selectedSession&&selectedSession.sid||''));$('chat-panel').hidden=true;$('history-new').hidden=true;$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-status').textContent='';$('history-retry').hidden=true;$('send-status').textContent='';$('history-truncated').hidden=true;$('native-attention').hidden=true;$('chat-draft').value='';}
-function openChat(row){if(!row||!UUID_RE.test(row.sid))return;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;selectedSession={sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;$('history-new').hidden=true;if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();loadHistory(false);loadModelCatalog();startPolling();}
+function openChat(row){if(!row||!UUID_RE.test(row.sid))return;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;selectedSession={created:row.configuredCreated===true,sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;$('history-new').hidden=true;if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();loadHistory(false);loadModelCatalog();startPolling();}
+// INV-WSESS-37: immutable in-memory operations survive dialog closure, never retry POST.
+function exactFields(value,keys){return Boolean(value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key)));}
+function createState(project){if(!creates.has(project))creates.set(project,{operation:null,status:'draft',inFlight:false,loading:false,available:false,message:'',generation:0,auth:chatAuthGeneration});return creates.get(project);}
+function closeCreateDialog(){createDialogEpoch++;createDialogProject=null;if($('create-dialog').open)$('create-dialog').close();}
+function syncCreateControls(){
+  $('create-open').disabled=!csrf||!selectedProject||!availableProjects.has(selectedProject);
+  const state=createDialogProject&&creates.get(createDialogProject);if(!state)return;
+  $('create-vendor').disabled=state.loading||state.inFlight||Boolean(state.operation);
+  $('create-submit').disabled=!state.available||state.loading||state.inFlight||Boolean(state.operation)||selectedProject!==createDialogProject||state.optionsGeneration!==selectionGeneration;
+  $('create-check').hidden=!state.operation;$('create-check').disabled=state.inFlight;
+  $('create-status').textContent=state.message;
+}
+function validCreateOptions(data,project){return exactFields(data,['schema','project','options'])&&data.schema===1&&data.project===project&&Array.isArray(data.options)&&data.options.length===1&&data.options.every(row=>exactFields(row,['context_mode','provider_id','available','reason'])&&row.context_mode==='configured'&&row.provider_id==='codex'&&typeof row.available==='boolean'&&row.reason===(row.available?null:'unavailable'));}
+async function openCreateDialog(){
+  if(!csrf||!selectedProject||!availableProjects.has(selectedProject))return;
+  const project=selectedProject,previous=creates.get(project);
+  if(previous?.status==='accepted'&&previous.selected)creates.delete(project);
+  const state=createState(project),auth=chatAuthGeneration,generation=selectionGeneration,epoch=++createDialogEpoch;
+  const current=()=>auth===chatAuthGeneration&&createDialogProject===project&&createDialogEpoch===epoch&&selectedProject===project&&selectionGeneration===generation&&$('create-dialog').open;
+  createDialogProject=project;state.optionsGeneration=generation;state.loading=true;state.available=false;
+  const pendingOption=new Option('Codex','codex');pendingOption.disabled=true;
+  $('create-vendor').replaceChildren(pendingOption);syncCreateControls();
+  if(!$('create-dialog').open)$('create-dialog').showModal();
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
+  try{const data=await api(queryPath('/api/session-create-options',{project}),undefined,controller.signal,current);if(!current())return;
+    if(!validCreateOptions(data,project))throw new Error();
+    state.available=data.options[0].available;const option=new Option('Codex','codex');option.disabled=!state.available;$('create-vendor').replaceChildren(option);
+    if(!state.operation)state.message=state.available?'':'Создание пока недоступно.';
+  }catch(_){if(current()){state.available=false;$('create-vendor').replaceChildren(new Option('Вендор недоступен',''));if(!state.operation)state.message='Создание пока недоступно.';}}
+  finally{clearTimeout(timer);if(current()){state.loading=false;syncCreateControls();}}
+}
+function validCreateResult(data,operation){
+  if(!data||data.operation_id!==operation.operation_id)return false;
+  if(data.status==='delivery_unknown')return exactFields(data,['operation_id','status']);
+  const row=data.session;
+  return data.status==='accepted'&&exactFields(data,['operation_id','status','session'])&&exactFields(row,['sid','project','vendor','context_mode','title'])&&typeof row.sid==='string'&&UUID_RE.test(row.sid)&&row.project===operation.project&&row.vendor==='codex'&&row.context_mode==='configured'&&(row.title===null||typeof row.title==='string'&&Array.from(row.title).length<=500);
+}
+function confirmCreate(state,data,generation){
+  if(!validCreateResult(data,state.operation))return false;
+  if(data.status!=='accepted')return false;
+  state.status='accepted';state.message='Сессия создана. Подтвердите выбор ручной проверкой статуса.';
+  projectSummaries.delete(state.operation.project);renderProjects();
+  const key=chatKey(state.operation.project,data.session.sid);modelDrafts.delete(key);historyData.delete(key);
+  if(selectedProject!==state.operation.project||selectionGeneration!==generation||!availableProjects.has(selectedProject))return true;
+  const row={sid:data.session.sid,title:data.session.title||'Новая сессия',vendor:'codex',status:'unknown',configuredCreated:true};
+  sessionRows=[row,...sessionRows.filter(existing=>existing.sid!==row.sid)];
+  state.selected=true;closeCreateDialog();renderSessions();openChat(row);return true;
+}
+async function submitCreate(event){
+  event.preventDefault();const project=createDialogProject,state=project&&creates.get(project);
+  if(!state||state.inFlight||state.operation||!state.available||project!==selectedProject||state.optionsGeneration!==selectionGeneration||$('create-vendor').value!=='codex')return;
+  state.operation=Object.freeze({project,operation_id:crypto.randomUUID(),context_mode:'configured',provider_id:'codex'});
+  state.generation=selectionGeneration;state.auth=chatAuthGeneration;state.inFlight=true;state.status='sending';state.message='Создаём сессию…';syncCreateControls();
+  try{let data;try{data=await api('/api/session-create',state.operation,undefined,()=>state.auth===chatAuthGeneration);}catch(err){if(err.data?.status==='delivery_unknown')data=err.data;else if(['invalid_request','forbidden','stale'].includes(err.code)){if(state.auth===chatAuthGeneration){state.operation=null;state.status='refused';state.message='Создание отклонено. Обновите параметры перед новой попыткой.';}return;}else throw err;}
+    if(state.auth!==chatAuthGeneration)return;
+    if(!confirmCreate(state,data,state.generation)){state.status='delivery_unknown';state.message='Создание не подтверждено. Проверить статус';}
+  }catch(_){if(state.auth===chatAuthGeneration){state.status='delivery_unknown';state.message='Создание не подтверждено. Проверить статус';}}
+  finally{state.inFlight=false;if(state.auth===chatAuthGeneration)syncCreateControls();}
+}
+async function checkCreate(){
+  const state=createDialogProject&&creates.get(createDialogProject);if(!state?.operation||state.inFlight)return;
+  const auth=chatAuthGeneration,generation=selectionGeneration;state.inFlight=true;state.message='Проверяем статус…';syncCreateControls();
+  try{const data=await api(queryPath('/api/session-create-status',state.operation),undefined,undefined,()=>auth===chatAuthGeneration);
+    if(auth!==chatAuthGeneration)return;
+    if(!confirmCreate(state,data,generation)){state.status='delivery_unknown';state.message='Создание не подтверждено. Проверить статус';}
+  }catch(_){if(auth===chatAuthGeneration){state.status='delivery_unknown';state.message='Проверка недоступна. Проверить статус';}}
+  finally{state.inFlight=false;if(auth===chatAuthGeneration)syncCreateControls();}
+}
+
 // INV-WSESS-30: rename receipts and drafts remain local to this authenticated page.
 function renameState(key){if(!renames.has(key))renames.set(key,{draft:selectedSession.title,status:'draft',operation:null,inFlight:false,message:''});return renames.get(key);}
 function closeRenameDialog(){if(renameStatusTimer!==null){clearTimeout(renameStatusTimer);renameStatusTimer=null;}$('rename-status').textContent='';renameDialogScope=null;if($('rename-dialog').open)$('rename-dialog').close();syncRenameControls();}
@@ -464,6 +537,15 @@ async function loadHistory(older=false,manual=false){
       // The deadline includes JSON consumption, and only cancels this browser GET.
       const data=await Promise.race([api(path,undefined,controller.signal,()=>activeSelection(project,sid,generation)),deadline]);
       if(!activeSelection(project,sid,generation)||historyFlights.get(key)!==flight)return;
+      if(Object.hasOwn(data,'history_state')){
+        const keys=['history_state','reason','recent_sends'];if(Object.hasOwn(data,'needs_native_attention'))keys.push('needs_native_attention');
+        if(older||!exactFields(data,keys)||data.history_state!=='unavailable'||data.reason!=='unavailable'||Object.hasOwn(data,'needs_native_attention')&&data.needs_native_attention!==true||!Array.isArray(data.recent_sends)||data.recent_sends.length>8||!data.recent_sends.every(row=>exactFields(row,['status','message_id','turn_id'])&&UUID_RE.test(row.message_id)&&(['accepted','delivery_unknown','rejected'].includes(row.status))&&(row.status==='accepted'?typeof row.turn_id==='string'&&row.turn_id.length>0&&Array.from(row.turn_id).length<=500:row.turn_id===null)))throw new Error(messages.unavailable);
+        state.confirmedOrigin=true;state.unavailable=true;state.attention=data.needs_native_attention===true;
+        state.latestHistoryError='История пока недоступна';state.historyError=state.latestHistoryError;state.historyErrorOrigin='latest';
+        for(const receipt of data.recent_sends)applyReceipt(key,receipt);
+        renderHistory(key);$('history-status').textContent=state.historyError;syncCurrentSessionControls();return;
+      }
+      state.confirmedOrigin=false;state.unavailable=false;
       let scrollDecision=captureHistoryScroll(project,sid,generation,older);
       const known=new Set(historyItems(state).map(entry=>entry.key));
       const hold=state.windowIds!==null&&(state.windowOlder||focusedHistoryBubble()||scrollDecision&&scrollDecision.kind!=='bottom');
@@ -623,12 +705,12 @@ function renderHistory(key,force=false){
     group.children.push(historyArticle(entry,articles.get(entry.key),force));
   }
   for(const group of contents.values())reconcileHistoryChildren(group.element,group.children);
-  if(!visible.length)children.push(node('li','Пока нет отображаемых текстовых сообщений.','meta'));
+  if(!visible.length&&!state.unavailable)children.push(node('li','Пока нет отображаемых текстовых сообщений.','meta'));
   if(historyScrollSlack&&historyScrollSpacer)children.push(historyScrollSpacer);
   reconcileHistoryChildren(list,children);syncMessageAges();
   if(historyScrollSlack)setHistoryScrollSlack(historyScrollSlack);
   $('history-truncated').hidden=!(state.truncated||all.some(entry=>entry.item.truncated===true));
-  $('history-older').hidden=!state.initialized;
+  $('history-older').hidden=state.unavailable||!state.initialized;
   $('history-older').disabled=!(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error));
   $('history-new').hidden=!state.pendingLatest;
   $('native-attention').hidden=!(state.attention||(selectedSession&&selectedSession.needs));renderReceipts(key);
@@ -675,6 +757,11 @@ $('rename-title').addEventListener('paste',event=>{const raw=event.clipboardData
 $('rename-dialog').addEventListener('cancel',event=>{event.preventDefault();closeRenameDialog();});
 $('rename-check').addEventListener('click',checkRename);
 $('rename-current-check').addEventListener('click',checkRename);
+$('create-open').addEventListener('click',openCreateDialog);
+$('create-form').addEventListener('submit',submitCreate);
+$('create-cancel').addEventListener('click',closeCreateDialog);
+$('create-dialog').addEventListener('cancel',event=>{event.preventDefault();closeCreateDialog();});
+$('create-check').addEventListener('click',checkCreate);
 $('chat-form').addEventListener('submit',submitMessage);
 $('chat-model').addEventListener('change',()=>{const key=currentSessionKey();if(!key||sendsInFlight.has(key)||hasUnknown(key))return;const state=modelDraft(key),row=state.catalog?.rows.find(row=>row.id===$('chat-model').value),previous=state.effort;state.modelId=$('chat-model').value;state.label=row?.label||'';if(!state.modelId||!row?.efforts.includes(previous)){state.effort='';state.message=previous&&state.modelId?'Выберите уровень размышления: прежний уровень недоступен для этой модели.':'';}else state.message='';syncCurrentSessionControls();});
 $('chat-effort').addEventListener('change',()=>{const key=currentSessionKey();if(!key||sendsInFlight.has(key)||hasUnknown(key))return;const state=modelDraft(key);state.effort=$('chat-effort').value;state.message='';syncCurrentSessionControls();});

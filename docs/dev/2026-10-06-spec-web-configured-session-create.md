@@ -1,7 +1,9 @@
 # Новая сессия в текущем настроенном Codex context
 
-Owner CONTROL-WEB-SESSIONS. Статус DRAFT: design review, independent RED,
-full integration, exact CI и installed acceptance впереди. INV-WSESS-34..37.
+Owner CONTROL-WEB-SESSIONS. Статус DRAFT: source implementation прошла независимые
+SOURCE review и focused tests; exact CI и installed acceptance впереди. INV-WSESS-34..37.
+HTTP/owner/UI actual SOURCE PASS, HTTP8 и browser8 GREEN:
+[validation](2026-10-06-web-configured-create-http-ui-validation.md).
 Phase1 private module/storage + fixed transport implemented; actual independent
 SOURCE PASS и focused23 GREEN: [validation](2026-10-06-web-configured-create-module-validation.md).
 Это отдельный explicit configured режим existing legacy Codex transport;
@@ -544,15 +546,24 @@ or account branch. Existing standalone imports and legacy methods stay compatibl
 
 ## INV-WSESS-37: UI state / cache / privacy
 
-Project toolbar «Новая сессия» opens labelled dialog with vendor/context row
-«Codex — текущий настроенный context», explicit account not selected/verified text,
-«Создать», «Отмена». No title/first-message field or account dropdown. Options loaded
-fresh per dialog/project; unsupported providers disabled. Browser snapshot exact
+Project toolbar has a button with accessible name «Новая сессия». It opens a
+dialog with accessible name «Новая сессия», a vendor select labelled «Вендор», and
+buttons with accessible names «Создать» and «Отмена». Dialog context explanation is
+exactly «Текущие настройки сервера. Выбор подписки пока недоступен.»; this makes no
+account/principal claim and exposes no private context identifier. The supported
+vendor label is «Codex». Only fresh server options with available:true are enabled
+for selection and creation; disabled/unavailable options and explanatory text
+cannot grant capability. Other providers may be shown disabled with explanation
+«Другие вендоры пока недоступны», never mapped to a configured Codex fallback.
+No title/first-message field or account dropdown. Options loaded fresh per
+dialog/project; pending/unavailable states disable creation. Browser snapshot exact
 project/context_mode/provider_id/operationUUID/selectionGeneration, no private context.
 POST only explicit user click, pending controls disabled. No browser durable storage.
 
 Unknown/network/timeout/malformed result/HTTP503 preserves operationUUID/selectors
-and displays «Создание не подтверждено. Проверить статус»; manual GET only. Never
+and displays «Создание не подтверждено. Проверить статус», with a distinct manual
+button named «Проверить статус». The dialog has one visible status with role=status
+and aria-live=polite; unknown/error remains visible there. Manual GET only. Never
 new UUID/retry/start automatically. Initial proved invalid_request/forbidden/stale
 refusal can allow explicit correction/new UUID only when never previously unknown;
 GET errors never authorize new creation. No operation is rebound by changing project.
@@ -561,8 +572,8 @@ when response SID was lost. A deliberate separate new creation after an unresolv
 one is outside this first dialog contract and must not be disguised as retry.
 
 Accepted updates only exact original project/current selectionGeneration: insert/
-refresh matching full SID row, select it, load empty chat through existing safe
-history flow; no automatic send. A→B→A late POST must not replace current selection;
+refresh matching full SID row, select it, load chat through the safe history flow
+(including the honest unavailable variant); no empty-history assumption or automatic send. A→B→A late POST must not replace current selection;
 retain original operation for manual GET in current generation. Project switch or
 another session selection keeps pending snapshot; late accepted never selects the
 wrong view. Close pending dialog retains in-memory operation for manual status,
@@ -578,6 +589,21 @@ local only, vendor badge codex; selected account labels are not added. Composer,
 model choices, send/rename receipts and other session drafts remain unchanged.
 Create has one polite dialog status; errors/unknown remain visible, accepted may
 close after explicit selection, not added to transient send status slot.
+
+The client history parser accepts the documented history-unavailable variant only
+with exactly history_state='unavailable', reason='unavailable', a validated
+recent_sends list, and optional needs_native_attention:true. It rejects extra fields,
+missing/malformed receipts, false attention or any turns/next_cursor/truncated key
+in that variant. The existing successful history schema remains unchanged. A bare
+HTTP/RPC error, malformed DTO or arbitrary unavailable flag does not enable a
+composer. For a valid variant belonging to the current project/fullSID/selection
+generation, show «История пока недоступна» and manual history refresh, retain actual
+recent send receipts and proved attention, and enable explicit-message composer
+under the existing send/model admission rules. Never render this DTO as turns=[],
+zero history count, an Older cursor, or proof that no message exists. A late response
+from a previous selection cannot change the current history/composer. The same
+existing selection and operation snapshot/UUID/close-retention/no-retry invariants
+continue to apply; accessible names introduce no new request fields or options.
 
 ## Independent acceptance and deployment boundary
 
