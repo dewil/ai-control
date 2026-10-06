@@ -1,7 +1,11 @@
 # Общий обзор работы и причин внимания
 
-Owner CONTROL-WEB-SESSIONS. Статус: публичный draft для design review; RED и
-реализация не начаты. Инварианты: [web-attention.md](../specs/web-attention.md),
+Owner CONTROL-WEB-SESSIONS. Статус: pure composer реализован, независимые
+SOURCE/QA PASS ([validation](2026-10-06-web-attention-foundation-validation.md));
+production sources/HTTP/UI ещё не реализованы. Первый TASK-adapter — отдельный
+[public draft](2026-10-06-spec-web-attention-registry-adapter.md) до DESIGN/RED.
+Он уточняет view-first503/403, current registered owner grants и конкретную
+single-owner wiring; planned native binding ниже не входит в этот TASK-only срез. Инварианты: [web-attention.md](../specs/web-attention.md),
 INV-WATTN-01..03. Создание сессий INV-WSESS-31..33 остаётся отдельным срезом.
 
 ## Источник и границы

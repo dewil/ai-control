@@ -63,7 +63,7 @@ def _load_totp_step(path):
     finally:
         os.close(fd)
 
-def create_app(config, backend, clock=None):
+def create_app(config, backend, clock=None, *, owner_only=True):
     clock = clock or time.time
     origin = config['origin']
     parsed = urlsplit(origin)
@@ -246,7 +246,7 @@ def create_app(config, backend, clock=None):
             # restart requires login. Use an external store before multi-worker.
             if len(sessions) >= 100:
                 sessions.clear()
-            sessions[token] = {'expires': now + ttl, 'csrf': csrf}
+            sessions[token] = {'expires': now + ttl, 'csrf': csrf, 'principal': 'owner'}
         response = JSONResponse({'csrf': csrf})
         response.set_cookie('control_session', token, max_age=ttl, httponly=True, secure=secure, samesite='strict', path='/')
         return response
@@ -260,6 +260,32 @@ def create_app(config, backend, clock=None):
         if failure:
             return failure
         return JSONResponse({'csrf': current['csrf']})
+
+    @app.get('/api/attention')
+    async def attention(request: Request):
+        def response(value, status):
+            return JSONResponse(value, status_code=status, headers={'Cache-Control': 'no-store'})
+        current, failure = session(request)
+        if failure:
+            failure.headers['Cache-Control'] = 'no-store'
+            return failure
+        if owner_only is not True or current.get('principal') != 'owner':
+            return response({'error': 'forbidden'}, 403)
+        origins = request.headers.getlist('origin')
+        if origins and origins != [origin]:
+            return response({'error': 'forbidden'}, 403)
+        if request.scope.get('query_string'):
+            return response({'error': 'invalid_request'}, 400)
+        # Read at most the first body chunk: any bytes violate this fixed GET.
+        async for chunk in request.stream():
+            if chunk:
+                return response({'error': 'invalid_request'}, 400)
+        try:
+            from _control_web_broker import attention_result
+            value = attention_result(await run_in_threadpool(backend.attention_snapshot))
+        except Exception:
+            value = {'error': 'unavailable'}
+        return response(value, 403 if value == {'error': 'forbidden'} else 503 if 'error' in value else 200)
 
     @app.get('/api/tasks')
     def tasks(request: Request):
