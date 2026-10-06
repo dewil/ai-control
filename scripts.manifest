@@ -53,6 +53,7 @@ ai-agent-waiting-hook
 _rc_projects.sh
 _control_provider_accounts.py
 _control_provider_context.py
+_control_web_create_store.py
 _control_provider_profile_cli.py
 _control_provider_task_context.py
 _proxy_env.sh
