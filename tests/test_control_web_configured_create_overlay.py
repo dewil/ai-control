@@ -117,7 +117,7 @@ class ConfiguredCreateOverlayContract(unittest.TestCase):
         self.require_feature()
         accepted = self.accepted_store()
         self.assertEqual(accepted.record['status'], 'accepted')
-        rpc = SyntheticRPC(self.root)
+        rpc = SyntheticRPC(self.root, status={'type': 'idle'})
         result = self.owner(rpc, self.feature.ConfiguredCreateStore(
             str(self.base / 'origin-receipts'))).overlay('demo')
         self.assertEqual(set(result), {'sessions', 'truncated'})
