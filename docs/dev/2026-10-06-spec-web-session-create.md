@@ -290,6 +290,17 @@ missing/corrupt/mismatch chain unavailable, matching unknown chain → None.
 Accepted chain export только после совпадения B и его commitment. Не искать
 неизвестную operation по всему namespace; не угадывать foreign/unmapped SID.
 
+Writer/replay с уже известным accepted `CreateReservation` требует присутствия
+matching A и всей chain/B; missing/corrupt A даёт store_unavailable, не unknown/
+новый reserve/repair. Для stateless lookup absence A без других терминальных
+свидетельств не доказывает, что принятия раньше не было: R+C остаётся unresolved
+unknown, которое НИКОГДА не разрешает повторный native create того же UUID.
+Внешнее удаление всех terminal witnesses невозможно отличить от prepared pair
+одними текущими файлами; контракт не обещает tamper ledger и не добавляет его.
+Cooperating storage writers не удаляют accepted stage и не понижают known
+accepted state. Full owner/UI protocol сохраняет прежний once-only dispatch,
+включая unknown/stateless absence, и не делает вывод «safe retry» из None.
+
 Replay после crash до R publication — all absent, native dispatch не мог начаться.
 Crash после R — durable unknown, без повторного native create. До C publication
 candidate остаётся unknown/null; C не восстанавливается из списка/notification.
