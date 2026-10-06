@@ -93,17 +93,14 @@ class ConfiguredCreatePublicationAndOverlay(unittest.TestCase):
     def require_feature(self):
         self.assertIsNotNone(self.feature,
                              'INV-WSESS-35 requires the public configured-create module')
-        for name in ('ConfiguredCreateStore', 'ConfiguredCreateReservation',
-                     'ConfiguredPreparedCreate', 'ConfiguredSessionCreate'):
+        for name in ('ConfiguredCreateStore', 'ConfiguredSessionCreate'):
             self.assertTrue(callable(getattr(self.feature, name, None)),
                             'public configured-create type is required: ' + name)
-        for name in ('locked', 'lookup', 'prepare_reservation', 'publish_reservation',
-                     'reserve', 'candidate', 'origin', 'accept'):
+
+    def require_store_methods(self, *names):
+        for name in names:
             self.assertTrue(callable(getattr(self.feature.ConfiguredCreateStore, name, None)),
                             'public configured store method is required: ' + name)
-        for name in ('create', 'overlay'):
-            self.assertTrue(callable(getattr(self.feature.ConfiguredSessionCreate, name, None)),
-                            'public configured owner method is required: ' + name)
 
     def invoke(self, function, *, allowed_errors=()):
         try:
@@ -125,6 +122,7 @@ class ConfiguredCreatePublicationAndOverlay(unittest.TestCase):
             str(self.base / 'send-receipts'), store=store)
 
     def accept(self, store, op_id, sid):
+        self.require_store_methods('locked', 'reserve', 'candidate', 'origin', 'accept')
         deadline = time.monotonic() + 20
         with store.locked(deadline, create=True) as base:
             r = store.reserve(base, 'demo', CONTEXT['context_id'], str(self.root), op_id, deadline)
@@ -134,6 +132,9 @@ class ConfiguredCreatePublicationAndOverlay(unittest.TestCase):
 
     def test_INV_WSESS_35_clock_preparation_is_pure_single_sample_replay_does_not_resample_and_invalid_clock_refuses_create(self):
         self.require_feature()
+        self.assertTrue(callable(getattr(self.feature, 'ConfiguredPreparedCreate', None)),
+                        'pure preparation needs its exact public frozen handle')
+        self.require_store_methods('prepare_reservation', 'publish_reservation', 'reserve')
         samples = []
         def clock():
             samples.append(1700000000000000000 + len(samples))
@@ -156,25 +157,15 @@ class ConfiguredCreatePublicationAndOverlay(unittest.TestCase):
         self.assertEqual(samples, [1700000000000000000],
                          'replay cannot request a second timestamp sample')
 
-        bad_path = self.base / 'invalid-clock-store'
-        bad_store = self.store(bad_path, clock=lambda: 0)
-        rpc = SyntheticRPC(self.root)
-        result = self.invoke(lambda: self.creator(rpc, bad_store).create(
-            'demo', OP_CLOCK, context_mode='configured', provider_id='codex'),
-            allowed_errors=('invalid_request',))
-        self.assertEqual(result, {'error': 'invalid_request'})
-        self.assertFalse(any(method == 'thread/start' for method, *_ in rpc.calls),
-                         'invalid clock cannot permit native creation')
-        if bad_path.exists():
-            self.assertEqual(list(bad_path.glob('*.json')), [],
-                             'invalid clock cannot publish an initial receipt')
-
     def test_INV_WSESS_35_publication_entry_uncertainty_is_unknown_and_never_dispatches_or_retries(self):
         self.require_feature()
         store = self.store(self.base / 'uncertain-store', clock=lambda: 1700000000000000000)
+        self.require_store_methods('publish_reservation')
         rpc = SyntheticRPC(self.root)
+        owner = self.creator(rpc, store)
+        self.assertTrue(callable(getattr(owner, 'create', None)), 'public create method is required')
         with patch.object(store, 'publish_reservation', side_effect=OSError('synthetic write uncertainty')) as publish:
-            result = self.invoke(lambda: self.creator(rpc, store).create(
+            result = self.invoke(lambda: owner.create(
                 'demo', OP_CLOCK, context_mode='configured', provider_id='codex'))
         self.assertEqual(result, {'operation_id': OP_CLOCK, 'status': 'delivery_unknown'})
         publish.assert_called_once()
@@ -190,7 +181,9 @@ class ConfiguredCreatePublicationAndOverlay(unittest.TestCase):
         rpc = SyntheticRPC(self.root, loaded_scans=([SID_A, SID_B, SID_C], [SID_B]),
                            outcomes={SID_A: web_sessions.RPCRejected('synthetic code'),
                                      SID_C: web_sessions.RPCRejected('synthetic code')})
-        result = self.invoke(lambda: self.creator(rpc, store).overlay('demo'))
+        owner = self.creator(rpc, store)
+        self.assertTrue(callable(getattr(owner, 'overlay', None)), 'public overlay method is required')
+        result = self.invoke(lambda: owner.overlay('demo'))
         self.assertEqual(result, {'sessions': [{
             'sid': SID_B, 'project': 'demo', 'vendor': 'codex',
             'context_mode': 'configured', 'title': 'Synthetic title',
@@ -203,24 +196,42 @@ class ConfiguredCreatePublicationAndOverlay(unittest.TestCase):
     def test_INV_WSESS_35_successful_null_malformed_or_unconfirmed_failed_reads_fail_closed(self):
         self.require_feature()
         cases = (
-            ('successful-null', [SID_A, SID_B], {SID_A: 'missing-null'}),
-            ('wrong-id', [SID_A, SID_B], {SID_A: 'wrong-id'}),
-            ('wrong-root', [SID_A, SID_B], {SID_A: 'wrong-root'}),
-            ('generic-error', [SID_A, SID_B], {SID_A: RuntimeError('synthetic transport error')}),
-            ('still-loaded', [SID_A, SID_B], {SID_A: web_sessions.RPCRejected('synthetic code')}),
+            ('successful-null', [SID_A, SID_B], {SID_A: 'missing-null'}, 'unavailable'),
+            ('wrong-id', [SID_A, SID_B], {SID_A: 'wrong-id'}, 'stale'),
+            ('wrong-root', [SID_A, SID_B], {SID_A: 'wrong-root'}, 'stale'),
+            ('generic-error', [SID_A, SID_B], {SID_A: RuntimeError('synthetic transport error')}, 'unavailable'),
+            ('still-loaded', [SID_A, SID_B], {SID_A: web_sessions.RPCRejected('synthetic code')}, 'unavailable'),
             ('partial-confirmation', {'data': [SID_B], 'nextCursor': 'more'},
-             {SID_A: web_sessions.RPCRejected('synthetic code')}),
+             {SID_A: web_sessions.RPCRejected('synthetic code')}, 'unavailable'),
         )
-        for label, confirmation, outcomes in cases:
+        for label, confirmation, outcomes, expected_code in cases:
             with self.subTest(case=label):
                 store = self.store(self.base / (label + '-store'))
                 self.accept(store, OP_A, SID_A)
                 self.accept(store, OP_B, SID_B)
                 rpc = SyntheticRPC(self.root, loaded_scans=([SID_A, SID_B], confirmation),
                                    outcomes=outcomes)
-                result = self.invoke(lambda: self.creator(rpc, store).overlay('demo'),
+                owner = self.creator(rpc, store)
+                self.assertTrue(callable(getattr(owner, 'overlay', None)),
+                                'public overlay method is required')
+                result = self.invoke(lambda: owner.overlay('demo'),
                                      allowed_errors=('unavailable', 'stale', 'forbidden'))
-                self.assertEqual(result, {'error': 'unavailable'})
+                self.assertEqual(result, {'error': expected_code})
+
+    def test_INV_WSESS_35_invalid_clock_zero_cannot_be_misreported_as_delivery_unknown(self):
+        self.require_feature()
+        store_path = self.base / 'invalid-clock-negative-store'
+        store = self.store(store_path, clock=lambda: 0)
+        rpc = SyntheticRPC(self.root)
+        owner = self.creator(rpc, store)
+        self.assertTrue(callable(getattr(owner, 'create', None)), 'public create method is required')
+        result = self.invoke(lambda: owner.create(
+            'demo', OP_CLOCK, context_mode='configured', provider_id='codex'),
+            allowed_errors=('invalid_request',))
+        self.assertEqual(result, {'error': 'invalid_request'})
+        self.assertFalse(any(method == 'thread/start' for method, *_ in rpc.calls))
+        if store_path.exists():
+            self.assertEqual(list(store_path.glob('*.json')), [])
 
 
 if __name__ == '__main__':
