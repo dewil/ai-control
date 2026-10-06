@@ -401,10 +401,16 @@ Fake wall_clock=1700000000; activity/callback sources None. Expected result:
 one unlinked TASK/question reason; known_sessions/running/decision/question/
 completed counts все0, complete=false, activity/native_callbacks unsupported.
 Та же задача с missing project_binding не экспортирует label/count, TASK source
-binding_incomplete. Добавление verified SessionBinding для Codex с этим root/SID,
+binding_incomplete. Отдельный fixture заменяет record на distinct Codex TASK:
+agent `synthetic-codex`, engine `codex`, incarnation V32, остальные question/result
+поля как выше. Его verified SessionBinding имеет этот project binding/root/SID,
 context H64, context_kind legacy_unbound, route H64/epoch I32/revision1,
-identity_epoch I32/identity_generation1 и coverage context_ids/route_ids [H64]
-даёт known_sessions1/question1, но running всё ещё unknown, не1. Labels synthetic,
+vendor codex, label `Synthetic Codex`, context_label `Synthetic context`,
+identity_epoch I32/identity_generation1; trusted view подтверждает exact текущий
+interactive host/route/context, а не только совпадение SID/root/home. Coverage
+context_ids/route_ids [H64]. Только этот distinct Codex TASK даёт
+known_sessions1/question1, но activity_state unknown и running count0. Исходный
+Claude TASK при любом таком binding остаётся unlinked. Labels synthetic,
 никакие данные filesystem/native не нужны.
 
 ## Deployment prerequisite
