@@ -265,8 +265,11 @@ production create remains unavailable before effects.
 
 ## INV-WSESS-33: UI identity, draft и отсутствие дублей
 
-Pending snapshot immutable project/provider/account/context/selection generation/
-operationUUID. Submit и selectors заблокированы до ответа; navigation не меняет
+Browser pending snapshot immutable project/provider/account/selection generation/
+operationUUID, только публичные selectors и client generation. Private context
+захватывает и fences owner после authoritative resolve/admission; browser его
+не получает, не конструирует и не добавляет в request. Submit и selectors
+заблокированы до ответа; navigation не меняет
 operation. Один UUID не заменяется автоматически после network/unknown/503.
 Draft и UUID сохраняются в текущем dialog state; без browser durable storage.
 Manual «Проверить создание» делает только status GET с исходными selectors.
@@ -299,6 +302,12 @@ Source review должен проверять настоящий production adap
 kernel-bound profile view, account-bound interactive owned host lifetime и
 registry/history/binding integration; actual native empty create/read acceptance
 на этом host. Existing TASK admission не объявляет эти interactive seams готовыми.
+Дополнительный pinned source report подтверждает: `workspaceRouting.chatgptAccountId`
+обозначает выбранный workspace, не индивидуального пользователя; internal token
+user claims/owner-generation не экспортируются через account/read. Config store
+preference/provenance, особенно auto, не подтверждает фактический backend текущих
+credentials. Это сохраняет `native_identity_unproven`; нельзя декодировать auth
+файл Control, придумывать wire principal/store поля или ослаблять admission.
 No production activation до отдельного pinned evidence и согласованной synthetic/
 native acceptance; capability остаётся runtime_unverified. После RED→GREEN:
 different-model review, exact CI, controlled installed acceptance synthetic owned
