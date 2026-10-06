@@ -149,6 +149,21 @@ class AttentionOverviewContractTests(unittest.TestCase):
         self.assertEqual(result, {"error": "forbidden"})
         self.assertNotIn("Synthetic task", repr(result))
 
+    def test_ungranted_project_records_never_enter_exported_payload(self):
+        source = FakeSource([task(questions=[question()],
+                                  label="Unauthorized synthetic project label")])
+        view = FakeView(allowed=False)
+        overview, _, _ = self.overview([], view=view, task_source=source)
+        result = overview.snapshot()
+        self.assertEqual(source.calls, 1,
+                         "project grants are checked against source bindings")
+        self.assertEqual(result["pool"]["known_sessions"], 0)
+        self.assertEqual(result["pool"]["question"], 0)
+        self.assertEqual(result["sessions"], [])
+        self.assertEqual(result["reasons"], [])
+        self.assertEqual(result["unlinked_tasks"], [])
+        self.assertNotIn("Unauthorized synthetic project label", repr(result))
+
     def test_claude_task_stays_unlinked_and_does_not_inflate_session_counts(self):
         record = task(engine="claude", linked=True, questions=[question()])
         overview, _, _ = self.overview([record])
@@ -171,7 +186,7 @@ class AttentionOverviewContractTests(unittest.TestCase):
         activity = FakeSource([running], source="activity", coverage={
             "scope": "declared_sessions", "registry_epoch": I32,
             "registry_revision": 1, "context_ids": [H64], "route_ids": [H64],
-            "session_set_revision": E32, "global_complete": False,
+            "session_set_revision": H64, "global_complete": False,
             "supported_methods": [],
         })
         overview, _, _ = self.overview([record], activity_source=activity)
