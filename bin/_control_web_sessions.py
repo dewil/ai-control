@@ -880,6 +880,90 @@ class SessionChat:
         self._remaining()
         return response
 
+    def _history_page(self, sid, cursor, limit, context):
+        params = {'threadId': sid, 'itemsView': 'notLoaded',
+                  'sortDirection': 'desc', 'limit': limit}
+        if cursor is not None:
+            params['cursor'] = cursor
+        response = self._rpc('thread/turns/list', params)
+        _need(type(response.get('data')) is list and len(response['data']) <= limit
+              and 'nextCursor' in response and valid_cursor(response['nextCursor'])
+              and (response['nextCursor'] is None or response['nextCursor'] != cursor))
+        _need(self._receipt_context() == context, 'stale')
+        turns, turn_ids = [], set()
+        for turn in response['data']:
+            _need(type(turn) is dict and _identity(turn.get('id'))
+                  and turn['id'] not in turn_ids
+                  and turn.get('status') in ('completed', 'interrupted', 'failed', 'inProgress')
+                  and type(turn.get('items')) is list and not turn['items']
+                  and turn.get('itemsView', 'notLoaded') == 'notLoaded')
+            turn_ids.add(turn['id'])
+            turns.append({key: turn[key] for key in ('id', 'status', 'items', 'startedAt')
+                          if key in turn})
+        used, truncated, stopped = 0, False, False
+        for turn in turns:
+            item_cursor, cursors, item_ids, projected = None, set(), set(), []
+            if stopped:
+                continue
+            for _ in range(4):
+                params = {'threadId': sid, 'turnId': turn['id'],
+                          'sortDirection': 'desc', 'limit': 32}
+                if item_cursor is not None:
+                    params['cursor'] = item_cursor
+                try:
+                    page = self._rpc('thread/items/list', params)
+                except RPCRejected:
+                    # Only unavailable turn metadata can use the controlled-empty variant.
+                    raise _DomainError('unavailable') from None
+                _need(self._receipt_context() == context, 'stale')
+                _need(type(page.get('data')) is list and len(page['data']) <= 32
+                      and 'nextCursor' in page and valid_cursor(page['nextCursor']))
+                following = page['nextCursor']
+                _need(following is None or following != item_cursor and following not in cursors)
+                size = len(_json(page))
+                page_projection = []
+                for entry in page['data']:
+                    self._remaining()
+                    _need(type(entry) is dict and set(entry) == {'turnId', 'item'}
+                          and entry['turnId'] == turn['id'])
+                    item = entry['item']
+                    _need(type(item) is dict and _identity(item.get('id'))
+                          and item['id'] not in item_ids and type(item.get('type')) is str)
+                    item_ids.add(item['id'])
+                    if item['type'] == 'userMessage':
+                        _need(type(item.get('content')) is list
+                              and (item.get('clientId') is None or type(item['clientId']) is str))
+                        content = []
+                        for part in item['content']:
+                            self._remaining()
+                            _need(type(part) is dict and type(part.get('type')) is str)
+                            if part['type'] == 'text':
+                                _need(type(part.get('text')) is str)
+                                content.append({'type': 'text', 'text': part['text']})
+                        page_projection.append({'id': item['id'], 'type': item['type'],
+                                                'content': content})
+                    elif item['type'] == 'agentMessage':
+                        _need(type(item.get('text')) is str)
+                        page_projection.append({'id': item['id'], 'type': item['type'],
+                                                'text': item['text']})
+                entry = item = part = None
+                if used + size > 8 * 1024 * 1024:
+                    truncated, stopped = True, True
+                    break
+                used += size
+                projected.extend(page_projection)
+                # Retain only text projection, not native tool/image payloads.
+                page = None
+                if following is None:
+                    break
+                cursors.add(following)
+                item_cursor = following
+            else:
+                truncated = True
+            turn['items'] = list(reversed(projected))
+        self._remaining()
+        return {'data': turns, 'nextCursor': response['nextCursor'], 'truncated': truncated}
+
     @_operation
     def projects(self):
         names = self._names()
@@ -1106,7 +1190,7 @@ class SessionChat:
         root = self._root(project)
         thread = self._proof(root, sid)
         try:
-            page = self._page(sid, cursor, limit=4 if cursor is None else 8)
+            page = self._history_page(sid, cursor, 4 if cursor is None else 8, context)
         except RPCRejected:
             if cursor is not None:
                 raise
@@ -1143,7 +1227,7 @@ class SessionChat:
                     self._remaining()
         self._remaining()
         result = {'turns': turns, 'next_cursor': page['nextCursor'],
-                  'truncated': eligible_count > item_limit, 'recent_sends': recent}
+                  'truncated': page['truncated'] or eligible_count > item_limit, 'recent_sends': recent}
         if _attention(thread):
             result['needs_native_attention'] = True
         # The empty item arrays reserve exact metadata/cursor/receipt bytes.
@@ -1474,7 +1558,7 @@ class SessionChat:
 
 class InteractiveRPC:
     """One receiver per connection; never responds to native server requests."""
-    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set', 'thread/start', 'thread/loaded/list'}
+    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/items/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set', 'thread/start', 'thread/loaded/list'}
 
     def __init__(self, socket_path, timeout=25):
         if type(socket_path) is not str or type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 55:
