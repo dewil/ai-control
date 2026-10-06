@@ -12,6 +12,7 @@ import re
 import time
 
 _ID = re.compile(r'[A-Za-z0-9_-]{1,80}\Z')
+_METADATA = re.compile(r'[A-Za-z0-9_.:-]{1,80}\Z')
 _STATES = {'accepted', 'running', 'completed', 'failed', 'needs_attention'}
 _ISSUES = {'local_eviction', 'invalid_event', 'id_conflict', 'retention_gap', 'stream_reset', 'replay_incomplete'}
 _REASONS = {'disabled', 'unavailable', 'invalid_config', 'dependency_unavailable', 'stream_policy', 'connection_lost'}
@@ -19,6 +20,10 @@ _REASONS = {'disabled', 'unavailable', 'invalid_config', 'dependency_unavailable
 
 def valid_id(value):
     return type(value) is str and _ID.fullmatch(value) is not None
+
+
+def valid_metadata(value):
+    return type(value) is str and _METADATA.fullmatch(value) is not None
 
 
 @dataclass(frozen=True)
@@ -193,9 +198,9 @@ class Projection:
             record['_observed'] = now
             if kind == 'registration' and sequence > record['_reg_seq']:
                 caps = payload.get('capabilities')
-                record.update(registered=True, capabilities=[c for c in caps if valid_id(c)][:32] if type(caps) is list else [],
+                record.update(registered=True, capabilities=[c for c in caps if valid_metadata(c)][:32] if type(caps) is list else [],
                     executor=payload.get('executor') if type(payload.get('executor')) is str and payload.get('executor') in {'codex','echo-test-only'} else None,
-                    version=payload.get('version') if valid_id(payload.get('version')) else None, _reg_seq=sequence)
+                    version=payload.get('version') if valid_metadata(payload.get('version')) else None, _reg_seq=sequence)
             if kind == 'heartbeat' and sequence > record['_hb_seq']:
                 record.update(heartbeat_at=at, _heartbeat=seconds, _hb_seq=sequence)
             self._bound(self._agents, self.limits.agents)
