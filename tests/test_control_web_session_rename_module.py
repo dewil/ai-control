@@ -30,6 +30,7 @@ class RenameRPC:
         self.name, self.preview, self.read_error, self.set_error = "Before rename", None, None, None
         self.set_updates_name, self.on_set = True, None
         self.transport_generation, self.context_generation = 3, 7
+        self.fenced_calls = []
 
     def __call__(self, method, params):
         self.calls.append((method, dict(params)))
@@ -51,6 +52,7 @@ class RenameRPC:
         raise AssertionError("Unexpected synthetic native call: " + method)
 
     def call_in_generation(self, method, params, *, transport_generation, context_generation, timeout=None):
+        self.fenced_calls.append((method, dict(params), transport_generation, context_generation, timeout))
         if (transport_generation, context_generation) != (self.transport_generation, self.context_generation):
             raise RuntimeError("synthetic captured generation mismatch")
         return self(method, params)
@@ -107,10 +109,6 @@ class SessionRenameModule(unittest.TestCase):
         self.assertEqual(result.get("operation_id"), OP)
 
     def test_raw_title_limits_and_controls_are_checked_before_trim_or_effects(self):
-        result = self.invoke(" " * 10 + "x" * 160 + " " * 10)
-        self.assertEqual(result.get("title"), "x" * 160)
-        self.assertEqual(len(self.fenced("thread/name/set")), 1)
-        self.rpc.calls.clear()
         invalid = ["\tname", "name\n", "\x7fname", "\x85name", "  \x00  ", " " * 40,
                    "x" * 161, "x" * 2049, b"bad-utf8-\xff", None, ["title"]]
         for title in invalid:
@@ -118,6 +116,14 @@ class SessionRenameModule(unittest.TestCase):
                 self.assertEqual(self.invoke(title), {"error": "invalid_request"})
         self.assertEqual(self.rpc.calls, [], "invalid raw titles must have no native effects")
         self.assertFalse(self.store_path.exists(), "invalid input must not create receipt storage")
+        result = self.invoke(" " * 10 + "x" * 160 + " " * 10)
+        self.assertEqual(result.get("status"), "accepted")
+        self.assertEqual(self.fenced("thread/name/set")[-1], ("thread/name/set", {"threadId": SID, "name": "x" * 160}))
+        self.rpc.calls.clear()
+        padded = " " * 600 + "ok" + " " * 600
+        accepted = self.invoke(padded)
+        self.assertEqual(accepted.get("status"), "accepted", "raw padding may exceed the normalized-title byte cap")
+        self.assertEqual(self.fenced("thread/name/set"), [("thread/name/set", {"threadId": SID, "name": "ok"})])
 
     def test_raw_utf8_byte_limit_is_enforced_before_native_effects(self):
         self.assertEqual(self.invoke("é" * 2048), {"error": "invalid_request"})
@@ -126,7 +132,7 @@ class SessionRenameModule(unittest.TestCase):
 
     def test_bad_identifiers_or_project_are_rejected_before_reservation(self):
         chat = self.chat()
-        for project, sid, op in [("../project", SID, OP), ("demo", SID[:8], OP), ("demo", SID, "not-a-uuid"), ("demo", SID.upper(), OP)]:
+        for project, sid, op in [("../project", SID, OP), ("demo", SID[:8], OP), ("demo", SID, "not-a-uuid"), ("demo", "11111111-1111-4111-8111-11111111111g", OP)]:
             with self.subTest(project=project, sid=sid, op=op):
                 self.assertEqual(chat.rename(project, sid, op, "Next"), {"error": "invalid_request"})
         self.assertEqual(self.rpc.calls, [])
@@ -153,16 +159,34 @@ class SessionRenameModule(unittest.TestCase):
 
     def test_happy_path_reserves_before_one_fenced_set_then_proves_raw_name(self):
         observed = []
-        self.rpc.on_set = lambda: observed.append((self.store_path.is_file(), self.store_path.stat().st_mode & 0o777 if self.store_path.exists() else None))
+        def inspect_reservation():
+            rows = []
+            for path in self.store_path.rglob("*"):
+                if path.is_file() and not path.is_symlink():
+                    try:
+                        record = json.loads(path.read_text(encoding="utf-8"))
+                    except (OSError, UnicodeError, json.JSONDecodeError):
+                        continue
+                    if record.get("operation_id") == OP:
+                        rows.append((record, stat.S_IMODE(path.stat().st_mode)))
+            observed.append((self.store_path.is_dir(), stat.S_IMODE(self.store_path.stat().st_mode), rows))
+        self.rpc.on_set = inspect_reservation
         result = self.invoke("  Approved  ")
-        self.assertEqual(observed, [(True, 0o600)], "durable unknown receipt must precede mutation")
+        self.assertEqual(len(observed), 1)
+        self.assertEqual(observed[0][0:2], (True, 0o700))
+        self.assertEqual(len(observed[0][2]), 1)
+        record, mode = observed[0][2][0]
+        self.assertEqual(mode, 0o600)
+        self.assertEqual((record.get("kind"), record.get("status"), record.get("operation_id")),
+                         ("session_rename", "unknown", OP),
+                         "the durable unknown receipt must precede mutation")
         self.assertEqual(self.fenced("thread/name/set"), [("thread/name/set", {"threadId": SID, "name": "Approved"})])
         self.assertEqual(self.fenced("thread/read")[-1], ("thread/read", {"threadId": SID, "includeTurns": False}))
         self.assertEqual(result, {"operation_id": OP, "status": "accepted", "title": "Approved"})
         self.assertEqual({method for method, _ in self.rpc.calls}, {"thread/read", "thread/name/set"})
 
     def test_receipt_is_exact_private_digest_record_and_never_contains_title(self):
-        self.invoke("Private title")
+        result = self.invoke("Private title")
         files = list(self.store_path.iterdir())
         self.assertEqual(len(files), 1)
         receipt_path = files[0]
@@ -203,7 +227,15 @@ class SessionRenameModule(unittest.TestCase):
         self.rpc.name = "Observed later"
         result = self.chat().rename_status("demo", SID, OP)
         self.assertEqual(result, {"operation_id": OP, "status": "accepted", "title": "Observed later"})
-        self.assertEqual(self.rpc.calls[len(before):], [], "status reconciliation must not call native")
+        reconciliation = self.rpc.calls[len(before):]
+        self.assertGreaterEqual([method for method, _ in reconciliation].count("thread/read"), 1,
+                                "status needs fresh metadata proof")
+        self.assertFalse({"thread/name/set", "thread/resume", "thread/list", "model/list"} &
+                         {method for method, _ in reconciliation})
+        self.assertTrue(any(method == "thread/read" and params == {"threadId": SID, "includeTurns": False}
+                            and (transport, context) == (3, 7)
+                            for method, params, transport, context, _ in self.rpc.fenced_calls),
+                        "status metadata proof must use the captured generation fence")
         self.assertEqual(json.loads(next(self.store_path.iterdir()).read_text(encoding="utf-8"))["status"], "accepted")
 
     def test_status_mismatch_keeps_unknown_and_never_mutates_native(self):
@@ -232,15 +264,79 @@ class SessionRenameModule(unittest.TestCase):
             with self.subTest(bad_name=bad_name):
                 self.rpc.name = bad_name
                 result = self.chat().rename_status("demo", SID, OP)
-                self.assertEqual(result.get("status"), "unavailable")
+                self.assertEqual(result, {"error": "unavailable"})
                 self.assertNotIn("title", result)
                 self.assertNotIn("Accepted", json.dumps(result))
                 self.assertEqual(json.loads(next(self.store_path.iterdir()).read_text(encoding="utf-8"))["status"], "accepted")
         self.rpc.name, self.rpc.read_error = "Accepted", OSError("synthetic read failure")
         result = self.chat().rename_status("demo", SID, OP)
-        self.assertEqual(result.get("status"), "unavailable")
+        self.assertEqual(result, {"error": "unavailable"})
         self.assertNotIn("title", result)
         self.assertEqual(json.loads(next(self.store_path.iterdir()).read_text(encoding="utf-8"))["status"], "accepted")
+
+
+    def receipt_file(self, operation=OP):
+        for path in self.store_path.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                try:
+                    value = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    continue
+                if value.get("operation_id") == operation:
+                    return path
+        self.fail("synthetic operation receipt should be discoverable by its public record fields")
+
+    def test_readonly_status_for_missing_store_does_not_create_storage(self):
+        result = self.chat().rename_status("demo", SID, OP)
+        self.assertEqual(result, {"error": "unavailable"})
+        self.assertFalse(self.store_path.exists(), "read-only receipt lookup must not create its store")
+        self.assertFalse(self.fenced("thread/name/set"))
+
+    def test_insecure_or_symlink_store_directory_refuses_publication(self):
+        self.store_path.mkdir(mode=0o700)
+        os.chmod(self.store_path, 0o755)
+        result = self.invoke("Denied")
+        self.assertEqual(result, {"error": "unavailable"})
+        self.assertFalse(self.fenced("thread/name/set"))
+        self.assertEqual(list(self.store_path.iterdir()), [])
+        self.store_path.rmdir()
+        target = self.base / "outside-target"
+        target.mkdir(mode=0o700)
+        self.store_path.symlink_to(target, target_is_directory=True)
+        result = self.invoke("Denied")
+        self.assertEqual(result, {"error": "unavailable"})
+        self.assertFalse(self.fenced("thread/name/set"))
+        self.assertEqual(list(target.iterdir()), [])
+
+    def test_symlink_and_hardlink_receipts_fail_closed_on_replay(self):
+        self.rpc.set_updates_name = False
+        self.assertEqual(self.invoke("Unknown"), {"operation_id": OP, "status": "delivery_unknown"})
+        set_count = len(self.fenced("thread/name/set"))
+        receipt = self.receipt_file()
+        saved = self.base / "saved-receipt"
+        receipt.replace(saved)
+        receipt.symlink_to(saved)
+        self.assertEqual(self.invoke("Unknown"), {"error": "unavailable"})
+        self.assertEqual(len(self.fenced("thread/name/set")), set_count)
+        receipt.unlink()
+        saved.replace(receipt)
+        outside_link = self.base / "receipt-hardlink"
+        os.link(receipt, outside_link)
+        self.assertEqual(self.invoke("Unknown"), {"error": "unavailable"})
+        self.assertEqual(len(self.fenced("thread/name/set")), set_count)
+        self.assertEqual(receipt.stat().st_nlink, 2)
+
+    def test_corrupt_legacy_send_namespace_is_not_migrated_into_rename_store(self):
+        send_store = self.base / "send-receipts"
+        send_store.mkdir(mode=0o700)
+        legacy = send_store / "synthetic-legacy.json"
+        payload = b'{"schema":1,"status":"accepted","message_id":"synthetic"}'
+        legacy.write_bytes(payload)
+        result = self.invoke("Separate store")
+        self.assertEqual(result.get("status"), "accepted")
+        self.assertEqual(legacy.read_bytes(), payload, "rename must not parse, rewrite, or migrate legacy send receipts")
+        self.assertTrue(self.store_path.is_dir())
+        self.assertNotEqual(self.store_path.resolve(), send_store.resolve())
 
     def test_generation_change_after_reservation_is_unknown_without_retry(self):
         original = self.rpc.call_in_generation
