@@ -163,6 +163,7 @@ let historyScrollbarStartY=null;
 let currentTab='tasks';
 let projectPage=0;
 let sessionPage=0;
+let sessionListRequest=0;
 let sessionsHaveMore=false;
 let sessionRows=[];
 let projectNames=[];
@@ -267,27 +268,38 @@ function projectChanged(name){
 }
 async function loadProjects(){
   if(!csrf)return;
-  const generation=++projectsGeneration,auth=csrf,selection=selectionGeneration,hadNames=projectEntries.length>0;
-  const current=()=>csrf===auth&&generation===projectsGeneration;
+  const generation=++projectsGeneration,auth=chatAuthGeneration,selection=selectionGeneration,hadNames=projectEntries.length>0;
+  const current=()=>Boolean(csrf&&auth===chatAuthGeneration&&generation===projectsGeneration);
   if(!hadNames)setSessionStatus('Загружаем проекты…');
   $('projects-refresh').disabled=true;
   try{
-    const data=await api('/api/session-projects');if(!current())return;
+    const data=await api('/api/session-projects',undefined,undefined,current);if(!current())return;
     if(!Array.isArray(data.projects))throw new Error('invalid projects');
     projectEntries=data.projects.filter(x=>x&&typeof x.name==='string');
     projectNames=projectEntries.map(x=>x.name);
     availableProjects=new Set(projectEntries.filter(x=>x.unavailable!==true).map(x=>x.name));
     if(selectedProject&&!availableProjects.has(selectedProject)){clearUnavailableProject();setSessionStatus('Выбранный проект недоступен. Выберите другой проект.');}
     renderProjects();
-    let summaryFailed=false;
+    let summaryFailed=false,summaryUnknown=false;
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
+    const validSummary=data=>exactFields(data,['projects'])&&Array.isArray(data.projects)&&data.projects.length<=1000&&data.projects.length===projectNames.length&&new Set(data.projects.map(x=>x?.name)).size===data.projects.length&&data.projects.every(x=>exactFields(x,['name','session_count','last_activity','summary_state','as_of'])&&projectNames.includes(x.name)&&(['fresh','stale'].includes(x.summary_state)?Number.isSafeInteger(x.session_count)&&x.session_count>=0&&(x.last_activity===null||typeof x.last_activity==='number'&&Number.isFinite(x.last_activity)&&x.last_activity>=0)&&typeof x.as_of==='number'&&Number.isFinite(x.as_of)&&x.as_of>=0:['unknown','unavailable'].includes(x.summary_state)&&x.session_count===null&&x.last_activity===null&&x.as_of===null));
+    const unknown=data=>data.projects.some(x=>availableProjects.has(x.name)&&x.summary_state==='unknown');
     try{
-      const summary=await api('/api/session-project-summary');if(!current())return;
-      if(!Array.isArray(summary.projects))throw new Error('invalid summary');
+      let summary=await api('/api/session-project-summary',undefined,controller.signal,current);if(!current())return;
+      if(!validSummary(summary))throw new Error('invalid summary');
+      if(unknown(summary)){
+        $('project-summary-status').textContent='Обновляем метаданные проектов…';
+        if(!current()||controller.signal.aborted)return;
+        summary=await api('/api/session-project-summary',undefined,controller.signal,current);if(!current())return;
+        if(!validSummary(summary))throw new Error('invalid summary');
+      }
+      summaryUnknown=unknown(summary);
       projectSummaries=new Map(summary.projects.filter(x=>x&&projectNames.includes(x.name)).map(x=>[x.name,x]));
       for(const [name,value] of projectSummaries)if(value.summary_state==='unavailable')availableProjects.delete(name);
       if(selectedProject&&!availableProjects.has(selectedProject)){clearUnavailableProject();setSessionStatus('Выбранный проект недоступен. Выберите другой проект.');}
     }catch(_){if(!current())return;projectSummaries.clear();summaryFailed=true;}
-    $('project-summary-status').textContent=summaryFailed?'Сводка недоступна. Число сессий и активность неизвестны.':'';
+    finally{clearTimeout(timer);}
+    $('project-summary-status').textContent=summaryFailed?'Сводка недоступна. Число сессий и активность неизвестны.':summaryUnknown?'Некоторые метаданные пока недоступны. Обновите проекты, чтобы повторить.':'';
     renderProjects();
     // A refresh never reopens history or overrides a newer user selection.
     if(selection!==selectionGeneration)return;
@@ -301,7 +313,31 @@ async function loadProjects(){
   }catch(_){if(current())setSessionStatus('Список проектов недоступен. Нажмите «Обновить проекты», чтобы повторить.');}
   finally{if(current())$('projects-refresh').disabled=false;}
 }
-async function loadSessionList(page=0,append=false,deepSid=null){const project=selectedProject;if(!project||!availableProjects.has(project))return;const generation=selectionGeneration;setSessionStatus(deepSid?'Ищем выбранную сессию…':'Загружаем сессии…');$('sessions-more').disabled=true;try{const data=await api(queryPath('/api/sessions',{project,page}));if(project!==selectedProject||generation!==selectionGeneration)return;const rows=Array.isArray(data.rows)?data.rows:[];sessionPage=page;sessionsHaveMore=data.has_more===true;sessionRows=append?sessionRows.concat(rows):rows;renderSessions();$('sessions-more').hidden=!sessionsHaveMore;if(deepSid){const found=rows.find(row=>row&&row.sid===deepSid);if(found){openChat(found);return;}if(sessionsHaveMore&&page<99)return loadSessionList(page+1,false,deepSid);setSessionStatus('Сессия из ссылки не найдена среди доступных сессий. Выберите другую из списка.');}else setSessionStatus(sessionRows.length?'Выберите сессию для переписки.':'В этом проекте пока нет доступных сессий.');}catch(_){if(project===selectedProject&&generation===selectionGeneration)setSessionStatus('Список сессий недоступен. Попробуйте ещё раз.');}finally{$('sessions-more').disabled=false;}}
+async function loadSessionList(page=0,append=false,deepSid=null){
+  const project=selectedProject;if(!project||!availableProjects.has(project))return;
+  const generation=selectionGeneration,auth=chatAuthGeneration,request=++sessionListRequest;
+  const owns=()=>Boolean(csrf&&auth===chatAuthGeneration&&project===selectedProject&&request===sessionListRequest);
+  const current=()=>owns()&&generation===selectionGeneration;
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
+  setSessionStatus(deepSid?'Ищем выбранную сессию…':'Загружаем сессии…');$('sessions-more').disabled=true;
+  try{
+    const path=queryPath('/api/sessions',{project,page});let data;
+    try{data=await api(path,undefined,controller.signal,current);}
+    catch(err){
+      if(err.status!==409||err.code!=='stale'||!current()||controller.signal.aborted)throw err;
+      setSessionStatus('Обновляем метаданные сессий…');
+      data=await api(path,undefined,controller.signal,current);
+    }
+    if(!current()||controller.signal.aborted)return;
+    const rows=Array.isArray(data.rows)?data.rows:[];sessionPage=page;sessionsHaveMore=data.has_more===true;
+    sessionRows=append?sessionRows.concat(rows):rows;renderSessions();$('sessions-more').hidden=!sessionsHaveMore;
+    if(deepSid){const found=rows.find(row=>row&&row.sid===deepSid);if(found){openChat(found);return;}
+      if(sessionsHaveMore&&page<99)return loadSessionList(page+1,false,deepSid);
+      setSessionStatus('Сессия из ссылки не найдена среди доступных сессий. Выберите другую из списка.');
+    }else setSessionStatus(sessionRows.length?'Выберите сессию для переписки.':'В этом проекте пока нет доступных сессий.');
+  }catch(err){if(current())setSessionStatus(err.status===409&&err.code==='stale'?'Метаданные сессий устарели. Обновите список, чтобы повторить.':'Список сессий недоступен. Обновите список, чтобы повторить.');}
+  finally{clearTimeout(timer);if(owns())$('sessions-more').disabled=false;}
+}
 function renderSessions(){const list=$('session-list');const frag=document.createDocumentFragment();for(const row of sessionRows){if(!row||typeof row.sid!=='string'||!UUID_RE.test(row.sid))continue;const b=node('button',undefined,'session-choice'+(selectedSession&&selectedSession.sid===row.sid?' selected':''));b.type='button';b.setAttribute('aria-pressed',String(Boolean(selectedSession&&selectedSession.sid===row.sid)));b.append(node('span',row.title||'Codex','session-title'));const vendorLabel=row.vendor==='codex'?'Codex':row.vendor==='claude'?'Claude':'Вендор неизвестен';b.append(node('span',vendorLabel,'session-vendor-badge'));b.append(node('span',statusLabel(row.status),'meta'));if(row.needs_native_attention===true)b.append(node('span','Нужно действие в клиенте Codex; ответы из панели пока недоступны.','attention-inline'));b.addEventListener('click',()=>openChat(row));frag.append(b);}list.replaceChildren(frag);}
 function statusLabel(status){const labels={active:'Работает',idle:'Готова',notLoaded:'Недоступна',systemError:'Ошибка',completed:'Завершён',interrupted:'Прерван',failed:'Ошибка',inProgress:'Выполняется'};return labels[status]||'Состояние неизвестно';}
 function chatError(err){if(err&&err.code==='stale')return 'Сессия устарела или изменилась. Обновите список и выберите её снова.';return err&&err.message||messages.unavailable;}
