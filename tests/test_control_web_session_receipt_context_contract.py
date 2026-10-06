@@ -44,6 +44,16 @@ class PlainCallableRPC:
         return [method for method, _params in self.calls]
 
 
+class ContextGetterRPC(PlainCallableRPC):
+    """Synthetic callable exposing owner metadata through the default RPC getter seam."""
+    def __init__(self, root, context):
+        super().__init__(root)
+        self.context = dict(context)
+
+    def model_context(self):
+        return dict(self.context)
+
+
 class ReceiptContextContract(unittest.TestCase):
     def setUp(self):
         self.module = feature(self, '_control_web_sessions')
@@ -279,6 +289,57 @@ class ReceiptContextContract(unittest.TestCase):
                 self.assert_no_receipt()
                 self.assertNotIn('thread/resume', rpc.methods())
                 self.assertNotIn('turn/start', rpc.methods())
+
+    def test_INV_WSESS_26_non_Codex_or_contradictory_legacy_context_fails_before_send_effects(self):
+        params = inspect.signature(self.module.SessionChat).parameters
+        self.assertIn('model_context', params,
+                      'Trusted model_context injection is required for fail-closed context verification')
+        claude_context = {'schema': 1, 'vendor': 'claude', 'context_kind': 'legacy_unbound',
+                          'context_id': 'c' * 64, 'transport_generation': 3,
+                          'context_generation': 7, 'native_version': 'codex/0.160.0'}
+
+        # Exercise both the explicit trusted dependency and the production-default
+        # rpc.model_context getter. The vendor/version contradiction must not turn
+        # this into a legacy receipt namespace or fall back to a Codex send.
+        cases = (
+            ('explicit_dependency', lambda: PlainCallableRPC(self.project),
+             lambda: (lambda: dict(claude_context))),
+            ('rpc_getter', lambda: ContextGetterRPC(self.project, claude_context), None),
+        )
+        for label, make_rpc, make_getter in cases:
+            with self.subTest(seam=label):
+                rpc = make_rpc()
+                getter = make_getter() if make_getter else None
+                chat = self.chat(rpc, model_context=getter)
+                result = chat.send('demo', SID, MID, TEXT)
+                methods = rpc.methods()
+                found_receipt = any(
+                    path.is_file() and path.name.endswith('.json')
+                    for path in self.receipts.rglob('*')
+                ) if self.receipts.exists() else False
+                violations = []
+                if result != {'error': 'unavailable'}:
+                    violations.append('expected unavailable, got ' + repr(result))
+                if found_receipt:
+                    violations.append('receipt storage was created/reserved')
+                for method in ('model/list', 'thread/resume', 'turn/start'):
+                    if method in methods:
+                        violations.append('unexpected pre-rejection RPC ' + method)
+                self.assertEqual(violations, [],
+                                 'Non-Codex/contradictory context must fail before any send effects')
+
+    def test_INV_WSESS_26_supported_Codex_inherit_does_not_depend_on_known_native_version(self):
+        context = {'schema': 1, 'vendor': 'codex', 'context_kind': 'legacy_unbound',
+                   'context_id': 'd' * 64, 'transport_generation': 3,
+                   'context_generation': 7, 'native_version': 'codex/future-synthetic'}
+        rpc = ContextGetterRPC(self.project, context)
+        chat = self.chat(rpc)
+        result = chat.send('demo', SID, MID, TEXT)
+        self.assertEqual(result, {'status': 'accepted', 'message_id': MID, 'turn_id': TURN},
+                         'Ordinary Codex inherit remains available when compatibility version is unknown')
+        self.assertNotIn('model/list', rpc.methods(), 'Inherit must not probe model catalog')
+        self.assertEqual(rpc.methods().count('thread/resume'), 1)
+        self.assertEqual(rpc.methods().count('turn/start'), 1)
 
 
 if __name__ == '__main__':
