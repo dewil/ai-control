@@ -274,52 +274,86 @@ class LifecycleStorageRed(unittest.TestCase):
     def test_closed_yielded_fd_reused_for_same_directory_is_not_a_live_lock(self):
         clock_calls = []
         store = self.store(clock=lambda: clock_calls.append("clock") or 123456789)
-        probe_locked = False
+        probe_acquired_while_active = False
+        post_lock_acquired = False
         looked_up = reserved = None
         before = after = None
+        opaque = False
+        indexable = same_inode = None
         with store.locked(deadline(), create=True) as base:
-            yielded_fd = base
-            os.close(yielded_fd)
-            replacement = os.open(self.store_path, os.O_RDONLY | os.O_DIRECTORY)
-            if replacement != yielded_fd:
-                os.dup2(replacement, yielded_fd)
-                os.close(replacement)
-            self.assertEqual(os.fstat(yielded_fd).st_ino, self.store_path.stat().st_ino)
+            before = sorted(path.name for path in self.store_path.iterdir())
+
+            def outcome(call):
+                try:
+                    return call()
+                except _DomainError as error:
+                    return "error:" + error.code
+
+            if type(base) is int:
+                # Frozen pre-opaque source counterexample: close the yielded FD,
+                # reopen the same namespace into its reused number, then prove
+                # the original flock is gone on an independent open description.
+                yielded_fd = base
+                os.close(yielded_fd)
+                replacement = os.open(self.store_path, os.O_RDONLY | os.O_DIRECTORY)
+                if replacement != yielded_fd:
+                    os.dup2(replacement, yielded_fd)
+                    os.close(replacement)
+                same_inode = os.fstat(yielded_fd).st_ino == self.store_path.stat().st_ino
+                lookup_fd = yielded_fd
+            else:
+                opaque = True
+                try:
+                    operator.index(base)
+                    indexable = True
+                except TypeError:
+                    indexable = False
+                lookup_fd = base
 
             probe_fd = os.open(self.store_path, os.O_RDONLY | os.O_DIRECTORY)
             try:
                 try:
                     fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    probe_locked = True
+                    probe_acquired_while_active = True
+                    fcntl.flock(probe_fd, fcntl.LOCK_UN)
                 except BlockingIOError:
                     pass
-                before = sorted(path.name for path in self.store_path.iterdir())
-
-                def outcome(call):
-                    try:
-                        return call()
-                    except _DomainError as error:
-                        return "error:" + error.code
-
                 looked_up = outcome(lambda: store.lookup(
-                    yielded_fd, CONTEXT, ROOT_PATH, SID, OP, deadline()))
-                reserved = outcome(lambda: store.reserve(
-                    yielded_fd, CONTEXT, ROOT_PATH, SID, OP,
-                    "unarchive", "restore_target", deadline()))
+                    lookup_fd, CONTEXT, ROOT_PATH, SID, OP, deadline()))
+                if not opaque:
+                    reserved = outcome(lambda: store.reserve(
+                        lookup_fd, CONTEXT, ROOT_PATH, SID, OP,
+                        "unarchive", "restore_target", deadline()))
                 after = sorted(path.name for path in self.store_path.iterdir())
             finally:
-                if probe_locked:
-                    fcntl.flock(probe_fd, fcntl.LOCK_UN)
                 os.close(probe_fd)
-        self.assertTrue(probe_locked,
-                        "closed yielded FD must release its namespace flock")
-        observed = (looked_up,
-                    "error:" + reserved if isinstance(reserved, str) and reserved.startswith("error:")
-                    else type(reserved).__name__,
-                    after == before, len(clock_calls))
-        self.assertEqual(observed, ("error:unavailable", "error:unavailable", True, 0),
-                         "same-thread/same-inode FD reuse must fail closed before lookup, "
-                         "reservation publication, or clock sampling")
+        post_fd = os.open(self.store_path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            try:
+                fcntl.flock(post_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                post_lock_acquired = True
+            except BlockingIOError:
+                pass
+        finally:
+            if post_lock_acquired:
+                fcntl.flock(post_fd, fcntl.LOCK_UN)
+            os.close(post_fd)
+
+        if opaque:
+            self.assertEqual((indexable, looked_up, probe_acquired_while_active, post_lock_acquired,
+                              after == before, len(clock_calls)),
+                             (False, None, False, True, True, 0),
+                             "opaque active handle has no integer protocol and preserves private lock")
+        else:
+            observed = (looked_up,
+                        "error:" + reserved if isinstance(reserved, str) and reserved.startswith("error:")
+                        else type(reserved).__name__,
+                        same_inode, probe_acquired_while_active,
+                        after == before, len(clock_calls))
+            self.assertEqual(observed,
+                             ("error:unavailable", "error:unavailable", True, True, True, 0),
+                             "same-thread/same-inode FD reuse must fail closed before lookup, "
+                             "reservation publication, or clock sampling")
 
     def test_locked_namespace_handle_is_opaque_and_keeps_flock_store_owned(self):
         store = self.store()
