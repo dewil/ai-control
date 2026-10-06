@@ -90,6 +90,7 @@ class FakeSource:
         self.reserve_hook = None
         self.finish_hook = None
         self.reserve_failure = None
+        self.reserve_mode = "reserved"
         self.finish_failure = None
         self.quarantine_failure = None
         self.close_hook = None
@@ -114,6 +115,17 @@ class FakeSource:
             self.reserve_hook()
         if self.reserve_failure is not None:
             raise self.auth.AuthError(self.reserve_failure)
+        if self.reserve_mode == "malformed":
+            return {"attempt_id": attempt_id, "disposition": "reserved"}
+        if self.reserve_mode == "wrong_id":
+            return self.auth.ReserveOutcome(str(uuid.uuid4()), "reserved")
+        if self.reserve_mode == "wrong_disposition":
+            return self.auth.ReserveOutcome(attempt_id, "invalid")
+        if self.reserve_mode == "not_written":
+            self.events.append(("source.no_replace_attempt", attempt_id))
+        if self.reserve_mode == "unknown":
+            self.events.append(("source.rename_then_dir_fsync_uncertain", attempt_id))
+        return self.auth.ReserveOutcome(attempt_id, self.reserve_mode)
 
     def commit_rotation(self, lease, ctx, attempt_id, new_refresh_token, *, deadline):
         assert lease is self.lease
@@ -157,11 +169,14 @@ class FakeOAuth:
         self.events = events
         self.clock = clock
         self.requests = []
+        self.before_return_hook = None
 
     def exchange(self, request, refresh_token, *, deadline):
         assert refresh_token == REFRESH_MARKER
         self.requests.append(request)
         self.events.append(("oauth.exchange", request.attempt_id))
+        if self.before_return_hook is not None:
+            self.before_return_hook()
         return self.auth.TLSExchange(
             request.attempt_id, request.context,
             ISSUER + "/api/accounts/oauth/token", CLIENT, "auth.openai.com",
@@ -275,6 +290,8 @@ class AuthStateContract(unittest.TestCase):
         self.clock = Clock()
         self.events = []
         self.durable_hook = None
+        self.exchange_before_hook = None
+        self.exchange_after_hook = None
         self.complete_before_hook = None
         self.complete_after_hook = None
         self.source = FakeSource(self.auth, self.events)
@@ -294,6 +311,20 @@ class AuthStateContract(unittest.TestCase):
                 events.append(("coordinator.durable", None))
                 if owner.durable_hook is not None:
                     owner.durable_hook()
+                return result
+
+            def abandon_reservation(self, *args, **kwargs):
+                result = super().abandon_reservation(*args, **kwargs)
+                events.append(("coordinator.abandon", None))
+                return result
+
+            def begin_exchange(self, *args, **kwargs):
+                if owner.exchange_before_hook is not None:
+                    owner.exchange_before_hook()
+                result = super().begin_exchange(*args, **kwargs)
+                events.append(("coordinator.exchange_claim", None))
+                if owner.exchange_after_hook is not None:
+                    owner.exchange_after_hook()
                 return result
 
             def publish_delivery(self, *args, **kwargs):
@@ -341,7 +372,8 @@ class AuthStateContract(unittest.TestCase):
             ("source.read", "coordinator.claim"),
             ("coordinator.claim", "source.reserve"),
             ("source.reserve", "coordinator.durable"),
-            ("coordinator.durable", "oauth.exchange"),
+            ("coordinator.durable", "coordinator.exchange_claim"),
+            ("coordinator.exchange_claim", "oauth.exchange"),
             ("oauth.exchange", "source.rotation"),
             ("source.rotation", "transport.login"),
             ("transport.login", "coordinator.publish"),
@@ -392,12 +424,69 @@ class AuthStateContract(unittest.TestCase):
         self.assertNotIn("oauth.exchange", self.codes())
         self.assertNotIn("transport.login", self.codes())
 
+    def test_close_first_at_begin_exchange_prevents_oauth(self):
+        self.exchange_before_hook = self.validator.close
+        self.denied("refresh_unknown", self.admit)
+        self.assertIn("coordinator.durable", self.codes())
+        self.assertNotIn("coordinator.exchange_claim", self.codes())
+        self.assertNotIn("oauth.exchange", self.codes())
+        self.assertNotIn("source.rotation", self.codes())
+
+    def test_exchange_claim_first_allows_only_one_bounded_exchange(self):
+        self.exchange_after_hook = self.validator.close
+        self.denied("refresh_unknown", self.admit)
+        self.assertIn("coordinator.exchange_claim", self.codes())
+        self.assertEqual(self.codes().count("oauth.exchange"), 1)
+        self.assertNotIn("source.rotation", self.codes())
+        self.assertNotIn("transport.login", self.codes())
+
     def test_uncertain_reservation_never_exchanges_or_retries(self):
         self.source.reserve_failure = "refresh_unknown"
         self.denied("refresh_unknown", self.admit)
         self.assertEqual(self.codes().count("source.reserve"), 1)
         self.assertNotIn("oauth.exchange", self.codes())
         self.assertNotIn("transport.login", self.codes())
+
+    def test_matching_not_written_abandons_without_oauth_or_poison(self):
+        self.source.reserve_mode = "not_written"
+        self.denied("refresh_busy", self.admit)
+        self.assertIn("source.no_replace_attempt", self.codes())
+        self.assertIn("coordinator.abandon", self.codes())
+        self.assertNotIn("oauth.exchange", self.codes())
+        self.assertNotIn("source.quarantine", self.codes())
+        self.source.reserve_mode = "reserved"
+        self.assertIsInstance(self.admit(), self.auth.Delivery)
+        self.assertEqual(len(self.oauth.requests), 1)
+
+    def test_not_written_loses_to_close_and_cannot_clear_poison(self):
+        self.source.reserve_mode = "not_written"
+        self.source.reserve_hook = self.validator.close
+        self.denied("refresh_unknown", self.admit)
+        self.assertIn("source.no_replace_attempt", self.codes())
+        self.assertNotIn("coordinator.abandon", self.codes())
+        self.assertNotIn("oauth.exchange", self.codes())
+
+    def test_rename_then_dir_fsync_unknown_poison_without_oauth(self):
+        self.source.reserve_mode = "unknown"
+        self.denied("refresh_unknown", self.admit)
+        self.assertIn("source.rename_then_dir_fsync_uncertain", self.codes())
+        self.assertNotIn("coordinator.abandon", self.codes())
+        self.assertNotIn("coordinator.durable", self.codes())
+        self.assertNotIn("oauth.exchange", self.codes())
+
+    def test_bad_reserve_outcomes_and_exceptions_never_start_oauth(self):
+        for mode in ("wrong_id", "wrong_disposition", "malformed", "exception"):
+            with self.subTest(mode=mode):
+                self.fresh_fixture()
+                if mode == "exception":
+                    self.source.reserve_failure = "refresh_busy"
+                else:
+                    self.source.reserve_mode = mode
+                self.denied("refresh_unknown", self.admit)
+                self.assertEqual(self.codes().count("source.reserve"), 1)
+                self.assertNotIn("coordinator.abandon", self.codes())
+                self.assertNotIn("coordinator.durable", self.codes())
+                self.assertNotIn("oauth.exchange", self.codes())
 
     def test_begin_requires_exact_live_durable_reservation_guard(self):
         scope_a = self.authority.AuthScope(reference(), principal())
@@ -406,26 +495,56 @@ class AuthStateContract(unittest.TestCase):
         lease_b = self.coordinator.open(scope_b, deadline=125.0)
         try:
             validator_id = str(uuid.uuid4())
+            pending_id = str(uuid.uuid4())
             pending = self.coordinator.claim_reservation(
-                lease_a, validator_id, str(uuid.uuid4()), deadline=125.0
+                lease_a, validator_id, pending_id, deadline=125.0
             )
+            self.denied("authority_stale", lambda: self.coordinator.mark_reservation_durable(
+                lease_a, guard=pending,
+                outcome=self.auth.ReserveOutcome(pending_id, "not_written"),
+            ))
+            self.denied("authority_stale", lambda: self.coordinator.abandon_reservation(
+                lease_a, guard=pending,
+                outcome=self.auth.ReserveOutcome(pending_id, "reserved"),
+            ))
+            self.denied("authority_stale", lambda: self.coordinator.mark_reservation_durable(
+                lease_a, guard=pending,
+                outcome=self.auth.ReserveOutcome(str(uuid.uuid4()), "reserved"),
+            ))
+            self.denied("authority_stale", lambda: self.coordinator.begin_exchange(
+                lease_a, validator_id, guard=pending, deadline=125.0
+            ))
             with self.coordinator.delivery_guard(
                 lease_a, scope_a, deadline=125.0
             ) as guard:
                 self.denied("authority_stale", lambda: guard.begin_enqueue(
                     reservation_guard=pending, deadline=125.0
                 ))
-            self.coordinator.abandon_reservation(lease_a, guard=pending)
+            self.coordinator.abandon_reservation(
+                lease_a, guard=pending,
+                outcome=self.auth.ReserveOutcome(pending_id, "not_written"),
+            )
+            self.denied("authority_stale", lambda: self.coordinator.begin_exchange(
+                lease_a, validator_id, guard=pending, deadline=125.0
+            ))
             with self.coordinator.delivery_guard(
                 lease_a, scope_a, deadline=125.0
             ) as guard:
                 self.denied("authority_stale", lambda: guard.begin_enqueue(
                     reservation_guard=pending, deadline=125.0
                 ))
+            foreign_validator = str(uuid.uuid4())
+            foreign_id = str(uuid.uuid4())
             foreign = self.coordinator.claim_reservation(
-                lease_b, str(uuid.uuid4()), str(uuid.uuid4()), deadline=125.0
+                lease_b, foreign_validator, foreign_id, deadline=125.0
             )
-            self.coordinator.mark_reservation_durable(lease_b, guard=foreign)
+            self.coordinator.mark_reservation_durable(
+                lease_b, guard=foreign,
+                outcome=self.auth.ReserveOutcome(foreign_id, "reserved"),
+            )
+            self.denied("authority_stale", lambda: self.coordinator.begin_exchange(
+                lease_a, validator_id, guard=foreign, deadline=125.0
+            ))
             with self.coordinator.delivery_guard(
                 lease_a, scope_a, deadline=125.0
             ) as guard:
@@ -436,6 +555,27 @@ class AuthStateContract(unittest.TestCase):
         finally:
             self.coordinator.release(lease_a)
             self.coordinator.release(lease_b)
+
+    def test_expired_durable_guard_cannot_claim_exchange(self):
+        scope = self.authority.AuthScope(reference(), principal())
+        lease = self.coordinator.open(scope, deadline=125.0)
+        validator_id = str(uuid.uuid4())
+        attempt_id = str(uuid.uuid4())
+        try:
+            guard = self.coordinator.claim_reservation(
+                lease, validator_id, attempt_id, deadline=125.0
+            )
+            self.coordinator.mark_reservation_durable(
+                lease, guard=guard,
+                outcome=self.auth.ReserveOutcome(attempt_id, "reserved"),
+            )
+            self.clock.now = 126.0
+            self.denied("authority_stale", lambda: self.coordinator.begin_exchange(
+                lease, validator_id, guard=guard, deadline=125.0
+            ))
+            self.assertNotIn("oauth.exchange", self.codes())
+        finally:
+            self.coordinator.release(lease)
 
     def test_finish_failure_after_known_receipt_never_returns_delivery(self):
         self.source.finish_failure = "refresh_unknown"
@@ -635,12 +775,14 @@ class AuthStateContract(unittest.TestCase):
         self.source.open_selected = pending_open
         restarted = self.auth.AuthStateValidator(
             profile_source=self.source, oauth_client=self.oauth,
-            owned_transport=self.transport, coordinator=self.coordinator,
+            owned_transport=self.transport,
+            coordinator=self.authority.AuthCoordinator(clock=self.clock),
             clock=self.clock, wall_clock=lambda: 1000.0,
         )
         self.denied(
             "refresh_unknown", lambda: restarted.admit(self.ctx, deadline=125.0)
         )
+        self.assertIn("source.pending_restart", self.codes())
         self.assertEqual(len(self.oauth.requests), first_count)
 
 
