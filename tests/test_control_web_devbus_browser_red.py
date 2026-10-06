@@ -31,11 +31,11 @@ class BrowserRED(unittest.TestCase):
 
     def mount(self,value):
         self.page.evaluate('''value=>{
-          window.calls=[]; window.status=200; window.offline=false; window.value=value;
+          window.calls=[]; window.devbusHttpStatus=200; window.offline=false; window.value=value;
           window.handle=ControlDevbus.mount(document.querySelector('#root'),{intervalMs:25,
             fetch:async (url,opts)=>{calls.push({url:String(url),credentials:opts.credentials,cache:opts.cache});
               if(window.offline) throw Error("synthetic offline");
-              return {ok:status===200,status,json:async()=>window.value};}});
+              return {ok:window.devbusHttpStatus===200,status:window.devbusHttpStatus,json:async()=>window.value};}});
         }''',value)
         self.page.wait_for_selector('[data-devbus-task="t1"]')
 
@@ -60,7 +60,7 @@ class BrowserRED(unittest.TestCase):
         for status in (401,403):
             with self.subTest(status=status):
                 self.mount(snapshot('sensitive synthetic result'))
-                self.page.evaluate('s=>window.status=s',status)
+                self.page.evaluate('s=>window.devbusHttpStatus=s',status)
                 self.page.wait_for_function('!document.querySelector("#root").textContent.includes("sensitive synthetic result")')
                 count=self.page.evaluate('calls.length')
                 self.page.wait_for_timeout(100)
