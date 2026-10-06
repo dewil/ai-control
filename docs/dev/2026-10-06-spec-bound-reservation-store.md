@@ -1,4 +1,4 @@
-# First bound reservation disk store — DRAFT before independent DESIGN
+# First bound reservation disk store — frozen DESIGN contract
 
 Module `bin/_control_web_bound_session_store.py`. First R+G disk slice of parent
 bound-session-store contract, uses reviewed pure records DTO/codec, no duplicated
@@ -127,3 +127,6 @@ crash unrecoverable (including same operation with different proposed UUID), mal
 G cannot hide history, exact replay including created,9998 capacity boundary, inode/path replacement/finalfences, replay no clock/no writes,
 shared deadline/busy and strict leaf schemas. No real credentials/project files or
 server account/runtime operations. Full C/I/A/stop/native/auth gates remain separate.
+
+Independent reservation_design repeat DESIGN READY for 2886e45 on 2026-10-06.
+This freeze precedes source-blind RED; no Linux behavior proof is implied.
