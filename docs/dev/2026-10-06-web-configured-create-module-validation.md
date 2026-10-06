@@ -40,18 +40,20 @@ Final focused18 PASS,0 failures,0 errors (1.548s), also with ambient process uma
 Overlay2 test SHA256 `120c947d2e81e4d7bacf69b886e6091a019b377230eeaa3420f01acf3cc28ad6`.
 Subsequent actual source review found two gaps: invalid clock reported unknown,
 and no proved omission after a loaded-row read rejection. Narrow b894 design
-amendment passed separate actual design review. New seam absent-source baseline4
-methods has4 semantic failures,0 errors; these initial failures are missing-type
-checks, not independent behavioral counterexamples.
+amendment passed separate actual design review. Final independent hardening baseline on frozen old source:5 methods,4 semantic
+failures,1 PASS,0 errors. Two failures identify missing prepare/publish seams;
+separate tests prove actual clock0 wrong unknown and actual typed read rejection
+aborting the whole overlay. Existing fail-closed negative cases PASS.
 
 Patched candidate prepares one validated clock sample before publication uncertainty,
 publishes that exact prepared DTO, and retains unknown barrier before publisher
 entry. Overlay omissions require actual RPCRejected and one shared complete fresh
 same-generation loaded scan proving failed SIDs absent; generic/malformed/partial
 proof failures remain closed. All exported origins receive final parent/context/root
-checks. Current22 methods run has two known false subtest failures only: wrong-id/
-wrong-root test demands unavailable despite allowed correct stale. Independent
-fixture correction is pending;22 GREEN is not yet claimed. Existing sessions and
+checks. Final focused23 PASS,0 failures,0 errors (2.056s), ambient umask; independent
+writer corrected exact identity stale expectations and separated behavioral guards.
+Hardening test SHA256 `28f7469121a6c66f1576a8a268d765b9db98075dbf99f4307f63a3c8bd10a0a1`.
+Source bytes unchanged after test-only correction. Existing sessions and
 manifest source bytes unchanged. Repeat source audit, independent QA and CI remain
 separate gates before merge/activation.
 
