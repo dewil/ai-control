@@ -208,10 +208,11 @@ R commitment и status unknown|accepted. DTO constructor сам не FS authorit
 Plain input mappings разрешены для independent synthetic fixtures, mutable storage
 внутри возвращённого handle не допускается. Record validators одинаковы для DTO/FS.
 
-Методы (base — held namespace FD либо None из locked, deadline — absolute monotonic):
+Методы (base — opaque store-owned namespace handle либо None из locked,
+deadline — absolute monotonic):
 
 ```
-locked(deadline, create=False) -> context manager yielding base FD | None
+locked(deadline, create=False) -> context manager yielding opaque base handle | None
 lookup(base, context_id, root, sid, operation_id, deadline)
     -> LifecycleReservation | None
 prepare_reservation(context_id, root, sid, operation_id, action, confirmation, deadline)
@@ -242,9 +243,22 @@ DIRECTORY inode (межпроцессный, whole operation); bounded acquisiti
 remaining deadline. Он сериализует capacity/temp/NOREPLACE/fsync и native attempt.
 Нет per-operation leaf lock, обратного lock order или второго receipt namespace
 lock во время RPC. Lookup base=None возвращает None; publish/accept base=None —
-unavailable. Вызовы с FD вне matching live namespace lock — misuse/unavailable.
+unavailable. Handle — non-FD capability: не integer, не имеет public FD fields,
+`fileno()` или `__index__()`; repr не раскрывает private state. Locked directory
+FD никогда не выдаётся caller и остаётся store-owned до выхода из context.
+Методы принимают только EXACT active handle identity того же store/thread/live
+context; перевод в retained private FD выполняется внутри store. Foreign handle,
+handle после выхода, raw integer или handle другого store/thread дают unavailable
+до clock/FS effects. Повторный вход не оживляет старый handle. Caller не может
+закрыть или LOCK_UN удерживаемый FD через public handle; arbitrary hostile
+same-process introspection private state вне threat model. Whole-operation flock,
+anchor/current identity fences и bounded deadline остаются обязательными.
 Every opened path/FD pin проверяется до/после чтения и publication; directory
 replacement не переводит запись на новый namespace. GET чтение не создаёт lock files.
+Independent acceptance: public handle не принимает `os.close`/`fcntl.flock`, не
+экспортирует FD conversion; raw FD, foreign/stale handle и cross-thread use
+refused без clock/publication. Valid active handle сохраняет private live lock
+через все методы; namespace replacement всё равно unavailable, никогда не rebind.
 
 Key64 = SHA256 canonical JSON
 `{kind:'session_lifecycle_key',context_id,root,sid,operation_id}`.

@@ -127,7 +127,10 @@ DESIGN/RED ещё впереди; source/installed capability не заявле�
   not-found/notification или guessed outcome. Terminal accepted не downgrade.
   Frozen LifecycleStore/PreparedLifecycle/R+A locator/parent commitments и exact
   clock/barrier/lookup/result signatures заданы в feature до blind RED; старые
-  send/rename схемы сохраняются. Архивный metadata read не требует loaded/resume.
+  send/rename схемы сохраняются. Namespace capability — opaque exact active
+  store/thread/context handle; private directory flock FD не экспортируется,
+  foreign/stale/raw-FD calls unavailable до clock/FS effects.
+  Архивный metadata read не требует loaded/resume.
 - INV-WSESS-41: fixed options/POST/status auth/Origin/CSRF/peer/no-store и immutable
   UI selection/action/UUID generation. Unsupported disabled, unknown manual status
   без POST retry/newUUID; cache refresh только подтверждённого target. Active/archived
