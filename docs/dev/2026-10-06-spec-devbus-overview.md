@@ -75,6 +75,11 @@ observed age, not producer time; periodic snapshot purges. Disconnection keeps
 visible stale state with connection label. Heartbeat freshness uses event_at:
 future >5s unknown, >=stale_seconds stale, otherwise fresh; missing unknown.
 
+Wire kind exact strings: accepted/running/completed/failed/needs_attention/
+registration/heartbeat (no prefix). Registration payload may contain agent_id,
+capabilities,executor,version,schema_version; heartbeat agent_id. Only listed
+DTO fields are exposed, agent identity is always envelope.source.
+
 ## Transport contract
 
 `bin/_control_web_devbus_nats.py`: `NatsConfig.from_env(env=None)` reads
