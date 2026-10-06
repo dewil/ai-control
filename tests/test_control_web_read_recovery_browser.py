@@ -65,12 +65,12 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
         self.page.on('request', lambda request: self.network.append((request.method, request.url)))
         self.page.on('pageerror', lambda error: self.errors.append(type(error).__name__))
         self.page.goto(self.url)
-        if self.page.locator('input[type=password]').count():
+        if self.page.locator('input[type=password]').is_visible():
             self.login()
         self.page.get_by_role('button', name='Сессии', exact=True).or_(
             self.page.get_by_role('tab', name='Сессии', exact=True)).click()
-        self.tile('high').wait_for()
         self.page.wait_for_timeout(200)
+        self.tile('high').wait_for()
         self.network.clear()
         self.page.evaluate('window.__readRecoveryIO.reads.length=0')
 
