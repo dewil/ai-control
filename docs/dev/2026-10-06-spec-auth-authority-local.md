@@ -90,3 +90,14 @@ and validates callback outcomes BEFORE final live/generation/quarantine checks;
 NO callbacks between final validation and begun/confirmed/publication mutation.
 Clock-triggered invalidation always wins over later stamp; no stamp on quarantined
 account. No test-only branch or weakened public scope/deadline invariant.
+
+## Single-capture identity clarification before additional fault RED
+
+Opening a lease derives the registry key, retained account identity and lease
+authority from the SAME initial independent immutable primitive snapshot. Account
+construction must not resnapshot the caller object. If a caller scope alias changes
+after initial capture, later supplied-scope validation rejects the mismatch; it
+must never register the changed identity under the original account key or permit
+two simultaneous leases for the same captured account via distinct registry keys.
+Synthetic mutation between capture and account construction is in scope for this
+local invariant; it is not a claim of protection against arbitrary Python code.
