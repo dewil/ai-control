@@ -166,9 +166,22 @@ class Delivery:
 class _CallbackRecord:
     callback: object
     delivery: object
+    captured: tuple
     running: bool = False
     result: object = None
     error: object = None
+
+
+@dataclass(frozen=True, repr=False)
+class _DeliveryRecord:
+    delivery: object
+    delivery_id: str
+    context: object
+    context_snapshot: tuple
+    channel: object
+    channel_snapshot: tuple
+    stamp: object
+    attempt_id: str
 
 
 class AuthStateValidator:
@@ -185,10 +198,12 @@ class AuthStateValidator:
         coordinator._validator(self._validator_id)
         self._deliveries = {}
         self._callbacks = {}
+        self._callback_records = {}
         self._callback_lock = threading.RLock()
         self._context_lock = threading.Lock()
         self._captured_context = None
         self._owned_channel = None
+        self._owned_channel_snapshot = None
 
     def _remaining(self, deadline):
         _number(deadline)
@@ -196,21 +211,55 @@ class AuthStateValidator:
         _require(deadline > now)
         return now
 
-    def _channel(self, channel, ctx):
+    def _bound_context(self, ctx):
+        scope, captured = _context(ctx)
+        _require(captured == self._captured_context)
+        return scope
+
+    def _channel_fields(self, channel, ctx):
+        scope = self._bound_context(ctx)
         _require(type(channel) is OwnedChannel and channel.context is ctx
                  and _text(channel.invocation_id, _UUID) and _text(channel.channel_id, _UUID)
                  and type(channel.transport_generation) is int and channel.transport_generation >= 1)
+        return (id(ctx), _snapshot(scope), self._captured_context[1],
+                channel.invocation_id, channel.channel_id, channel.transport_generation)
+
+    def _channel(self, channel, ctx):
+        captured = self._channel_fields(channel, ctx)
+        if self._owned_channel is not None:
+            _require(channel is self._owned_channel and captured == self._owned_channel_snapshot)
+        return captured
+
+    def _bound(self, ctx, channel):
+        self._bound_context(ctx)
+        self._channel(channel, ctx)
+
+    def _workspace(self):
+        return dict(self._captured_context[0][-1])['workspace_id']
+
+    def _delivery_baseline(self, delivery, ctx=None):
+        _require(type(delivery) is Delivery)
+        record = self._deliveries.get(id(delivery))
+        _require(record is not None and record.delivery is delivery
+                 and delivery.context is record.context and delivery.channel is record.channel
+                 and delivery.stamp is record.stamp and type(delivery.delivery_id) is str
+                 and delivery.delivery_id == record.delivery_id)
+        actual = delivery.context if ctx is None else ctx
+        scope = self._bound_context(actual)
+        _require(_context(actual)[1] == record.context_snapshot
+                 and _context(delivery.context)[1] == record.context_snapshot)
+        self._channel(delivery.channel, delivery.context)
+        _require(self._channel_fields(delivery.channel, delivery.context) == record.channel_snapshot)
+        return record, scope
 
     def _delivery(self, delivery, ctx=None):
-        _require(type(delivery) is Delivery and self._deliveries.get(id(delivery)) is delivery)
-        actual = delivery.context if ctx is None else ctx
-        scope, captured = _context(actual)
-        _require(captured == _context(delivery.context)[1])
-        self._channel(delivery.channel, delivery.context)
+        record, scope = self._delivery_baseline(delivery, ctx)
+        self._coordinator._validate_final(record.stamp, self._validator_id, record.attempt_id, scope)
         self._coordinator._check_stamp(delivery.stamp, self._validator_id, scope)
         return scope
 
-    def _callback(self, callback, channel, deadline):
+    def _callback_fields(self, callback, channel):
+        self._bound(channel.context, channel)
         _require(type(callback) is CapturedCallback and callback.channel is channel
                  and _request_id(callback.request_id)
                  and type(callback.params) is MappingProxyType
@@ -219,14 +268,29 @@ class AuthStateValidator:
                  and callback.params['reason'] == 'unauthorized')
         previous = callback.params['previousAccountId']
         _require(previous is None or (type(previous) is str
-                 and previous == channel.context.expected_native_principal['workspace_id']))
+                 and previous == self._workspace()))
+        return (id(channel), self._channel_fields(channel, channel.context),
+                type(callback.request_id), callback.request_id,
+                tuple(sorted(callback.params.items())), _number(callback.received_monotonic))
+
+    def _callback_baseline(self, callback, channel):
+        record = self._callback_records.get(id(callback))
+        _require(record is not None and record.callback is callback
+                 and self._callback_fields(callback, channel) == record.captured)
+        return record
+
+    def _callback(self, callback, channel, deadline):
+        record = self._callback_baseline(callback, channel)
         now = self._remaining(deadline)
-        _require(_number(callback.received_monotonic) <= now
-                 and now < callback.received_monotonic + 9)
+        self._callback_baseline(callback, channel)
+        received = record.captured[-1]
+        _require(received <= now and now < received + 9)
         self._transport.validate_callback(callback, channel, deadline=deadline)
+        self._callback_baseline(callback, channel)
 
     def _validate(self, ctx, channel, scope, lease, source_lease, deadline, callback=None, *, claimed=False):
         self._remaining(deadline)
+        self._bound(ctx, channel)
         try:
             self._coordinator._validator_current(self._validator_id, scope)
             self._coordinator.check(lease, scope, deadline=deadline)
@@ -234,8 +298,11 @@ class AuthStateValidator:
             if claimed:
                 raise AuthError('refresh_unknown') from None
             raise
+        self._bound(ctx, channel)
         self._source.validate_current(ctx, source_lease, deadline=deadline)
+        self._bound(ctx, channel)
         self._transport.validate_current(channel, ctx, deadline=deadline)
+        self._bound(ctx, channel)
         if callback is not None:
             try:
                 self._callback(callback, channel, deadline)
@@ -243,6 +310,7 @@ class AuthStateValidator:
                 if claimed:
                     raise AuthError('refresh_unknown') from None
                 raise
+        self._bound(ctx, channel)
 
     def admit(self, ctx, *, deadline):
         return _safe(lambda: self._operation(ctx, deadline, None, None))
@@ -275,24 +343,30 @@ class AuthStateValidator:
         return _safe(lambda: self._capture_callback(delivery, request_id, params, deadline))
 
     def _capture_callback(self, delivery, request_id, params, deadline):
+        self._delivery(delivery)
         _require(_request_id(request_id) and _keys(params, 'reason previousAccountId'))
         _require(type(params['reason']) is str and params['reason'] == 'unauthorized')
         previous = params['previousAccountId']
         _require(previous is None or (type(previous) is str
-                 and previous == delivery.context.expected_native_principal['workspace_id']))
+                 and previous == self._workspace()))
         self._current(delivery, delivery.context, deadline)
         channel = delivery.channel
         key = (channel.channel_id, channel.transport_generation, type(request_id), request_id)
         with self._callback_lock:
             existing = self._callbacks.get(key)
             if existing is not None:
+                self._callback_baseline(existing.callback, channel)
                 _require(existing.delivery is delivery and dict(existing.callback.params) == params)
                 return existing.callback
             callback = self._transport.capture_callback(channel, request_id, params, deadline=deadline)
-            self._callback(callback, channel, deadline)
+            captured = self._callback_fields(callback, channel)
             _require(type(callback.request_id) is type(request_id) and callback.request_id == request_id
                      and dict(callback.params) == params)
-            self._callbacks[key] = _CallbackRecord(callback, delivery)
+            record = _CallbackRecord(callback, delivery, captured)
+            self._callbacks[key] = record
+            self._callback_records[id(callback)] = record
+            self._callback(callback, channel, deadline)
+            self._bound(delivery.context, channel)
             return callback
 
     def refresh(self, delivery, callback, *, deadline):
@@ -301,10 +375,10 @@ class AuthStateValidator:
     def _refresh(self, delivery, callback, deadline):
         with self._callback_lock:
             _require(type(callback) is CapturedCallback)
-            key = (callback.channel.channel_id, callback.channel.transport_generation,
-                   type(callback.request_id), callback.request_id)
-            record = self._callbacks.get(key)
+            record = self._callback_records.get(id(callback))
             _require(record is not None and record.callback is callback and record.delivery is delivery)
+            self._callback_baseline(callback, delivery.channel)
+            self._delivery_baseline(delivery)
             if record.error is not None:
                 raise AuthError(record.error)
             if record.result is not None:
@@ -315,7 +389,7 @@ class AuthStateValidator:
         code = None
         try:
             self._delivery(delivery)
-            bounded = min(_number(deadline), _number(callback.received_monotonic) + 9)
+            bounded = min(_number(deadline), record.captured[-1] + 9)
             self._callback(callback, delivery.channel, bounded)
             result = self._operation(delivery.context, bounded, delivery.channel, callback)
         except AuthError as error:
@@ -336,28 +410,69 @@ class AuthStateValidator:
         return _safe(lambda: self._coordinator._close_validator(self._validator_id))
 
     def _exchange(self, request, refresh_token, scope):
-        self._remaining(request.deadline)
-        response = self._oauth.exchange(request, refresh_token, deadline=request.deadline)
-        _require(type(response) is TLSExchange and response.attempt_id == request.attempt_id
-                 and type(response.attempt_id) is str and response.context is request.context)
-        for actual, expected in ((response.endpoint, _ENDPOINT), (response.client_id, _CLIENT),
-                                 (response.peer_hostname, 'auth.openai.com')):
-            if type(actual) is not str or actual != expected:
-                raise AuthError('auth_response_invalid')
-        if response.ca_verified is not True or response.redirected is not False or response.proxy_used is not False:
-            raise AuthError('auth_response_invalid')
-        now = self._remaining(request.deadline)
-        _require(request.started_monotonic <= _number(response.received_monotonic) <= now)
-        if type(response.status) is not int:
-            raise AuthError('auth_response_invalid')
-        if response.status != 200:
-            raise AuthError('auth_expired' if response.status in (400, 401) else 'auth_unavailable')
+        # Freeze our request BEFORE handing its forgeable public fields to a seam.
+        _require(type(request) is OAuthRequest)
+        attempt, ctx = request.attempt_id, request.context
+        start_mono, start_wall, budget = (request.started_monotonic,
+                                         request.started_wall, request.deadline)
+        captured_request = (attempt, start_mono, start_wall, budget)
+        captured_types = tuple(type(value) for value in captured_request)
+
+        def request_current():
+            current = (request.attempt_id, request.started_monotonic,
+                       request.started_wall, request.deadline)
+            if (request.context is not ctx or tuple(type(value) for value in current) != captured_types
+                    or current != captured_request):
+                raise AuthError('refresh_unknown')
+            self._bound(ctx, self._owned_channel)
+
+        try:
+            self._remaining(budget)
+            request_current()
+            response = self._oauth.exchange(request, refresh_token, deadline=budget)
+        except Exception:
+            raise AuthError('refresh_unknown') from None
+        if type(response) is not TLSExchange:
+            raise AuthError('refresh_unknown')
+        # No injected callback runs between receipt and this independent capture.
+        (response_attempt, response_context, endpoint, client, peer, ca, redirected,
+         proxy, status, body, received_mono, received_wall) = (
+            response.attempt_id, response.context, response.endpoint, response.client_id,
+            response.peer_hostname, response.ca_verified, response.redirected,
+            response.proxy_used, response.status, response.body,
+            response.received_monotonic, response.received_wall)
+        request_current()
+        try:
+            now = self._remaining(budget)
+        except Exception:
+            raise AuthError('refresh_unknown') from None
+        request_current()
+        invalid = 'auth_response_invalid' if type(status) is int and status == 200 else 'refresh_unknown'
+
+        def response_require(condition):
+            if not condition:
+                raise AuthError(invalid)
+
+        response_require(type(response_attempt) is str and response_attempt == attempt
+                         and response_context is ctx)
+        for actual, expected in ((endpoint, _ENDPOINT), (client, _CLIENT), (peer, 'auth.openai.com')):
+            response_require(type(actual) is str and actual == expected)
+        response_require(ca is True and redirected is False and proxy is False)
+        response_require(type(status) is int and type(body) is bytes and len(body) <= 65536)
+        response_require(type(received_mono) in (int, float) and math.isfinite(received_mono)
+                         and start_mono <= received_mono <= now)
+        evaluation = self._wall()
+        request_current()
+        response_require(type(received_wall) in (int, float) and math.isfinite(received_wall)
+                         and received_wall >= 0 and type(evaluation) in (int, float)
+                         and math.isfinite(evaluation) and start_wall <= received_wall <= evaluation)
+        if status != 200:
+            raise AuthError('refresh_unknown')
         code = None
         try:
             parsed = parse_token_response(
-                response.status, response.body, scope,
-                request_start_wall=request.started_wall,
-                response_end_wall=response.received_wall, evaluation_wall=self._wall())
+                status, body, scope, request_start_wall=start_wall,
+                response_end_wall=received_wall, evaluation_wall=evaluation)
         except TokenResponseError as error:
             code = error.code
         if code is not None:
@@ -365,12 +480,15 @@ class AuthStateValidator:
         return parsed
 
     def _make_delivery(self, ctx, channel, stamp, attempt_id, scope):
+        self._bound(ctx, channel)
         self._coordinator._validate_final(stamp, self._validator_id, attempt_id, scope)
         result = object.__new__(Delivery)
         for name, value in (('delivery_id', str(uuid.uuid4())), ('context', ctx),
                             ('channel', channel), ('stamp', stamp)):
             object.__setattr__(result, name, value)
-        self._deliveries[id(result)] = result
+        self._deliveries[id(result)] = _DeliveryRecord(
+            result, result.delivery_id, ctx, self._captured_context, channel,
+            self._owned_channel_snapshot, stamp, attempt_id)
         return result
 
     def _operation(self, ctx, deadline, channel, callback):
@@ -412,8 +530,9 @@ class AuthStateValidator:
                 channel = self._owned_channel
                 if channel is None:
                     channel = self._transport.capture(ctx, validator_id=self._validator_id, deadline=deadline)
-                    self._channel(channel, ctx)
+                    channel_snapshot = self._channel(channel, ctx)
                     self._owned_channel = channel
+                    self._owned_channel_snapshot = channel_snapshot
             self._channel(channel, ctx)
             self._validate(ctx, channel, scope, lease, source_lease, deadline, callback)
             refresh_token = self._source.read_refresh(source_lease, deadline=deadline)
@@ -441,6 +560,11 @@ class AuthStateValidator:
             self._validate(ctx, channel, scope, lease, source_lease, deadline, callback, claimed=True)
             if parsed.refresh_token is not None:
                 try:
+                    self._coordinator._claim_rotation(
+                        lease, self._validator_id, reservation_guard=reservation, deadline=deadline)
+                    self._bound(ctx, channel)
+                    if callback is not None:
+                        self._callback_baseline(callback, channel)
                     self._source.commit_rotation(source_lease, ctx, attempt_id, parsed.refresh_token, deadline=deadline)
                 except Exception:
                     raise AuthError('refresh_unknown') from None
@@ -455,25 +579,35 @@ class AuthStateValidator:
 
                         def final_check():
                             self._remaining(final)
+                            self._bound(ctx, channel)
                             self._coordinator._validator_current(self._validator_id, scope)
                             guard.validate_current(deadline=final)
+                            self._bound(ctx, channel)
                             source_guard.validate_current(deadline=final)
+                            self._bound(ctx, channel)
                             channel_guard.validate_current(deadline=final)
+                            self._bound(ctx, channel)
                             if callback is not None:
                                 self._callback(callback, channel, final)
                             self._remaining(final)
+                            self._bound(ctx, channel)
+                            if callback is not None:
+                                self._callback_baseline(callback, channel)
 
                         final_check()
                         if not parsed.usable_at(self._wall()):
                             raise AuthError('auth_expired')
                         payload = {'accessToken': parsed.access_token,
-                                   'chatgptAccountId': ctx.expected_native_principal['workspace_id'],
+                                   'chatgptAccountId': self._workspace(),
                                    'chatgptPlanType': None}
                         if callback is None:
                             payload['type'] = 'chatgptAuthTokens'
                         _require(len(json.dumps(payload, separators=(',', ':')).encode('ascii')) <= 32768)
                         final_check()
                         guard.begin_enqueue(reservation_guard=reservation, deadline=final)
+                        self._bound(ctx, channel)
+                        if callback is not None:
+                            self._callback_baseline(callback, channel)
                         if callback is None:
                             receipt = self._transport.login(channel, MappingProxyType(payload), guard=channel_guard, deadline=final)
                             _require(type(receipt) is LoginReceipt and receipt.channel is channel
@@ -492,6 +626,11 @@ class AuthStateValidator:
                         final_check()
                         publication = self._coordinator.publish_delivery(lease, guard=guard, deadline=final)
                         final_check()
+                        self._coordinator._claim_finish(
+                            lease, guard=guard, publication=publication, deadline=final)
+                        self._bound(ctx, channel)
+                        if callback is not None:
+                            self._callback_baseline(callback, channel)
                         self._source.finish_confirmed(source_lease, ctx, attempt_id, deadline=final)
                         final_check()
                         stamp = self._coordinator._complete_terminal(lease, guard=guard, publication=publication, deadline=final)

@@ -344,6 +344,7 @@ class _ReservationRecord:
     durable: bool = False
     exchange: bool = False
     enqueue: bool = False
+    rotation: bool = False
 
 
 @dataclass(repr=False)
@@ -359,6 +360,7 @@ class _StateGuardRecord:
     completed: bool = False
     reservation: object = None
     publication: object = None
+    finish: bool = False
 
 
 class _StateDeliveryGuard:
@@ -583,6 +585,18 @@ class AuthStateCoordinator:
             _require(detail.validator is validator and detail.durable and not detail.exchange)
             detail.exchange = True
 
+    def _claim_rotation(self, lease, validator_id, *, reservation_guard, deadline):
+        self._remaining(deadline)
+        detail, record = self._reservation(lease, reservation_guard)
+        validator = self._validator(validator_id)
+        _require(deadline <= detail.deadline)
+        with record.account.intent:
+            self._reservation_live(detail, record)
+            _require(detail.validator is validator and detail.durable and detail.exchange
+                     and not detail.enqueue and not detail.rotation
+                     and record.account.terminal is None)
+            detail.rotation = True
+
     @contextmanager
     def delivery_guard(self, lease, scope, *, deadline):
         record = self._lease(lease)
@@ -660,13 +674,24 @@ class AuthStateCoordinator:
             detail.publication = publication
             return publication
 
+    def _claim_finish(self, lease, *, guard, publication, deadline):
+        detail, record = self._guard_preflight(guard, deadline)
+        _require(detail.lease is lease and type(publication) is ProvisionalPublication)
+        with record.account.intent:
+            self._guard_live(detail, record)
+            self._reservation_live(detail.reservation, record)
+            _require(detail.confirmed and detail.published and not detail.completed
+                     and not detail.finish and detail.publication is publication
+                     and record.account.terminal is detail)
+            detail.finish = True
+
     def _complete_terminal(self, lease, *, guard, publication, deadline):
         # All injected/preflight work precedes the final leaf-mutex transition.
         detail, record = self._guard_preflight(guard, deadline)
         _require(detail.lease is lease and type(publication) is ProvisionalPublication)
         with record.account.intent:
             self._guard_live(detail, record)
-            _require(detail.published and not detail.completed
+            _require(detail.published and detail.finish and not detail.completed
                      and detail.publication is publication
                      and record.account.terminal is detail)
             attempt = detail.reservation
