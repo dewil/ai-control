@@ -14,6 +14,7 @@ const sendsInFlight = new Set();
 const statusChecks = new Set();
 const creates = new Map();
 let createDialogProject=null;
+let createDialogEpoch=0;
 const renames = new Map();
 let renameDialogScope=null;
 let renameStatusTimer=null;
@@ -311,12 +312,12 @@ function openChat(row){if(!row||!UUID_RE.test(row.sid))return;pageReaderScope=nu
 // INV-WSESS-37: immutable in-memory operations survive dialog closure, never retry POST.
 function exactFields(value,keys){return Boolean(value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key)));}
 function createState(project){if(!creates.has(project))creates.set(project,{operation:null,status:'draft',inFlight:false,loading:false,available:false,message:'',generation:0,auth:chatAuthGeneration});return creates.get(project);}
-function closeCreateDialog(){createDialogProject=null;if($('create-dialog').open)$('create-dialog').close();}
+function closeCreateDialog(){createDialogEpoch++;createDialogProject=null;if($('create-dialog').open)$('create-dialog').close();}
 function syncCreateControls(){
   $('create-open').disabled=!csrf||!selectedProject||!availableProjects.has(selectedProject);
   const state=createDialogProject&&creates.get(createDialogProject);if(!state)return;
   $('create-vendor').disabled=state.loading||state.inFlight||Boolean(state.operation);
-  $('create-submit').disabled=!state.available||state.loading||state.inFlight||Boolean(state.operation)||selectedProject!==createDialogProject;
+  $('create-submit').disabled=!state.available||state.loading||state.inFlight||Boolean(state.operation)||selectedProject!==createDialogProject||state.optionsGeneration!==selectionGeneration;
   $('create-check').hidden=!state.operation;$('create-check').disabled=state.inFlight;
   $('create-status').textContent=state.message;
 }
@@ -325,18 +326,19 @@ async function openCreateDialog(){
   if(!csrf||!selectedProject||!availableProjects.has(selectedProject))return;
   const project=selectedProject,previous=creates.get(project);
   if(previous?.status==='accepted'&&previous.selected)creates.delete(project);
-  const state=createState(project),auth=chatAuthGeneration;
-  createDialogProject=project;state.loading=true;state.available=false;
+  const state=createState(project),auth=chatAuthGeneration,generation=selectionGeneration,epoch=++createDialogEpoch;
+  const current=()=>auth===chatAuthGeneration&&createDialogProject===project&&createDialogEpoch===epoch&&selectedProject===project&&selectionGeneration===generation&&$('create-dialog').open;
+  createDialogProject=project;state.optionsGeneration=generation;state.loading=true;state.available=false;
   const pendingOption=new Option('Codex','codex');pendingOption.disabled=true;
   $('create-vendor').replaceChildren(pendingOption);syncCreateControls();
   if(!$('create-dialog').open)$('create-dialog').showModal();
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
-  try{const data=await api(queryPath('/api/session-create-options',{project}),undefined,controller.signal,()=>auth===chatAuthGeneration);if(auth!==chatAuthGeneration||createDialogProject!==project)return;
+  try{const data=await api(queryPath('/api/session-create-options',{project}),undefined,controller.signal,current);if(!current())return;
     if(!validCreateOptions(data,project))throw new Error();
     state.available=data.options[0].available;const option=new Option('Codex','codex');option.disabled=!state.available;$('create-vendor').replaceChildren(option);
     if(!state.operation)state.message=state.available?'':'Создание пока недоступно.';
-  }catch(_){if(auth===chatAuthGeneration&&createDialogProject===project){state.available=false;$('create-vendor').replaceChildren(new Option('Вендор недоступен',''));if(!state.operation)state.message='Создание пока недоступно.';}}
-  finally{clearTimeout(timer);state.loading=false;if(auth===chatAuthGeneration&&createDialogProject===project){syncCreateControls();if(!$('create-dialog').open)$('create-dialog').showModal();}}
+  }catch(_){if(current()){state.available=false;$('create-vendor').replaceChildren(new Option('Вендор недоступен',''));if(!state.operation)state.message='Создание пока недоступно.';}}
+  finally{clearTimeout(timer);if(current()){state.loading=false;syncCreateControls();}}
 }
 function validCreateResult(data,operation){
   if(!data||data.operation_id!==operation.operation_id)return false;
@@ -357,7 +359,7 @@ function confirmCreate(state,data,generation){
 }
 async function submitCreate(event){
   event.preventDefault();const project=createDialogProject,state=project&&creates.get(project);
-  if(!state||state.inFlight||state.operation||!state.available||project!==selectedProject||$('create-vendor').value!=='codex')return;
+  if(!state||state.inFlight||state.operation||!state.available||project!==selectedProject||state.optionsGeneration!==selectionGeneration||$('create-vendor').value!=='codex')return;
   state.operation=Object.freeze({project,operation_id:crypto.randomUUID(),context_mode:'configured',provider_id:'codex'});
   state.generation=selectionGeneration;state.auth=chatAuthGeneration;state.inFlight=true;state.status='sending';state.message='Создаём сессию…';syncCreateControls();
   try{let data;try{data=await api('/api/session-create',state.operation,undefined,()=>state.auth===chatAuthGeneration);}catch(err){if(err.data?.status==='delivery_unknown')data=err.data;else if(['invalid_request','forbidden','stale'].includes(err.code)){if(state.auth===chatAuthGeneration){state.operation=null;state.status='refused';state.message='Создание отклонено. Обновите параметры перед новой попыткой.';}return;}else throw err;}
