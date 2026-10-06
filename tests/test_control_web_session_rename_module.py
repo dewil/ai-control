@@ -206,6 +206,20 @@ class SessionRenameModule(unittest.TestCase):
         self.assertEqual(result, {"operation_id": OP, "status": "accepted", "title": "Private title"})
         self.assertEqual(self.rpc.calls.count(("thread/name/set", {"threadId": SID, "name": "Private title"})), 1)
 
+
+    def test_accepted_exact_replay_returns_fresh_native_title_without_second_set(self):
+        first = self.invoke("Requested title")
+        self.assertEqual(first, {"operation_id": OP, "status": "accepted", "title": "Requested title"})
+        set_count = len(self.fenced("thread/name/set"))
+        record_path = self.receipt_file()
+        before_record = json.loads(record_path.read_text(encoding="utf-8"))
+        self.rpc.name = "Renamed elsewhere"
+        replay = self.invoke("Requested title")
+        self.assertEqual(replay, {"operation_id": OP, "status": "accepted", "title": "Renamed elsewhere"})
+        self.assertEqual(len(self.fenced("thread/name/set")), set_count)
+        after_record = json.loads(record_path.read_text(encoding="utf-8"))
+        self.assertEqual(after_record, before_record, "accepted replay must not rewrite its terminal receipt")
+
     def test_ack_without_raw_name_proof_is_unknown_and_preview_never_confirms(self):
         self.rpc.set_updates_name, self.rpc.preview = False, "Wanted title"
         self.assertEqual(self.invoke("Wanted title"), {"operation_id": OP, "status": "delivery_unknown"})
