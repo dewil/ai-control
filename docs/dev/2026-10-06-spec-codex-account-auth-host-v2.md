@@ -347,8 +347,15 @@ placed in Delivery/context, or included in exceptions/metrics.
   web input cannot construct a trusted callback.
 - `LoginReceipt(channel,request_id,response_id,result_type)` and
   `WriteReceipt(channel,request_id,frame_length,accepted_length)` are opaque typed
-  transport results. A login receipt is valid only for the captured channel, exact
-  JSON-RPC request id, matching response id, and result type `chatgptAuthTokens`.
+  transport results. For `account/login/start`, the trusted transport allocates a fresh
+  canonical UUIDv4 string request id immediately before writing the JSON-RPC frame,
+  records that id in the sent request, and correlates only the response with that exact
+  id on the captured channel/generation. A login receipt is valid only for that channel,
+  canonical request id, matching sent/response ids, and result type `chatgptAuthTokens`;
+  the validator checks all four fields and does not infer an id from auth params. A
+  duplicate, late, malformed, mismatched-id, or wrong-channel/generation response is
+  not a known login outcome and poisons the selected account after enqueue. The test fake
+  records its generated id and constructs the receipt from that record.
   A write receipt is valid only for that channel and callback request id, with a
   positive bounded frame length and `accepted_length==frame_length`. The trusted
   writer returns it only after the entire exact frame is accepted by the pinned
@@ -388,8 +395,10 @@ Transport exposes `capture(ctx,*,validator_id,deadline)->OwnedChannel`,
 `validate_current(channel,ctx,*,deadline)`, `validate_callback(callback,channel,*,deadline)`,
 `login(channel,payload,*,guard,deadline)->LoginReceipt`, and
 `write_refresh(channel,callback,*,guard,deadline)->WriteReceipt`. The login payload
-and exact positive JSON-RPC result are fixed above; refresh writes only the captured
-callback response, on the same channel and request id. None of the injected protocols
+and exact positive JSON-RPC result are fixed above; `login` generates and records its
+own UUIDv4 request id in the JSON-RPC frame and returns the correlated id in the
+receipt. Refresh writes only the captured callback response, on the same channel and
+request id. None of the injected protocols
 accept caller-supplied endpoint/path/token-verification switches.
 
 Duplicate capture for one live channel/request returns the same callback capability;
