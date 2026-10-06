@@ -37,10 +37,11 @@ def _text(value, pattern):
 
 
 def _keys(value, keys):
-    return type(value) is dict and value.keys() == set(keys.split())
+    return (type(value) is dict and all(type(key) is str for key in value)
+            and value.keys() == set(keys.split()))
 
 
-@dataclass(frozen=True, repr=False, init=False)
+@dataclass(frozen=True, repr=False, init=False, slots=True)
 class AuthScope:
     _reference: object
     _principal: object
@@ -48,7 +49,7 @@ class AuthScope:
     def __init__(self, reference, principal):
         _require(_keys(reference, 'schema provider_id account_id profile_instance_id adapter_revision registration_snapshot'))
         _require(type(reference['schema']) is int and reference['schema'] == 2)
-        _require(reference['provider_id'] == 'codex' and type(reference['provider_id']) is str)
+        _require(type(reference['provider_id']) is str and reference['provider_id'] == 'codex')
         _require(_text(reference['account_id'], r'[a-z][a-z0-9_-]{0,63}'))
         instance = reference['profile_instance_id']
         _require(_text(instance, r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'))
@@ -70,6 +71,29 @@ class AuthScope:
         object.__setattr__(self, '_principal', MappingProxyType(dict(principal)))
 
 
+def _snapshot(scope):
+    """Validate and independently capture values, never retaining caller aliases."""
+    _require(type(scope) is AuthScope)
+    try:
+        _require(type(scope._reference) is MappingProxyType
+                 and type(scope._principal) is MappingProxyType)
+        _require(all(type(key) is str for key in scope._reference)
+                 and all(type(key) is str for key in scope._principal))
+        reference = dict(scope._reference)
+        nested = reference['registration_snapshot']
+        _require(type(nested) is MappingProxyType
+                 and all(type(key) is str for key in nested))
+        reference['registration_snapshot'] = dict(nested)
+        validated = AuthScope(reference, dict(scope._principal))
+    except Exception:
+        raise AuthError('authority_stale') from None
+    ref = validated._reference
+    return (ref['schema'], ref['provider_id'], ref['account_id'],
+            ref['profile_instance_id'], ref['adapter_revision'],
+            tuple(sorted(ref['registration_snapshot'].items())),
+            tuple(sorted(validated._principal.items())))
+
+
 class AuthorityLease:
     __slots__ = ()
 
@@ -82,7 +106,7 @@ class AuthorityStamp:
 
 class _Account:
     def __init__(self, scope):
-        self.scope = scope
+        self.scope = _snapshot(scope)
         self.refresh = threading.Lock()
         self.state = threading.RLock()
         self.owner_generation = 1
@@ -136,9 +160,11 @@ class AuthCoordinator:
         _require(type(deadline) in (int, float))
         try:
             _require(math.isfinite(deadline))
-            remaining = deadline - self._clock()
+            now = self._clock()
+            _require(type(now) in (int, float) and math.isfinite(now))
+            remaining = deadline - now
             _require(math.isfinite(remaining) and remaining > 0)
-        except (OverflowError, TypeError):
+        except Exception:
             raise AuthError('authority_stale') from None
         return remaining
 
@@ -161,13 +187,15 @@ class AuthCoordinator:
             account.state.release()
 
     def _live(self, record, scope):
-        _require(type(scope) is AuthScope and record.active)
-        _require(not record.account.quarantined and record.account.scope == scope)
+        captured = _snapshot(scope)
+        _require(record.active and not record.account.quarantined
+                 and record.account.scope == captured)
 
     def open(self, scope, *, deadline):
         self._remaining(deadline)
         _require(type(scope) is AuthScope)
-        key = (scope._reference['provider_id'], scope._reference['account_id'])
+        captured = _snapshot(scope)
+        key = (captured[1], captured[2])
         with self._registry_lock:
             account = self._accounts.get(key)
             if account is None:
@@ -177,7 +205,7 @@ class AuthCoordinator:
             raise AuthError('refresh_busy')
         try:
             with self._state(account, deadline):
-                _require(account.scope == scope and not account.quarantined)
+                _require(account.scope == _snapshot(scope) and not account.quarantined)
                 lease = AuthorityLease()
                 with self._registry_lock:
                     self._leases[lease] = _LeaseRecord(account, threading.current_thread())
@@ -212,8 +240,8 @@ class AuthCoordinator:
         with self._state(record.account, deadline):
             self._live(record, scope)
             guard = _DeliveryGuard(self)
-            entry = self._clock()
-            self._remaining(deadline)
+            entry = deadline - self._remaining(deadline)
+            self._live(record, scope)
             detail = _GuardRecord(lease, scope, deadline, min(deadline, entry + 1),
                                   record.account.owner_generation)
             with self._registry_lock:
@@ -233,10 +261,14 @@ class AuthCoordinator:
             detail = self._guards.get(guard)
         _require(detail is not None and detail.active)
         record = self._lease(detail.lease)
+        self._remaining(detail.window)
+        self._guard_live(detail, record)
+        return detail, record
+
+    def _guard_live(self, detail, record):
+        _require(detail.active)
         self._live(record, detail.scope)
         _require(record.account.owner_generation == detail.generation)
-        self._remaining(detail.window)
-        return detail, record
 
     def _mark(self, guard, stage):
         detail, _ = self._guard(guard)
@@ -254,6 +286,8 @@ class AuthCoordinator:
         self._remaining(deadline)
         _require(deadline <= detail.caller_deadline)
         self._remaining(min(deadline, detail.window))
+        self._guard_live(detail, record)
+        _require(not detail.published)
         record.account.credential_generation += 1
         detail.published = True
         return AuthorityStamp(record.account.owner_generation, record.account.credential_generation)
