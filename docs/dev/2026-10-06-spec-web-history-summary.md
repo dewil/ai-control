@@ -73,3 +73,15 @@ scan scenarios below. Receipt recovery full assertions unchanged.
 After fix scoped history/receipts/context/socket/broker/browser regressions,
 actual independent SOURCE review, exact full CI, reviewed deploy +readonly installed
 same-thread proof. No multiaccount work. Initial summary tests/spec not codeGO.
+
+## Additional synthetic fixture migration after full CI
+
+Only three existing files still encode the old history transport and require
+mechanical adaptation to this already accepted norm:
+`test_control_web_compact_chat_contract.py` (metadata notLoaded + per-turn items),
+`test_control_web_message_times_contract.py` (same synthetic turn/item data via
+per-turn paging and readonly method allowlist), and
+`test_control_web_configured_create_module.py` (exact InteractiveRPC METHODS adds
+only readonly thread/items/list). Preserve every existing projection count/order,
+root proof/cursor/value/timestamp boundary/negative assertion. No time semantic,
+writer allowlist, frame/deadline or send_status full-call expectation changes.
