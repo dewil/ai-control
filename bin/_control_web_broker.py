@@ -26,6 +26,9 @@ SESSION_FIELDS = {
     'session_send_status': {'op', 'project', 'sid', 'message_id'},
     'session_rename': {'op', 'project', 'sid', 'operation_id', 'title'},
     'session_rename_status': {'op', 'project', 'sid', 'operation_id'},
+    'session_create_options': {'op', 'project'},
+    'session_create': {'op', 'project', 'operation_id', 'context_mode', 'provider_id'},
+    'session_create_status': {'op', 'project', 'operation_id', 'context_mode', 'provider_id'},
 }
 
 
@@ -49,6 +52,9 @@ def _valid_session(request):
         return False
     if 'cursor' in request and request['cursor'] is not None and (
             type(request['cursor']) is not str or not 0 < len(request['cursor']) <= 4096):
+        return False
+    if 'context_mode' in request and (request['context_mode'] != 'configured'
+                                      or request['provider_id'] != 'codex'):
         return False
     if 'title' in request and not valid_rename_title(request['title']):
         return False
@@ -82,6 +88,82 @@ def rename_result(result, operation_id):
         except UnicodeError:
             return {'error': 'unavailable'}
         safe['title'] = redact(title)[:500]
+    return safe
+
+
+def configured_create_result(result, project, operation_id=None):
+    """Exact public DTO gate; no private object is projected by dropping fields."""
+    failure = {'error': 'unavailable'}
+    if type(result) is not dict:
+        return failure
+    if 'error' in result:
+        code = result['error']
+        return {'error': code if set(result) == {'error'} and code in
+                ('invalid_request', 'forbidden', 'stale') else 'unavailable'}
+    if operation_id is None:
+        if (set(result) != {'schema', 'project', 'options'} or type(result['schema']) is not int
+                or result['schema'] != 1 or result['project'] != project
+                or type(result['options']) is not list or len(result['options']) != 1):
+            return failure
+        row = result['options'][0]
+        if (type(row) is not dict or set(row) != {'context_mode', 'provider_id', 'available', 'reason'}
+                or row['context_mode'] != 'configured' or row['provider_id'] != 'codex'
+                or type(row['available']) is not bool
+                or row['reason'] != (None if row['available'] else 'unavailable')):
+            return failure
+        return dict(schema=1, project=project, options=[dict(row)])
+    if result.get('operation_id') != operation_id:
+        return failure
+    if result.get('status') == 'delivery_unknown':
+        return dict(result) if set(result) == {'operation_id', 'status'} else failure
+    if set(result) != {'operation_id', 'status', 'session'} or result['status'] != 'accepted':
+        return failure
+    session = result['session']
+    if (type(session) is not dict or set(session) != {'sid', 'project', 'vendor', 'context_mode', 'title'}
+            or not valid_qid(session['sid']) or session['project'] != project
+            or session['vendor'] != 'codex' or session['context_mode'] != 'configured'
+            or session['title'] is not None and (type(session['title']) is not str or len(session['title']) > 500)):
+        return failure
+    title = session['title']
+    if title is not None:
+        try:
+            title.encode('utf-8')
+        except UnicodeError:
+            return failure
+        title = redact(title)[:500]
+    return dict(operation_id=operation_id, status='accepted', session=dict(session, title=title))
+
+
+def history_result(result):
+    """Validate the honest unavailable variant, leaving ordinary history unchanged."""
+    if type(result) is not dict:
+        return {'error': 'unavailable'}
+    if 'history_state' not in result:
+        return result
+    if (set(result) not in ({'history_state', 'reason', 'recent_sends'},
+                           {'history_state', 'reason', 'recent_sends', 'needs_native_attention'})
+            or result['history_state'] != 'unavailable' or result['reason'] != 'unavailable'
+            or 'needs_native_attention' in result and result['needs_native_attention'] is not True
+            or type(result['recent_sends']) is not list or len(result['recent_sends']) > 8):
+        return {'error': 'unavailable'}
+    recent = []
+    for row in result['recent_sends']:
+        if (type(row) is not dict or set(row) != {'status', 'message_id', 'turn_id'}
+                or not valid_qid(row['message_id'])
+                or row['status'] not in ('accepted', 'delivery_unknown')
+                or row['status'] == 'delivery_unknown' and row['turn_id'] is not None
+                or row['status'] == 'accepted' and
+                   (type(row['turn_id']) is not str or not 0 < len(row['turn_id']) <= 500)):
+            return {'error': 'unavailable'}
+        recent.append(dict(row))
+    safe = dict(history_state='unavailable', reason='unavailable', recent_sends=recent)
+    if result.get('needs_native_attention') is True:
+        safe['needs_native_attention'] = True
+    try:
+        if len(json.dumps(safe, ensure_ascii=False, allow_nan=False).encode('utf-8')) > 96 * 1024:
+            return {'error': 'unavailable'}
+    except (ValueError, UnicodeError):
+        return {'error': 'unavailable'}
     return safe
 
 
@@ -202,15 +284,28 @@ def _field(doc, key, default=''):
 
 
 class RegistryBackend:
-    def __init__(self, registry, bin_dir, runner=None, sessions=None):
+    def __init__(self, registry, bin_dir, runner=None, sessions=None, configured_creator=None):
         self.registry = os.path.abspath(registry)
         self.bin_dir = os.path.abspath(bin_dir)
         self.runner = runner or subprocess.run
         self.sessions = sessions
+        self.configured_creator = configured_creator
 
     def _session(self, request):
         if not _valid_session(request):
             return {'error': 'invalid_request'}
+        if request['op'] in ('session_create_options', 'session_create', 'session_create_status'):
+            if self.configured_creator is None:
+                return {'error': 'unavailable'}
+            try:
+                method = {'session_create_options': 'options', 'session_create': 'create',
+                          'session_create_status': 'status'}[request['op']]
+                args = (request['project'],) if method == 'options' else (
+                    request['project'], request['operation_id'], request['context_mode'], request['provider_id'])
+                result = getattr(self.configured_creator, method)(*args)
+            except Exception as exc:
+                result = {'error': getattr(exc, 'code', 'unavailable')}
+            return configured_create_result(result, request['project'], request.get('operation_id'))
         if self.sessions is None:
             return {'error': 'unavailable'}
         try:
@@ -233,6 +328,8 @@ class RegistryBackend:
                 result = self.sessions.rename_status(request['project'], request['sid'], request['operation_id'])
             else:
                 result = self.sessions.send_status(request['project'], request['sid'], request['message_id'])
+            if op == 'session_history':
+                return history_result(result)
             if op in ('session_rename', 'session_rename_status'):
                 return rename_result(result, request['operation_id'])
             return result if type(result) is dict else {'error': 'unavailable'}
@@ -259,6 +356,17 @@ class RegistryBackend:
 
     def session_send_status(self, project, sid, message_id):
         return self._session(dict(op='session_send_status', project=project, sid=sid, message_id=message_id))
+
+    def session_create_options(self, project):
+        return self._session(dict(op='session_create_options', project=project))
+
+    def session_create(self, project, operation_id, context_mode, provider_id):
+        return self._session(dict(op='session_create', project=project, operation_id=operation_id,
+                                  context_mode=context_mode, provider_id=provider_id))
+
+    def session_create_status(self, project, operation_id, context_mode, provider_id):
+        return self._session(dict(op='session_create_status', project=project, operation_id=operation_id,
+                                  context_mode=context_mode, provider_id=provider_id))
 
     def session_rename(self, project, sid, operation_id, title):
         return self._session(dict(op='session_rename', project=project, sid=sid, operation_id=operation_id, title=title))
@@ -544,12 +652,22 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = backend.session_models(request['project'], request['sid'])
                     elif op == 'session_send':
                         result = _forward_send(backend.session_send, request)
+                    elif op == 'session_create_options':
+                        result = backend.session_create_options(request['project'])
+                    elif op == 'session_create':
+                        result = backend.session_create(request['project'], request['operation_id'], request['context_mode'], request['provider_id'])
+                    elif op == 'session_create_status':
+                        result = backend.session_create_status(request['project'], request['operation_id'], request['context_mode'], request['provider_id'])
                     elif op == 'session_rename':
                         result = backend.session_rename(request['project'], request['sid'], request['operation_id'], request['title'])
                     elif op == 'session_rename_status':
                         result = backend.session_rename_status(request['project'], request['sid'], request['operation_id'])
                     else:
                         result = backend.session_send_status(request['project'], request['sid'], request['message_id'])
+                    if op in ('session_create_options', 'session_create', 'session_create_status'):
+                        result = configured_create_result(result, request['project'], request.get('operation_id'))
+                    elif op == 'session_history':
+                        result = history_result(result)
                     if op in ('session_rename', 'session_rename_status'):
                         result = rename_result(result, request['operation_id'])
                     reply(conn, result)
@@ -644,7 +762,14 @@ class SocketBackend:
         return self._call(dict(op='verdict', agent=agent, generation=generation, decision=decision, comment=comment))
 
     def _session(self, request):
-        return self._call(request) if _valid_session(request) else {'error': 'invalid_request'}
+        if not _valid_session(request):
+            return {'error': 'invalid_request'}
+        result = self._call(request)
+        if request['op'] in ('session_create_options', 'session_create', 'session_create_status'):
+            return configured_create_result(result, request['project'], request.get('operation_id'))
+        if request['op'] == 'session_history':
+            return history_result(result)
+        return result
 
     def session_projects(self):
         return self._session({'op': 'session_projects'})
@@ -666,6 +791,17 @@ class SocketBackend:
 
     def session_send_status(self, project, sid, message_id):
         return self._session(dict(op='session_send_status', project=project, sid=sid, message_id=message_id))
+
+    def session_create_options(self, project):
+        return self._session(dict(op='session_create_options', project=project))
+
+    def session_create(self, project, operation_id, context_mode, provider_id):
+        return self._session(dict(op='session_create', project=project, operation_id=operation_id,
+                                  context_mode=context_mode, provider_id=provider_id))
+
+    def session_create_status(self, project, operation_id, context_mode, provider_id):
+        return self._session(dict(op='session_create_status', project=project, operation_id=operation_id,
+                                  context_mode=context_mode, provider_id=provider_id))
 
     def session_rename(self, project, sid, operation_id, title):
         return self._session(dict(op='session_rename', project=project, sid=sid, operation_id=operation_id, title=title))

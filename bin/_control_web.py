@@ -154,7 +154,7 @@ def create_app(config, backend, clock=None):
             if lock_fd is not None:
                 os.close(lock_fd)
 
-    async def body(request):
+    async def body(request, limit=128 * 1024, strict=False):
         def unique_object(pairs):
             value = {}
             for key, item in pairs:
@@ -165,10 +165,12 @@ def create_app(config, backend, clock=None):
         try:
             data = bytearray()
             async for chunk in request.stream():
-                if len(data) + len(chunk) > 128 * 1024:
+                if len(data) + len(chunk) > limit:
                     return None
                 data.extend(chunk)
-            value = json.loads(data, object_pairs_hook=unique_object)
+            value = (json.loads(data.decode('utf-8'), object_pairs_hook=unique_object,
+                                parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+                     if strict else json.loads(data, object_pairs_hook=unique_object))
             return value if type(value) is dict else None
         except (ValueError, UnicodeError):
             return None
@@ -358,7 +360,8 @@ def create_app(config, backend, clock=None):
 
     @app.get('/api/session-history')
     async def session_history(request: Request):
-        return await chat_read(request, ('project', 'sid'), ('cursor',), lambda data: backend.session_history(data['project'], data['sid'], data.get('cursor')))
+        from _control_web_broker import history_result
+        return await chat_read(request, ('project', 'sid'), ('cursor',), lambda data: history_result(backend.session_history(data['project'], data['sid'], data.get('cursor'))))
 
     @app.get('/api/session-models')
     async def session_models(request: Request):
@@ -367,6 +370,57 @@ def create_app(config, backend, clock=None):
     @app.get('/api/session-send-status')
     async def session_send_status(request: Request):
         return await chat_read(request, ('project', 'sid', 'message_id'), (), lambda data: backend.session_send_status(data['project'], data['sid'], data['message_id']))
+
+    def create_response(call, project, operation_id=None, sending=False):
+        from _control_web_broker import configured_create_result
+        try:
+            result = configured_create_result(call(), project, operation_id)
+        except Exception:
+            return error('unavailable', 503)
+        if 'error' in result:
+            code = result['error']
+            return error(code, {'invalid_request': 422, 'forbidden': 403, 'stale': 409}.get(code, 503))
+        return JSONResponse(result, status_code=503 if sending and
+                            result.get('status') == 'delivery_unknown' else 200)
+
+    async def create_read(request, status=False):
+        _, failure = session(request)
+        if failure:
+            return failure
+        supplied_origin = request.headers.get('origin')
+        if supplied_origin is not None and supplied_origin != origin:
+            return error('forbidden', 403)
+        if len(request.scope.get('query_string', b'')) > 4096:
+            return error('invalid_request', 422)
+        fields = ('project', 'operation_id', 'context_mode', 'provider_id') if status else ('project',)
+        data = chat_query(request, fields)
+        if data is None or status and (data['context_mode'] != 'configured' or data['provider_id'] != 'codex'):
+            return error('invalid_request', 422)
+        call = (lambda: backend.session_create_status(data['project'], data['operation_id'],
+                data['context_mode'], data['provider_id'])) if status else (
+                lambda: backend.session_create_options(data['project']))
+        return await run_in_threadpool(create_response, call, data['project'], data.get('operation_id'))
+
+    @app.get('/api/session-create-options')
+    async def session_create_options(request: Request):
+        return await create_read(request)
+
+    @app.get('/api/session-create-status')
+    async def session_create_status(request: Request):
+        return await create_read(request, True)
+
+    @app.post('/api/session-create')
+    async def session_create(request: Request):
+        _, failure = session(request, True)
+        if failure:
+            return failure
+        data = await body(request, limit=4096, strict=True)
+        from _control_web_broker import _valid_session
+        if data is None or not _valid_session(dict(data, op='session_create')) or 'op' in data:
+            return error('invalid_request', 422)
+        return await run_in_threadpool(create_response,
+            lambda: backend.session_create(data['project'], data['operation_id'],
+                data['context_mode'], data['provider_id']), data['project'], data['operation_id'], True)
 
     def rename_response(call, operation_id, sending=False):
         from _control_web_broker import rename_result
