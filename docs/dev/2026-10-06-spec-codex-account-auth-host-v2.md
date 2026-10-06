@@ -1046,3 +1046,47 @@ both source-effect claim winner orderings; full context/channel alias drift befo
 current I/O and during OAuth; callback ID/params/time mutation; a borrowed real
 Delivery stamp; original OAuth deadline alias renewal; and malformed negative envelopes. Original 48 tests and accepted
 parser/legacy suites stay unchanged. No production capability is established.
+## Callback capture concurrency and caller-budget clarification
+
+The callback key is the original channel identity/generation and request-ID type
+and value. Selecting or reserving that key is one atomic local map operation.
+Deadline preflight may invoke an injected clock before selection; selection must
+re-read the map after that preflight. Never carry a previously absent/existing map
+result across an injected callback and then overwrite a newer record.
+
+Once selected as a new pending identity, reserve it before external current/source
+validation or reader capture. Exactly one worker may capture that identity. A
+same-key call while the original worker is pending may fail `refresh_busy` without
+reader capture, OAuth, reserve or native write. This refusal does not invalidate
+the original worker. A nested call completed before the outer worker selected the
+key is instead an existing accepted capture; the outer returns that SAME capability
+after required baseline/current checks. Completed valid duplicates retain the
+same capability and cached refresh outcome. A rejected original reader capability
+remains a permanent closed failure, including for an alias retained by the reader.
+
+Only local registry selection, identity and state transitions run under the
+callback-map mutex. No injected clock, `_current`, source/transport validation,
+reader call or other I/O runs while holding it. Acquisition of this mutex shares
+the caller absolute deadline; a contended acquisition that exhausts its remaining
+budget returns `refresh_busy` before new effects. Record finalization must preserve
+once-only success/failure without waiting behind another external reader. No step
+renews the original callback receipt window or caller budget.
+
+If the original worker cannot finalize before its original absolute deadline,
+the reserved key remains permanently non-accepted. It may retain a pending
+sentinel; never delete it, recapture its reader, promote it on a later caller's
+budget, or refresh a reader-retained alias. The original finalization refusal is
+`refresh_busy` for exhausted map acquisition; duplicates of this never-finalized
+identity remain `refresh_busy`, with zero effects. Only the original worker may
+publish acceptance, once and within its original budget. A normal finalized
+reader rejection preserves its original closed error. A duplicate encountering
+a still-live pending worker is merely busy and does not invalidate that worker.
+No deadline-expired worker gets an additional finalization wait or a retry.
+
+A different callback key or an already accepted callback may make progress while
+another reader is pending. It may succeed with its one normal bounded operation,
+or refuse within its own budget; this clarification does not add a validator-wide
+authentication exclusion. Existing account refresh serialization still applies.
+Original snapshots, pending/accepted/error states and map association must be
+rechecked at transitions; a fabricated second typed reader object cannot establish
+a second refresh/write for the same key.
