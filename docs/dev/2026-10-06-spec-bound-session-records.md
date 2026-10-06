@@ -48,7 +48,8 @@ V2 context_ref exact schema2, provider codex, account `[a-z][a-z0-9_-]{0,63}`,
 canonical lowercase UUIDv4 profile_instance_id, adapter_revision
 `codex-chatgpt-external-auth-host-v2`, registration_snapshot exact dev>=0, ino>0,
 ctime_ns>0 plain ints, sha256 lowercase64hex; no credential commitments.
-Project uses the same account-ID grammar for this explicit bound slice. Root plain
+Project uses existing configured-project grammar `[a-zA-Z0-9_-]{1,32}`
+(case-sensitive, including capitalized/numeric-leading names). Root plain
 absolute POSIX lexical path, UTF8<=4096, no C0/C1/surrogates, no repeated separators,
 dot/dotdot segments or trailing slash except `/`. This is lexical validation only;
 real canonical registered path and symlink/anchor proof are store/resolver duties.
