@@ -1,4 +1,8 @@
 """Narrow owner-side task interface. Never returns raw registry documents."""
+from collections import namedtuple
+from types import MappingProxyType
+import math
+import selectors
 import hashlib
 import json
 import os
@@ -281,6 +285,669 @@ def _field(doc, key, default=''):
     if not valid_text(value):
         raise ValueError('invalid field')
     return value
+
+
+# All reader helpers debit the same capture budget, including fences and parsing.
+_ProjectCapture = namedtuple('_ProjectCapture', 'epoch revision identity entries')
+_GrantCapture = namedtuple('_GrantCapture', 'principal owner_only epoch revision projects')
+
+
+class _AttentionLimit(ValueError):
+    pass
+
+
+class _AttentionBinding(ValueError):
+    pass
+
+
+def _attention_digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
+        ensure_ascii=False, allow_nan=False).encode('utf-8')).hexdigest()
+
+
+def _attention_text(value, limit):
+    return (type(value) is str and 0 < len(value) <= limit
+            and not any(ord(c) < 32 or 127 <= ord(c) <= 159 or 0xD800 <= ord(c) <= 0xDFFF for c in value))
+
+
+def _attention_root(value):
+    return (_attention_text(value, 4096) and value.startswith('/') and
+            (value == '/' or not value.endswith('/') and
+             all(p not in ('', '.', '..') for p in value[1:].split('/'))))
+
+
+class _AttentionBudget:
+    def __init__(self, deadline, monotonic):
+        self.deadline, self.monotonic, self.bytes = deadline, monotonic, 0
+        self.check()
+
+    def check(self):
+        now = self.monotonic()
+        if (type(self.deadline) not in (int, float) or not math.isfinite(self.deadline)
+                or type(now) not in (int, float) or not math.isfinite(now)
+                or now >= self.deadline):
+            raise _AttentionLimit('limit')
+        return self.deadline - now
+
+    def consume(self, amount):
+        self.check()
+        self.bytes += amount
+        if self.bytes > 16 * 1024 * 1024:
+            raise _AttentionLimit('limit')
+
+
+def _attention_metadata(info, directory=False):
+    if ((not stat.S_ISDIR(info.st_mode) if directory else not stat.S_ISREG(info.st_mode))
+            or info.st_uid != os.getuid() or info.st_mode & 0o022):
+        raise ValueError('invalid metadata')
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _attention_directory(path, parent=None):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    try:
+        _attention_metadata(os.fstat(fd), True)
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _attention_anchor(fd, path, parent=None):
+    held = os.fstat(fd)
+    current = os.stat(path, dir_fd=parent, follow_symlinks=False)
+    _attention_metadata(held, True)
+    _attention_metadata(current, True)
+    if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino):
+        raise _AttentionBinding('binding incomplete')
+
+
+def _attention_bytes(parent, name, budget, optional=False):
+    budget.check()
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    except FileNotFoundError:
+        if optional:
+            return None
+        raise
+    try:
+        before = _attention_metadata(os.fstat(fd))
+        data = bytearray()
+        while len(data) <= 65536:
+            block = os.read(fd, min(8192, 65537 - len(data)))
+            budget.consume(len(block))
+            if not block:
+                break
+            data.extend(block)
+        if len(data) > 65536:
+            raise _AttentionLimit('limit')
+        after = _attention_metadata(os.fstat(fd))
+        bound = _attention_metadata(os.stat(name, dir_fd=parent, follow_symlinks=False))
+        if before != after or after != bound:
+            raise _AttentionBinding('binding incomplete')
+        return bytes(data), before
+    finally:
+        os.close(fd)
+
+
+def _attention_json(data):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError('duplicate field')
+            result[key] = value
+        return result
+    def constant(value):
+        raise ValueError('nonfinite value')
+    def floating(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError('nonfinite value')
+        return result
+    return json.loads(data.decode('utf-8'), object_pairs_hook=pairs,
+                      parse_constant=constant, parse_float=floating)
+
+
+def _attention_yaml_runner(argv, *, input, capture_output, text, shell, timeout):
+    """Fixed yq over pipes: bound both output streams before materializing them."""
+    expires = time.monotonic() + timeout
+    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, shell=False)
+    streams = (proc.stdin, proc.stdout, proc.stderr)
+    outgoing, offset = input.encode('utf-8'), 0
+    stdout, stderr = bytearray(), bytearray()
+    try:
+        with selectors.DefaultSelector() as poll:
+            for stream in streams:
+                os.set_blocking(stream.fileno(), False)
+            poll.register(proc.stdin, selectors.EVENT_WRITE, None)
+            poll.register(proc.stdout, selectors.EVENT_READ, stdout)
+            poll.register(proc.stderr, selectors.EVENT_READ, stderr)
+            while poll.get_map():
+                remaining = expires - time.monotonic()
+                if remaining <= 0:
+                    raise _AttentionLimit('limit')
+                for key, _ in poll.select(remaining):
+                    stream, buffer = key.fileobj, key.data
+                    if buffer is None:
+                        if offset < len(outgoing):
+                            try:
+                                offset += os.write(stream.fileno(), outgoing[offset:offset + 4096])
+                            except BrokenPipeError:
+                                offset = len(outgoing)
+                        if offset == len(outgoing):
+                            poll.unregister(stream)
+                            stream.close()
+                    else:
+                        block = os.read(stream.fileno(), 8192)
+                        if not block:
+                            poll.unregister(stream)
+                            stream.close()
+                        else:
+                            buffer.extend(block)
+                            if len(buffer) > 65536:
+                                raise _AttentionLimit('limit')
+            remaining = expires - time.monotonic()
+            if remaining <= 0:
+                raise _AttentionLimit('limit')
+            proc.wait(timeout=remaining)
+        return subprocess.CompletedProcess(argv, proc.returncode,
+                                           stdout.decode('utf-8'), stderr.decode('utf-8'))
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        for stream in streams:
+            if not stream.closed:
+                stream.close()
+
+
+def _attention_document(raw, budget, runner, yaml=False):
+    data = raw[0]
+    try:
+        doc = _attention_json(data)
+    except json.JSONDecodeError:
+        if not yaml:
+            raise
+        budget.consume(len(data))
+        result = runner(['yq', '-p=yaml', '-o=json', '.', '-'],
+                        input=data.decode('utf-8'), capture_output=True, text=True,
+                        shell=False, timeout=budget.check())
+        budget.check()
+        if result.returncode != 0 or len(result.stdout.encode('utf-8')) > 65536:
+            raise ValueError('invalid document')
+        budget.consume(len(result.stdout.encode('utf-8')))
+        doc = _attention_json(result.stdout.encode('utf-8'))
+    if type(doc) is not dict:
+        raise ValueError('invalid document')
+    return doc
+
+
+class OwnerProjectMap:
+    def __init__(self, config_path, *, runner=None, monotonic=None):
+        self.path = os.path.abspath(config_path)
+        self.runner = runner or _attention_yaml_runner
+        self.monotonic = monotonic or time.monotonic
+        self._anchors, self._config_fd, self._capture = [], None, None
+        self._incarnation, self._epoch, self._revision, self._identity = None, None, 0, None
+        self._entries_identity = None
+        self._budget, self._closed = None, False
+
+    def _release(self):
+        for _, fd in self._anchors:
+            os.close(fd)
+        self._anchors = []
+        if self._config_fd is not None:
+            os.close(self._config_fd)
+            self._config_fd = None
+        self._capture = None
+
+    def close(self):
+        self._release()
+        self._closed = True
+
+    def capture(self, *, deadline):
+        return self._capture_budget(_AttentionBudget(deadline, self.monotonic))
+
+    def _capture_budget(self, budget):
+        if self._closed:
+            raise RuntimeError('unavailable')
+        self._release()
+        self._budget = budget
+        try:
+            raw = _attention_bytes(None, self.path, budget)
+            self._config_fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            if _attention_metadata(os.fstat(self._config_fd)) != raw[1]:
+                raise _AttentionBinding()
+            doc = _attention_document(raw, budget, self.runner, True)
+            if len(doc) > 1000:
+                raise _AttentionLimit()
+            entries = []
+            for alias, item in sorted(doc.items()):
+                budget.check()
+                if type(alias) is not str or not PROJECT.fullmatch(alias):
+                    raise ValueError('invalid project')
+                root = item.get('path') if type(item) is dict else item
+                if not _attention_root(root):
+                    raise ValueError('invalid root')
+                root = os.path.realpath(root)
+                fd = _attention_directory(root)
+                self._anchors.append((root, fd))
+                _attention_anchor(fd, root)
+                info = os.fstat(fd)
+                entries.append(MappingProxyType(dict(project=alias, root=root,
+                    root_identity=_attention_digest(dict(root=root, dev=info.st_dev, ino=info.st_ino)))))
+            identity = _attention_digest(dict(metadata=raw[1], sha256=hashlib.sha256(raw[0]).hexdigest()))
+            incarnation = raw[1][:2]
+            if incarnation != self._incarnation:
+                self._epoch, self._revision = uuid.uuid4().hex, 0
+            entries_identity = _attention_digest([dict(row) for row in entries])
+            if incarnation == self._incarnation and (identity != self._identity or entries_identity != self._entries_identity):
+                self._revision += 1
+            captured = _ProjectCapture(self._epoch, self._revision, identity, tuple(entries))
+            self._raw, self._capture = raw, captured
+            if not self.current(captured, deadline=budget.deadline):
+                raise _AttentionBinding()
+            self._incarnation, self._identity = incarnation, identity
+            self._entries_identity = entries_identity
+            return captured
+        except Exception:
+            self._release()
+            raise RuntimeError('unavailable') from None
+
+    def current(self, capture, *, deadline):
+        try:
+            budget = self._budget
+            if self._closed or capture is not self._capture or budget is None or deadline != budget.deadline:
+                return False
+            budget.check()
+            if _attention_metadata(os.fstat(self._config_fd)) != self._raw[1]:
+                return False
+            if _attention_bytes(None, self.path, budget) != self._raw:
+                return False
+            for path, fd in self._anchors:
+                budget.check()
+                _attention_anchor(fd, path)
+            return True
+        except Exception:
+            return False
+
+
+class OwnerRegisteredGrants:
+    def __init__(self, *, owner_only=True):
+        self.owner_only = owner_only
+
+    def capture(self, project_capture, *, deadline):
+        if type(deadline) not in (int, float) or not math.isfinite(deadline):
+            raise RuntimeError('unavailable')
+        return _GrantCapture('owner', self.owner_only is True, project_capture.epoch,
+                             project_capture.revision, tuple(sorted(row['project'] for row in project_capture.entries)))
+
+    def current(self, grant_capture, project_capture, *, deadline):
+        try:
+            return grant_capture == self.capture(project_capture, deadline=deadline)
+        except Exception:
+            return False
+
+
+class RegistryAttentionView:
+    def __init__(self, registry, *, projects, grants, monotonic=None):
+        self.registry = os.path.abspath(registry)
+        self.projects, self.grants = projects, grants
+        self.monotonic = monotonic or time.monotonic
+        self._active, self._root_fd, self._closed = None, None, False
+        self._root_identity, self._source_epoch = None, None
+        self._epoch, self._revision, self._signature = uuid.uuid4().hex, 0, None
+
+    def close(self):
+        self._closed, self._active = True, None
+        if self._root_fd is not None:
+            os.close(self._root_fd)
+            self._root_fd = None
+        close = getattr(self.projects, 'close', None)
+        if close:
+            close()
+
+    def snapshot(self, *, deadline):
+        self._active = None
+        try:
+            if self._closed:
+                raise ValueError()
+            budget = _AttentionBudget(deadline, self.monotonic)
+            pc = (self.projects._capture_budget(budget) if isinstance(self.projects, OwnerProjectMap)
+                  else self.projects.capture(deadline=deadline))
+            self._validate_projects(pc)
+            budget.check()
+            if self._root_fd is not None:
+                try:
+                    _attention_anchor(self._root_fd, self.registry)
+                except Exception:
+                    os.close(self._root_fd)
+                    self._root_fd = None
+            if self._root_fd is None:
+                self._root_fd = _attention_directory(self.registry)
+                self._source_epoch = uuid.uuid4().hex
+            _attention_anchor(self._root_fd, self.registry)
+            info = os.fstat(self._root_fd)
+            self._root_identity = _attention_digest(dict(kind='attention_registry',
+                root=os.path.realpath(self.registry), dev=info.st_dev, ino=info.st_ino))
+            gc = self.grants.capture(pc, deadline=deadline)
+            self._validate_grants(gc, pc)
+            if self.grants.current(gc, pc, deadline=deadline) is not True:
+                raise ValueError()
+            signature = (pc.epoch, pc.revision, pc.identity, gc.epoch, gc.revision,
+                         gc.principal, gc.owner_only, tuple(gc.projects), self._root_identity)
+            if self._signature != signature:
+                self._revision += 1
+                self._signature = signature
+            vs = dict(schema=1, principal=gc.principal, epoch=self._epoch, revision=self._revision,
+                registry_epoch=pc.epoch, registry_revision=pc.revision,
+                context_id=_attention_digest(dict(kind='attention_projection_context', epoch=self._epoch)),
+                route_id=_attention_digest(dict(kind='attention_projection_route', epoch=self._epoch)),
+                route_epoch=self._epoch, route_revision=self._revision,
+                owner_only=gc.owner_only is True and gc.principal == 'owner')
+            self._active = (pc, gc, vs, budget)
+            if not self.current(vs, deadline=deadline):
+                raise ValueError()
+            return dict(vs)
+        except Exception:
+            self._active = None
+            raise RuntimeError('unavailable') from None
+
+    @staticmethod
+    def _validate_projects(pc):
+        if (not re.fullmatch('[0-9a-f]{32}', pc.epoch) or type(pc.revision) is not int or pc.revision < 0
+                or not re.fullmatch('[0-9a-f]{64}', pc.identity) or len(pc.entries) > 1000):
+            raise ValueError()
+        seen = set()
+        for row in pc.entries:
+            if (set(row) != {'project', 'root', 'root_identity'} or type(row['project']) is not str
+                    or not PROJECT.fullmatch(row['project']) or not _attention_root(row['root'])
+                    or not re.fullmatch('[0-9a-f]{64}', row['root_identity']) or row['project'] in seen):
+                raise ValueError()
+            seen.add(row['project'])
+
+    @staticmethod
+    def _validate_grants(gc, pc):
+        if (type(gc.principal) is not str or not re.fullmatch('[a-z][a-z0-9_-]{0,31}', gc.principal)
+                or type(gc.owner_only) is not bool or not re.fullmatch('[0-9a-f]{32}', gc.epoch)
+                or type(gc.revision) is not int or gc.revision < 0
+                or tuple(gc.projects) != tuple(sorted(set(gc.projects)))
+                or any(p not in {r['project'] for r in pc.entries} for p in gc.projects)):
+            raise ValueError()
+
+    def current(self, view_snapshot, *, deadline):
+        try:
+            if self._closed or self._active is None:
+                return False
+            pc, gc, vs, budget = self._active
+            if view_snapshot != vs or deadline != budget.deadline:
+                return False
+            budget.check()
+            _attention_anchor(self._root_fd, self.registry)
+            return (self.projects.current(pc, deadline=deadline) is True
+                    and self.grants.current(gc, pc, deadline=deadline) is True)
+        except Exception:
+            return False
+
+    def resolve_project(self, project, view_snapshot, *, deadline):
+        if self._active is None or view_snapshot != self._active[2]:
+            return None
+        pc, gc, vs, budget = self._active
+        if deadline != budget.deadline:
+            return None
+        budget.check()
+        for row in pc.entries:
+            if row['project'] == project:
+                return dict(project=project, root=row['root'], registry_epoch=pc.epoch,
+                            registry_revision=pc.revision)
+        return None
+
+    def authorize(self, project_binding, view_snapshot, *, deadline):
+        if self._active is None or view_snapshot != self._active[2] or type(project_binding) is not dict:
+            return False
+        pc, gc, vs, budget = self._active
+        budget.check()
+        return (vs['owner_only'] and project_binding.get('project') in gc.projects
+                and project_binding == self.resolve_project(project_binding.get('project'), vs, deadline=deadline))
+
+
+# Equivalent read-only ai-agent-io structural rules, including private references.
+# Importing that writer pulls provider runtime helpers into the fixed web closure.
+def _attention_control(doc):
+    if (type(doc.get('schema')) is not int or doc['schema'] != 1
+            or type(doc.get('seq')) is not int or doc['seq'] < 0
+            or type(doc.get('generation')) is not int or doc['generation'] < 0
+            or type(doc.get('incarnation')) is not str or not re.fullmatch('[0-9a-f]{32}', doc['incarnation'])
+            or doc.get('desired') not in ('running', 'paused', 'stopped')
+            or type(doc.get('lease')) is not dict or doc['lease'].get('state') not in ('none', 'acquiring', 'active', 'stopping')
+            or type(doc.get('acceptance')) is not dict or doc['acceptance'].get('status') not in ('pending', 'needs-human', 'revise', 'accepted', 'rejected')
+            or doc.get('hold') not in (None, 'luks_locked', 'budget_exhausted', 'admission_queue')):
+        raise ValueError()
+    att, ho = doc.get('attention'), doc.get('handoff')
+    if (att is not None and (type(att) is not dict or not att.get('reason'))
+            or ho is not None and (type(ho) is not dict or ho.get('phase') not in ('prepared', 'adopting', 'adopted', 'expired', 'aborted'))):
+        raise ValueError()
+    binding = doc.get('provider_binding')
+    if 'provider_binding' in doc and (type(binding) is not dict or set(binding) != {'schema', 'provider_id', 'account_id'}
+            or type(binding['schema']) is not int or binding['schema'] != 1
+            or any(type(binding[k]) is not str or not re.fullmatch('[a-z][a-z0-9_-]{0,63}', binding[k]) for k in ('provider_id', 'account_id'))):
+        raise ValueError()
+    if 'provider_context' in doc:
+        ref = doc['provider_context']
+        if (type(ref) is not dict or set(ref) != {'schema', 'provider_id', 'account_id', 'profile_instance_id', 'adapter_revision', 'registration_snapshot'}
+                or type(ref['schema']) is not int or ref['schema'] != 1 or ref['provider_id'] != 'codex'
+                or type(ref['account_id']) is not str or not re.fullmatch('[a-z][a-z0-9_-]{0,63}', ref['account_id'])
+                or not valid_qid(ref['profile_instance_id']) or uuid.UUID(ref['profile_instance_id']).version != 4
+                or ref['adapter_revision'] != 'codex-managed-chatgpt-file-v1' or binding is None
+                or any(ref[k] != binding[k] for k in ('provider_id', 'account_id'))):
+            raise ValueError()
+        snap = ref['registration_snapshot']
+        if (type(snap) is not dict or set(snap) != {'dev', 'ino', 'ctime_ns', 'sha256'}
+                or any(type(snap[k]) is not int or snap[k] < 0 for k in ('dev', 'ino', 'ctime_ns'))
+                or type(snap['sha256']) is not str or not re.fullmatch('[0-9a-f]{64}', snap['sha256'])):
+            raise ValueError()
+
+
+def _attention_state(doc, generation, control):
+    if (type(doc.get('schema')) is not int or doc['schema'] != 1
+            or type(doc.get('generation')) is not int or doc['generation'] != generation
+            or not _attention_text(doc.get('attempt_id'), 500)
+            or doc.get('phase') not in ('working', 'sleeping', 'waiting_input', 'blocked')
+            or doc.get('agent_claim') not in ('running', 'done', 'blocked')):
+        raise ValueError()
+    if doc['attempt_id'] != control['lease'].get('start_attempt_id'):
+        raise _AttentionBinding()
+
+
+class RegistryAttentionSource:
+    def __init__(self, view, *, monotonic=None, wall_clock=None):
+        self.view = view
+        self.monotonic, self.wall_clock = monotonic or time.monotonic, wall_clock or time.time
+        self._revision, self._state_digest, self._epoch = 0, None, None
+
+    def _task(self, name, pc, gc, vs, budget, questions_count):
+        root = self.view._root_fd
+        fd = _attention_directory(name, root)
+        try:
+            spec_raw = _attention_bytes(fd, 'spec.yaml', budget)
+            spec = _attention_document(spec_raw, budget, getattr(self.view.projects, 'runner', _attention_yaml_runner), True)
+            if spec.get('type') != 'task':
+                if spec.get('type') in ('mission', 'event'):
+                    return None
+                raise ValueError()
+            engine = spec.get('engine', 'claude')
+            if engine not in ('codex', 'claude'):
+                raise ValueError()
+            candidate = spec.get('project')
+            aliases = sorted(r['project'] for r in pc.entries if r['root'] == candidate and r['project'] in gc.projects)
+            if not aliases:
+                raise _AttentionBinding()
+            binding = self.view.resolve_project(aliases[0], vs, deadline=budget.deadline)
+            control_raw = _attention_bytes(fd, 'control.json', budget)
+            control = _attention_document(control_raw, budget, None)
+            if type(control.get('incarnation')) is not str or not re.fullmatch('[0-9a-f]{32}', control['incarnation']):
+                raise _AttentionBinding()
+            _attention_control(control)
+            generation = control['generation']
+            state_raw = _attention_bytes(fd, 'state.%d.json' % generation, budget, optional=True)
+            if generation > 0 and state_raw is None:
+                raise _AttentionBinding()
+            state = _attention_document(state_raw, budget, None) if state_raw else None
+            if state is not None:
+                _attention_state(state, generation, control)
+            attempt = state['attempt_id'] if state else None
+            label = spec.get('name', name)
+            if not _attention_text(label, 16000):
+                raise ValueError()
+            label = redact(label)[:120]
+            questions = []
+            question_files = []
+            try:
+                qfd = _attention_directory('questions', fd)
+            except FileNotFoundError:
+                qfd = None
+            if qfd is not None:
+                try:
+                    with os.scandir(qfd) as entries:
+                        for entry in entries:
+                            budget.check()
+                            questions_count[0] += 1
+                            if questions_count[0] > 1000:
+                                raise _AttentionLimit()
+                            filename = entry.name
+                            if not filename.endswith('.json'):
+                                continue
+                            if not valid_qid(filename[:-5]):
+                                raise ValueError()
+                            question_raw = _attention_bytes(qfd, filename, budget)
+                            question_files.append((filename, question_raw))
+                            doc = _attention_document(question_raw, budget, None)
+                            qid = filename[:-5]
+                            if doc.get('qid') != qid or doc.get('kind') not in ('info', 'permission') or doc.get('status') not in ('open', 'closed'):
+                                raise ValueError()
+                            answered = doc.get('answered_at') is not None
+                            published = doc.get('event_published_at') is not None
+                            if answered and (not _attention_text(doc['answered_at'], 500) or not _attention_text(doc.get('answered_by'), 500)):
+                                raise ValueError()
+                            if published and not _attention_text(doc['event_published_at'], 500):
+                                raise ValueError()
+                            if answered and doc['kind'] == 'permission' and doc.get('decision') not in ('approve', 'reject'):
+                                raise ValueError()
+                            if answered and doc['kind'] == 'info' and not valid_text(doc.get('answer')):
+                                raise ValueError()
+                            questions.append(dict(qid=qid, kind=doc['kind'], status=doc['status'], answered=answered,
+                                pending_delivery=answered and not published, blocking='unknown', native_key=None))
+                    for filename, raw in question_files:
+                        if _attention_bytes(qfd, filename, budget) != raw:
+                            raise _AttentionBinding()
+                    _attention_anchor(qfd, 'questions', fd)
+                finally:
+                    os.close(qfd)
+            done_raw = _attention_bytes(fd, 'done.json', budget, True)
+            result = None
+            if done_raw is not None:
+                done = _attention_document(done_raw, budget, None)
+                key, commit = done.get('envelope_key'), done.get('commit_sha')
+                if commit is None:
+                    commit = ''
+                if (not _attention_text(key, 500) or done.get('state') not in ('requested', 'accepted', 'integrated', 'cleaned', 'archived', 'rejected')
+                        or type(done.get('finalized')) is not bool or type(commit) is not str
+                        or commit and not re.fullmatch('(?:[0-9a-f]{40}|[0-9a-f]{64})', commit)):
+                    raise ValueError()
+                task_key = _attention_digest(dict(kind='attention_task', registry_id=self.view._root_identity,
+                                                 agent=name, incarnation=control['incarnation']))
+                result = dict(generation=hashlib.sha256(('done-gen:' + key + ':' + commit).encode()).hexdigest()[:8],
+                              state=done['state'], finalized=done['finalized'],
+                              result_key=_attention_digest(dict(kind='attention_result', task_key=task_key,
+                                                              envelope_key=key, commit_sha=commit)))
+            if (_attention_bytes(fd, 'control.json', budget) != control_raw
+                    or _attention_bytes(fd, 'state.%d.json' % generation, budget, optional=generation == 0) != state_raw
+                    or _attention_bytes(fd, 'spec.yaml', budget) != spec_raw
+                    or _attention_bytes(fd, 'done.json', budget, True) != done_raw):
+                raise _AttentionBinding()
+            _attention_anchor(fd, name, root)
+            return dict(registry_id=self.view._root_identity, agent=name, incarnation=control['incarnation'],
+                generation=generation, attempt_id=attempt, project_binding=binding, session_binding=None,
+                label=label, engine=engine, questions=sorted(questions, key=lambda q: q['qid']), result=result)
+        finally:
+            os.close(fd)
+
+    def snapshot(self, *, deadline):
+        active = getattr(self.view, '_active', None)
+        coverage = dict(scope='none', registry_epoch=None, registry_revision=None, context_ids=[], route_ids=[],
+                        session_set_revision=None, global_complete=False, supported_methods=[])
+        snapshot = dict(schema=1, source='task_registry', epoch=None, revision=0, observed_at=None,
+                        state='unavailable', complete=False, reason='unavailable', coverage=coverage, records=[])
+        if active is None:
+            return snapshot
+        pc, gc, vs, budget = active
+        snapshot['epoch'] = self.view._source_epoch
+        snapshot['revision'] = self._revision
+        coverage.update(scope='task_registry', registry_epoch=pc.epoch, registry_revision=pc.revision)
+        records, reason, state = [], None, 'fresh'
+        try:
+            if deadline != budget.deadline or not vs['owner_only']:
+                raise _AttentionBinding()
+            _AttentionBudget(deadline, self.monotonic).check()
+            budget.check()
+            _attention_anchor(self.view._root_fd, self.view.registry)
+            if not self.view.current(vs, deadline=deadline):
+                budget.check()
+                if budget.bytes > 16 * 1024 * 1024:
+                    raise _AttentionLimit()
+                raise _AttentionBinding()
+            questions_count, count = [0], 0
+            with os.scandir(self.view._root_fd) as entries:
+                for entry in entries:
+                    budget.check()
+                    count += 1
+                    if count > 1000:
+                        raise _AttentionLimit()
+                    if not valid_agent(entry.name):
+                        continue
+                    try:
+                        record = self._task(entry.name, pc, gc, vs, budget, questions_count)
+                        if record is not None:
+                            records.append(record)
+                    except _AttentionLimit:
+                        raise
+                    except _AttentionBinding:
+                        state, reason = 'incomplete', 'binding_incomplete'
+                    except (ValueError, OSError, TypeError, subprocess.SubprocessError):
+                        state, reason = 'incomplete', 'invalid_source'
+            _attention_anchor(self.view._root_fd, self.view.registry)
+            if not self.view.current(vs, deadline=deadline):
+                budget.check()
+                if budget.bytes > 16 * 1024 * 1024:
+                    raise _AttentionLimit()
+                raise _AttentionBinding()
+        except _AttentionLimit:
+            state, reason = 'incomplete', 'limit'
+        except _AttentionBinding:
+            records, state, reason = [], 'incomplete', 'binding_incomplete'
+        except (OSError, ValueError, TypeError):
+            records, state, reason = [], 'unavailable', 'unavailable'
+        records.sort(key=lambda r: r['agent'])
+        snapshot.update(state=state, reason=reason, records=records, complete=state == 'fresh')
+        coverage['global_complete'] = snapshot['complete']
+        if records or snapshot['complete']:
+            now = self.wall_clock()
+            if type(now) in (int, float) and math.isfinite(now) and now > 0:
+                snapshot['observed_at'] = int(now * 1000)
+            else:
+                snapshot.update(observed_at=None, records=[], complete=False, state='unavailable', reason='unavailable')
+                coverage['global_complete'] = False
+        signature = _attention_digest(dict(records=snapshot['records'], state=snapshot['state'], reason=snapshot['reason'],
+                                           complete=snapshot['complete'], coverage=coverage))
+        if self._epoch != snapshot['epoch']:
+            self._epoch, self._revision, self._state_digest = snapshot['epoch'], 0, None
+        if signature != self._state_digest:
+            self._revision += 1
+            self._state_digest = signature
+        snapshot['revision'] = self._revision
+        return snapshot
 
 
 class RegistryBackend:
