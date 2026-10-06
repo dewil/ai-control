@@ -231,13 +231,17 @@ class ConfiguredCreateBrowser(unittest.TestCase):
         self.assertEqual(vendor.count(), 1)
         codex = vendor.locator('option').filter(has_text='Codex')
         self.assertEqual(codex.count(), 1)
+        from playwright.sync_api import expect
+        expect(codex).to_be_enabled(timeout=5000)
         self.assertFalse(codex.is_disabled(), 'Fresh server-proven Codex option is selectable')
         other_options = vendor.locator('option').evaluate_all(
             "els => els.filter(e => e.value && e.value !== 'codex').map(e => ({disabled:e.disabled,text:e.textContent.trim()}))")
         self.assertTrue(all(item['disabled'] for item in other_options),
                         'Unsupported vendors remain disabled, never mapped to Codex')
         self.assertEqual(dialog.get_by_role('button', name='Отмена', exact=True).count(), 1)
-        self.assertEqual(dialog.get_by_role('button', name='Создать', exact=True).count(), 1)
+        create = dialog.get_by_role('button', name='Создать', exact=True)
+        self.assertEqual(create.count(), 1)
+        self.assertTrue(create.is_enabled(), 'Fresh available server capability enables explicit create')
         self.assertEqual(dialog.get_by_role('textbox').count(), 0, 'Create dialog has no title or first-message field')
         self.assertEqual(self.calls().count({'method': 'options', 'project': 'demo'}), 1)
 
