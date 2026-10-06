@@ -177,7 +177,7 @@ sessions, reasons, unlinked_tasks`.
   plain int counts уникальных экспортированных session keys. При incomplete это
   lower bounds показанного известного пула, не полный счётчик всей работы.
 - `sessions`: `{session_key,project,sid,vendor,context_label,label,activity_state,primary_state,
-  reason_ids}`. Key64lowerhex opaque; project≤128; sid canonical UUID;
+  reason_ids}`. Key64lowerhex opaque; project fullmatch `[a-zA-Z0-9_-]{1,32}`; sid canonical UUID;
   vendor codex в первом session adapter; labels redacted≤120codepoints; activity_state running/waiting/
   idle/unknown/stale; primary_state fixed enum выше. Running group выбирается по
   activity_state, поэтому independent running не теряется за priority decision.
@@ -231,7 +231,7 @@ source. Идентификаторы — case-sensitive, без Unicode normaliz
 `hex64`, `gen8` означают fullmatch lowercase `[0-9a-f]{32|64|8}`. `UUID` — строка,
 для которой `str(uuid.UUID(value)) == value`. `agent` соответствует existing
 `[a-z][a-z0-9-]{0,30}[a-z0-9]`; `project` — existing HTTP/broker
-`[a-zA-Z0-9_-]{1,32}`. `text(N)` — nonempty valid UTF-8 string≤N codepoints,
+`[a-zA-Z0-9_-]{1,32}` во всех source/output bindings и links; uppercase alias допустим и сохраняется без case-folding. Display label отдельно ограничен 120 codepoints. `text(N)` — nonempty valid UTF-8 string≤N codepoints,
 без C0/C1 и lone surrogate. Private `root` — canonical absolute path≤4096 без
 controls и `.`/`..` components; resolver гарантирует real canonical identity.
 Native `opaque_id` — text(500); request ID — plain int либо text(500), не bool.
