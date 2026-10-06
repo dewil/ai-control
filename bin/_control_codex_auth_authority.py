@@ -105,8 +105,9 @@ class AuthorityStamp:
 
 
 class _Account:
-    def __init__(self, scope):
-        self.scope = _snapshot(scope)
+    def __init__(self, captured):
+        # Registry key and stored identity come from the same immutable capture.
+        self.scope = captured
         self.refresh = threading.Lock()
         self.state = threading.RLock()
         self.owner_generation = 1
@@ -199,7 +200,7 @@ class AuthCoordinator:
         with self._registry_lock:
             account = self._accounts.get(key)
             if account is None:
-                account = _Account(scope)
+                account = _Account(captured)
                 self._accounts[key] = account
         if not account.refresh.acquire(timeout=min(self._remaining(deadline), 0.5)):
             raise AuthError('refresh_busy')
