@@ -4,6 +4,17 @@
 <section id="session-loading"><p>Восстанавливаем сессию…</p><button id="session-retry" hidden>Повторить</button></section>
 <section id="login" hidden><h2>Войти в Control</h2><p>Введите пароль и код из приложения аутентификации.</p><form id="login-form"><label>Пароль<input id="password" type="password" autocomplete="current-password" required maxlength="1024"></label><label>Код подтверждения<input id="login-totp" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required></label><button type="submit">Войти</button></form></section>
 <section id="workspace" hidden>
+  <section id="attention-overview" role="region" aria-labelledby="attention-heading">
+    <div class="toolbar"><h2 id="attention-heading">Обзор работы</h2><button id="attention-refresh" type="button">Обновить обзор</button></div>
+    <p id="attention-status" role="status" aria-live="polite"></p><p id="attention-age" class="meta"></p><p id="attention-source-status" class="meta"></p>
+    <section id="attention-running"><h3>Сейчас работают</h3><p id="attention-running-status">Статус сессий пока недоступен</p></section>
+    <section id="attention-decision"><h3 data-attention-group-heading="decision" tabindex="-1">Требуется решение</h3><div id="attention-decision-rows"></div></section>
+    <section id="attention-question"><h3 data-attention-group-heading="question" tabindex="-1">Вопрос</h3><div id="attention-question-rows"></div></section>
+    <section id="attention-completed"><h3 data-attention-group-heading="completed" tabindex="-1">Работа завершена — нужна проверка</h3><div id="attention-completed-rows"></div></section>
+    <section id="attention-delivery"><h3 data-attention-group-heading="delivery" tabindex="-1">Ответ сохранён, ожидает доставки</h3><div id="attention-delivery-rows"></div></section>
+    <section id="attention-unlinked"><h3 data-attention-group-heading="unlinked" tabindex="-1">Задачи без подтверждённой сессии</h3><div id="attention-unlinked-rows"></div></section>
+    <p id="attention-truncated" hidden>Обзор показан не полностью</p>
+  </section>
   <nav class="tabs" role="tablist" aria-label="Раздел Control"><button id="tab-tasks" type="button" role="tab" aria-selected="true" aria-controls="tasks-panel">Задачи</button><button id="tab-sessions" type="button" role="tab" aria-selected="false" aria-controls="sessions-panel">Сессии</button></nav>
   <section id="tasks-panel" role="tabpanel" aria-labelledby="tab-tasks"><div class="toolbar"><p id="count"></p><button id="refresh">Обновить</button></div><div id="cards"></div></section>
   <section id="sessions-panel" role="tabpanel" aria-labelledby="tab-sessions" hidden>
