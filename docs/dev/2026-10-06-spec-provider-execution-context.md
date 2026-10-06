@@ -274,7 +274,11 @@ Internal creator publisher проверяет staged control и captured referen
 existing task/name/incarnation/catalog/directory fences и делает atomic registry rename
 в body guard; browser не передаёт paths/guard flags. Линеаризация — rename под lock,
 а не возврат create: register после rename не присоединяет контекст к уже созданной
-contextless TASK. Отказ guard сохраняет cleanup TASK/spool/worktree; native host/credentials
+contextless TASK. Для уже поддержанного paused binding non-Codex с context_ref=None
+guard проверяет fresh catalog grant под тем же producer lock, не читает Codex profile
+и не объявляет native/profile capability. Non-None unsupported-provider reference
+отклоняется. Это совместимость прежнего paused/unverified create, не native routing
+другого vendor. Отказ guard сохраняет cleanup TASK/spool/worktree; native host/credentials
 по-прежнему недоступны.
 
 Каждый будущий resolve/admission/replay/resume/native status/history/registry/
