@@ -86,7 +86,10 @@ def serve(root, evidence):
                     options_count = 0
                 options_count += 1
                 index = options_count
-            record({'method': 'options', 'project': project, 'index': index})
+            event = {'method': 'options', 'project': project}
+            if data.get('options_token') is not None:
+                event['index'] = index
+            record(event)
             if index == 1 and data.get('hold_first_options'):
                 deadline = time.monotonic() + 8
                 while not (evidence / 'release-options-first.json').exists() and time.monotonic() < deadline:
@@ -270,6 +273,8 @@ class ConfiguredCreateBrowser(unittest.TestCase):
         token = str(time.monotonic_ns())
         private_json(self.evidence / 'control.json', {
             'options_token': token, 'options_results': [True, False], 'hold_first_options': True})
+        # Routed continuation disables the browser HTTP cache for these identical GETs.
+        self.page.route('**/api/session-create-options*', lambda route: route.continue_())
         toolbar = self.page.get_by_role('button', name='Новая сессия', exact=True)
         self.assertEqual(toolbar.count(), 1, 'INV-WSESS-37 exposes the project create action')
         with self.page.expect_request(lambda request: request.method == 'GET' and
@@ -308,8 +313,7 @@ class ConfiguredCreateBrowser(unittest.TestCase):
                                        timeout=5000) as stale_response:
             private_json(self.evidence / 'release-options-first.json', {'release': True})
         self.assertEqual(stale_response.value.status, 200)
-        expect(codex).to_be_disabled(timeout=5000,
-                                     message='Late options from the closed dialog cannot replace the fresh unavailable result')
+        expect(codex, message='Late options from the closed dialog cannot replace the fresh unavailable result').to_be_disabled(timeout=5000)
         expect(create).to_be_disabled(timeout=5000)
         self.assertEqual(len([request for request in self.network if request.method == 'POST' and
                               '/api/session-create' in request.url]), 0)
