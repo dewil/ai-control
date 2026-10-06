@@ -150,8 +150,8 @@ def history_result(result):
     for row in result['recent_sends']:
         if (type(row) is not dict or set(row) != {'status', 'message_id', 'turn_id'}
                 or not valid_qid(row['message_id'])
-                or row['status'] not in ('accepted', 'delivery_unknown')
-                or row['status'] == 'delivery_unknown' and row['turn_id'] is not None
+                or row['status'] not in ('accepted', 'delivery_unknown', 'rejected')
+                or row['status'] in ('delivery_unknown', 'rejected') and row['turn_id'] is not None
                 or row['status'] == 'accepted' and
                    (type(row['turn_id']) is not str or not 0 < len(row['turn_id']) <= 500)):
             return {'error': 'unavailable'}
