@@ -57,6 +57,9 @@ INV-DEPLOY-09: Весь deployment, recovery и проверка исходно�
 schema2/exact14, after только schema2/exact14, strictly increasing release ID.
 Для before13 отсутствие нового leaf проверено до journal; это фиксированная
 семантика схемы, не входной arbitrary deletion list.
+Checkpoint files, его accepted state и directory entry самого checkpoint в
+родительском каталоге должны быть fsync-durable до публикации pending journal.
+Durable accepted state должен предшествовать durable удалению journal.
 
 INV-DEPLOY-10: После durable journal: остановить две разрешённые службы,
 атомарно установить проверенный full14 snapshot с fixed modes, запустить их,
