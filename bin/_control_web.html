@@ -8,11 +8,11 @@
     <div class="toolbar"><h2 id="attention-heading">Обзор работы</h2><button id="attention-refresh" type="button">Обновить обзор</button></div>
     <p id="attention-status" role="status" aria-live="polite"></p><p id="attention-age" class="meta"></p><p id="attention-source-status" class="meta"></p>
     <section id="attention-running"><h3>Сейчас работают</h3><p id="attention-running-status">Статус сессий пока недоступен</p></section>
-    <section id="attention-decision"><h3>Требуется решение</h3><div id="attention-decision-rows"></div></section>
-    <section id="attention-question"><h3>Вопрос</h3><div id="attention-question-rows"></div></section>
-    <section id="attention-completed"><h3>Работа завершена — нужна проверка</h3><div id="attention-completed-rows"></div></section>
-    <section id="attention-delivery"><h3>Ответ сохранён, ожидает доставки</h3><div id="attention-delivery-rows"></div></section>
-    <section id="attention-unlinked"><h3>Задачи без подтверждённой сессии</h3><div id="attention-unlinked-rows"></div></section>
+    <section id="attention-decision"><h3 data-attention-group-heading="decision" tabindex="-1">Требуется решение</h3><div id="attention-decision-rows"></div></section>
+    <section id="attention-question"><h3 data-attention-group-heading="question" tabindex="-1">Вопрос</h3><div id="attention-question-rows"></div></section>
+    <section id="attention-completed"><h3 data-attention-group-heading="completed" tabindex="-1">Работа завершена — нужна проверка</h3><div id="attention-completed-rows"></div></section>
+    <section id="attention-delivery"><h3 data-attention-group-heading="delivery" tabindex="-1">Ответ сохранён, ожидает доставки</h3><div id="attention-delivery-rows"></div></section>
+    <section id="attention-unlinked"><h3 data-attention-group-heading="unlinked" tabindex="-1">Задачи без подтверждённой сессии</h3><div id="attention-unlinked-rows"></div></section>
     <p id="attention-truncated" hidden>Обзор показан не полностью</p>
   </section>
   <nav class="tabs" role="tablist" aria-label="Раздел Control"><button id="tab-tasks" type="button" role="tab" aria-selected="true" aria-controls="tasks-panel">Задачи</button><button id="tab-sessions" type="button" role="tab" aria-selected="false" aria-controls="sessions-panel">Сессии</button></nav>
