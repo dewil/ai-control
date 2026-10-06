@@ -620,10 +620,11 @@ PYMARKER
 
   if [[ $provider_seen -eq 1 ]]; then
     [[ "$(python3 "$BIN_DIR/_control_provider_accounts.py" create-check "$provider" "$account" "$s_project")" == "$binding_check" ]] || fail "catalog_invalid"
-    printf '%s' "$provider_context" | python3 "$BIN_DIR/_control_provider_task_context.py" check "$provider" "$account" "$s_project_name" "$tmp/control.json" || return 2
+    printf '%s' "$provider_context" | python3 "$BIN_DIR/_control_provider_task_context.py" publish "$provider" "$account" "$s_project_name" "$tmp/control.json" "$AGENTS_DIR/$name" "$binding_check" || return 2
+  else
+    mv "$tmp" "$AGENTS_DIR/$name"
   fi
-  # --- атомарная публикация: единый mv (реестр + worktree вместе) ---
-  mv "$tmp" "$AGENTS_DIR/$name"
+  # Bound TASK rename occurs inside the metadata producer guard.
   trap - EXIT   # опубликовано - staging больше не откатывается
   if [[ "$s_type" == "mission" \
         || ( "$s_type" == "event" && "$s_workspace" == "worktree" ) ]]; then

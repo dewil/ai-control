@@ -257,6 +257,85 @@ class ProviderProfiles:
             raise AccountError('catalog_unsafe')
 
     @contextmanager
+    def _producer(self):
+        """Stable owner-only metadata writer lock, always before profile locks."""
+        directories, lock = _Directories(self.uid), None
+        try:
+            parent = directories.walk(self.home)
+            for name in ('.local', 'share', 'ai-control', 'provider-profile-locks'):
+                created = False
+                try:
+                    os.mkdir(name, 0o700, dir_fd=parent)
+                    created = True
+                except FileExistsError:
+                    pass
+                # Creating a fixed writer directory changes only its parent.
+                directories.check(changed_directory=parent if created else None)
+                if created:
+                    for index, entry in enumerate(directories.entries):
+                        if entry[2] == parent:
+                            directories.entries[index] = (*entry[:3], os.fstat(parent))
+                parent = directories.child(parent, name, private=name == 'provider-profile-locks')
+            flags = os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+            created = False
+            try:
+                lock = os.open('publication.lock', flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=parent)
+                created = True
+            except FileExistsError:
+                lock = os.open('publication.lock', flags, dir_fd=parent)
+            before = os.fstat(lock)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != self.uid
+                    or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1):
+                raise AccountError('profile_unsafe')
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            current = os.stat('publication.lock', dir_fd=parent, follow_symlinks=False)
+            if _pin(current) != _pin(os.fstat(lock)) or _pin(current) != _pin(before):
+                raise AccountError('profile_unsafe')
+            directories.check(changed_directory=parent if created else None)
+            if created:
+                for index, entry in enumerate(directories.entries):
+                    if entry[2] == parent:
+                        directories.entries[index] = (*entry[:3], os.fstat(parent))
+            yield
+            directories.check()
+            if _pin(os.stat('publication.lock', dir_fd=parent, follow_symlinks=False)) != _pin(before):
+                raise AccountError('profile_unsafe')
+        except OSError:
+            raise AccountError('profile_unsafe') from None
+        finally:
+            if lock is not None:
+                os.close(lock)
+            directories.close()
+
+    @contextmanager
+    def task_publication_guard(self, binding, context_ref, project):
+        binding = validate_binding(binding)
+        reference = None if context_ref is None else validate_context_ref(context_ref)
+        provider, account = binding['provider_id'], binding['account_id']
+        self.accounts.resolve(provider, account, project)
+        catalog = self.accounts.snapshot_identity
+        with self._producer():
+            self.accounts.resolve(provider, account, project)
+            if self.accounts.snapshot_identity != catalog:
+                raise AccountError('catalog_unsafe')
+            if reference is not None:
+                self.resolve(binding, reference, project)
+            elif provider == 'codex':
+                try:
+                    self.capture_reference(binding, project)
+                except AccountError as error:
+                    leaf = (self.home / '.local/share/ai-control/provider-profiles/codex'
+                            / binding['account_id'] / 'registration.json')
+                    if error.code != 'profile_unconfigured' or os.path.lexists(leaf):
+                        raise
+                else:
+                    raise AccountError('context_drift')
+            self.accounts.resolve(provider, account, project)
+            if self.accounts.snapshot_identity != catalog:
+                raise AccountError('catalog_unsafe')
+            yield
+
+    @contextmanager
     def _profile(self, account, *, writing=False):
         directories = _Directories(self.uid)
         try:
@@ -330,6 +409,11 @@ class ProviderProfiles:
             raise AccountError('profile_unsafe')
 
     def register(self, provider_id, account_id, project, metadata_path):
+        self._grant(provider_id, account_id, project)
+        with self._producer():
+            return self._register(provider_id, account_id, project, metadata_path)
+
+    def _register(self, provider_id, account_id, project, metadata_path):
         catalog = self._grant(provider_id, account_id, project)
         source = _Directories(self.uid)
         try:
