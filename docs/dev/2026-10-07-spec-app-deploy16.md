@@ -1,8 +1,9 @@
 # Подписанная поставка app API: exact14 -> exact16
 
 Дата: 07.10.2026. Владелец: CONTROL-APP-DEPLOY16, родитель CONTROL-APP-AUTH-RELEASE.
-Статус: DESIGN после исправлений первого review Sonnet5.5 (f6dd32e0);
-повторное review pending. Реализация, blind RED, bootstrap и установка не выполнены.
+Статус: DESIGN accepted actual Sonnet5.5 ac2f724a; committed independent
+blind RED принят до GO. Реализация подготовлена, SOURCE review и exact CI
+pending; bootstrap/установка/публикация не выполнены.
 Исходная принятая база R5: `0ea544756765c68ee3fea262a8a77ab4d4b8fe41`.
 Домен: [web-deployment](../specs/web-deployment.md).
 
@@ -218,7 +219,7 @@ helper/bootstrap/operator wrapper SHA и bounded descriptor snapshot bytes.
 В этой спецификации нет нового SHA: его можно получить только после
 реализации и review. Здесь не приводятся исполняемые production-команды.
 
-Bootstrap удерживает existing `/var/lib/ai-control-deploy/lock` root0600
+Bootstrap удерживает existing `/var/lib/ai-control-deploy/checkpoints/lock` root0600
 от первого чтения state/markers до окончательного fsync-clear. Это тот же
 flock, что deploy; он сериализует живые процессы, не переживает смерть
 держателя. Marker `/var/lib/ai-control-deploy/bootstrap-pending.json` root0600
@@ -302,7 +303,7 @@ preservation. Продуктовый код16 не подменяет этот f
 "config migrated, package still14" допустимо только после этого gate и health.
 Package rollback14 при сохраненном migrated config также обязан быть healthy.
 
-Config lock - тот же `/var/lib/ai-control-deploy/lock` root0600. Он берется
+Config lock - тот же `/var/lib/ai-control-deploy/checkpoints/lock` root0600. Он берется
 ДО проверки markers/pending и удерживается через stop/snapshot/replace/start/
 health/clear либо rollback. Deployment и bootstrap отказывают при config
 marker; config отказывает при bootstrap/package pending. Marker
@@ -463,7 +464,7 @@ production wrapper не предоставляет такого канала и�
 | KEY | `/etc/ai-control-deploy/release-key.pem` |
 | HELPER | `/usr/local/sbin/ai-control-deploy` |
 | NEW_HELPER | `/home/dwl/ai-control-app-deploy16-helper.py` |
-| LOCK | `/var/lib/ai-control-deploy/lock` |
+| LOCK | `/var/lib/ai-control-deploy/checkpoints/lock` |
 | PACKAGE_PENDING | `/var/lib/ai-control-deploy/checkpoints/pending.json` |
 | BOOTSTRAP_MARKER | `/var/lib/ai-control-deploy/bootstrap-pending.json` |
 | BOOTSTRAP_CHECKPOINTS | `/var/lib/ai-control-deploy/bootstrap-checkpoints` |
@@ -487,7 +488,9 @@ Config также экспортирует EXPECTED_AUTH_SHA256 - whole-config
 preflight digest - и EXPECTED_NEW_HELPER_SHA256/EXPECTED_ACCEPTED_SHA256.
 Новые pins фиксируются immutable operation packet после независимого
 source/CI review. Reviewed root wrapper связывает их с проверенным snapshot;
-непоставленный/невалидный pin - отказ. Нельзя вывести EXPECTED_NEW_HELPER_SHA256
+непоставленный/невалидный pin - отказ. Source defaults для новых reviewed pins
+равны None; immutable reviewed wrapper связывает constants с literal pins после
+проверки snapshot hash до исполнения. Pins не выводятся из candidate bytes. Нельзя вывести EXPECTED_NEW_HELPER_SHA256
 из NEW_HELPER и тем самым довериться любым подложенным bytes. Accepted pin
 происходит из root-verified current accepted14 raw bytes, не compiled13 reset
 и не догадка о R5 digest. В тесте wrong new-helper pin должен отказать без
@@ -593,3 +596,49 @@ device update/downgrade policy определяет родитель; эта с�
 pins и результаты CI пока не получены. Это незакрытые проверочные gates,
 а не разрешение выполнить команды. Ни secrets, ни production writes при
 подготовке DESIGN не читались и не выполнялись.
+
+## Implementation corrigendum и SOURCE handoff
+
+07.10: lock path исправлен по immutable accepted source
+`0ea544756765c68ee3fea262a8a77ab4d4b8fe41:deployment/ai-control-web-deploy.py`,
+run lines496-524: old4ead открывает `lock` через descriptor `checkpoints`.
+Фактический общий inode - `/var/lib/ai-control-deploy/checkpoints/lock`.
+Новый helper/bootstrap/config сохраняют этот inode/path; lock migration и
+параллельный новый state-parent lock не вводятся. Synthetic constants могут
+указывать fixture path, production не предоставляет override.
+
+DESIGN M1: повтор terminal refusal при legitimate14' сохраняет те же marker,
+checkpoint и current14' bytes; old4ead signed14 scope остается прежним.
+M2: emergency restart health означает active/User/Group обеих служб.
+M3: kill до marker не меняет config; повтор того же pinned packet распознает
+before digest и заново выполняет безопасный stop/start. При измененном digest
+refusal не разрешает migration; оператор отдельно восстанавливает service health.
+M4: rollback service bound10 = stop2 + start2 + health6, включая health.
+Post-stop config preflight отдельно проверяет inactive обоих units.
+M5: config rollback/start timeout оставляет marker/checkpoint и DB/replay;
+одна попытка на invocation проверяется failure test.
+
+Owner-source supplementary tests проверяют current legacy journal1/2 recovery,
+unknown journal pairs, actual shared flock, bootstrap/config kill, publisher
+immutable-before-feed, next-code/CAS rollback, parser/certificate и concurrent
+publisher. Captured legacy signed14 install suite сохраняет прежние assertions
+на pinned accepted4ead helper: новые schema2 installs superseded INV-DEPLOY-13,
+а actual new helper recovery отдельно проверяется blind и owner suites.
+Тестовый каталог frozen ops должен явно chmod0755/0750 после mkdir под umask077;
+это исправление fixture, exact metadata gates не ослабляются.
+
+Publisher emits exact four-field feed versionCode/versionName/apkUrl/sha256
+по публичному Android download contract. Input APK bounded128MiB; feed16KiB.
+Verified temporary APK snapshot используется для aapt2/apksigner, final commit
+через Linux renameat2(RENAME_NOREPLACE) не создает retained hardlink и не
+перезаписывает immutable filename. APK tool paths pinned SDK build-tools36.0.0,
+JAVA_HOME - JDK17.0.20.1+1; verification не читает private keystore/signing env.
+Transient tool stdout/stderr не публикуется. Retained proof содержит whole-feed
+before/after digest/raw bytes, APK hash/size/package/code/certificate provenance;
+до APK/feed switch current predecessor сверяется под fixed flock.
+
+Источник и synthetic проверки не доказывают root migration, реальные unit gates,
+совместимость production config, routes, публикацию или device acceptance.
+Все новые operation pins и reviewed wrapper требуют SOURCE/CI packet; до этого
+root entrypoints fail closed. Post-CI stamping требует review/CI stamped exact
+bytes. Operator command готовится отдельно после этих gates.

@@ -6,7 +6,7 @@ Root helper устанавливает только фиксированный s
 двумя разрешенными службами. Private app config/storage и публичный APK catalog
 имеют отдельные транзакции; native/provider auth не относится к deployment.
 Принятая база R5 `0ea544756765c68ee3fea262a8a77ab4d4b8fe41` остается исходным
-exact14. Расширение exact16 - DESIGN, не установленное состояние.
+exact14. Расширение exact16 реализовано для SOURCE review; установка не выполнена.
 
 ## Инварианты
 
@@ -44,9 +44,13 @@ root bootstrap. 07.10: app DESIGN сохраняет accepted14 и задает 
 exact16 и отдельные config/publisher artifacts. Signing доказывает authority,
 а качество source устанавливают independent review и exact CI.
 
-Известная дыра: installed helper4ead не принимает exact16. Новый helper,
-bootstrap/config migration/publisher, их blind RED, privileged review/CI и
-операторский пакет еще не созданы. Первый Sonnet5.5 design review f6dd32e0 не принят; B1/B2/M1..6/L1..8 исправлены автором, Второй review5592aade потребовал N1/N2/N4/N5, исправленные автором; N6 - известное отсутствие quota/GC, повторное review pending. DESIGN не является installation proof.
+Известная дыра: installed helper4ead не принимает exact16. DESIGN ac2f724a
+принят actual Sonnet5.5; committed blind RED предшествовал implementation GO.
+Новый helper/bootstrap/config/publisher и supplementary fault probes подготовлены;
+SOURCE review, exact CI, trusted operator pins/wrapper и installation pending.
+Фактический общий lock - checkpoints/lock по immutable old4ead source, как
+зафиксировано corrigendum feature spec. Retained APK/proof quota/GC отсутствует
+как принятое ограничение. Production config/unit compatibility - отдельный gate.
 Открытых продуктовых вопросов в bounded deployment нет; app grant lifetime
 и device acceptance принадлежат CONTROL-APP-AUTH-RELEASE.
 
@@ -54,8 +58,8 @@ bootstrap/config migration/publisher, их blind RED, privileged review/CI и
 
 INV-DEPLOY-01..11 - существующие deployment synthetic suites; поиск тега
 проверяет фактическую связь, документация не заменяет выполненный тест.
-INV-DEPLOY-12..19 - будущие blind RED группы в feature specification, coverage
-пока не заявляется. Helper/bootstrap/config migration/publisher должны получить
+INV-DEPLOY-12..19 - committed independent core/operations suites и supplementary
+fault probes; точный результат исполнения фиксирует SOURCE/CI packet. Helper/bootstrap/config migration/publisher должны получить
 meaningful committed RED до автора реализации. Root production и device
 проверки учитываются отдельно от synthetic tests и CI.
 

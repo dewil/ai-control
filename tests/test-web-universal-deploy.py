@@ -34,6 +34,16 @@ class SignedDeploy(unittest.TestCase):
   loader=importlib.machinery.SourceFileLoader('blind_signed_deploy',str(SOURCE))
   spec=importlib.util.spec_from_loader(loader.name,loader)
   self.api=importlib.util.module_from_spec(spec);sys.modules[loader.name]=self.api;loader.exec_module(self.api)
+  if isinstance(self,SignedDeploy):
+   # INV-DEPLOY-13 supersedes *new* schema2/13->14 installs. Keep this
+   # captured historical suite/assertions intact against its immutable accepted
+   # 4ead source; derived blind16 fixtures load the actual current helper above.
+   pinned=subprocess.run(['/usr/bin/git','-C',str(ROOT),'show',
+    '0ea544756765c68ee3fea262a8a77ab4d4b8fe41:deployment/ai-control-web-deploy.py'],
+    capture_output=True,timeout=10,check=True).stdout
+   self.assertEqual(sha(pinned),'4eadf6d37d597e9ba7034fe6b86b696d7f75735b5c47ce0aa3a2d249b277eaa9')
+   exec(compile(pinned,str(SOURCE)+'@accepted4ead','exec'),self.api.__dict__)
+
   for name in ('Deploy','Rejected','RollbackFailed','verify_ed25519','initialize_state'):
    self.assertTrue(callable(getattr(self.api,name,None)),'Accepted deploy public boundary absent: '+name)
   self.assertEqual(tuple(self.api.SERVICES),SERVICES)
