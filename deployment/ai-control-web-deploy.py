@@ -22,7 +22,10 @@ MAX_MANIFEST = 64 * 1024
 SERVICES = ('ai-control-web.service', 'ai-control-web-broker.service')
 LEGACY_MODES = {'bin/ai-control-web': 493, 'bin/_control_web.py': 420, 'bin/_control_web_broker.py': 420, 'bin/_control_web_sessions.py': 420, 'bin/_codex_rc.py': 420, 'bin/_rc_projects.sh': 493, 'bin/_control_web.html': 420, 'bin/_control_web.css': 420, 'bin/_control_web.js': 420, 'requirements-web.lock': 420, 'systemd/ai-control-web.service.tmpl': 420, 'systemd/ai-control-web-broker.service.tmpl': 420, 'bin/_control_web.svg': 420}
 NEW_LEAF = 'bin/_control_web_configured_create.py'
-MODES = {**LEGACY_MODES, NEW_LEAF: 0o644}
+CURRENT_MODES = {**LEGACY_MODES, NEW_LEAF: 0o644}
+APP_LEAVES = ('bin/_control_web_android_auth.py', 'bin/_control_web_android_download.py')
+MODES = {**CURRENT_MODES, **dict.fromkeys(APP_LEAVES, 0o644)}
+SCHEMAS = {1: LEGACY_MODES, 2: CURRENT_MODES, 3: MODES}
 BOOTSTRAP_BASE = {'bin/ai-control-web': '2dbe492440a9e01f73468f2220a4e8b8b908fab2ea8c6a13a55d79409730f4e7', 'bin/_control_web.py': 'a0724ec2c3a505fdc123b96c90a178657e835562ce6b018ea34b8214e6617e8a', 'bin/_control_web_broker.py': 'c4f6f69e0c9d258c07f0138c192e35e99b30254485e078e4403acf5c9bc994e6', 'bin/_control_web_sessions.py': '978847a34320fb381f4bad2848a8832274c4dc34d7f816b9173d4e39e4bc510a', 'bin/_codex_rc.py': '8113bff19a607e9d0dd84af387a4aa700bb2dbfcd3223dc01a6d7c6cd8b6c3e6', 'bin/_rc_projects.sh': '8576c2c5aa4d0c5c24b9efee6ceeb3a9c46882724d6796acbce4a20246a6b2e6', 'bin/_control_web.html': '210ea89cdf6724f0f920cc39fc279a66477d8f08cfa10be1d4dda31862ce5b7f', 'bin/_control_web.css': '5a59c6251dbd376a73f0814ec094747b0a3413cfe80c15e94bbf1cb6dcb170de', 'bin/_control_web.js': 'be0f799ff9ba72b5d22a602b24919c3360d693a4b43ad24e15b1204eb7a55e15', 'requirements-web.lock': 'c56ca5ea2670d01dac8c1d3daa8ee204323bacb29e8a347a749c987a6615d222', 'systemd/ai-control-web.service.tmpl': 'ae73cbaf5dc9c6f35d973573a1a18b0ce451b9142c0c22ab8cc4f87b4b80c641', 'systemd/ai-control-web-broker.service.tmpl': '1bd0ad1c78d98b22245ace274c9b96a59159f0b14f6669b4e09076f87cd53434', 'bin/_control_web.svg': '2a6b140eb1e60610f61aeb3941241bab9121cc4f6f5b31e42d7da8743a2c79e9'}
 
 
@@ -85,6 +88,7 @@ def read_file(path, *, owners, limit=MAX_FILE, mode=None, private_parent=False):
             info = os.fstat(child)
             if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
                     or info.st_uid not in owners or info.st_mode & 0o022
+                    or (owners == (0,) and info.st_gid != 0)
                     or info.st_size > limit
                     or (mode is not None and stat.S_IMODE(info.st_mode) != mode)):
                 raise Rejected('Unsafe or oversized file')
@@ -165,8 +169,10 @@ def integer(value, minimum):
 def scope(files):
     if type(files) is dict and set(files) == set(LEGACY_MODES):
         return LEGACY_MODES
-    if type(files) is dict and set(files) == set(MODES):
-        return MODES
+    if type(files) is dict:
+        for modes in (CURRENT_MODES, MODES):
+            if set(files) == set(modes):
+                return modes
     raise Rejected('Invalid fixed scope')
 
 
@@ -179,10 +185,10 @@ def hashes(value):
 
 def state_value(value):
     keys(value, ('schema', 'release_id', 'manifest_sha256', 'files'))
-    if type(value['schema']) is not int or value['schema'] not in (1, 2):
+    if type(value['schema']) is not int or value['schema'] not in (1, 2, 3):
         raise Rejected('Invalid state schema')
     integer(value['release_id'], 0 if value['schema'] == 1 else 1)
-    keys(value['files'], LEGACY_MODES if value['schema'] == 1 else MODES)
+    keys(value['files'], SCHEMAS[value['schema']])
     hashes(value['files'])
     sha = value['manifest_sha256']
     if value['release_id'] == 0:
@@ -193,11 +199,11 @@ def state_value(value):
     return value
 
 
-def new_leaf_absent(target, owner_uid):
+def leaf_absent(target, owner_uid, leaf):
     parent = directory(Path(target) / 'bin', owner_uid)
     try:
         try:
-            os.stat(Path(NEW_LEAF).name, dir_fd=parent, follow_symlinks=False)
+            os.stat(Path(leaf).name, dir_fd=parent, follow_symlinks=False)
         except FileNotFoundError:
             return
         raise Rejected('Unexpected new leaf')
@@ -205,8 +211,17 @@ def new_leaf_absent(target, owner_uid):
         os.close(parent)
 
 
+def new_leaf_absent(target, owner_uid):
+    leaf_absent(target, owner_uid, NEW_LEAF)
+
+
+def outside_absent(target, owner_uid, modes):
+    for leaf in MODES.keys() - modes.keys():
+        leaf_absent(target, owner_uid, leaf)
+
+
 def tree(target, owner_uid, modes=MODES):
-    if modes is not LEGACY_MODES and modes is not MODES:
+    if not any(modes is known for known in SCHEMAS.values()):
         raise Rejected('Invalid fixed scope')
     for relative in ('', 'bin', 'systemd'):
         os.close(directory(Path(target) / relative, owner_uid))
@@ -224,7 +239,7 @@ def initialize_state(target, state_path, *, owner_uid=0):
     os.close(directory(state_path.parent, owner_uid, private=True))
     if os.path.lexists(state_path):
         raise Rejected('State already exists')
-    new_leaf_absent(target, owner_uid)
+    outside_absent(target, owner_uid, LEGACY_MODES)
     if tree_hashes(tree(target, owner_uid, LEGACY_MODES)) != BOOTSTRAP_BASE:
         raise Rejected('Bootstrap tree mismatch')
     value = {'schema': 1, 'release_id': 0, 'manifest_sha256': None,
@@ -289,6 +304,7 @@ class Deploy:
         self.runner = runner
         self.verifier = verifier if verifier is not None else verify_ed25519
         self.pending = self.checkpoints / 'pending.json'
+        self.rollback_used = False
 
     def ctl(self, *args):
         return self.runner(['/usr/bin/systemctl', *args]).strip()
@@ -320,12 +336,14 @@ class Deploy:
         atomic_write(self.state_path, encode(state), 0o600, self.owner_uid)
 
     def install(self, payload):
-        for path, data in payload.items():
+        for path in MODES:
+            if path not in payload:
+                continue
+            data = payload[path]
             atomic_write(self.target / path, data, MODES[path], self.owner_uid)
 
     def match(self, expected):
-        if scope(expected) is LEGACY_MODES:
-            new_leaf_absent(self.target, self.owner_uid)
+        outside_absent(self.target, self.owner_uid, scope(expected))
         if tree_hashes(tree(self.target, self.owner_uid, scope(expected))) != expected:
             raise Rejected('Installed tree mismatch')
 
@@ -337,13 +355,15 @@ class Deploy:
         finally:
             os.close(fd)
 
-    def transition_leaf(self, expected, remove=False):
-        """Only the fixed new leaf may be removed, after fresh anchored proof."""
+    def transition_leaf(self, expected, remove=False, leaf=NEW_LEAF):
+        """Only a closed transition leaf may be removed after anchored proof."""
+        if leaf not in (NEW_LEAF, *APP_LEAVES):
+            raise Rejected('Unknown transition leaf path')
         parent = directory(self.target / 'bin', self.owner_uid)
         child = None
         try:
             try:
-                child = os.open(Path(NEW_LEAF).name,
+                child = os.open(Path(leaf).name,
                                 os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                                 dir_fd=parent)
             except FileNotFoundError:
@@ -351,7 +371,8 @@ class Deploy:
             info = os.fstat(child)
             if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
                     or info.st_uid != self.owner_uid
-                    or stat.S_IMODE(info.st_mode) != MODES[NEW_LEAF]
+                    or (self.owner_uid == 0 and info.st_gid != 0)
+                    or stat.S_IMODE(info.st_mode) != MODES[leaf]
                     or info.st_size > MAX_FILE):
                 raise Rejected('Unsafe transition leaf')
             chunks, total = [], 0
@@ -367,7 +388,7 @@ class Deploy:
             if sha != expected:
                 raise Rejected('Unknown transition leaf')
             if remove:
-                fresh = os.stat(Path(NEW_LEAF).name, dir_fd=parent,
+                fresh = os.stat(Path(leaf).name, dir_fd=parent,
                                 follow_symlinks=False)
                 if (fresh != os.fstat(child) or any(
                         getattr(fresh, field) != getattr(info, field)
@@ -375,7 +396,7 @@ class Deploy:
                                       'st_uid', 'st_gid', 'st_size',
                                       'st_mtime_ns', 'st_ctime_ns'))):
                     raise Rejected('Transition leaf changed')
-                os.unlink(Path(NEW_LEAF).name, dir_fd=parent)
+                os.unlink(Path(leaf).name, dir_fd=parent)
                 os.fsync(parent)
             return sha
         finally:
@@ -389,21 +410,25 @@ class Deploy:
         if any(current[path] not in (before['files'][path], after['files'][path])
                for path in modes):
             raise Rejected('Unknown bytes in interrupted tree')
-        if modes is LEGACY_MODES:
-            if after['schema'] == 1:
-                new_leaf_absent(self.target, self.owner_uid)
-            else:
-                sha = self.transition_leaf(after['files'][NEW_LEAF])
+        for leaf in MODES.keys() - modes.keys():
+            if leaf in after['files']:
+                sha = self.transition_leaf(after['files'][leaf], leaf=leaf)
                 if sha is not None:
-                    current[NEW_LEAF] = sha
+                    current[leaf] = sha
+            else:
+                leaf_absent(self.target, self.owner_uid, leaf)
         return current
 
     def rollback(self, before, old, after, raw):
+        if self.rollback_used:
+            raise RollbackFailed('Rollback budget exhausted; pending journal retained')
+        # Validation failures and timeouts also consume the single attempt.
+        self.rollback_used = True
         try:
             self.interrupted_tree(before, after)
             self.stop()
-            if before['schema'] == 1 and after['schema'] == 2:
-                self.transition_leaf(after['files'][NEW_LEAF], remove=True)
+            for leaf in after['files'].keys() - before['files'].keys():
+                self.transition_leaf(after['files'][leaf], remove=True, leaf=leaf)
             self.install(old)
             self.start()
             self.match(before['files'])
@@ -419,11 +444,11 @@ class Deploy:
         journal = decode(read_file(self.pending, owners=(self.owner_uid,),
                                    limit=MAX_MANIFEST, mode=0o600, private_parent=True))
         keys(journal, ('schema', 'before', 'after', 'checkpoint'))
-        if type(journal['schema']) is not int or journal['schema'] not in (1, 2):
+        if type(journal['schema']) is not int or journal['schema'] not in (1, 2, 3):
             raise Rejected('Invalid journal schema')
         before, after = state_value(journal['before']), state_value(journal['after'])
-        if ((journal['schema'] == 1 and (before['schema'], after['schema']) != (1, 1))
-                or (journal['schema'] == 2 and after['schema'] != 2)
+        pairs = {1: {(1, 1)}, 2: {(1, 2), (2, 2)}, 3: {(2, 3), (3, 3)}}
+        if ((before['schema'], after['schema']) not in pairs[journal['schema']]
                 or after['release_id'] <= before['release_id']
                 or accepted not in (before, after)):
             raise Rejected('Journal state mismatch')
@@ -478,10 +503,12 @@ class Deploy:
             raise Rejected('Signature verification failed')
         manifest = decode(raw)
         keys(manifest, ('schema', 'release_id', 'base', 'files'))
-        if type(manifest['schema']) is not int or manifest['schema'] != 2:
+        if type(manifest['schema']) is not int or manifest['schema'] != 3:
             raise Rejected('Invalid release schema')
         integer(manifest['release_id'], 1)
         hashes(manifest['base'])
+        if scope(manifest['base']) is LEGACY_MODES:
+            raise Rejected('Invalid staged base scope')
         keys(manifest['files'], MODES)
         expected = {}
         for path, item in manifest['files'].items():
@@ -491,7 +518,7 @@ class Deploy:
             expected[path] = item['sha256']
         hashes(expected)
         payload = {path: read_file(self.stage / path, owners=owners) for path in MODES}
-        if sum(map(len, payload.values())) > 28 * 1024 * 1024 or tree_hashes(payload) != expected:
+        if sum(map(len, payload.values())) > 32 * 1024 * 1024 or tree_hashes(payload) != expected:
             raise Rejected('Payload digest mismatch')
         return manifest, raw, payload, expected
 
@@ -526,9 +553,13 @@ class Deploy:
             raise Rejected('Filesystem or schema validation failed') from exc
 
     def _run_locked(self):
+        # A reused library instance still represents a fresh operator invocation.
+        self.rollback_used = False
+        for name in ('bootstrap-pending.json', 'config-pending.json'):
+            if os.path.lexists(self.state_path.parent / name):
+                raise Rejected('Separate operation pending')
         before = self.recover(self.read_state())
-        if before['schema'] == 1:
-            new_leaf_absent(self.target, self.owner_uid)
+        outside_absent(self.target, self.owner_uid, scope(before['files']))
         original = tree(self.target, self.owner_uid, scope(before['files']))
         if tree_hashes(original) != before['files']:
             raise Rejected('Accepted tree drift')
@@ -538,13 +569,15 @@ class Deploy:
         if release < before['release_id']:
             raise Rejected('Release replay')
         if release == before['release_id']:
-            if before['schema'] != 2 or sha != before['manifest_sha256'] or expected != before['files']:
+            if before['schema'] != 3 or sha != before['manifest_sha256'] or expected != before['files']:
                 raise Rejected('Release identity reused')
             self.services()
             return {'result': 'already_installed', 'release_id': release}
+        if before['schema'] not in (2, 3):
+            raise Rejected('Only accepted14 or accepted16 may advance')
         if manifest['base'] != before['files']:
             raise Rejected('Signed base mismatch')
-        after = {'schema': 2, 'release_id': release, 'manifest_sha256': sha, 'files': expected}
+        after = {'schema': 3, 'release_id': release, 'manifest_sha256': sha, 'files': expected}
         if expected == before['files']:
             self.services()
             self.publish(after)
@@ -561,7 +594,7 @@ class Deploy:
                 os.fsync(fd)
             finally:
                 os.close(fd)
-        journal = {'schema': 2, 'before': before, 'after': after, 'checkpoint': checkpoint.name}
+        journal = {'schema': 3, 'before': before, 'after': after, 'checkpoint': checkpoint.name}
         atomic_write(self.pending, encode(journal), 0o600, self.owner_uid)
         try:
             self.stop()
@@ -569,7 +602,11 @@ class Deploy:
             self.start()
             self.match(expected)
             self.publish(after)
-        except Exception:
+        except Exception as exc:
+            if self.rollback_used:
+                # Pending recovery already spent this invocation's one attempt.
+                # The new checkpoint/journal authorizes a later recovery only.
+                raise RollbackFailed('Rollback budget exhausted; new pending journal retained') from exc
             self.rollback(before, original, after, self.accepted_raw)
             raise
         self.clear_pending()

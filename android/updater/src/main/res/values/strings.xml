@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="update_error_network">Не удалось скачать обновление. Проверьте связь.</string>
+    <string name="update_error_checksum">Файл обновления поврежден. Скачайте его повторно.</string>
+    <string name="update_error_install">Не удалось установить обновление.</string>
+    <string name="update_error_download">Не удалось подготовить файл обновления.</string>
+    <string name="update_error_too_large">Файл обновления превышает допустимый размер.</string>
+    <string name="update_error_package">Файл не является подписанным обновлением ai-control.</string>
+    <string name="update_error_unknown">Результат установки неизвестен. Сначала проверьте версию и состояние установщика.</string>
+</resources>

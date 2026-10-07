@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>Control</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/web.css"><script src="/web.js" defer></script></head>
-<body><main><header><div><span class="eyebrow">CONTROL</span><h1>Control</h1></div><button id="logout" hidden>Выйти</button></header><p id="notice" role="status" aria-live="polite"></p>
+<body><main><header><div><span class="eyebrow">CONTROL</span><h1>Control</h1></div><a href="/download/android/">Скачать Android-приложение</a><button id="logout" hidden>Выйти</button></header><p id="notice" role="status" aria-live="polite"></p>
 <section id="session-loading"><p>Восстанавливаем сессию…</p><button id="session-retry" hidden>Повторить</button></section>
 <section id="login" hidden><h2>Войти в Control</h2><p>Введите логин, пароль и код из приложения аутентификации.</p><form id="login-form"><label>Логин<input id="username" name="username" autocomplete="username" autocapitalize="none" required minlength="2" maxlength="32" pattern="[a-z][a-z0-9_\-]{1,31}" title="2–32 символа: строчные латинские буквы, цифры, _ и -; первый символ — буква"></label><label>Пароль<input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024"></label><label>Код подтверждения<input id="login-totp" name="totp" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required></label><button type="submit">Войти</button></form></section>
 <section id="workspace" hidden>
@@ -53,6 +53,6 @@
 <button id="create-check" type="button" class="secondary" hidden>Проверить статус</button>
 </dialog>
 <!-- BUILD-INFO:START -->
-<footer id="build-info" class="build-info" data-release-id="5">ai-control · r5 · Собрано: <time datetime="2026-10-06T19:55:50.985241Z">06.10.2026 22:55 МСК</time> · Ветка: feat/web-login-name</footer>
+<footer id="build-info" class="build-info" data-release-id="6">ai-control · r6 · Собрано: <time datetime="2026-10-07T09:49:18.446434Z">07.10.2026 12:49 МСК</time> · Ветка: feat/app-auth-release</footer>
 <!-- BUILD-INFO:END -->
 </body></html>

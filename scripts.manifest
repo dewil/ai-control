@@ -79,6 +79,8 @@ codex-task-runtime
 # Optional task web frontend; installation does not activate services.
 ai-control-web
 _control_web.py
+_control_web_android_auth.py
+_control_web_android_download.py
 _control_web.svg
 _control_web_access.py
 _control_web_sessions.py
