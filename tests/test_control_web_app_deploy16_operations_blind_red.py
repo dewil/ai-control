@@ -103,9 +103,14 @@ class OperationsFixture(unittest.TestCase):
                 return subprocess.CompletedProcess(argv, 0 if self.service_active else 3,
                     stdout='active\n' if self.service_active else 'inactive\n', stderr='')
             if argv[1] == 'show':
-                props = {'User': 'ai-panel' if fixture.SERVICES[0] in argv else 'dwl', 'Group': 'ai-panel',
-                    'ProtectSystem': 'strict', 'ProtectHome': 'yes',
-                    'ReadWritePaths': str(self.paths['AUTH_CONFIG'].parent), 'InaccessiblePaths': '/data'}
+                frontend = fixture.SERVICES[0] in argv
+                # Accepted R5 templates have distinct confinement contracts. The
+                # broker owns native runtime writers and retains the R5 full/no profile.
+                props = {'User': 'ai-panel' if frontend else 'dwl', 'Group': 'ai-panel',
+                    'ProtectSystem': 'strict' if frontend else 'full',
+                    'ProtectHome': 'yes' if frontend else 'no',
+                    'ReadWritePaths': str(self.paths['AUTH_CONFIG'].parent) if frontend else '',
+                    'InaccessiblePaths': '/data' if frontend else ''}
                 requested = [argv[i+1] for i, x in enumerate(argv[:-1]) if x in ('-p', '--property')]
                 output = '\n'.join(props.get(p, '') if '--value' in argv else p+'='+props.get(p, '') for p in requested)
                 return subprocess.CompletedProcess(argv, 0, stdout=output+'\n', stderr='')
@@ -219,7 +224,11 @@ class ConfigContracts(OperationsFixture):
     def test_only_two_app_paths_append_all_other_values_preserved(self):
         # INV-DEPLOY-18
         replay = Path(self.config['totp_state_path']).read_bytes()
-        self.assertIsNone(self.op.configure())
+        try:
+            result = self.op.configure()
+        except ValueError:
+            self.fail('Valid pinned config migration with accepted R5 unit profiles was refused')
+        self.assertIsNone(result)
         after = json.loads(self.paths['AUTH_CONFIG'].read_bytes())
         expected = copy.deepcopy(self.config)
         expected.update(android_auth_db=str(self.paths['AUTH_DB']), android_download_dir=str(self.paths['CATALOG']))
