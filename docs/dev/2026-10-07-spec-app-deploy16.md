@@ -188,6 +188,13 @@ Accepted==after с pending - незавершенная транзакция; с
 rollback до before здесь явно разрешен, как в legacy recovery, поэтому
 provisional published ID может вернуться к before. Перед mutation проверяется
 весь interrupted tree/checkpoint; failed rollback/start/health сохраняет pending.
+На один invocation разрешена одна попытка rollback, без автоматических retry
+loops. Существующий runner ограничивает каждый systemctl subprocess40 секундами;
+health - максимум6 probes (is-active/User/Group двух units), то есть240 секунд.
+Rollback stop/start/health - максимум10 subprocess calls, то есть400 секунд
+на service steps; любой timeout/error/неверный health прекращает попытку и
+сохраняет pending/checkpoint. Новый invocation может снова выполнить одну
+проверенную recovery attempt, но текущий не начинает второй rollback.
 Монотонный fence окончательно принятого release применяется после durable
 clear journal. После этого возврат на меньший ID запрещен: только forward-fix.
 Unknown journal version, плохая pair, checkpoint
@@ -230,7 +237,8 @@ Marker никогда не означает авторизацию bytes: све
 | own valid marker/old pin | exact marker accepted14, no pending/config marker | проверить checkpoint, продолжить atomic replacement либо вернуть old verified bytes и clear |
 | own valid marker/new pin | exact marker accepted14, no pending/config marker | проверить pins/metadata/absence/trust, fsync helper/parent, durable clear |
 | none/new pin | exact ожидаемый14, no pending/config marker | проверенный no-op |
-| invalid marker/unknown helper/accepted drift/pending | любое | отказ, evidence retained; только новый отдельно reviewed operator recovery packet |
+| own valid marker/old pin | root-verified legitimate accepted14' нового signed14, no package pending | terminal refusal ЭТОГО bootstrap candidate, marker/checkpoint retained, intent abandoned; valid current accepted14' не заменяется before |
+| invalid marker/unknown helper/иной accepted drift/pending | любое | отказ, evidence retained; только новый отдельно reviewed operator recovery packet |
 
 Новый helper под тем же flock отказывает ДО package recovery/install при
 наличии bootstrap либо config marker (включая malformed marker). Он не
@@ -238,7 +246,17 @@ Marker никогда не означает авторизацию bytes: све
 он может принять valid signed14 в прежнем авторизованном scope. Это не новая
 полномочность; последующий bootstrap recovery отказывает при accepted drift
 и не перезаписывает state из checkpoint. Нет гарантии marker guard старого
-helper, скрытой замены его bytes или изменения sudoers. Operator recovery
+helper, скрытой замены его bytes или изменения sudoers. При legitimate
+accepted14' безопасный выход текущего кандидата - документированно отказаться
+от bootstrap: неизменный old14 helper/package/services остаются usable в
+прежнем авторизованном scope после read-only проверки tree/health; именно
+new16/config migration остаются BLOCKED. Intent abandoned не стирает marker
+или checkpoint и не отменяет новый accepted14'. Дальнейший переход требует
+ОТДЕЛЬНОГО reviewed rebaseline/recovery packet, pinned на CURRENT accepted14'
+и новый marker с сохранением старого evidence; этот packet OUT OF current
+package, не готовится/не авторизуется данной спецой. Текущий bootstrap не
+переписывает пары marker/accepted. Риск - ожидание оператора без гарантированного
+срока завершения; автоматический выход из drift не обещается. Operator recovery
 применяется отдельно, marker нельзя удалять вручную для обхода проверки.
 
 После durable принятия16 без pending действует forward-fix only: старый
@@ -301,7 +319,16 @@ accepted14 и effective unit gates; safe stop двух служб; reread whole 
 raw config/metadata/fsync parent; durable marker; atomic replace preserving
 owner0600/fsync; start двух служб/health; durable marker clear. TOTP replay
 stores не snapshot/rewind: они не меняются этой операцией, штатные writes
-завершены до auth snapshot. Public proof не содержит содержимого checkpoint.
+завершены до auth snapshot: systemctl stop обеих служб успешно завершен и
+units проверены inactive до reread. Если post-stop digest отличается от
+preflight, migration отказывает без auth/path mutation и без marker/checkpoint
+публикации; под тем же lock один раз запускает обе прежние службы и проверяет
+health. При restart/health failure - bounded refusal с retained private
+операторским отчетом о failure/digests/metadata, без secret values; marker
+не создается, signed16 gate остается закрыт до проверки оператором. Автоматический
+новый preflight/retry отсутствует. Public proof не содержит содержимого checkpoint.
+Config recovery/rollback также имеет одну попытку на invocation и те же
+40-секундные subprocess/240-секундные health/400-секундные rollback service bounds.
 
 | Config/marker после start либо kill | Действие под тем же lock |
 | --- | --- |
@@ -355,7 +382,10 @@ regular/nlink1 owner/mode checks, existing inode не заменяется; floc
 каталоги0700/files0600 вне repo/sync; содержит raw before manifest либо явное
 absence, expected current digest, after manifest digest, APK hashes и проверенный
 build/certificate provenance. Этот proof не содержит signing credentials,
-retained после success/kill/rollback; GC не входит в scope. До switch
+retained после success/kill/rollback; GC не входит в scope. Известное
+ограничение: объем retained APK/proof не имеет quota/retention bound;
+заполнение диска может отказать публикации, не разрешая early feed switch,
+удаление evidence или automatic GC. Новый quota/GC механизм не добавляется. До switch
 он проверяет current manifest digest и expected predecessor, чтобы stale
 publisher не откатил новый feed. Private signing key не попадает в каталог.
 APK сверяется с reviewed build: размер/SHA256, package, certificate и
@@ -410,10 +440,10 @@ initialize_state, state_value/signing fixtures, без чтения реализ
 | INV-DEPLOY-12/13 | exact maps/modes/keys/bounds, signed14->16, повтор первого16/base14, затем два разных16->16 с большими IDs без helper change и повтор последнего; replay/downgrade/mixed/extra rejection; stage swap после snapshot; unhealthy same-ID no repair |
 | INV-DEPLOY-14/15 | обоим app leaves absence до journal; preexisting even matching leaf rejects; четыре interrupted combinations; rollback exact14/raw state/две absence;16->16 четыре before/after app пары; before16 absence отказ; per-leaf order/atomicity; unknown leaf retained |
 | INV-DEPLOY-16 | legacy pending1/2 recovery,13->14 removal, отсутствие обоих app leaves; pending3 before14/16; accepted before/after; unknown journal/checkpoint отказ |
-| INV-DEPLOY-14/16 | kill каждого checkpoint/journal/leaf install/stop/start/state publish/clear boundary, fsync ordering, checkpoint basename collision refusal, repeat recovery, accepted-after broken-health rollback только при pending, failed rollback retained evidence |
+| INV-DEPLOY-14/16 | kill каждого checkpoint/journal/leaf install/stop/start/state publish/clear boundary, fsync ordering, checkpoint basename collision refusal, repeat recovery, same-ID после state publish/до clear обязан вызвать recovery до no-op; accepted-after broken-health rollback только при pending, timeout/одна попытка/failed rollback retained evidence |
 | INV-DEPLOY-12/15 | nofollow/hardlink/owner/mode/ancestry и identity drift; root scope не расширен; serialized concurrent deploys; stale staged base отказ |
-| INV-DEPLOY-17 | bootstrap old/new pins, accepted14/trust/no pending/absence gates; no state initialization; replacement kill/idempotence/unknown marker preservation; no restoration old helper after16; new helper refuses markers; old helper after kill accepted drift refused by bootstrap |
-| INV-DEPLOY-18 | unknown auth values/password/TOTP/replay/username/TTL сохраняются; только два append; conflicts/unsafe paths reject; private proof; marker recovery/rollback; DB/grants не удаляются; pinned accepted-R5 startup с добавленными keys, package rollback14/migrated-config health; effective-unit gate; same flock whole-period и concurrent deploy marker отказ |
+| INV-DEPLOY-17 | bootstrap old/new pins, accepted14/trust/no pending/absence gates; no state initialization; replacement kill/idempotence/unknown marker preservation; no restoration old helper after16; new helper refuses markers; old helper after kill legitimate14' дает terminal refusal кандидата/evidence retained/oldscope usable/new16 blocked |
+| INV-DEPLOY-18 | unknown auth values/password/TOTP/replay/username/TTL сохраняются; только два append; conflicts/unsafe paths reject; private proof; marker recovery/rollback; DB/grants не удаляются; pinned accepted-R5 startup с добавленными keys, package rollback14/migrated-config health; effective-unit gate; same flock whole-period и concurrent deploy marker отказ; post-stop digest mismatch без writes/marker с bounded restart обеих служб, failed restart private report |
 | INV-DEPLOY-19 | immutable APK before feed, collision different bytes refusal, same bytes repeat, stale/concurrent publisher, interruption/hash/signature/metadata/parser checks, atomic feed CAS rollback, empty-before restore, strict code monotonicity и exception только explicit rollback, lock/proof metadata |
 
 До root bootstrap обязательны independent design PASS, committed blind RED,
@@ -459,6 +489,11 @@ markers/state table и forward-fix only; M5 - whole-period lock/config failure
 в правила absence, stage/target boundaries, test groups, basename/units/privacy,
 unhealthy same-ID и meaningful RED. Это adjudication автора, не review PASS;
 повторная независимая проверка exact исправленного коммита обязательна.
+Второй review5592aade закрыл B1/B2/M1/M2/M4/M6/L1..8. N1 adjudicated основным
+агентом как terminal refusal текущего bootstrap с retained evidence и usable
+oldscope; config/new16 blocked до отдельного будущего packet. N2/N4/N5 закрыты
+post-stop restart/bounds/pending same-ID test; N6 зафиксирован как отсутствие
+GC/quota. N3 - pending production compatibility/health gate, не source proof.
 
 ## Решения и открытые вопросы
 
