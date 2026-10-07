@@ -35,10 +35,13 @@ class AppDeepJSONContract(unittest.TestCase):
         self.client = TestClient(self.web.create_app(config, self.backend, clock=lambda: 1800000000),
             base_url=ORIGIN, raise_server_exceptions=False)
         # Raw bytes avoid constructing recursive Python objects or changing recursionlimit.
-        self.deep = b'[' * 1100 + b'0' + b']' * 1100
+        # Use 60000 levels, still below the 128KiB byte limit, to exceed
+        # elevated parser recursion limits without changing process state.
+        self.deep = b'[' * 60000 + b'0' + b']' * 60000
         self.assertLess(len(self.deep), 128 * 1024)
 
     def invalid(self, endpoint, body):
+        self.assertLess(len(body), 128 * 1024)
         response = self.client.post('/api/app/' + endpoint, content=body,
             headers={'Origin': ORIGIN, 'Authorization': 'Bearer ' + 'A' * 43},
             follow_redirects=False)
