@@ -214,6 +214,25 @@ class Deploy16(unittest.TestCase):
         self.assertLessEqual(sum(c[1] == 'start' for c in self.calls), 2)
         self.assertEqual(self.hashes(self.tree()), self.hashes(self.before14))
 
+    def test_recovery_timeout_retains_pending_and_never_retries_start(self):
+        # INV-DEPLOY-16 / DESIGN M4: stop2 + start2 + health6 <=10 total calls.
+        self.journal(self.before14, 2, self.before16)
+        for p in APP:
+            self.write(self.target / p, self.before16[p])
+        original = self.runner
+        def timeout_first_start(args):
+            result = original(args)
+            if args[1] == 'start':
+                raise subprocess.TimeoutExpired('/usr/bin/systemctl', 40)
+            return result
+        self.runner = timeout_first_start
+        with self.assertRaises((self.api.Rejected, self.api.RollbackFailed)):
+            self.deploy().run()
+        self.assertTrue((self.checkpoints / 'pending.json').exists())
+        self.assertEqual(sum(c[1] == 'start' for c in self.calls), 1)
+        self.assertLessEqual(len(self.calls), 10)
+        self.assertEqual(self.hashes(self.tree()), self.hashes(self.before14))
+
     def test_bootstrap_or_config_marker_blocks_even_valid_signed16(self):
         # INV-DEPLOY-17 / INV-DEPLOY-18: malformed marker is a guard, not authorization.
         for name in ('bootstrap-pending.json', 'config-pending.json'):
