@@ -214,6 +214,38 @@ class Deploy16(unittest.TestCase):
         self.assertLessEqual(sum(c[1] == 'start' for c in self.calls), 2)
         self.assertEqual(self.hashes(self.tree()), self.hashes(self.before14))
 
+    def test_pending_recovery_consumes_single_rollback_budget_before_new_install_failure(self):
+        # INV-DEPLOY-16: recovery consumes the single rollback budget for this invocation.
+        raw = self.journal(self.before14, 2, self.before16)
+        self.write(self.target / AUTH, self.before16[AUTH])
+        # A subsequent authorized transaction may start, but cannot trigger a second rollback.
+        self.signed(self.before16)
+        original = self.runner
+        starts = []
+        def fail_only_if_second_transaction_starts(args):
+            value = original(args)
+            if args[1] == 'start':
+                starts.append(args[2])
+                if len(starts) == 3:
+                    raise RuntimeError('synthetic staged-install start failure after completed recovery')
+            return value
+        self.runner = fail_only_if_second_transaction_starts
+        caught = None
+        try:
+            self.deploy().run()
+        except Exception as exc:
+            caught = exc
+        self.assertEqual(len(starts), 3, 'Invocation attempted a second rollback after consuming its budget')
+        self.assertIsInstance(caught, self.api.RollbackFailed, 'Budget exhaustion must be explicit and retained')
+        self.assertEqual(self.state.read_bytes(), raw)
+        self.assertEqual(self.hashes(self.tree()), self.hashes(self.before16))
+        pending = self.checkpoints / 'pending.json'
+        self.assertTrue(pending.exists(), 'Exhausted rollback budget discarded the new pending transaction')
+        journal = json.loads(pending.read_bytes())
+        self.assertEqual(journal['before'], json.loads(raw))
+        self.assertEqual(journal['after']['files'], self.hashes(self.before16))
+        self.assertTrue((self.checkpoints / journal['checkpoint']).is_dir())
+
     def test_recovery_timeout_retains_pending_and_never_retries_start(self):
         # INV-DEPLOY-16 / DESIGN M4: stop2 + start2 + health6 <=10 total calls.
         self.journal(self.before14, 2, self.before16)

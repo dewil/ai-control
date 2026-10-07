@@ -33,7 +33,7 @@ class OperationsFixture(unittest.TestCase):
         core.Deploy16.setUp(self)
         self.paths = dict(TARGET=self.target, STATE=self.state, KEY=self.key,
             HELPER=self.root/'helper/ai-control-deploy', NEW_HELPER=self.root/'owner/candidate.py',
-            LOCK=self.state.parent/'lock', PACKAGE_PENDING=self.checkpoints/'pending.json',
+            LOCK=self.checkpoints/'lock', PACKAGE_PENDING=self.checkpoints/'pending.json',
             BOOTSTRAP_MARKER=self.state.parent/'bootstrap-pending.json',
             BOOTSTRAP_CHECKPOINTS=self.state.parent/'bootstrap-checkpoints',
             CONFIG_MARKER=self.state.parent/'config-pending.json',
@@ -76,6 +76,8 @@ class OperationsFixture(unittest.TestCase):
         for name, value in pins.items():
             if hasattr(self.op, name):
                 setattr(self.op, name, value)
+        # Bootstrap/config reuse the durable existing accepted-R5 flock inode.
+        self.write(self.paths['LOCK'], b'', 0o600)
         self.commands = []
         self.service_active = True
         self.after_stop = None
@@ -115,6 +117,31 @@ class OperationsFixture(unittest.TestCase):
                 else 'Signer #1 certificate SHA-256 digest: '+CERT+'\n')
         return subprocess.CompletedProcess(argv, 0, stdout=text, stderr='')
 
+    def existing_lock_drift_refuses_without_creation_or_repair(self, operation):
+        # INV-DEPLOY-17 / INV-DEPLOY-18: existing root-private lock provenance.
+        operation_name = operation.__name__
+        with self.subTest(drift='missing lock'):
+            lock = self.paths['LOCK']
+            lock.unlink()
+            before_paths = {p.relative_to(self.root) for p in self.root.rglob('*')}
+            self.refuse_without_mutation(operation)
+            self.assertFalse(lock.exists(), 'Operation manufactured missing accepted-R5 lock')
+            self.assertEqual({p.relative_to(self.root) for p in self.root.rglob('*')}, before_paths)
+            self.assertFalse(self.commands, 'Lock drift triggered service mutation')
+        # A failed refusal must not contaminate the independent unsafe-parent case.
+        self.setUp()
+        operation = getattr(self.op, operation_name)
+        with self.subTest(drift='parent0755'):
+            lock = self.paths['LOCK']
+            inode = lock.stat().st_ino
+            lock.parent.chmod(0o755)
+            before_paths = {p.relative_to(self.root) for p in self.root.rglob('*')}
+            self.refuse_without_mutation(operation)
+            self.assertEqual(lock.stat().st_ino, inode)
+            self.assertEqual(lock.parent.stat().st_mode & 0o777, 0o755)
+            self.assertEqual({p.relative_to(self.root) for p in self.root.rglob('*')}, before_paths)
+            self.assertFalse(self.commands, 'Lock drift triggered service mutation')
+
     def protected(self):
         return {name: path.read_bytes() if path.is_file() else None for name, path in self.paths.items()
                 if name in ('HELPER', 'STATE', 'KEY', 'AUTH_CONFIG', 'FEED')}
@@ -129,6 +156,9 @@ class OperationsFixture(unittest.TestCase):
 class BootstrapContracts(OperationsFixture):
     def setUp(self):
         self.prepare('ai-control-app-bootstrap.py')
+
+    def test_missing_existing_lock_or_unsafe_parent_is_drift(self):
+        self.existing_lock_drift_refuses_without_creation_or_repair(self.op.bootstrap)
 
     def test_wrong_new_pin_never_derives_authority_from_candidate(self):
         # INV-DEPLOY-17
@@ -183,6 +213,9 @@ class ConfigContracts(OperationsFixture):
         self.prepare('ai-control-app-config.py')
         self.write(self.paths['HELPER'], self.paths['NEW_HELPER'].read_bytes(), 0o755)
 
+    def test_missing_existing_lock_or_unsafe_parent_is_drift(self):
+        self.existing_lock_drift_refuses_without_creation_or_repair(self.op.configure)
+
     def test_only_two_app_paths_append_all_other_values_preserved(self):
         # INV-DEPLOY-18
         replay = Path(self.config['totp_state_path']).read_bytes()
@@ -231,9 +264,12 @@ class ConfigContracts(OperationsFixture):
         # INV-DEPLOY-18 / DESIGN M5: one bounded rollback attempt, no DB rewind.
         self.write(self.paths['AUTH_DB'], b'synthetic existing grant authority', 0o600)
         count = []
+        first_failure_index = []
         def fail_start(argv):
             if argv[1] == 'start':
                 count.append(True)
+                if not first_failure_index:
+                    first_failure_index.append(len(self.commands)-1)
                 raise subprocess.TimeoutExpired(argv[0], 40)
         self.command_failure = fail_start
         with self.assertRaises(ValueError):
@@ -242,6 +278,9 @@ class ConfigContracts(OperationsFixture):
         self.assertEqual(self.paths['AUTH_DB'].read_bytes(), b'synthetic existing grant authority')
         self.assertTrue(self.paths['CONFIG_MARKER'].exists())
         self.assertLessEqual(len(count), 2)
+        # Config rollback: stop2 + inactive2 + start2 + health6 <=12 calls / 480s.
+        self.assertTrue(first_failure_index)
+        self.assertLessEqual(len(self.commands)-first_failure_index[0]-1, 12)
 
 
 class PublisherContracts(OperationsFixture):
