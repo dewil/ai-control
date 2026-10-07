@@ -36,7 +36,7 @@ PANEL_UID, PANEL_GID = optional_identity('ai-panel')
 
 def run_command(argv, *, timeout=40):
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
-        cwd='/', env={'PATH': '/usr/bin:/bin', 'LANG': 'C',
+        cwd='/', env={'PATH': '/home/dwl/android-tools/jdk-17.0.20.1+1/bin:/usr/bin:/bin', 'LANG': 'C',
                      'JAVA_HOME': '/home/dwl/android-tools/jdk-17.0.20.1+1'})
 
 TARGET = Path('/opt/ai-control-web')

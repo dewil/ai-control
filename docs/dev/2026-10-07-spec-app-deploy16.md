@@ -773,3 +773,15 @@ phase (stop2/inactive2/start2/health6), не ко всему invocation. effecti
 делает12 bounded read-only show calls до мутации. Healthy pending-after recovery
 делает ещё health6:18 read-only calls, maximum720s по40s/call. Profile proof
 обязателен; service mutation/rollback budget не увеличен.
+
+## Publication verifier PATH corrigendum
+
+Actual SDK36 apksigner запускает bare `java` (line97) и не использует JAVA_HOME.
+Sanitized publisher env обязан задать literal
+PATH=/home/dwl/android-tools/jdk-17.0.20.1+1/bin:/usr/bin:/bin вместе с прежним
+JAVA_HOME. Caller env/PATH не наследуется; verifier argv/cwd/timeout40 неизменны.
+Изменение касается только public APK verification, не SDK/provider/config/auth.
+Config уже прошёл recovery gate: отдельная publication-only команда содержит
+verified-I/privdrop publisher, без config повторения или package deploy.
+Old wrapperd642 historical frozen; новый wrapper sourcepin проходит независимый
+RED/SOURCE/fullCI до root invocation. APKda7/code3/certbaa неизменны.
