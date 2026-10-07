@@ -5,7 +5,7 @@
 После7days без foreground запуска нужен новый вход. При регулярном использовании
 30days срок токена продлевается автоматически; background polling не продлевает idle.
 
-Версия0.1.2/code3, applicationId ru.dewil.aicontrol, minSDK26/targetSDK36.
+Версия0.1.3/code4, applicationId ru.dewil.aicontrol, minSDK26/targetSDK36.
 Debug устанавливается отдельно как ru.dewil.aicontrol.debug.
 Toolchain: JDK17, Gradle9.7.1, AGP9.4.1, Kotlin2.4.20, SDK36/build-tools36.0.0.
 Точные зависимости находятся в gradle/libs.versions.toml и app/build.gradle.kts.
