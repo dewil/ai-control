@@ -130,7 +130,11 @@ class Accepted16ConfigIncident(operations.OperationsFixture):
         self.configure_successfully()
         self.assertFalse(marker_path.exists())
         self.assert_preserved()
-        self.assertLessEqual(len(self.commands), 12)
+        # Healthy pending finalization does not perform rollback. Its read-only
+        # budget includes12 effective-unit property probes and6 health probes.
+        self.assertFalse(any(argv[1] in ('stop','start') for argv in self.commands))
+        self.assertLessEqual(len(self.commands), 18)  # <=720s at frozen40s/call.
+        # Rollback's separate12-call/480s budget is asserted by the timeout suite.
 
     def test_existing_package_bootstrap_or_unknown_config_marker_blocks16_without_writes(self):
         # INV-DEPLOY-18: accepting known16 does not bypass any marker authority gate.
