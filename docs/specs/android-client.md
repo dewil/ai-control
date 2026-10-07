@@ -9,8 +9,8 @@ APK updater. Mac остается браузером. Provider auth, NATS и roo
 
 ## Инварианты
 
-- INV-AND-01 (auth revision DRAFT): Server владеет device admission/revoke. Android device token восстанавливает рабочую WebView session без credentials при регулярном использовании; inactivity7days/logout/revoke требуют login. Web session3hours не ограничивает длительный вход Android; month token renewal контракт еще проектируется.
-- INV-AND-02 (auth revision DRAFT): Native защищает device token в отдельном хранилище; password/TOTP не сохраняются, cookie/token не попадают в settings/logs/backup; узкий native auth transport временно передает control_session из same-origin Set-Cookie в CookieManager и держит ее только в memory, без JS/external export. Защищенное хранение, rotation и связка WebView требуют новой независимой проверки; действующие backup/debug ограничения сохраняются.
+- INV-AND-01: Принятый auth контракт от 07.10.2026 - INV-APP-02/04 в [app-auth](app-auth.md). Server владеет admission/revoke; token восстанавливает WebView session без credentials. Idle >=7 дней, expires >=30-day rolling deadline, logout/revoke требуют login. Успешное foreground open обновляет last_open и expires=now+30 дней; фоновые события не продлевают сроки. Web cookie 10800 секунд сохраняется. Ранее DRAFT month renewal закрыт этой нормой.
+- INV-AND-02: Принятый INV-APP-02/03/06 защищает device token через Keystore encrypted noBackup store; пароль/TOTP не сохраняются, token/cookie не попадают в settings/logs/backup. Узкий native transport принимает только control_session от exact HTTPS origin и временно передает его CookieManager; cookie хранится в WebView profile/native memory, без JS/external export. Token не ротируется в первом срезе. Independent SOURCE и device acceptance остаются проверочными gates, а не открытым выбором механизма.
 - INV-AND-03: В поддерживаемой границе доверенного panel server с действующей CSP и без внешних redirects WebView показывает только точный panel HTTPS origin; callbacks не являются sandbox от скомпрометированного сервера; внешние user-gesture GET http(s) и явный клик на same-origin /download/android/ открываются в браузере без credentials, прочие переходы блокируются. Native Intent не задает URL.
 - INV-AND-04: TLS ошибки отменяют загрузку без обхода; cleartext и mixed content запрещены; универсальный JS/native мост отсутствует.
 - INV-AND-05: Background/resume/reconnect не перезагружают живой документ, не повторяют mutation или неизвестную отправку; холодное восстановление получает auth/history через web GET.
@@ -21,7 +21,7 @@ APK updater. Mac остается браузером. Provider auth, NATS и roo
 - INV-AND-10: Загрузка/установка требуют явного действия; системное подтверждение обязательно: API31+ USER_ACTION_REQUIRED, API26..30 непривилегированный installer с отдельным acceptance. Permission return/reboot/unknown не повторяют установку; callback привязан к attempt/session, watchdog не заявляет успех.
 - INV-AND-11: Native picker считается поддержанным только после серверного потребления attachments. Push/фон не следуют из наличия WebView.
 
-- INV-AND-12: Общая навигация панели постоянно содержит ссылку /download/android/; публичная без panel cookie/auth redirect страница предлагает APK текущего manifest с no-store для landing/manifest, не закрепляет версию и честно показывает отсутствие релиза/ошибку проверки. Переход по действию dwl, без авто download/install.
+- INV-AND-12: Общая навигация панели постоянно содержит ссылку /download/android/; публичная без panel cookie/auth redirect страница предлагает APK текущего manifest с no-store для landing/manifest, не закрепляет версию и честно показывает отсутствие релиза/ошибку проверки. Переход по явному действию пользователя, без авто download/install.
 
 ## Решения 06.10.2026
 
@@ -33,9 +33,7 @@ Gid reference только механизм build/updater; dwl подтверд�
 
 ## Известные дыры
 
-Auth пересматривается под device token; предыдущий DESIGN PASS не относится
-к новым INV01/02. Android исходники/APK/тесты отсутствуют; key/feed и N->N+1 acceptance
-не проверены. Durable draft и фон имеют отдельных backlog owners в клиентском
+Контракт device token принят 07.10 в app-auth и активной app release feature spec; предыдущий DESIGN PASS не заменяет review нового API. Server integration, key/feed и N->N+1 acceptance требуют отдельных доказательств. Durable draft и фон имеют отдельных backlog owners в клиентском
 корне. Web контракты не ослабляются этим проектированием.
 
 ## Трассировка
