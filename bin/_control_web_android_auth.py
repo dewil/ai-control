@@ -222,9 +222,13 @@ class DeviceGrantStore:
         self._validate_storage()
         try:
             connection = sqlite3.connect(str(self._path), timeout=5, isolation_level=None)
-            os.chmod(self._path, 0o600, follow_symlinks=False)
-            self._validate_storage()
-            return connection
+            try:
+                os.chmod(self._path, 0o600, follow_symlinks=False)
+                self._validate_storage()
+                return connection
+            except BaseException:
+                connection.close()
+                raise
         except (sqlite3.Error, OSError):
             raise RuntimeError("device store unavailable") from None
 

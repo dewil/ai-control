@@ -20,6 +20,22 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 
+class _APKResponse(StreamingResponse):
+    """Own the open descriptor for the entire ASGI response, even before iteration."""
+
+    def __init__(self, stream, content, **kwargs):
+        self._stream = stream
+        super().__init__(content, **kwargs)
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            stream, self._stream = self._stream, None
+            if stream is not None:
+                stream.close()
+
+
 def valid_username(value):
     return type(value) is str and re.fullmatch(r'[a-z][a-z0-9_-]{1,31}', value) is not None
 
@@ -201,7 +217,7 @@ def create_app(config, backend, clock=None, *, owner_only=True):
                                 parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
                      if strict else json.loads(data, object_pairs_hook=unique_object))
             return value if type(value) is dict else None
-        except (ValueError, UnicodeError):
+        except (ValueError, UnicodeError, RecursionError):
             return None
 
     def outcome(call):
@@ -220,7 +236,17 @@ def create_app(config, backend, clock=None, *, owner_only=True):
 
     @app.middleware('http')
     async def security_headers(request, call_next):
-        response = await call_next(request)
+        path = request.url.path
+        app_namespace = path == '/api/app' or path.startswith('/api/app/')
+        download_namespace = path == '/download/android' or path.startswith('/download/android/')
+        canonical_app = path in ('/api/app/login', '/api/app/session', '/api/app/logout')
+        canonical_download = (path in ('/download/android/', '/download/android/version.json') or
+                              re.fullmatch(r'/download/android/ai-control-[1-9][0-9]{0,9}\.apk', path))
+        if (app_namespace and not canonical_app) or (download_namespace and not canonical_download):
+            # Scope slash rejection to the new namespaces; preserve R5 web redirects.
+            response = error('not_found', 404)
+        else:
+            response = await call_next(request)
         immutable_apk = (response.status_code == 200 and
                          re.fullmatch(r'/download/android/ai-control-[1-9][0-9]{0,9}\.apk', request.url.path) and
                          response.headers.get('content-type') == 'application/vnd.android.package-archive')
@@ -360,23 +386,23 @@ def create_app(config, backend, clock=None, *, owner_only=True):
         if not directory or not match or int(match[1]) > 2147483647:
             return android_error('not_found', 404)
         helper = download_helper()
+        stream = None
         try:
             stream = helper.open_file(directory, filename)
             size = os.fstat(stream.fileno()).st_size
         except helper.FeedMissing:
             return android_error('not_found', 404)
-        except helper.FeedUnavailable:
+        except (helper.FeedUnavailable, OSError):
+            if stream is not None:
+                stream.close()
             return android_error('unavailable', 503)
         async def chunks():
-            try:
-                while True:
-                    chunk = await run_in_threadpool(stream.read, 65536)
-                    if not chunk:
-                        break
-                    yield chunk
-            finally:
-                stream.close()
-        return StreamingResponse(chunks(), media_type='application/vnd.android.package-archive',
+            while True:
+                chunk = await run_in_threadpool(stream.read, 65536)
+                if not chunk:
+                    break
+                yield chunk
+        return _APKResponse(stream, chunks(), media_type='application/vnd.android.package-archive',
             headers={'Content-Length': str(size), 'Content-Disposition': f'attachment; filename="{filename}"',
                      'Cache-Control': 'public, max-age=31536000, immutable'})
 
