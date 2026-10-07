@@ -228,7 +228,8 @@ class AppAuthContract(unittest.TestCase):
         with sqlite3.connect(self.db) as db:
             dump = '\n'.join(db.iterdump())
         self.assertNotIn(token, dump)
-        self.assertIn(hashlib.sha256(token.encode('ascii')).hexdigest(), dump)
+        # SQLite BLOB dumps use uppercase X'HEX'; TEXT digests may be lowercase.
+        self.assertIn(hashlib.sha256(token.encode('ascii')).hexdigest(), dump.lower())
         for file in self.private.iterdir():
             if file.is_file():
                 self.assertNotIn(token.encode(), file.read_bytes(), file.name)
