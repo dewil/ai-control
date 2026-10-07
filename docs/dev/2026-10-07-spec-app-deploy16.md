@@ -679,3 +679,91 @@ pre-journal orphan checkpoints, os.walk error reporting), operators low005
 (path-based checkpoint mkdir under verified root0700), publisher low001/002
 (lock initialization interruption, SDK digest pin) переданы root triage.
 Их чтение не разрешает дополнительные действия или снятие operator gates.
+
+## Incident recovery: принятый package16, config еще before
+
+07.10 root incident evidence: helperbf142e2b установлен, signed schema3/full16
+release6 принят, web healthy; root operator packet отказал ДО config mutation,
+потому что effective_units ошибочно проверял frontend sandbox profile у broker.
+Принятому R5 broker принадлежат другие permissions. Catalog/app config не готовы,
+native login недоступен. Этот addendum задаёт узкое восстановление config и
+publication, без bootstrap, package install/downgrade, accepted reset или provider
+изменений. Старый bootstrap accepted14 strict guard не расширяется.
+
+### Effective unit contract по pinned accepted R5
+
+Oracle - exact `0ea544756765c68ee3fea262a8a77ab4d4b8fe41` templates, не fixture:
+
+| Property | ai-control-web.service | ai-control-web-broker.service |
+| --- | --- | --- |
+| User | ai-panel | dwl |
+| Group | ai-panel | ai-panel |
+| ProtectSystem | strict | full |
+| ProtectHome | yes | no (implicit default) |
+| ReadWritePaths | /var/lib/ai-control-web | empty (implicit default) |
+| InaccessiblePaths | /data | empty (implicit default) |
+
+Проверяется каждый фактический profile, permissions НЕ меняются. Native/provider
+account/config/session stores не читаются и не трогаются. Frontend storage/sandbox
+gates сохраняются; broker intentionally требует доступа к owner runtime.
+Old blind fixture одинаковых двух profiles была неверным oracle; independent
+writer исправляет её по указанным public templates до source GO.
+
+### Проверенный accepted package для config
+
+Новый public `accepted_package() -> raw_accepted_bytes` в config module допускает
+ТОЛЬКО schema2/exact14 либо schema3/exact16. До любого auth/service/path mutation
+проверяет root private whole-state snapshot и literal EXPECTED_ACCEPTED_SHA256;
+строгие exact keys schema/release_id/manifest_sha256/files, schema int2/3, ID>=1,
+lowercase SHA256. Map выбирается только по verified schema, hashes/metadata всех
+14/16 target leaves совпадают. При schema2 обязательны обе app absence proofs;
+при schema3 все16 присутствуют с exact owner/mode/nlink1/nofollow bounds. Extra/
+subset/mixed/legacy13/state-zero/schema4/drift отказывает. Accepted state не пишется.
+
+Config `configure()` вызывает accepted_package вместо14-only guard. Оба app
+fields по-прежнему только append fixed paths, unknown/password/TOTP/replay/username/
+TTL10800 сохраняются; конфликтующие fields и неожиданный TTL/username отказывают.
+Старый public config `accepted14()` остаётся strict14-only compatibility function;
+bootstrap module accepted14 и его источник/authority не изменяются.
+Helper installedbf142e2b и прежний trust191c проверяются fixed pins. Никакого
+инициализирования/замены accepted/private key/new helper или расширения sudo seam.
+
+### Узкий root recovery packet
+
+Known PUBLIC signed6 manifest SHA
+`f6af5e76328743c3320f9e4839b2ea50034fa84b959444f3df81cf85aaf18d66` в
+`/home/dwl/.ai-control-review/app-auth-release/candidate/release.json`.
+Canonical helper encode schema3/id6/files(manifest hashes) даёт1651 bytes и
+literal accepted pin
+`df1dc5bd9e223f75a7759ea5836f6576c40d723eb7cb49f0340df8c6cc3a44a9`.
+Pin не выводится из произвольного production accepted/current after config.
+
+Separate recovery packet embeds reviewed updated config snapshot, literal source/
+helper/trust/accepted16 pins; запускается тем же trusted -I/bounded anchored snapshot
+contract. Bootstrap НЕ загружается/НЕ вызывается; noarg deploy НЕ запускается,
+package/state не меняется. Initial checks require no BOOTSTRAP_MARKER/package pending
+и exact known accepted16/tree/helper/trust. CONFIG_MARKER обычно отсутствует;
+own validated marker ЭТОГО accepted16 разрешает same-transaction recovery:
+marker/checkpoint raw before/migration after hashes проверены, EXPECTED_AUTH pin
+только из checked before bytes. Foreign accepted14 marker/unknown/evidence mismatch
+отказывает с retained evidence. Normal auth preflight - root-private whole-before
+snapshot в памяти, не public credential fields. Runtime paths и UID/pins не CLI/env.
+
+Первый config migration известного16 может иметь before без app fields: при failure
+одна bounded rollback attempt восстанавливает exact raw private before с сохранением
+DB/grants/replay. Это incident transaction preservation, НЕ разрешение удалить app
+fields у успешно configured16, сменить package/accepted или сделать downgrade.
+После успешной config migration действует прежний forward-fix fence. Recovery
+source не перематывает DB/replay; safe stop/inactive/restore/start/health остается
+12calls/480s, file/checkpoint/marker fsync ordering unchanged.
+
+Publication wrapper d642ad93 и publisher source4326db92 остаются прежними; fixed
+APK da7e092a/code3/name0.1.2/certbaa209 и transient child group987 unchanged. Новый
+recovery-command содержит только verified config recovery, затем отдельный verified
+publisher child при success, без bootstrap/signed deploy. Actual web/native/routes
+proof требуется после отдельно подтверждённого root execution; source/CI не заменяют
+этот факт. Root premature package advance фиксируется в private task incident report.
+
+До config/packet code обязательны committed meaningful independent RED по actual
+broker profiles и known schema3 config guard/preservation. Тот же автор исправляет,
+независимый SOURCE follow-up/full exact CI/packet review предшествуют root команде.
