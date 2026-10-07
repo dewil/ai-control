@@ -14,7 +14,7 @@
 
 Traceability: независимые HTTP/auth/device/restart/logout/rate/TOTP tests и проверки публичных landing/cache/manifest; Android payload/field/version tests, существующие policy/updater checks и компиляция native tests; полный web/naming/install/deploy CI; доказательства signed package и установленного HTTPS release. Вход на устройстве пользователя и обновление N->N+1 проверяются отдельно.
 
-Точная API-матрица, JSON/token/Bearer validation order и shared limiter/replay semantics зафиксированы в `docs/dev/2026-10-07-spec-app-auth-release.md`, раздел "Точная матрица API и порядок проверок". Exact16 bootstrap обязателен до публикации; scope14 не допускает app release.
+Точная API-матрица, JSON/token/Bearer validation order и shared limiter/replay semantics зафиксированы в `docs/dev/2026-10-07-spec-app-auth-release.md`, раздел "Точная матрица API и порядок проверок". Exact16 bootstrap обязателен до публикации; scope14 не допускает app release. Deployment-инварианты определены в [web-deployment](web-deployment.md), актуальный [deploy16-контракт](../dev/2026-10-07-spec-app-deploy16.md) закреплен на immutable `73d86006abe70165de1e36839876a7afbd596cc9`; интеграция исходников не заменяет SOURCE/CI/bootstrap и установленную проверку.
 
 Известные ограничения: до проверенной server integration `/api/app/` отсутствует. Instrumented tests на устройстве и системное обновление имеют статус NOT RUN до фактического исполнения.
 
