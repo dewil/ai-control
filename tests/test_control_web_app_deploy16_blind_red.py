@@ -8,6 +8,10 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
+import sys
+import tempfile
+import copy
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -288,6 +292,56 @@ class Deploy16(unittest.TestCase):
         self.assertFalse(pending.exists())
         for p in APP:
             self.assertFalse(os.path.lexists(self.target / p))
+
+
+class AcceptedR5ConfigCompatibility(unittest.TestCase):
+    def test_pinned_old14_extended_config_startup_login_ttl_and_preservation(self):
+        # INV-DEPLOY-18: old accepted source, never the new app implementation.
+        from fastapi.testclient import TestClient
+        prior = os.umask(0o077)
+        self.addCleanup(os.umask, prior)
+        temporary = tempfile.TemporaryDirectory(prefix='deploy16-pinned-r5-', dir='/var/tmp')
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        pin = '0ea544756765c68ee3fea262a8a77ab4d4b8fe41'
+        for relative in fixture.MODES:
+            result = subprocess.run(['/usr/bin/git', '-C', str(ROOT), 'show', pin + ':' + relative],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, check=False)
+            self.assertEqual(result.returncode, 0, 'Pinned accepted R5 artifact unavailable: ' + relative)
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path.write_bytes(result.stdout)
+        module_spec = importlib.util.spec_from_file_location('pinned_deploy16_r5_web', root / 'bin/_control_web.py')
+        web = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(web)
+        now = [1800000000]
+        replay = root / 'synthetic-replay.json'
+        replay.write_text('{"last_step":-1}')
+        replay.chmod(0o600)
+        password, secret = 'deploy16-synthetic-password', 'JBSWY3DPEHPK3PXP'
+        config = dict(username='dwl', origin='https://control.example.test',
+            password_hash=web.hash_password(password), totp_secret=secret,
+            session_ttl=10800, secure_cookie=True, totp_state_path=str(replay),
+            android_auth_db='/var/lib/ai-control-web/android-auth/device-grants.sqlite3',
+            android_download_dir='/srv/ai-control-download/android',
+            unknown_nested={'preserve': [True, None, 7, 'exact']})
+        expected = copy.deepcopy(config)
+        class Backend:
+            def snapshot(self):
+                return {'tasks': []}
+        with TestClient(web.create_app(config, Backend(), clock=lambda: now[0]),
+                        base_url=config['origin']) as client:
+            self.assertEqual(client.get('/api/tasks').status_code, 401)
+            response = client.post('/api/login', json={'username': 'dwl', 'password': password,
+                'totp': web.totp_code(secret, now[0])}, headers={'Origin': config['origin']})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(client.get('/api/tasks').status_code, 200)
+            now[0] += 10799
+            self.assertEqual(client.get('/api/tasks').status_code, 200)
+            now[0] += 2
+            self.assertEqual(client.get('/api/tasks').status_code, 401)
+        self.assertEqual(config, expected)
+        self.assertEqual(json.loads(replay.read_text())['last_step'], 1800000000 // 30)
 
 
 if __name__ == '__main__':
