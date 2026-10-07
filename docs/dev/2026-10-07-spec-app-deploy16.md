@@ -429,11 +429,96 @@ Android downgrade: установленный versionCode ограничивае
 Пустой catalog дает landing200/no-store без broken APK link. После установки
 routes/cache/hash проверяются без cookies; proxy не меняется по предположению.
 
+## Публичный контракт модулей для blind tests
+
+Контракт заморожен до реализации; это library test surface, не новые root
+CLI полномочия. Три purpose modules имеют следующие публичные функции:
+
+| Source module | Entry point | Режим |
+| --- | --- | --- |
+| deployment/ai-control-app-bootstrap.py | `bootstrap()` | root, без аргументов; повтор вызывает описанное marker recovery |
+| deployment/ai-control-app-config.py | `configure()` | root, без аргументов; повтор вызывает описанное marker recovery |
+| deployment/publish-android-release.py | `publish(apk_path, *, version_code, version_name, sha256, certificate_sha256)` | dwl, только входной APK и публичные metadata |
+| deployment/publish-android-release.py | `rollback(expected_current_digest, predecessor_proof_id)` | dwl, explicit CAS rollback; proof ID только validated basename |
+
+Успешные bootstrap/configure/rollback возвращают None; publish возвращает
+validated publication proof ID (basename в fixed private proof root). Отказ
+поднимает ValueError с несекретным сообщением; subprocess timeout/error
+приводит к тому же проверенному refusal/recovery, не leaked command output.
+Production entrypoints не принимают target/config/helper/key/catalog/marker
+paths, UID, pins или arbitrary commands как CLI/env параметры. Root modules
+исполняются только из bounded checksum-pinned snapshot reviewed wrapper.
+Publisher apk_path - единственный входной файл; destinations фиксированы.
+
+Точные module-level constants ниже представляют уже принятые fixed paths.
+Каждый module экспортирует используемые им constants; bootstrap/config
+экспортируют весь root path набор, publisher - catalog/proof набор. Tests
+могут monkeypatch их на private tmp fixtures так же, как baseline helper;
+production wrapper не предоставляет такого канала или environment override.
+
+| Constant | Production value |
+| --- | --- |
+| TARGET | `/opt/ai-control-web` |
+| STATE | `/var/lib/ai-control-deploy/accepted.json` |
+| KEY | `/etc/ai-control-deploy/release-key.pem` |
+| HELPER | `/usr/local/sbin/ai-control-deploy` |
+| NEW_HELPER | `/home/dwl/ai-control-app-deploy16-helper.py` |
+| LOCK | `/var/lib/ai-control-deploy/lock` |
+| PACKAGE_PENDING | `/var/lib/ai-control-deploy/checkpoints/pending.json` |
+| BOOTSTRAP_MARKER | `/var/lib/ai-control-deploy/bootstrap-pending.json` |
+| BOOTSTRAP_CHECKPOINTS | `/var/lib/ai-control-deploy/bootstrap-checkpoints` |
+| CONFIG_MARKER | `/var/lib/ai-control-deploy/config-pending.json` |
+| CONFIG_CHECKPOINTS | `/var/lib/ai-control-deploy/config-checkpoints` |
+| AUTH_CONFIG | `/var/lib/ai-control-web/auth.json` |
+| AUTH_DB | `/var/lib/ai-control-web/android-auth/device-grants.sqlite3` |
+| CATALOG_ROOT | `/srv/ai-control-download` |
+| CATALOG | `/srv/ai-control-download/android` |
+| FEED | `/srv/ai-control-download/android/version.json` |
+| PUBLISH_LOCK | `/srv/ai-control-download/android/.publish.lock` |
+| PUBLICATION_PROOFS | `/home/dwl/.local/state/ai-control-android/publication` |
+
+Bootstrap pins называются EXPECTED_OLD_HELPER_SHA256 (принятый4ead),
+EXPECTED_NEW_HELPER_SHA256, EXPECTED_ACCEPTED_SHA256 и EXPECTED_KEY_SHA256
+(принятый191c). Publisher экспортирует EXPECTED_CERTIFICATE_SHA256 (прежний публичный
+certificate pin), PACKAGE_ID (`ru.dewil.aicontrol`) и DOWNLOAD_ORIGIN
+(`https://llm-web.dewil.ru:18443`); certificate аргумента сверяется с pin,
+не превращает caller metadata в trust authority.
+Config также экспортирует EXPECTED_AUTH_SHA256 - whole-config
+preflight digest - и EXPECTED_NEW_HELPER_SHA256/EXPECTED_ACCEPTED_SHA256.
+Новые pins фиксируются immutable operation packet после независимого
+source/CI review. Reviewed root wrapper связывает их с проверенным snapshot;
+непоставленный/невалидный pin - отказ. Нельзя вывести EXPECTED_NEW_HELPER_SHA256
+из NEW_HELPER и тем самым довериться любым подложенным bytes. Accepted pin
+происходит из root-verified current accepted14 raw bytes, не compiled13 reset
+и не догадка о R5 digest. В тесте wrong new-helper pin должен отказать без
+replacement/state/key mutation. Private config bytes в packet не публикуются.
+
+Публичные seams каждого module: `run_command(argv, *, timeout=40)` возвращает
+subprocess.CompletedProcess; production использует fixed reviewed argv без
+shell и указанные timeout bounds. `account_identity(name)` возвращает
+`(uid,gid)` существующего account, production допускает только root/dwl/ai-panel
+по назначению операции. Expected identities экспортируются как ROOT_UID,
+ROOT_GID, OWNER_UID, OWNER_GID, PANEL_UID, PANEL_GID; production root=0/0,
+прочие получаются из фактических account identities, не env. Tests patch эти
+constants/account_identity/run_command только в импортированном synthetic
+module, без запуска sudo/root commands. File descriptor/fsync/interruption
+assertions могут наблюдать stdlib seams; дополнительных runtime mock flags нет.
+
+Accepted-R5 compatibility fixture извлекает exact
+`0ea544756765c68ee3fea262a8a77ab4d4b8fe41:bin/_control_web.py` через git show,
+загружает его existing load_web fixture способом и проверяет synthetic HTTP
+web login/session с extended config. Автор tests не читает реализацию новых
+модулей и не выводит из нее ожидания. Loader отсутствующего purpose module
+должен дать явный assertion missing public contract, не необработанный ImportError;
+это честный RED только availability surface, не замена содержательному helper
+transition/recovery RED и будущим negative preservation fixtures.
+
 ## Приемка и blind RED packet
 
 Теги ниже ставятся в будущие независимые synthetic tests; сейчас coverage не
 заявляется. Blind writer получает эту спеку и public seams Deploy,
-initialize_state, state_value/signing fixtures, без чтения реализации.
+initialize_state, state_value/signing fixtures и замороженный module contract
+выше, без чтения реализации.
 
 | Инварианты | Проверяемый результат |
 | --- | --- |

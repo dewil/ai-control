@@ -58,3 +58,9 @@ INV-DEPLOY-12..19 - будущие blind RED группы в feature specificati
 пока не заявляется. Helper/bootstrap/config migration/publisher должны получить
 meaningful committed RED до автора реализации. Root production и device
 проверки учитываются отдельно от synthetic tests и CI.
+
+Public blind-test contract bootstrap/config/publisher (source paths, noargs root
+functions, fixed path/pin constants, service/account seams) заморожен в разделе
+"Публичный контракт модулей для blind tests" feature spec. Monkeypatch применяется
+только synthetic test module; production wrapper не принимает root paths/pins
+через CLI/env, проверяет immutable reviewed snapshot и operation pins.
