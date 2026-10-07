@@ -1,0 +1,1 @@
+package android.content; public class Intent {public static final String ACTION_VIEW="view",CATEGORY_BROWSABLE="browser"; public Class<?> destination;public Intent(Context c,Class<?> cls){destination=cls;}public Intent(String action,android.net.Uri uri){}public Intent addCategory(String category){return this;} }
