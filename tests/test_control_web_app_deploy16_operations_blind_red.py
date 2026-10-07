@@ -55,7 +55,11 @@ class OperationsFixture(unittest.TestCase):
         self.write(self.paths['HELPER'], fixture.SOURCE.read_bytes(), 0o755)
         self.write(self.paths['NEW_HELPER'], fixture.SOURCE.read_bytes()+b'\n# synthetic reviewed candidate\n', 0o755)
         self.paths['CATALOG_ROOT'].mkdir(mode=0o755)
+        self.paths['CATALOG_ROOT'].chmod(0o755)
         self.paths['CATALOG'].mkdir(mode=0o750)
+        self.paths['CATALOG'].chmod(0o750)
+        self.assertEqual(self.paths['CATALOG_ROOT'].stat().st_mode & 0o777, 0o755)
+        self.assertEqual(self.paths['CATALOG'].stat().st_mode & 0o777, 0o750)
         self.paths['PUBLICATION_PROOFS'].mkdir(mode=0o700)
         self.config = dict(username='dwl', session_ttl=10800, origin='https://control.example.test',
             password_hash='synthetic unchanged hash', totp_secret='synthetic unchanged TOTP',
@@ -107,7 +111,7 @@ class OperationsFixture(unittest.TestCase):
         # Metadata verifier invocation is intentionally a command seam, no real signing keys.
         tool = Path(argv[0]).name
         self.assertIn(tool, ('aapt', 'aapt2', 'apksigner'), 'Unreviewed arbitrary executable')
-        text = ("package: name='ru.dewil.aicontrol' versionCode='3' versionName='0.1.2'\n" if tool != 'apksigner'
+        text = ("package: name='ru.dewil.aicontrol' versionCode='3' versionName='0.1.2'\nminSdkVersion:'26'\ntargetSdkVersion:'36'\n" if tool != 'apksigner'
                 else 'Signer #1 certificate SHA-256 digest: '+CERT+'\n')
         return subprocess.CompletedProcess(argv, 0, stdout=text, stderr='')
 
