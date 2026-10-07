@@ -1,2 +1,2 @@
 package android.os;
-public class Handler {public Handler(Looper l){} public boolean post(Runnable r){return true;} public boolean postDelayed(Runnable r,long d){return true;} public void removeCallbacks(Runnable r){} }
+public class Handler {static java.util.List<Runnable> posted=new java.util.ArrayList<>();public Handler(Looper l){}public boolean post(Runnable r){posted.add(r);return true;}public boolean postDelayed(Runnable r,long d){return true;}public void removeCallbacks(Runnable r){posted.remove(r);}public static void runPosted(){java.util.List<Runnable> work=new java.util.ArrayList<>(posted);posted.clear();for(Runnable r:work)r.run();}}
