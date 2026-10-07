@@ -304,6 +304,8 @@ class AppAuthContract(unittest.TestCase):
         candidates = []
         unsafe = self.private / 'unsafe'
         unsafe.mkdir(mode=0o755)
+        # Earlier tests may set process umask077: this fixture must be truly unsafe.
+        unsafe.chmod(0o755)
         candidates.append(unsafe / 'grants.sqlite')
         corrupt = self.private / 'corrupt.sqlite'
         corrupt.write_bytes(b'not a SQLite database')
