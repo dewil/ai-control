@@ -23,6 +23,9 @@ APK updater. Mac остается браузером. Provider auth, NATS и roo
 
 - INV-AND-12: Общая навигация панели постоянно содержит ссылку /download/android/; публичная без panel cookie/auth redirect страница предлагает APK текущего manifest с no-store для landing/manifest, не закрепляет версию и честно показывает отсутствие релиза/ошибку проверки. Переход по явному действию пользователя, без авто download/install.
 
+- INV-AND-13: До первого входа обычный stop/start той же Activity сохраняет текущую видимую форму, точные username/password/TOTP и доступный фокус только в RAM. Submission очищает пароль/TOTP; явная смена auth экрана/reset создаёт новую пустую форму. Bundle, disk, logs и восстановление секретов после process death не используются. Пользователь должен успеть скопировать пароль и TOTP из KeePass по отдельности. Точный [контракт lifecycle](../dev/2026-10-07-spec-android-login-lifecycle.md).
+- INV-AND-14: На login экране компактный читаемый переход к обновлениям находится внизу после отправки с отдельным touch target; большая кнопка над полями не мешает входу. Authenticated update bar сохраняется. Контракт и критерии — в lifecycle addendum.
+
 ## Решения 06.10.2026
 
 Views/XML вместо player/Compose, min26/target36 как design baseline;
@@ -40,3 +43,5 @@ Gid reference только механизм build/updater; dwl подтверд�
 
 INV01..12 -> группы матрицы в feature spec; реальные Android tests пока
 отсутствуют, покрытие NOT RUN. Наличие этого документа не означает readiness.
+
+INV-AND-13/14 -> критерии lifecycle addendum; independent RED/SOURCE и реальный KeePass round trip требуют отдельных доказательств.
