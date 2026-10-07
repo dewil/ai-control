@@ -163,7 +163,9 @@ def snapshot(path, uid, mode, limit=MAX_FILE, gid=None):
                 if total > limit:
                     raise ValueError('Oversized snapshot')
             fresh = os.stat(Path(path).name, dir_fd=parent, follow_symlinks=False)
-            if fresh != os.fstat(fd) or fresh != info:
+            if fresh != os.fstat(fd) or any(getattr(fresh, field) != getattr(info, field)
+                    for field in ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid',
+                                  'st_size', 'st_mtime_ns', 'st_ctime_ns')):
                 raise ValueError('Snapshot identity drift')
             return b''.join(chunks)
         finally:
