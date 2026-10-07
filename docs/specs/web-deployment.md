@@ -74,3 +74,13 @@ existing-lock provenance defects. Original writer committed meaningful RED343309
 до исправлений того же автора. Исправление/повторные synthetic checks подготовлены;
 повторное SOURCE заключение и integrated CI еще pending. Root wrapper `python3 -I`
 с checksum-pinned snapshot до импортов остается обязательным самостоятельным gate.
+
+07.10 incident addendum: signed16 release6 принят при unmigrated app config; web
+healthy, native not configured. Config effective-unit oracle теперь exact pinned
+R5 frontend strict/yes/varlib/data и broker full/no/empty/empty, permissions не
+меняются. Config accepted_package допускает only literal-pinned exact14/16; bootstrap
+остается14-only. Bounded recovery packet pinned на известный signed6 accepted
+`df1dc5bd9e223f75a7759ea5836f6576c40d723eb7cb49f0340df8c6cc3a44a9` восстанавливает
+ТОЛЬКО config/publication, не package/state/provider. First migration known16 failure
+может rollback exact before config этой transaction, сохраняя DB/replay; успешный
+configured16 не downgrades. Details/public seams в incident section feature spec.
