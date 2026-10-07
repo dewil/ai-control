@@ -34,6 +34,17 @@ class Accepted16ConfigIncident(operations.OperationsFixture):
         self.assertTrue(callable(method), 'AVAILABILITY: frozen accepted_package public seam absent')
         return method
 
+    def refuse_scope_without_repair(self, method):
+        before_tree = self.hashes(self.tree())
+        def metadata():
+            return {p: tuple(getattr(os.lstat(self.target/p), key) for key in
+                    ('st_dev','st_ino','st_mode','st_nlink','st_uid','st_gid','st_size','st_mtime_ns','st_ctime_ns'))
+                    for p in operations.core.FULL16 if os.path.lexists(self.target/p)}
+        before_metadata = metadata()
+        self.refuse_without_mutation(method)
+        self.assertEqual(self.hashes(self.tree()), before_tree)
+        self.assertEqual(metadata(), before_metadata, 'Rejected scope proof repaired target metadata')
+
     def configure_successfully(self):
         try:
             result = self.op.configure()
@@ -62,30 +73,31 @@ class Accepted16ConfigIncident(operations.OperationsFixture):
         except ValueError:
             self.fail('Valid exact16 raw accepted proof was refused')
         self.assertEqual(actual, self.original_state)
+        self.refuse_scope_without_repair(self.op.accepted14)
         with self.subTest(drift='wrong accepted pin'):
             self.op.EXPECTED_ACCEPTED_SHA256 = 'f'*64
-            self.refuse_without_mutation(method)
+            self.refuse_scope_without_repair(method)
         self.op.EXPECTED_ACCEPTED_SHA256 = operations.fixture.sha(self.original_state)
         with self.subTest(drift='schema3 mixed14'):
             mixed = json.loads(self.original_state)
             mixed['files'].pop(operations.core.AUTH)
             self.state.write_bytes(json.dumps(mixed).encode())
             self.op.EXPECTED_ACCEPTED_SHA256 = operations.fixture.sha(self.state.read_bytes())
-            self.refuse_without_mutation(method)
+            self.refuse_scope_without_repair(method)
         self.state.write_bytes(self.original_state)
         self.op.EXPECTED_ACCEPTED_SHA256 = operations.fixture.sha(self.original_state)
         leaf = self.target/operations.core.DOWNLOAD
         original = leaf.read_bytes()
         with self.subTest(drift='unknown target hash'):
             leaf.write_bytes(b'unreviewed app module')
-            self.refuse_without_mutation(method)
+            self.refuse_scope_without_repair(method)
         leaf.write_bytes(original)
         with self.subTest(drift='target symlink'):
             retained = self.root/'retained-download'
             retained.write_bytes(original)
             leaf.unlink()
             leaf.symlink_to(retained)
-            self.refuse_without_mutation(method)
+            self.refuse_scope_without_repair(method)
         self.assertFalse(self.commands, 'Accepted proof mutated service state')
 
     def test_same_pin16_pending_config_recovers_from_checked_before_without_replay_rewind(self):
