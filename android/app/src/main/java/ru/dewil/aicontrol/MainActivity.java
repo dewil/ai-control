@@ -39,9 +39,11 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
 
     @Override public void onCreate(Bundle saved){
         super.onCreate(saved);
+        getWindow().setStatusBarColor(0xff141414);getWindow().setNavigationBarColor(0xff141414);
+        if(Build.VERSION.SDK_INT>=30){WindowInsetsController bars=getWindow().getInsetsController();if(bars!=null)bars.setSystemBarsAppearance(0,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);}
         getOnBackPressedDispatcher().addCallback(this,new androidx.activity.OnBackPressedCallback(true){@Override public void handleOnBackPressed(){handleBack();}});
         store=new CredentialStore(this);
-        root=new FrameLayout(this);root.setBackgroundColor(Color.WHITE);setContentView(root);
+        root=new FrameLayout(this);root.setBackgroundColor(0xff141414);setContentView(root);
         root.setOnApplyWindowInsetsListener((view,insets)->{
             if(Build.VERSION.SDK_INT>=30){imeVisible=insets.isVisible(WindowInsets.Type.ime());android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());
                 view.setPadding(bars.left,bars.top,bars.right,bars.bottom);
@@ -176,8 +178,9 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
                 if(OriginPolicy.INSTANCE.classify(url,true,false,"GET",false)!=NavigationDecision.ALLOW_PANEL){view.stopLoading();showFailure("Переход заблокирован.",true);}
             }
         });
-        web.setWebChromeClient(new WebChromeClient());FrameLayout.LayoutParams layout=new FrameLayout.LayoutParams(-1,-1);layout.topMargin=(int)(44*getResources().getDisplayMetrics().density);root.addView(web,0,layout);
-        Button updates=new Button(this);updates.setText("Обновления");updates.setOnClickListener(v->startActivity(new Intent(this,UpdatesActivity.class)));updates.setTag("updates");FrameLayout.LayoutParams bar=new FrameLayout.LayoutParams(-1,layout.topMargin,Gravity.TOP);root.addView(updates,1,bar);
+        int footerHeight=(int)(48*getResources().getDisplayMetrics().density);
+        web.setWebChromeClient(new WebChromeClient());FrameLayout.LayoutParams layout=new FrameLayout.LayoutParams(-1,-1);layout.bottomMargin=footerHeight;root.addView(web,0,layout);
+        Button updates=new Button(this);updates.setText("Обновления");updates.setTextSize(14);updates.setBackgroundColor(0xff141414);updates.setTextColor(Color.WHITE);updates.setFocusable(true);updates.setOnClickListener(v->startActivity(new Intent(this,UpdatesActivity.class)));updates.setTag("updates");FrameLayout.LayoutParams bar=new FrameLayout.LayoutParams(-2,footerHeight,Gravity.BOTTOM|Gravity.END);root.addView(updates,1,bar);
     }
     private void destroyPage(){View bar=root.findViewWithTag("updates");if(bar!=null)root.removeView(bar);nativeCookie=null;pageLoaded=false;if(web!=null){root.removeView(web);web.stopLoading();web.removeJavascriptInterface("AndroidAuth");web.clearHistory();web.clearCache(true);web.destroy();web=null;}WebStorage.getInstance().deleteAllData();}
     private void terminal(){epoch++;gate.deny();destroyPage();
