@@ -21,11 +21,14 @@ if not jar.is_file():
     subprocess.run([str(ROOT/'android/gradlew'), '-p', str(ROOT/'android'), ':policy:jar', '--offline', '--console=plain'], check=True)
 cp = os.pathsep.join(map(str,[json_jars[-1],jar,sdk/'platforms/android-36/android.jar']))
 with tempfile.TemporaryDirectory(prefix='ai-login-host-') as out:
-    sources = sorted(HERE.glob('stubs/**/*.java')) + [HERE/'LoginLifecycleProbe.java', ROOT/'android/app/src/main/java/ru/dewil/aicontrol/MainActivity.java']
+    sources = sorted(HERE.glob('stubs/**/*.java')) + [HERE/'LoginLifecycleProbe.java', HERE/'CompactUpdatesProbe.java', ROOT/'android/app/src/main/java/ru/dewil/aicontrol/MainActivity.java']
     subprocess.run([str(jdk/'bin/javac'), '-d', out, '-cp', cp, *map(str,sources)], check=True)
     failures=[]
     for case in ['initial', 'keepass', 'submit', 'reset', 'updates']:
         result=subprocess.run([str(jdk/'bin/java'), '-cp', out+os.pathsep+cp, 'ru.dewil.aicontrol.LoginLifecycleProbe',case])
         if result.returncode: failures.append(case)
+    for case in ['viewport','palette','access']:
+        result=subprocess.run([str(jdk/'bin/java'), '-cp', out+os.pathsep+cp, 'ru.dewil.aicontrol.CompactUpdatesProbe',case])
+        if result.returncode: failures.append('compact-'+case)
     print('Host contract failures:', ', '.join(failures) if failures else 'none', flush=True)
     raise SystemExit(bool(failures))

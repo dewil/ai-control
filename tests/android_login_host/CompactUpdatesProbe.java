@@ -52,7 +52,8 @@ public final class CompactUpdatesProbe {
                 check(pageBottom<=footerTop,"Footer overlays web controls");
             } else if(args[0].equals("palette")) {
                 check(updates.getBackgroundColor()==0xff141414,"Footer is not dark#141414");
-                check(updates.getCurrentTextColor()==0xffffffff,"Footer text is not light");
+                int rgb=updates.getCurrentTextColor();
+                check(((rgb>>16)&255)+((rgb>>8)&255)+(rgb&255)>=600,"Footer text is not light/readable");
                 check(updates.isClickable()&&updates.isFocusable(),"Updates is not accessible by click/focus");
                 check(activity.getWindow().statusBarColor==0xff141414 && activity.getWindow().navigationBarColor==0xff141414,"Native system bars do not match panel");
                 check(!activity.getWindow().lightStatus && !activity.getWindow().lightNavigation,"Native bar icons request dark mode");

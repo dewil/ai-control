@@ -1,2 +1,2 @@
 package android.view;
-public class Window {public View root; public View getDecorView(){return root;}}
+public class Window {public View root;public WindowInsetsController getInsetsController(){return new WindowInsetsController(this);}public int statusBarColor,navigationBarColor;public boolean lightStatus=true,lightNavigation=true;public void setStatusBarColor(int c){statusBarColor=c;}public void setNavigationBarColor(int c){navigationBarColor=c;} public View getDecorView(){return root;}}
