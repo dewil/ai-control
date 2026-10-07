@@ -1,7 +1,8 @@
 # Подписанная поставка app API: exact14 -> exact16
 
 Дата: 07.10.2026. Владелец: CONTROL-APP-DEPLOY16, родитель CONTROL-APP-AUTH-RELEASE.
-Статус: DESIGN для независимого review; реализация, blind RED, bootstrap и установка не выполнены.
+Статус: DESIGN после исправлений первого review Sonnet5.5 (f6dd32e0);
+повторное review pending. Реализация, blind RED, bootstrap и установка не выполнены.
 Исходная принятая база R5: `0ea544756765c68ee3fea262a8a77ab4d4b8fe41`.
 Домен: [web-deployment](../specs/web-deployment.md).
 
@@ -76,8 +77,9 @@ Bootstrap14->16 не вызывает initialize_state. При rollback исхо
 
 Новые staged manifests допускают только schema3 и exact keys `schema`,
 `release_id`, `base`, `files`. `base` - exact14 либо exact16 карта SHA256,
-побайтно не заменяемая догадкой issuer: значения должны совпасть с
-root-private accepted.files и проверенным target. `files` всегда exact16
+не заменяемая догадкой issuer: при новом большем ID значения обязаны
+совпасть с root-private accepted.files и проверенным target; same-ID
+исключение ниже сравнивает accepted digest/files, не исторический base. `files` всегда exact16
 с exact `{sha256,mode}` для каждого пути. Первый переход имеет accepted2/base14,
 последующие accepted3/base16; прямой13->16 и install schema1/2 запрещены.
 Поддержка schema1/2 state/journal нужна для recovery, не для новых downgrade.
@@ -94,9 +96,17 @@ Snapshot проверяется и устанавливается из тех ж
 
 Новый release_id строго больше accepted.release_id. Исключение - healthy
 повтор уже принятого schema3 release: совпадают ID, raw manifest digest,
-full16 hashes/modes и health обеих служб. Такой повтор не останавливает службы
-и не перепубликует state. Тот же ID с иными bytes, старый ID и base14 после
-accepted3 отвергаются. Обработка pending recovery предшествует этому решению.
+full16 hashes/modes и health обеих служб. Равный ID проверяется ДО сравнения
+base с accepted.files: exact digest,
+files и health дают no-op, включая повтор первого16 manifest с base14
+после accepted3. Manifest schema/signature/payload остаются проверенными.
+Такой повтор не останавливает службы и не перепубликует state. Равный ID
+с иным digest/files и старый ID отвергаются. Только для большего ID требуется
+base==accepted.files: новый base14 после accepted3 отвергается. Обработка
+pending recovery и отказ при bootstrap/config markers предшествуют решению.
+Если равный ID имеет exact bytes, но health неисправен, helper отказывает
+без попытки stop/start/repair, state и journal не меняет. Repair существующего
+service health - отдельное операторское действие, не same-release redeploy.
 
 ## Транзакция перехода и recovery
 
@@ -112,7 +122,9 @@ after ID строго возрастает. Вариант14->16 фиксиро�
 списком удаляемых путей. Basename identities checkpoint не коллидируют.
 
 После durable journal helper останавливает две разрешенные службы,
-атомарно устанавливает full16 snapshot, запускает службы, проверяет exact
+устанавливает full16 snapshot через отдельный atomic rename каждого leaf
+в фиксированном порядке таблицы сверху вниз, с file/parent fsync; весь пакет
+не имеет единого atomic rename. Затем запускает службы, проверяет exact
 user/group/active и full16 bytes/modes, атомарно публикует accepted3,
 fsync state/parent и только затем durable clear journal. Health frontend
 ai-panel:ai-panel, broker dwl:ai-panel не ослабляется. Код приложения
@@ -133,11 +145,19 @@ type, owner, mode, hardlink или unsafe ancestry сохраняет pending/ch
 identity/hash/metadata непосредственно перед удалением, в каталоге без
 записи owner/group/other и под lock. Смена имени/каталога/метаданных между
 проверками - отказ; uncooperative root находится вне модели противника,
-flock сам по себе не защита от owner stage race. Частичный отказ deletion
+flock сам по себе не защита от изменения target; root-owned bin не writable
+owner/group/other. Owner stage races отдельно исключает одноразовый
+verified snapshot: rollback читает target/checkpoint, не owner stage. Частичный отказ deletion
 сохраняет journal; следующий recovery допускает уже отсутствующий leaf.
 Затем восстанавливаются before bytes, службы, проверяется exact14 и оба
 absence proofs, восстанавливается raw before state и очищается pending.
 Rollback16->16 сохраняет оба app leaves с before hashes, не удаляет их.
+При before16 каждый из16 leaves, включая оба app leaves, обязательно
+присутствует с before либо after hash и правильными metadata. Допустимы
+before/before, before/after, after/before, after/after для app пары и любая
+проверенная before/after смесь остальных14 leaves. Отсутствующий before16
+leaf - drift: refusal, pending retained, никаких repair writes. При before14
+absence допускается только для двух новых leaves; остальные14 обязательны.
 
 INV-DEPLOY-16: Recovery принимает только закрытые пары:
 
@@ -145,23 +165,39 @@ INV-DEPLOY-16: Recovery принимает только закрытые пар�
 | --- | --- | --- | --- |
 | schema1 | schema1/exact13 | schema1/exact13 | configured-create и оба app leaves |
 | schema2 | schema1/exact13 или schema2/exact14 | schema2/exact14 | оба app leaves |
-| schema3 | schema2/exact14 или schema3/exact16 | schema3/exact16 | оба app leaves в исходном14 до начала перехода |
+| schema3 | schema2/exact14 | schema3/exact16 | оба app leaves до начала перехода; после journal каждый absent/after |
+| schema3 | schema3/exact16 | schema3/exact16 | отсутствие не допускается; каждый before/after |
 
 Для journal2 сохраняется прежняя проверка configured-create: в13->14
 отсутствует либо verified after; rollback13 удаляет только verified new leaf.
 Для legacy13 также сохраняется state-zero/compiled base семантика. Старые
 pending1/2 обрабатываются без передачи13 maps в16-only validators.
 Accepted должен быть exact before либо after; checkpoint bytes/raw state
-должны доказуемо совпадать с before. Если accepted==after, exact after tree
-и health проверены, recovery завершает durable state/journal ordering.
-Иначе восстанавливает before. Unknown journal version, плохая pair, checkpoint
+должны доказуемо совпадать с before. Решение recovery под lock:
+
+| Accepted | Tree | Health | Действие |
+| --- | --- | --- | --- |
+| before | допустимый interrupted tree | любое | проверенный rollback before, start/check, restore raw state, durable clear |
+| after | exact after | исправен | fsync accepted/parent, durable clear, оставить after |
+| after | exact after | неисправен | проверенный rollback before в рамках pending |
+| after | допустимая смесь before/after | любое | проверенный rollback before в рамках pending |
+| before/after | unknown tree/metadata | любое | отказ, marker/journal/checkpoint retained, без writes |
+| иной state | любое | любое | отказ, evidence retained |
+
+Accepted==after с pending - незавершенная транзакция; существующий bounded
+rollback до before здесь явно разрешен, как в legacy recovery, поэтому
+provisional published ID может вернуться к before. Перед mutation проверяется
+весь interrupted tree/checkpoint; failed rollback/start/health сохраняет pending.
+Монотонный fence окончательно принятого release применяется после durable
+clear journal. После этого возврат на меньший ID запрещен: только forward-fix.
+Unknown journal version, плохая pair, checkpoint
 или accepted mismatch отказывают и сохраняют доказательства. Нельзя вручную
 стирать pending, hand-edit state или удалять app leaves для повторной попытки.
 
 ## Отдельный reviewed root bootstrap helper
 
 INV-DEPLOY-17: Root bootstrap и signed package deployment - разные операции.
-Будущий bootstrap допускает только старый helper с указанным4ead SHA, exact
+Первичный bootstrap допускает только старый helper с указанным4ead SHA, exact
 проверенный accepted schema2/full14 и no pending под тем же deploy flock.
 Он сверяет private accepted raw digest, release ID/manifest digest, tree,
 root trust SHA/owner/mode и обе absence proofs. Не инициализирует state,
@@ -175,21 +211,52 @@ helper/bootstrap/operator wrapper SHA и bounded descriptor snapshot bytes.
 В этой спецификации нет нового SHA: его можно получить только после
 реализации и review. Здесь не приводятся исполняемые production-команды.
 
-Замена helper атомарна: приватный before snapshot с metadata/digest и durable
-marker создается до replacement; helper file и parent fsync до завершения.
-После kill допустимы только pinned old либо pinned new helper. Повтор bootstrap
-при new pin и совпадении исходного accepted14/trust/absence/no pending
-проверяет завершенность и не меняет bytes. Unknown helper/state drift сохраняет
-marker и отказывает. Operator recovery может восстановить old helper только
-при unchanged accepted14/package/no pending; после accepted3 old helper
-возвращать нельзя. Helper migration не обещает атомарность вместе с config.
+Bootstrap удерживает existing `/var/lib/ai-control-deploy/lock` root0600
+от первого чтения state/markers до окончательного fsync-clear. Это тот же
+flock, что deploy; он сериализует живые процессы, не переживает смерть
+держателя. Marker `/var/lib/ai-control-deploy/bootstrap-pending.json` root0600
+имеет strict bounded exact keys `schema` (1), `checkpoint`, `before_sha256`,
+`after_sha256`, `accepted_sha256`; hashes - exact old/new helper и before
+raw accepted. Checkpoint - validated basename в fixed
+`/var/lib/ai-control-deploy/bootstrap-checkpoints` root0700; его каталог0700
+хранит `helper.before` root0600 и metadata/digest root0600. Before bytes и
+checkpoint parent entry durable до marker; marker durable до replacement.
+Replacement file root:root0755 и parent fsync предшествуют clear marker.
+Marker никогда не означает авторизацию bytes: сверяется весь reviewed packet.
+
+| Marker/helper | Accepted/pending | Действие bootstrap/recovery под flock |
+| --- | --- | --- |
+| none/old pin | exact исходный14, no pending/config marker | начать pinned migration |
+| own valid marker/old pin | exact marker accepted14, no pending/config marker | проверить checkpoint, продолжить atomic replacement либо вернуть old verified bytes и clear |
+| own valid marker/new pin | exact marker accepted14, no pending/config marker | проверить pins/metadata/absence/trust, fsync helper/parent, durable clear |
+| none/new pin | exact ожидаемый14, no pending/config marker | проверенный no-op |
+| invalid marker/unknown helper/accepted drift/pending | любое | отказ, evidence retained; только новый отдельно reviewed operator recovery packet |
+
+Новый helper под тем же flock отказывает ДО package recovery/install при
+наличии bootstrap либо config marker (включая malformed marker). Он не
+финализирует bootstrap сам. Старый4ead не знает markers: после kill bootstrap
+он может принять valid signed14 в прежнем авторизованном scope. Это не новая
+полномочность; последующий bootstrap recovery отказывает при accepted drift
+и не перезаписывает state из checkpoint. Нет гарантии marker guard старого
+helper, скрытой замены его bytes или изменения sudoers. Operator recovery
+применяется отдельно, marker нельзя удалять вручную для обхода проверки.
+
+После durable принятия16 без pending действует forward-fix only: старый
+helper возвращать и accepted ID/state сбрасывать нельзя. Плохие routes при
+успешном service health требуют нового reviewed signed full16 с большим ID,
+base из current accepted16, exact CI и operator gate. Можно вернуть старые
+проверенные14 content bytes в составе16, только если это совместимо с
+сохраненными app modules/config/DB; новое release provenance обязательно.
+Гарантии общего downgrade16->14 нет. Helper migration не атомарна с config.
 
 ## Private config и storage - отдельная транзакция
 
 INV-DEPLOY-18: Будущая reviewed root migration открывает fixed
 `/var/lib/ai-control-web/auth.json` через anchored nofollow descriptors,
 проверяет regular/nlink1, ai-panel owner0600, private ancestry и ожидаемый
-дооперационный digest. Username exact `dwl` и session_ttl=10800 - preconditions,
+дооперационный digest из приватного root preflight того же reviewed
+операторского пакета; digest относится к whole raw config. Username exact
+`dwl` и session_ttl=10800 - preconditions,
 не значения для принудительной замены. Password hash, TOTP secret, TOTP
 replay state, origin, secure_cookie и ВСЕ неизвестные поля сохраняются.
 Credential/replay значения сохраняются точно, без нормализации/перехеширования.
@@ -203,18 +270,54 @@ Credential/replay значения сохраняются точно, без н�
 добавляются, конфликтующее значение отказывает. Семантика остальных JSON
 значений сохраняется, исходные bytes хранятся для точного rollback. Secret
 bytes не печатаются в stdout/stderr, не идут в public proof/repo/stage/chat;
-публичный proof содержит только digest/metadata/результат проверки.
+публичный proof содержит только whole-config digest/metadata/результат
+проверки. Digests отдельных password/TOTP/replay/secret fields не публикуются.
 
-Перед config mutation проверяется no package pending и сохраняется частная
-копия0600 с исходным owner в приватном0700 checkpoint вне sync/repo. Config
-migration имеет собственный durable marker, не package pending journal.
-Службы останавливаются, чтобы исключить config/replay write race; под deploy
-flock выполняются повторная digest проверка, atomic replace и fsync. Replay
-stores не восстанавливаются к устаревшему счетчику: их данные не меняются
-и штатные writes завершаются до snapshot. После старта проверяются health,
-без вывода auth. Kill recovery сверяет только известные before/after digest
-и marker; неизвестный config сохраняет marker и отказывает. Config rollback
-восстанавливает original raw bytes с metadata при остановленных службах.
+Config migration допускается только после завершенного bootstrap на новом
+marker-aware helper. Exact source R5 `bin/_control_web.py:create_app` принимает
+config через известные обращения config.get/index, без strict set keys; это
+read-only source evidence, не выполненный startup test. До migration нужен
+независимый accepted-source fixture: загрузить pinned exact R5 create_app с
+синтетическими username=dwl/TTL10800/password/TOTP/replay, обоими добавленными
+ключами и unknown полем; доказать startup, web login/session behavior и
+preservation. Продуктовый код16 не подменяет этот fixture. Состояние
+"config migrated, package still14" допустимо только после этого gate и health.
+Package rollback14 при сохраненном migrated config также обязан быть healthy.
+
+Config lock - тот же `/var/lib/ai-control-deploy/lock` root0600. Он берется
+ДО проверки markers/pending и удерживается через stop/snapshot/replace/start/
+health/clear либо rollback. Deployment и bootstrap отказывают при config
+marker; config отказывает при bootstrap/package pending. Marker
+`/var/lib/ai-control-deploy/config-pending.json` root0600 имеет exact bounded
+keys `schema` (1), `checkpoint`, `before_sha256`, `after_sha256`,
+`accepted_sha256`; checkpoint - basename в
+`/var/lib/ai-control-deploy/config-checkpoints` root0700. Checkpoint0700 хранит
+`auth.before` ai-panel0600 и metadata root0600. Отсутствующий config/копия,
+неизвестные keys/hash/owner/link marker или checkpoint - отказ с сохранением.
+
+Порядок под whole-period flock: проверить новый helper/no markers/no pending/
+accepted14 и effective unit gates; safe stop двух служб; reread whole config
+после завершения штатных writes и сравнить preflight digest; checkpoint
+raw config/metadata/fsync parent; durable marker; atomic replace preserving
+owner0600/fsync; start двух служб/health; durable marker clear. TOTP replay
+stores не snapshot/rewind: они не меняются этой операцией, штатные writes
+завершены до auth snapshot. Public proof не содержит содержимого checkpoint.
+
+| Config/marker после start либо kill | Действие под тем же lock |
+| --- | --- |
+| after digest, marker valid, health исправен | проверить paths/metadata, fsync config/parent, clear marker |
+| before digest, marker valid | завершить проверенный no-op recovery либо повторить migration по тому же packet |
+| after digest, start/health failure | stop обе службы, restore exact raw before/owner0600, fsync, start/check old14, clear только при доказанном успехе |
+| unknown config/checkpoint/accepted drift | отказ, marker retained, никаких restore writes |
+| rollback/start old14 failure | сохранить marker/checkpoint, ошибка оператору, никакого signed deploy |
+
+Неудача signed16 после успешной config migration вызывает package rollback14
+с migrated config и health. При его отказе package pending сохраняется;
+config rollback не начинается поверх package pending. Отдельный config
+rollback разрешен только после разрешения pending под whole-period lock,
+при stopped services и verified before/after proofs; DB и replay не откатываются.
+После принятия16 без pending откат config к отсутствующим app paths запрещен;
+forward-fix сохраняет эти fixed paths и runtime data.
 
 DB parent создается ai-panel:ai-panel0700 с real nofollow ancestry; frontend
 создает SQLite DB0600. Existing DB/parent проверяются и сохраняются, не
@@ -233,20 +336,35 @@ ai-panel читает catalog, dwl публикует. Catalog не помеща
 `/var/lib/ai-control-web`: это закрыло бы owner traversal. ProtectSystem=strict
 допускает чтение `/srv`; существующий ReadWritePaths=/var/lib/ai-control-web
 допускает DB. ProtectHome=yes и InaccessiblePaths=/data сохраняются; новые
-unit permissions не требуются. Выход migration - proof существующих путей
+unit permissions не требуются по source design, но перед migration обязателен
+read-only production gate effective User/Group/ProtectSystem/ProtectHome/
+ReadWritePaths/InaccessiblePaths, real ancestry и ai-panel доступ к `/srv`/DB.
+Если effective unit отличается или traversal не работает, refusal; расширять
+permissions/parent mode этой migration нельзя. Выход migration - proof существующих путей
 и config digest, не доказательство доступности routes до signed16 install.
 
 ## Независимая публикация APK и feed
 
 INV-DEPLOY-19: Каталог не входит в root signed16 scope. Descriptor-safe
-publisher dwl сериализует публикации отдельным fixed catalog lock; до switch
+publisher dwl сериализует publish и rollback через fixed
+`/srv/ai-control-download/android/.publish.lock` dwl:ai-panel0600: anchored
+regular/nlink1 owner/mode checks, existing inode не заменяется; flock держится
+от проверки current feed до final fsync/receipt. ai-panel не имеет права
+записи lock/catalog. Private before/after publication proof хранится в
+`/home/dwl/.local/state/ai-control-android/publication` dwl0700, transaction
+каталоги0700/files0600 вне repo/sync; содержит raw before manifest либо явное
+absence, expected current digest, after manifest digest, APK hashes и проверенный
+build/certificate provenance. Этот proof не содержит signing credentials,
+retained после success/kill/rollback; GC не входит в scope. До switch
 он проверяет current manifest digest и expected predecessor, чтобы stale
 publisher не откатил новый feed. Private signing key не попадает в каталог.
 APK сверяется с reviewed build: размер/SHA256, package, certificate и
-versionCode. Эта поставка - `ru.dewil.aicontrol`, versionName `0.1.2`,
+versionCode. Release metadata текущей поставки (не постоянная
+норма publisher для будущих releases): `ru.dewil.aicontrol`, versionName `0.1.2`,
 versionCode `3`, certificate SHA256
 `baa20956801a031fd5acd36d9c11438f49fd04ef07304eaf99fb9853575888ce`;
-смена certificate запрещена. VersionCode1..2147483647; feed name<=64, lowercase SHA256,
+certificate остается pinned прежним для последующих updates. Общий parser:
+VersionCode1..2147483647; feed name<=64, lowercase SHA256,
 strict JSON без duplicate keys/nonfinite numbers; URL exact HTTPS origin
 `https://llm-web.dewil.ru:18443/download/android/ai-control-<code>.apk`.
 
@@ -255,13 +373,25 @@ immutable `ai-control-N.apk` без overwrite и fsync catalog. Same code с т�
 же проверенными bytes допускает idempotent reuse; иные bytes - отказ.
 Только потом валидированный temp version.json fsync и atomic rename в том
 же каталоге с fsync parent. Перед switch повторно проверяется final APK и
-ожидаемый predecessor. Символические/жесткие ссылки и смена ancestry
+ожидаемый predecessor. Обычный publish требует code строго больше current
+feed code; exact same manifest/APK/code допускает healthy idempotent no-op.
+Меньший code и same code с иным feed/APK отказывают. First publish требует
+proved absence current feed. Символические/жесткие ссылки и смена ancestry
 отвергаются. Route existence check не заменяет hashing у publisher.
 
 Kill до manifest switch оставляет безопасный unused APK; kill после rename
 требует сверки actual final manifest/APK, не blind republish. Старый APK
-сохраняется; private before manifest proof позволяет atomic restore старого
-проверенного feed с retained APK. Это server feed rollback, не обещание
+сохраняется. Отдельный явно выбранный оператором rollback использует тот же
+lock и private proof: CAS current whole-feed digest обязан равняться after
+конкретной транзакции, before manifest и referenced retained APK повторно
+проверяются. Только этот режим допускает снижение code; rollback требует явного
+операторского выбора конкретной транзакции, не auto fallback publish. Stale proof при
+новом current digest отказывает. Restore before через temp/fsync/atomic rename/
+parent fsync; если before было absence, удалить только pinned verified after
+version.json anchored nofollow с parent fsync, возвращая landing empty-state.
+Ни APK, ни lock/proof не удаляются. Если current уже exact before (либо proved
+absence для empty before), verified rollback no-op; unknown current/metadata
+отказывает. Это server feed rollback, не обещание
 Android downgrade: установленный versionCode ограничивает device behavior.
 Удаление старых APK/GC не входит в задачу. API/grants config и package journal
 не меняются публикацией. Landing `/download/android/` и feed - anonymous
@@ -277,14 +407,14 @@ initialize_state, state_value/signing fixtures, без чтения реализ
 
 | Инварианты | Проверяемый результат |
 | --- | --- |
-| INV-DEPLOY-12/13 | exact maps/modes/keys/bounds, signed14->16 и два16->16; replay/downgrade/mixed/extra rejection; stage swap после snapshot |
-| INV-DEPLOY-14/15 | обоим app leaves absence до journal; preexisting even matching leaf rejects; четыре interrupted combinations; rollback exact14/raw state/две absence; unknown leaf retained |
+| INV-DEPLOY-12/13 | exact maps/modes/keys/bounds, signed14->16, повтор первого16/base14, затем два разных16->16 с большими IDs без helper change и повтор последнего; replay/downgrade/mixed/extra rejection; stage swap после snapshot; unhealthy same-ID no repair |
+| INV-DEPLOY-14/15 | обоим app leaves absence до journal; preexisting even matching leaf rejects; четыре interrupted combinations; rollback exact14/raw state/две absence;16->16 четыре before/after app пары; before16 absence отказ; per-leaf order/atomicity; unknown leaf retained |
 | INV-DEPLOY-16 | legacy pending1/2 recovery,13->14 removal, отсутствие обоих app leaves; pending3 before14/16; accepted before/after; unknown journal/checkpoint отказ |
-| INV-DEPLOY-14/16 | kill каждого checkpoint/journal/leaf install/stop/start/state publish/clear boundary, fsync ordering, repeat recovery, failed rollback retained evidence |
+| INV-DEPLOY-14/16 | kill каждого checkpoint/journal/leaf install/stop/start/state publish/clear boundary, fsync ordering, checkpoint basename collision refusal, repeat recovery, accepted-after broken-health rollback только при pending, failed rollback retained evidence |
 | INV-DEPLOY-12/15 | nofollow/hardlink/owner/mode/ancestry и identity drift; root scope не расширен; serialized concurrent deploys; stale staged base отказ |
-| INV-DEPLOY-17 | bootstrap old/new pins, accepted14/trust/no pending/absence gates; no state initialization; replacement kill/idempotence/unknown marker preservation; no restoration old helper after16 |
-| INV-DEPLOY-18 | unknown auth values/password/TOTP/replay/username/TTL сохраняются; только два append; conflicts/unsafe paths reject; private proof; marker recovery/rollback; DB/grants не удаляются |
-| INV-DEPLOY-19 | immutable APK before feed, collision different bytes refusal, same bytes repeat, stale/concurrent publisher, interruption/hash/signature/metadata/parser checks, atomic feed rollback |
+| INV-DEPLOY-17 | bootstrap old/new pins, accepted14/trust/no pending/absence gates; no state initialization; replacement kill/idempotence/unknown marker preservation; no restoration old helper after16; new helper refuses markers; old helper after kill accepted drift refused by bootstrap |
+| INV-DEPLOY-18 | unknown auth values/password/TOTP/replay/username/TTL сохраняются; только два append; conflicts/unsafe paths reject; private proof; marker recovery/rollback; DB/grants не удаляются; pinned accepted-R5 startup с добавленными keys, package rollback14/migrated-config health; effective-unit gate; same flock whole-period и concurrent deploy marker отказ |
+| INV-DEPLOY-19 | immutable APK before feed, collision different bytes refusal, same bytes repeat, stale/concurrent publisher, interruption/hash/signature/metadata/parser checks, atomic feed CAS rollback, empty-before restore, strict code monotonicity и exception только explicit rollback, lock/proof metadata |
 
 До root bootstrap обязательны independent design PASS, committed blind RED,
 implementation, независимый privileged-source/bootstrap/operator review и
@@ -292,7 +422,15 @@ implementation, независимый privileged-source/bootstrap/operator revi
 APK publisher - отдельные reviewed source artifacts с meaningful blind RED,
 закоммиченным ДО написания их реализации. RED должен доказывать отказ на
 небезопасных inputs, interruption/recovery и preservation, не только отсутствие
-нового файла. Все эти artifacts получают exact source/hash/CI/review proof;
+нового файла. Минимальная RED матрица: helper нарушает exact16/state3 либо
+rollback двух leaves; bootstrap unsafe old pin/accepted drift/pending/marker
+не должен давать mutation; config dropping unknown/TOTP/replay/TTL/username
+либо unsafe parent/start failure должен быть обнаружен; publisher feed-before-APK,
+collision/stale predecessor/nonmonotone publish обязан отказывать. Accepted-R5
+compatibility fixture должен PASS на pinned old source, а failure-path RED для
+новых artifacts должен быть содержательным: stub нарушающий конкретный инвариант
+или old baseline дает assertion failure, не import/file-not-found alone.
+Все эти artifacts получают exact source/hash/CI/review proof;
 ручной обход helper скриптом без тестов/review не допустим. Только после
 SOURCE review и CI готовится конкретная проверенная команда для отдельного
 root решения оператора. Signed16 issuer payload создается только из reviewed
@@ -310,6 +448,17 @@ cookies по текущему контракту, persistent Android grants со
 
 Source/CI/publication не доказывают device login/relaunch/logout/expiry или
 signed N->N+1. Эти проверки подтверждаются отдельно родителем пользователем.
+
+## Уточнения после независимого review
+
+07.10, Sonnet5.5/medium, exact f6dd32e0: B1 закрыт порядком same-ID до base;
+B2 - pinned accepted-source config compatibility/health gate. M1/M2 закрыты
+pending recovery fence и16->16 матрицей/per-leaf атомарностью; M3/M4 - fixed
+markers/state table и forward-fix only; M5 - whole-period lock/config failure
+таблицей; M6 - fixed publisher lock/proof/CAS/code monotonicity. L1..8 включены
+в правила absence, stage/target boundaries, test groups, basename/units/privacy,
+unhealthy same-ID и meaningful RED. Это adjudication автора, не review PASS;
+повторная независимая проверка exact исправленного коммита обязательна.
 
 ## Решения и открытые вопросы
 

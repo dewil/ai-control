@@ -14,7 +14,7 @@ exact14. Расширение exact16 - DESIGN, не установленное 
 - INV-DEPLOY-02: Прежний root-owned Ed25519 trust key авторизует exact bounded strict manifest и проверенные snapshot bytes. Issuer secret не публикуется.
 - INV-DEPLOY-03: Root-private accepted baseline/release identity защищает от drift/replay и не поступает из owner stage. State/trust не обнуляются ради миграции.
 - INV-DEPLOY-04: Journal/checkpoint/fsync/rollback/recovery сохраняют last accepted tree. Неизвестное состояние сохраняет evidence и не считается успехом.
-- INV-DEPLOY-05: Healthy exact same release идемпотентен; следующие релизы внутри принятого состава не требуют изменения helper.
+- INV-DEPLOY-05: Healthy exact same release идемпотентен до base equality для нового ID; первый16/base14 повтор допустим после accepted3. Unhealthy same-ID отказывает без repair; следующие релизы внутри принятого состава не требуют изменения helper.
 - INV-DEPLOY-06: Legacy13 и current14 - закрытые точные составы;14 добавляет только configured-create0644.13 recovery сохраняется после расширения.
 - INV-DEPLOY-07: Schema1/exact13 и schema2/exact14 сохраняют version/provenance и state-zero compiled13 семантику. Bootstrap не пересоздает существующий accepted state.
 - INV-DEPLOY-08: Переход13->14 авторизуется full14 signed schema2 с точным accepted base и возрастающим ID; downgrade/subsets не допускаются.
@@ -22,13 +22,13 @@ exact14. Расширение exact16 - DESIGN, не установленное 
 - INV-DEPLOY-10: Rollback13 восстанавливает raw state и отсутствие configured-create, удаляя только доказанный after leaf через безопасный descriptor.
 - INV-DEPLOY-11: Recovery legacy journal1/2 проверяет exact before/after/checkpoint и допустимое interrupted tree; unknown не удаляется и не чинится по догадке.
 - INV-DEPLOY-12: App16 расширяет current14 ровно android-auth0644 и android-download0644. Noargs sudo, root target, authority, службы, accounts, порты и dependencies сохраняются.
-- INV-DEPLOY-13: Schema3/exact16 сохраняет release provenance; новые manifests только3/full16 с accepted base14 либо16. Прямой13->16, install старых manifests и downgrade запрещены.
+- INV-DEPLOY-13: Schema3/exact16 сохраняет release provenance; новые manifests только3/full16 с accepted base14 либо16. Прямой13->16, install старых manifests и downgrade запрещены. После durable journal clear исправление только forward full16 с большим ID.
 - INV-DEPLOY-14: До journal14->16 доказано отсутствие обоих app leaves. Durable checkpoint/raw before state и journal3 предшествуют full16 install/health/accepted/clear.
 - INV-DEPLOY-15: Rollback14 проверяет весь interrupted tree, удаляет только доказанные after app leaves и восстанавливает exact14/raw state/две absence proofs. Unknown сохраняет pending; rollback16 восстанавливает before16.
-- INV-DEPLOY-16: Recovery различает закрытые journal1/2/3 pairs и независимое присутствие двух app leaves. Kill/повтор/частичный rollback не ослабляют validation или ordering.
-- INV-DEPLOY-17: Замена helper - отдельно reviewed checksum-pinned root bootstrap на accepted14/no pending. State/trust/package/config не меняются; old helper после accepted16 не восстанавливается.
-- INV-DEPLOY-18: Отдельная reviewed config migration добавляет только fixed DB/catalog paths и сохраняет exact dwl, password/TOTP/replay, TTL10800 и неизвестные поля. Private proof не содержит secrets; rollback не стирает DB/grants и не ослабляет private parent mode.
-- INV-DEPLOY-19: Отдельный reviewed publisher фиксирует проверенный immutable APK до atomic feed. Catalog dwl:ai-panel0750/files0640 не входит в signed package; stale/concurrent publication не overwrites APK и не откатывает новый feed.
+- INV-DEPLOY-16: Recovery различает закрытые journal1/2/3 pairs и независимое присутствие двух app leaves. При pending accepted==after остается provisional: verified rollback before допустим. После clear этот rollback запрещен. Kill/повтор/частичный rollback не ослабляют validation или ordering.
+- INV-DEPLOY-17: Замена helper - отдельно reviewed checksum-pinned root bootstrap на accepted14/no pending. State/trust/package/config не меняются; fixed marker/new-helper guard и accepted-drift refusal сохраняют evidence. Старый helper после kill не знает marker; после принятия16 его не восстанавливают.
+- INV-DEPLOY-18: Отдельная reviewed config migration добавляет только fixed DB/catalog paths и сохраняет exact dwl, password/TOTP/replay, TTL10800 и неизвестные поля. Pinned old14 config compatibility и effective-unit gates предшествуют migration; same flock охватывает stop/start/health/rollback. Private proof не содержит secrets или field digests; rollback не стирает DB/grants и не ослабляет private parent mode.
+- INV-DEPLOY-19: Отдельный reviewed publisher фиксирует проверенный immutable APK до atomic feed. Catalog dwl:ai-panel0750/files0640 не входит в signed package; fixed lock/private proof исключают stale publication. Code растет, кроме explicit CAS rollback, включая restore empty-before; APK не overwrites.
 
 ## Контракты, решения и известные дыры
 
@@ -46,7 +46,7 @@ exact16 и отдельные config/publisher artifacts. Signing доказыв
 
 Известная дыра: installed helper4ead не принимает exact16. Новый helper,
 bootstrap/config migration/publisher, их blind RED, privileged review/CI и
-операторский пакет еще не созданы. DESIGN не является installation proof.
+операторский пакет еще не созданы. Первый Sonnet5.5 design review f6dd32e0 не принят; B1/B2/M1..6/L1..8 исправлены автором, повторное review pending. DESIGN не является installation proof.
 Открытых продуктовых вопросов в bounded deployment нет; app grant lifetime
 и device acceptance принадлежат CONTROL-APP-AUTH-RELEASE.
 
