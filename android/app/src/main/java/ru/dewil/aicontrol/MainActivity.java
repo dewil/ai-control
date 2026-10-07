@@ -92,7 +92,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
         }catch(Exception e){ui.post(()->{if(current(version)){loading=false;showLogin();status.setText("Сервер недоступен. Повторите вход.");}});}});
     }
     private void admit(boolean opened){
-        if(!foreground||loading||credential==null||!"ACTIVE".equals(credential.state))return;
+        if(!foreground||loading||credential==null||!"ACTIVE".equals(credential.state)||!gate.canApply(authGeneration))return;
         loading=true;long version=++epoch;long generation=gate.begin();authGeneration=generation;String token=credential.token,cookie=nativeCookie;
         if(web!=null)web.getSettings().setBlockNetworkLoads(true);showWait("Восстанавливаем вход…");
         io.execute(()->{try{JSONObject body=new JSONObject().put("foreground_open",opened);
@@ -174,13 +174,18 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     }
     private void destroyPage(){View bar=root.findViewWithTag("updates");if(bar!=null)root.removeView(bar);nativeCookie=null;pageLoaded=false;if(web!=null){root.removeView(web);web.stopLoading();web.removeJavascriptInterface("AndroidAuth");web.clearHistory();web.clearCache(true);web.destroy();web=null;}WebStorage.getInstance().deleteAllData();}
     private void terminal(){epoch++;gate.deny();destroyPage();
-        try{store.clear();credential=null;}catch(Exception e){storageBroken=true;showFailure("Не удалось удалить сохраненный вход. Очистите данные приложения.",false);return;}
+        try{store.clear();credential=null;}catch(Exception e){storageBroken=true;showFailure("Не удалось удалить сохраненный вход. Очистите данные приложения.",false);}
         clearPending=true;CookieManager.getInstance().removeAllCookies(ok->{clearPending=false;CookieManager.getInstance().flush();if(foreground&&credential==null&&!storageBroken)showLogin();});
     }
     private void logout(){if(!foreground||credential==null||!"ACTIVE".equals(credential.state))return;
         epoch++;loading=false;gate.logout();ui.removeCallbacks(renewal);if(web!=null)web.getSettings().setBlockNetworkLoads(true);
         try{store.save(credential.token,"PENDING_LOGOUT");credential=new CredentialStore.Record(credential.token,"PENDING_LOGOUT");revoke();}
-        catch(Exception e){showFailure("Не удалось сохранить выход. Очистите данные приложения или перезапустите и повторите выход.",false);}
+        catch(Exception e){
+            destroyPage();clearPending=true;
+            CookieManager.getInstance().removeAllCookies(ok->{clearPending=false;CookieManager.getInstance().flush();});
+            showFailure("Не удалось сохранить выход. Выход на сервере не подтвержден. Повторите выход или очистите данные приложения.",false);
+            Button retryLogout=new Button(this);retryLogout.setText("Повторить выход");overlay.addView(retryLogout);retryLogout.setOnClickListener(v->logout());
+        }
     }
     private void revoke(){if(!foreground||loading||credential==null||!"PENDING_LOGOUT".equals(credential.state))return;
         loading=true;long version=++epoch;String token=credential.token;showWait("Завершаем вход на сервере…");
