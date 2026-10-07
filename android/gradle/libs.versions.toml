@@ -1,0 +1,20 @@
+[versions]
+agp = "9.4.1"
+kotlin = "2.4.20"
+junit = "4.13.2"
+coreKtx = "1.17.0"
+coroutines = "1.10.2"
+serialization = "1.11.0"
+
+[libraries]
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+
+core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+
+android-library = { id = "com.android.library", version.ref = "agp" }

@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 import uuid
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 
@@ -67,7 +67,7 @@ def _load_totp_step(path):
     finally:
         os.close(fd)
 
-def create_app(config, backend, clock=None):
+def create_app(config, backend, clock=None, *, owner_only=True):
     clock = clock or time.time
     username = config.get('username', 'owner')
     if not valid_username(username):
@@ -99,6 +99,22 @@ def create_app(config, backend, clock=None):
             raise ValueError('private replay directory required')
         used_step = _load_totp_step(replay_path)
     lock = threading.Lock()
+    device_store = None
+
+    def android_store():
+        nonlocal device_store
+        path = config.get('android_auth_db')
+        if not path:
+            raise RuntimeError('device store unavailable')
+        if device_store is None:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location('_control_web_android_auth',
+                         Path(__file__).with_name('_control_web_android_auth.py'))
+            helper = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(helper)
+            device_store = helper.DeviceGrantStore(path, clock)
+        return device_store
+
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     def error(code, status):
@@ -114,6 +130,12 @@ def create_app(config, backend, clock=None):
             current = sessions.get(token)
         if current is None:
             return None, error('unauthorized', 401)
+        if current.get('device_id'):
+            try:
+                if not android_store().valid(current['device_id']):
+                    return None, error('unauthorized', 401)
+            except (ValueError, RuntimeError):
+                return None, error('unavailable', 503)
         supplied_csrf = request.headers.get('x-csrf-token', '')
         if mutation and (request.headers.get('origin') != origin or not supplied_csrf.isascii() or not hmac.compare_digest(supplied_csrf, current['csrf'])):
             return None, error('forbidden', 403)
@@ -199,7 +221,11 @@ def create_app(config, backend, clock=None):
     @app.middleware('http')
     async def security_headers(request, call_next):
         response = await call_next(request)
-        response.headers['Cache-Control'] = 'no-store'
+        immutable_apk = (response.status_code == 200 and
+                         re.fullmatch(r'/download/android/ai-control-[1-9][0-9]{0,9}\.apk', request.url.path) and
+                         response.headers.get('content-type') == 'application/vnd.android.package-archive')
+        if not immutable_apk:
+            response.headers['Cache-Control'] = 'no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['Content-Security-Policy'] = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
@@ -229,6 +255,21 @@ def create_app(config, backend, clock=None):
         from fastapi.responses import Response
         return Response(Path(__file__).with_name('_control_web.css').read_text(), media_type='text/css')
 
+    def authenticate(data, now):
+        attempts[:] = [at for at in attempts if at > now - 60]
+        if len(attempts) >= 10:
+            return error('rate_limited', 429)
+        attempts.append(now)
+        try:
+            # Unknown valid names still pay the hash cost; only the owner may consume TOTP.
+            password_valid = verify_password(data['password'], config['password_hash'])
+            valid = data['username'] == username and password_valid and consume_totp(data['totp'])
+        except (OSError, ValueError):
+            return error('unavailable', 503)
+        if not valid:
+            return error('unauthorized', 401)
+        return None
+
     @app.post('/api/login')
     async def login(request: Request):
         if request.headers.get('origin') != origin:
@@ -240,18 +281,9 @@ def create_app(config, backend, clock=None):
             return error('invalid_request', 422)
         now = clock()
         with lock:
-            attempts[:] = [at for at in attempts if at > now - 60]
-            if len(attempts) >= 10:
-                return error('rate_limited', 429)
-            attempts.append(now)
-            try:
-                # Unknown valid names still pay the hash cost; only the owner may consume TOTP.
-                password_valid = verify_password(data['password'], config['password_hash'])
-                valid = data['username'] == username and password_valid and consume_totp(data['totp'])
-            except (OSError, ValueError):
-                return error('unavailable', 503)
-            if not valid:
-                return error('unauthorized', 401)
+            failure = authenticate(data, now)
+            if failure is not None:
+                return failure
             token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
             # SIMPLIFIED: one operator, one worker, bounded in-memory sessions;
             # restart requires login. Use an external store before multi-worker.
@@ -260,6 +292,178 @@ def create_app(config, backend, clock=None):
             sessions[token] = {'expires': now + ttl, 'csrf': csrf}
         response = JSONResponse({'csrf': csrf})
         response.set_cookie('control_session', token, max_age=ttl, httponly=True, secure=secure, samesite='strict', path='/')
+        return response
+
+    def android_error(code, status):
+        response = error(code, status)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+
+    def android_gate(request):
+        if owner_only is not True or request.headers.getlist('origin') != [origin]:
+            return android_error('forbidden', 403)
+        return None
+
+    def bearer(request):
+        values = request.headers.getlist('authorization')
+        if len(values) != 1 or re.fullmatch(r'Bearer [A-Za-z0-9_-]{43}', values[0]) is None:
+            return ''
+        return values[0][7:]
+
+    def android_cookie(response, token):
+        response.set_cookie('control_session', token, max_age=10800,
+                            httponly=True, secure=secure, samesite='strict', path='/')
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+
+    def download_helper():
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('_control_android_download',
+                    Path(__file__).with_name('_control_web_android_download.py'))
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        return helper
+
+    @app.get('/download/android/')
+    def android_landing():
+        directory = config.get('android_download_dir')
+        if not directory:
+            return android_error('not_found', 404)
+        helper = download_helper()
+        try:
+            value = helper.manifest(directory)
+            return HTMLResponse(helper.landing(value), headers={'Cache-Control': 'no-store'})
+        except helper.FeedMissing:
+            return HTMLResponse(helper.landing(), headers={'Cache-Control': 'no-store'})
+        except helper.FeedOperational:
+            return android_error('unavailable', 503)
+        except helper.FeedUnavailable:
+            return HTMLResponse(helper.landing(broken=True), headers={'Cache-Control': 'no-store'})
+
+    @app.get('/download/android/version.json')
+    def android_manifest():
+        directory = config.get('android_download_dir')
+        if not directory:
+            return android_error('not_found', 404)
+        helper = download_helper()
+        try:
+            return JSONResponse(helper.manifest(directory), headers={'Cache-Control': 'no-store'})
+        except helper.FeedMissing:
+            return android_error('not_found', 404)
+        except helper.FeedUnavailable:
+            return android_error('unavailable', 503)
+
+    @app.get('/download/android/{filename}')
+    def android_apk(filename: str):
+        directory = config.get('android_download_dir')
+        match = re.fullmatch(r'ai-control-([1-9][0-9]{0,9})\.apk', filename)
+        if not directory or not match or int(match[1]) > 2147483647:
+            return android_error('not_found', 404)
+        helper = download_helper()
+        try:
+            stream = helper.open_file(directory, filename)
+            size = os.fstat(stream.fileno()).st_size
+        except helper.FeedMissing:
+            return android_error('not_found', 404)
+        except helper.FeedUnavailable:
+            return android_error('unavailable', 503)
+        async def chunks():
+            try:
+                while True:
+                    chunk = await run_in_threadpool(stream.read, 65536)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                stream.close()
+        return StreamingResponse(chunks(), media_type='application/vnd.android.package-archive',
+            headers={'Content-Length': str(size), 'Content-Disposition': f'attachment; filename="{filename}"',
+                     'Cache-Control': 'public, max-age=31536000, immutable'})
+
+    async def app_preflight(request, endpoint):
+        failure = android_gate(request)
+        if failure is not None:
+            return None, None, failure
+        data = await body(request, strict=True)
+        valid = data is not None
+        if endpoint == 'login':
+            valid = (valid and set(data) == {'username', 'password', 'totp'}
+                     and valid_username(data['username'])
+                     and type(data['password']) is str and 0 < len(data['password']) <= 1024
+                     and type(data['totp']) is str and len(data['totp']) <= 1024)
+        elif endpoint == 'session':
+            valid = valid and set(data) == {'foreground_open'} and type(data['foreground_open']) is bool
+        else:
+            valid = valid and not data
+        if not valid:
+            return None, None, android_error('invalid_request', 422)
+        try:
+            grant = android_store()
+            grant.check_available()
+        except (ValueError, RuntimeError):
+            return None, None, android_error('unavailable', 503)
+        return data, grant, None
+
+    @app.post('/api/app/login')
+    async def app_login(request: Request):
+        data, grant, failure = await app_preflight(request, 'login')
+        if failure is not None:
+            return failure
+        now = clock()
+        with lock:
+            failure = authenticate(data, now)
+            if failure is not None:
+                return failure
+            try:
+                token, identity = grant.issue_grant()
+            except (ValueError, RuntimeError):
+                return android_error('unavailable', 503)
+            cookie = secrets.token_urlsafe(32)
+            if len(sessions) >= 100:
+                sessions.clear()
+            sessions[cookie] = {'expires': now + 10800, 'csrf': secrets.token_urlsafe(32),
+                                'device_id': identity}
+        return android_cookie(JSONResponse({'device_token': token}), cookie)
+
+    @app.post('/api/app/session')
+    async def android_session(request: Request):
+        data, grant, failure = await app_preflight(request, 'session')
+        if failure is not None:
+            return failure
+        try:
+            identity = grant.admit(bearer(request), foreground_open=data['foreground_open'])
+        except (ValueError, RuntimeError):
+            return android_error('unavailable', 503)
+        if identity is None:
+            return android_error('device_unauthorized', 401)
+        now = clock()
+        old = request.cookies.get('control_session', '')
+        with lock:
+            current = sessions.get(old)
+            replaced = not (current and current.get('device_id') == identity and current['expires'] > now)
+            if replaced:
+                old = secrets.token_urlsafe(32)
+                current = {'expires': now + 10800, 'csrf': secrets.token_urlsafe(32),
+                           'principal': 'owner', 'device_id': identity}
+                if len(sessions) >= 100:
+                    sessions.clear()
+                sessions[old] = current
+            else:
+                current['expires'] = now + 10800
+        return android_cookie(JSONResponse({'status': 'ok', 'session_replaced': replaced}), old)
+
+    @app.post('/api/app/logout')
+    async def android_logout(request: Request):
+        data, grant, failure = await app_preflight(request, 'logout')
+        if failure is not None:
+            return failure
+        try:
+            if not grant.revoke_token(bearer(request)):
+                return android_error('device_unauthorized', 401)
+        except (ValueError, RuntimeError):
+            return android_error('unavailable', 503)
+        response = JSONResponse({'status': 'ok'}, headers={'Cache-Control': 'no-store'})
+        response.delete_cookie('control_session', httponly=True, secure=secure, samesite='strict')
         return response
 
     @app.get('/api/session')
@@ -541,8 +745,16 @@ def create_app(config, backend, clock=None):
         _, failure = session(request, True)
         if failure:
             return failure
+        cookie = request.cookies.get('control_session')
         with lock:
-            sessions.pop(request.cookies.get('control_session'), None)
+            current = sessions.get(cookie)
+        if current and current.get('device_id'):
+            try:
+                android_store().revoke(current['device_id'])
+            except (ValueError, RuntimeError):
+                return error('unavailable', 503)
+        with lock:
+            sessions.pop(cookie, None)
         response = JSONResponse({'status': 'applied'})
         response.delete_cookie('control_session', httponly=True, secure=secure, samesite='strict')
         return response
