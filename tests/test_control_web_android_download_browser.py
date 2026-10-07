@@ -19,6 +19,25 @@ ROOT = Path(os.environ.get('CONTROL_ANDROID_DOWNLOAD_QA_REPO', str(Path(__file__
 PREFIX = '/download/android/'
 
 
+# Independent fixture handoff: a path may exist before private_json finishes.
+# Readiness requires complete usable JSON within the original bounded deadline.
+def wait_ready_json(path, server, timeout=8):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if server.poll() is not None:
+            raise RuntimeError('Synthetic download fixture failed')
+        try:
+            ready = json.loads(path.read_text())
+            if (isinstance(ready, dict) and all(isinstance(ready.get(key), str)
+                    and ready[key].startswith('http://127.0.0.1:')
+                    for key in ('url', 'disabled_url'))):
+                return ready
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        time.sleep(.02)
+    raise RuntimeError('Synthetic download fixture readiness timed out')
+
+
 def manifest(code=1, name='0.1.0', payload=b'synthetic APK one'):
     return dict(versionCode=code, versionName=name,
                 apkUrl='https://llm-web.dewil.ru:18443' + PREFIX + f'ai-control-{code}.apk',
@@ -76,11 +95,7 @@ class AndroidDownloadBrowserContract(unittest.TestCase):
         cls.server = subprocess.Popen([interpreter, str(Path(__file__).resolve()), '--serve', str(ROOT), str(cls.evidence)],
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         cls.addClassCleanup(cls.stop_server)
-        deadline = time.monotonic() + 8
-        while not (cls.evidence / 'ready.json').exists() and time.monotonic() < deadline:
-            if cls.server.poll() is not None: raise RuntimeError('Synthetic download fixture failed')
-            time.sleep(.02)
-        ready = json.loads((cls.evidence / 'ready.json').read_text())
+        ready = wait_ready_json(cls.evidence / 'ready.json', cls.server)
         cls.url = ready['url']
         cls.disabled_url = ready['disabled_url']
         cls.playwright = sync_playwright().start(); cls.addClassCleanup(cls.playwright.stop)
@@ -156,6 +171,8 @@ class AndroidDownloadBrowserContract(unittest.TestCase):
         for width in (1280, 360):
             self.page.set_viewport_size({'width': width, 'height': 900})
             self.assert_panel_link(self.page)
+        # Session admission resolves asynchronously; retain a bounded visible gate.
+        self.page.locator('input[type=password]').wait_for(state='visible', timeout=5000)
         self.assertTrue(self.page.locator('input[type=password]').is_visible())
 
     def test_anonymous_latest_link_updates_after_manifest_publication_with_cache_enabled(self):

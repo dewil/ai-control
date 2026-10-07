@@ -1,0 +1,2 @@
+package android.widget;
+public class EditText extends TextView {public EditText(android.content.Context c){super(c);}int start,end; boolean focus; public void setInputType(int i){} public boolean requestFocus(){focus=true;return true;} public boolean hasFocus(){return focus;} public void setSelection(int s,int e){start=s;end=e;} public int getSelectionStart(){return start;} public int getSelectionEnd(){return end;} }

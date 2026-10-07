@@ -1,0 +1,2 @@
+package android.widget;
+public class TextView extends android.view.View { CharSequence text="",hint="";public TextView(android.content.Context c){super(c);}public void setText(CharSequence t){text=t;}public CharSequence getText(){return text;}public void setHint(CharSequence t){hint=t;}public CharSequence getHint(){return hint;}public void setTextSize(float s){}public void setGravity(int i){} }

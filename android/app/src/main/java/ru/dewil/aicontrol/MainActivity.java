@@ -33,7 +33,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     private long epoch=0,pageEpoch=0,authGeneration=0;
     private boolean imeVisible=false,clearPending=false,storageBroken=false;
     private volatile boolean foreground=false;
-    private boolean loading=false,pageLoaded=false;
+    private boolean loading=false,pageLoaded=false,loginVisible=false;
     private final Runnable renewal=()->admit(false);
     private final Runnable banner=new Runnable(){public void run(){if(!foreground)return;View view=root.findViewWithTag("updates");if(view instanceof Button){ru.dewil.aicontrol.updater.UpdateInfo available=((ru.dewil.aicontrol.updater.UpdateRepositoryOwner)getApplication()).getUpdateRepository().getState().getValue().getAvailable();((Button)view).setText(available==null?"Обновления":"Доступно обновление "+available.getVersionName());}ui.postDelayed(this,5000);}};
 
@@ -53,29 +53,36 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     @Override public void onStart(){super.onStart();foreground=true;((ru.dewil.aicontrol.updater.UpdateRepositoryOwner)getApplication()).getUpdateRepository().onAppResumed();ui.removeCallbacks(banner);ui.post(banner);epoch++;authGeneration=gate.begin();
         if(credential!=null){if("PENDING_LOGOUT".equals(credential.state))revoke();else admit(true);}
         if(web!=null)web.onResume();
-        if(credential==null&&!storageBroken){if(clearPending)showWait("Удаляем веб-сессию…");else showLogin();}
+        if(credential==null&&!storageBroken){if(clearPending)showWait("Удаляем веб-сессию…");else if(!loginVisible)showLogin();}
     }
     @Override public void onStop(){foreground=false;epoch++;loading=false;gate.stop();ui.removeCallbacks(renewal);ui.removeCallbacks(banner);
         if(web!=null){web.getSettings().setBlockNetworkLoads(true);web.onPause();}super.onStop();}
     @Override public void onDestroy(){epoch++;io.shutdownNow();if(web!=null){root.removeView(web);web.destroy();web=null;}super.onDestroy();}
     private boolean current(long version){return foreground&&!isFinishing()&&epoch==version;}
     private boolean active(long version,long generation){return current(version)&&credential!=null&&"ACTIVE".equals(credential.state)&&gate.canApply(generation);}
-    private LinearLayout box(){
+    private LinearLayout box(boolean login){
+        loginVisible=false;
+        if(password!=null)password.setText("");if(totp!=null)totp.setText("");
         if(overlay!=null)root.removeView(overlay);
         overlay=new LinearLayout(this);overlay.setOrientation(LinearLayout.VERTICAL);overlay.setGravity(Gravity.CENTER);
         overlay.setPadding(32,32,32,32);overlay.setBackgroundColor(Color.WHITE);overlay.setClickable(true);
         root.addView(overlay,new FrameLayout.LayoutParams(-1,-1));
-        Button updates=new Button(this);updates.setText("Обновления приложения");updates.setOnClickListener(v->startActivity(new Intent(this,UpdatesActivity.class)));overlay.addView(updates);
+        if(!login)overlay.addView(updatesEntry());
         status=new TextView(this);status.setTextSize(18);overlay.addView(status);return overlay;
     }
-    private void showWait(String message){box();status.setText(message);}
+    private Button updatesEntry(){Button updates=new Button(this);updates.setText("Обновления приложения");updates.setOnClickListener(v->startActivity(new Intent(this,UpdatesActivity.class)));return updates;}
+    private void showWait(String message){box(false);status.setText(message);}
     private void showFailure(String message,boolean canRetry){showWait(message);if(canRetry){retry=new Button(this);retry.setText("Повторить");overlay.addView(retry);retry.setOnClickListener(v->{if(credential!=null&&"PENDING_LOGOUT".equals(credential.state))revoke();else admit(false);});}}
     private void showLogin(){
-        box();status.setText("Вход в ai-control");
+        box(true);status.setText("Вход в ai-control");
         username=new EditText(this);username.setHint("Логин");username.setInputType(1);username.setSaveEnabled(false);username.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);overlay.addView(username);
         password=new EditText(this);password.setHint("Пароль");password.setInputType(129);password.setSaveEnabled(false);password.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);overlay.addView(password);
         totp=new EditText(this);totp.setHint("Код TOTP");totp.setInputType(2);totp.setSaveEnabled(false);totp.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);overlay.addView(totp);
         Button login=new Button(this);login.setText("Войти");overlay.addView(login);login.setOnClickListener(v->login());
+        float density=getResources().getDisplayMetrics().density;
+        View gap=new View(this);overlay.addView(gap,new LinearLayout.LayoutParams(1,(int)(16*density)));
+        Button updates=updatesEntry();updates.setTextSize(14);overlay.addView(updates,new LinearLayout.LayoutParams(-2,(int)(48*density)));
+        loginVisible=true;
     }
     private void login(){
         if(!foreground||loading)return;
