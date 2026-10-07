@@ -34,8 +34,8 @@ class NativePublicContract(unittest.TestCase):
         payload_source = source + '\n' + self.source(JAVA / 'MainActivity.java')
         values = re.findall(r'\.put\(\s*"username"\s*,\s*'
             r'([A-Za-z_$][A-Za-z0-9_$]*(?:\.getText\(\)\.toString\(\))?)\s*\)', payload_source)
-        self.assertTrue(values,
-            'login JSON must carry an unmodified username identifier or exact EditText value')
+        self.assertEqual(len(values), 1,
+            'login JSON must construct username once from an unmodified identifier or exact EditText value')
         self.assertNotRegex(source, r'\.put\(\s*"(?:owner|principal|role|platform)"')
 
     def test_native_username_is_editable_and_sent_without_normalization(self):
