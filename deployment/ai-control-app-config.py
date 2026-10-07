@@ -249,27 +249,24 @@ def clear(path, uid, expected):
 
 @contextlib.contextmanager
 def locked(path, uid, gid):
-    parent = directory(Path(path).parent, uid)
+    # The accepted-R5 deployment lock is existing authority, not a bootstrap
+    # artifact: never manufacture a replacement inode or repair its parent.
+    ensure_dir_existing(Path(path).parent, uid, gid, 0o700)
+    parent = directory(Path(path).parent, uid, private=True)
     fd = None
     try:
-        try:
-            fd = os.open(Path(path).name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK,
-                         0o600, dir_fd=parent)
-            os.fchown(fd, uid, gid)
-            os.fsync(fd)
-            os.fsync(parent)
-        except FileExistsError:
-            fd = os.open(Path(path).name, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        fd = os.open(Path(path).name, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
         info = os.fstat(fd)
         if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
                 (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (uid, gid, 0o600)):
-            raise ValueError('Unsafe operation lock')
+            raise ValueError('Unsafe existing deployment lock')
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
     finally:
         if fd is not None:
             os.close(fd)
         os.close(parent)
+
 
 def absent(path, uid):
     parent = directory(Path(path).parent, uid)
@@ -367,11 +364,9 @@ def health():
             command('show', service, '-p', 'Group', '--value') != 'ai-panel'):
             raise ValueError('Service health mismatch')
 
-def stop(verify_inactive=True):
+def stop():
     for service in SERVICES:
         command('stop', service)
-    if not verify_inactive:
-        return
     for service in SERVICES:
         result = run_command(['/usr/bin/systemctl', 'is-active', service], timeout=40)
         if result.returncode not in (0, 3) or result.stdout.strip() != 'inactive':
@@ -448,7 +443,7 @@ def config_rollback(before, after, raw_marker):
     current = snapshot(AUTH_CONFIG, PANEL_UID, 0o600, MAX_MANIFEST, PANEL_GID)
     if current not in (before, after):
         raise ValueError('Unknown config during rollback')
-    stop(verify_inactive=False)
+    stop()
     write(AUTH_CONFIG, before, 0o600, PANEL_UID, PANEL_GID)
     start()
     if snapshot(AUTH_CONFIG, PANEL_UID, 0o600, MAX_MANIFEST, PANEL_GID) != before:

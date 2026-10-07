@@ -99,6 +99,55 @@ class RecoveryProbes(core.Deploy16):
             os.close(fd)
             os.close(status_read)
 
+    def test_same_instance_new_invocation_recovers_retained_budget_exhaustion(self):
+        # INV-DEPLOY-16: exhaustion does not silently reset until next invocation.
+        raw = self.journal(self.before14, 2, self.before16)
+        self.write(self.target / core.AUTH, self.before16[core.AUTH])
+        self.signed(self.before16)
+        original = self.runner
+        starts = []
+        def fail_third_start(args):
+            result = original(args)
+            if args[1] == 'start':
+                starts.append(args[2])
+                if len(starts) == 3:
+                    raise RuntimeError('synthetic one-time new install failure')
+            return result
+        self.runner = fail_third_start
+        controller = self.deploy()
+        with self.assertRaises(self.api.RollbackFailed):
+            controller.run()
+        self.assertEqual(len(starts), 3)
+        self.assertTrue(controller.rollback_used)
+        self.assertTrue(controller.pending.exists())
+        self.assertEqual(self.state.read_bytes(), raw)
+        (self.stage / 'release.sig').write_bytes(bytes(64))
+        with self.assertRaises(self.api.Rejected):
+            controller.run()
+        self.assertEqual(len(starts), 5)
+        self.assertEqual(self.state.read_bytes(), raw)
+        self.assertEqual(self.tree(), self.before14)
+        self.assertFalse(controller.pending.exists())
+        with self.assertRaises(self.api.Rejected):
+            controller.run()
+        self.assertEqual(len(starts), 5)
+        self.assertFalse(controller.rollback_used)
+
+    def test_rollback_validation_failure_consumes_budget_before_sideeffects(self):
+        # INV-DEPLOY-16: failed validation/timeout cannot buy an additional attempt.
+        controller = self.deploy()
+        calls = []
+        def unknown_tree(*args):
+            calls.append(True)
+            raise self.api.Rejected('synthetic unknown tree')
+        controller.interrupted_tree = unknown_tree
+        for _ in range(2):
+            with self.assertRaises(self.api.RollbackFailed):
+                controller.rollback({}, {}, {}, b'')
+            self.assertTrue(controller.rollback_used)
+        self.assertEqual(calls, [True])
+        self.assertFalse(self.calls)
+
 
 class BootstrapProbes(ops.BootstrapContracts):
     def test_kill_after_marker_and_after_helper_replace_recover(self):
@@ -137,6 +186,22 @@ class BootstrapProbes(ops.BootstrapContracts):
         self.paths['BOOTSTRAP_MARKER'].unlink()
         os.link(self.paths['NEW_HELPER'], self.root/'candidate-hardlink')
         self.refuse_without_mutation(self.op.bootstrap)
+
+    def test_trust_key_reread_refuses_drift_before_helper_replacement(self):
+        # INV-DEPLOY-17: durable marker never authorizes a changed trust anchor.
+        genuine = self.op.write
+        before = self.paths['HELPER'].read_bytes()
+        def key_changed(path, *args):
+            result = genuine(path, *args)
+            if path == self.paths['BOOTSTRAP_MARKER']:
+                self.paths['KEY'].write_bytes(b'changed synthetic trust anchor')
+            return result
+        self.op.write = key_changed
+        with self.assertRaises(ValueError):
+            self.op.bootstrap()
+        self.assertEqual(self.paths['HELPER'].read_bytes(), before)
+        self.assertTrue(self.paths['BOOTSTRAP_MARKER'].exists())
+        self.assertFalse(self.commands)
 
 
 class ConfigProbes(ops.ConfigContracts):
@@ -185,6 +250,27 @@ class ConfigProbes(ops.ConfigContracts):
         self.op.run_command = original
         self.op.account_identity = lambda name: (os.getuid()+1, os.getgid())
         self.refuse_without_mutation(self.op.configure)
+    def test_rollback_requires_inactive_before_any_restore_write(self):
+        # INV-DEPLOY-18: failed stop proof retains after/marker instead of racing writers.
+        original = self.op.run_command
+        rollback_started = []
+        def unsafe_restart(argv, *, timeout=40):
+            if argv[1] == 'start':
+                rollback_started.append(True)
+                raise subprocess.TimeoutExpired(argv[0], 40)
+            result = original(argv, timeout=timeout)
+            if rollback_started and argv[1] == 'is-active':
+                return subprocess.CompletedProcess(argv, 0, stdout='active\n', stderr='')
+            return result
+        self.op.run_command = unsafe_restart
+        with self.assertRaises(ValueError):
+            self.op.configure()
+        expected = self.config | {'android_auth_db': str(self.paths['AUTH_DB']),
+                                  'android_download_dir': str(self.paths['CATALOG'])}
+        self.assertEqual(json.loads(self.paths['AUTH_CONFIG'].read_bytes()), expected)
+        self.assertTrue(self.paths['CONFIG_MARKER'].exists())
+        self.assertEqual(len(rollback_started), 1)
+
 
 class PublisherProbes(ops.PublisherContracts):
     def prepare(self, filename):

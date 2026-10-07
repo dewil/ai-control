@@ -328,8 +328,11 @@ health. При restart/health failure - bounded refusal с retained private
 операторским отчетом о failure/digests/metadata, без secret values; marker
 не создается, signed16 gate остается закрыт до проверки оператором. Автоматический
 новый preflight/retry отсутствует. Public proof не содержит содержимого checkpoint.
-Config recovery/rollback также имеет одну попытку на invocation и те же
-40-секундные subprocess/240-секундные health/400-секундные rollback service bounds.
+Config recovery/rollback также имеет одну попытку на invocation, каждый
+subprocess ограничен40 секундами, health6 probes -240 секундами. Config
+rollback дополнительно проверяет inactive обоих units до restore: максимум12
+вызовов (stop2 + inactive2 + start2 + health6),480 секунд service steps.
+Controller rollback сохраняет прежний bound10 calls/400 секунд.
 
 | Config/marker после start либо kill | Действие под тем же lock |
 | --- | --- |
@@ -616,7 +619,8 @@ refusal не разрешает migration; оператор отдельно в�
 M4: rollback service bound10 = stop2 + start2 + health6, включая health.
 Post-stop config preflight отдельно проверяет inactive обоих units.
 M5: config rollback/start timeout оставляет marker/checkpoint и DB/replay;
-одна попытка на invocation проверяется failure test.
+одна попытка на invocation проверяется failure test; inactive доказательство
+перед restore добавляет2 probes, config-specific bound12 calls/480 секунд.
 
 Owner-source supplementary tests проверяют current legacy journal1/2 recovery,
 unknown journal pairs, actual shared flock, bootstrap/config kill, publisher
@@ -642,3 +646,36 @@ before/after digest/raw bytes, APK hash/size/package/code/certificate provenance
 Все новые operation pins и reviewed wrapper требуют SOURCE/CI packet; до этого
 root entrypoints fail closed. Post-CI stamping требует review/CI stamped exact
 bytes. Operator command готовится отдельно после этих gates.
+
+### SOURCE follow-up после 5f977233
+
+Actual Sonnet5.5 SOURCE controller medium01 исправляется явным rollback budget
+на invocation: попытка потребляется до validation/side effects, включая timeout.
+Healthy pending finalization не потребляет rollback. После successful pending
+rollback допустима новая подписанная transaction, но её failure не начинает
+второй rollback: новый pending/checkpoint сохраняются, возвращается
+RollbackFailed без installed claim. Interrupted tree может оставаться новым;
+route outage сохраняется до отдельно выбранного следующего invocation, которое
+проверит retained journal и выполнит свою одну recovery attempt. Без pending
+healthy same-ID поведение не меняется. Reused library instance начинает новый
+budget только на следующем invocation. Committed independent RED343309c
+предшествует исправлению; owner supplement проверяет retry той же instance и
+потребление budget до неудачной validation.
+
+SOURCE operators medium001: bootstrap/config только открывают существующий
+accepted-R5 checkpoints/lock и до открытия проверяют real nofollow parent
+root:root0700. Missing lock/unsafe parent отказывают без создания/repair inode,
+state/markers/services не меняются. Controller остаётся на прежнем creation
+контракте accepted helper; отдельного lock migration нет. Low003 закрывается
+повторным trust KEY SHA/owner/mode чтением непосредственно перед helper replace.
+Low004: config rollback до auth restore обязательно проверяет inactive двух
+units, при отказе retains after/marker вместо restore racing service writes.
+Root execution wrapper обязательно запускает Python `-I` до импортов через
+checksum-pinned descriptor snapshot; это самостоятельный pending packet gate,
+а не доказательство из source operations shebang. CLI/env root knobs отсутствуют.
+
+SOURCE controller low02/03/04 (helper key SHA pin versus root-owned authority,
+pre-journal orphan checkpoints, os.walk error reporting), operators low005
+(path-based checkpoint mkdir under verified root0700), publisher low001/002
+(lock initialization interruption, SDK digest pin) переданы root triage.
+Их чтение не разрешает дополнительные действия или снятие operator gates.

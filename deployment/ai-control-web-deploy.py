@@ -304,6 +304,7 @@ class Deploy:
         self.runner = runner
         self.verifier = verifier if verifier is not None else verify_ed25519
         self.pending = self.checkpoints / 'pending.json'
+        self.rollback_used = False
 
     def ctl(self, *args):
         return self.runner(['/usr/bin/systemctl', *args]).strip()
@@ -419,6 +420,10 @@ class Deploy:
         return current
 
     def rollback(self, before, old, after, raw):
+        if self.rollback_used:
+            raise RollbackFailed('Rollback budget exhausted; pending journal retained')
+        # Validation failures and timeouts also consume the single attempt.
+        self.rollback_used = True
         try:
             self.interrupted_tree(before, after)
             self.stop()
@@ -548,6 +553,8 @@ class Deploy:
             raise Rejected('Filesystem or schema validation failed') from exc
 
     def _run_locked(self):
+        # A reused library instance still represents a fresh operator invocation.
+        self.rollback_used = False
         for name in ('bootstrap-pending.json', 'config-pending.json'):
             if os.path.lexists(self.state_path.parent / name):
                 raise Rejected('Separate operation pending')
@@ -595,7 +602,11 @@ class Deploy:
             self.start()
             self.match(expected)
             self.publish(after)
-        except Exception:
+        except Exception as exc:
+            if self.rollback_used:
+                # Pending recovery already spent this invocation's one attempt.
+                # The new checkpoint/journal authorizes a later recovery only.
+                raise RollbackFailed('Rollback budget exhausted; new pending journal retained') from exc
             self.rollback(before, original, after, self.accepted_raw)
             raise
         self.clear_pending()
