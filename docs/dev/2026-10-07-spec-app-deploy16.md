@@ -767,3 +767,9 @@ proof требуется после отдельно подтверждённо�
 До config/packet code обязательны committed meaningful independent RED по actual
 broker profiles и known schema3 config guard/preservation. Тот же автор исправляет,
 независимый SOURCE follow-up/full exact CI/packet review предшествуют root команде.
+
+Incident budget clarification: 12calls/480s относится только к rollback service
+phase (stop2/inactive2/start2/health6), не ко всему invocation. effective_units
+делает12 bounded read-only show calls до мутации. Healthy pending-after recovery
+делает ещё health6:18 read-only calls, maximum720s по40s/call. Profile proof
+обязателен; service mutation/rollback budget не увеличен.

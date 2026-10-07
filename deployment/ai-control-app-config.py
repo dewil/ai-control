@@ -283,23 +283,37 @@ def reject_pending(*paths):
     if any(os.path.lexists(p) for p in paths):
         raise ValueError('Other operation pending')
 
-def accepted14():
+def _accepted_package():
     ensure_dir_existing(STATE.parent, ROOT_UID, ROOT_GID, 0o700)
     raw = snapshot(STATE, ROOT_UID, 0o600, MAX_MANIFEST, ROOT_GID)
     if digest(raw) != pin(EXPECTED_ACCEPTED_SHA256):
         raise ValueError('Accepted state drift')
     value = decode(raw)
     keys(value, ('schema', 'release_id', 'manifest_sha256', 'files'))
-    if type(value['schema']) is not int or value['schema'] != 2:
-        raise ValueError('Expected accepted14')
+    if type(value['schema']) is not int or value['schema'] not in (2, 3):
+        raise ValueError('Expected accepted14 or accepted16')
     integer(value['release_id'], 1)
     pin(value['manifest_sha256'])
-    keys(value['files'], CURRENT_MODES)
-    for leaf, mode in CURRENT_MODES.items():
+    modes = CURRENT_MODES if value['schema'] == 2 else {**CURRENT_MODES, **dict.fromkeys(APP_LEAVES, 0o644)}
+    keys(value['files'], modes)
+    for leaf, mode in modes.items():
         if digest(snapshot(TARGET / leaf, ROOT_UID, mode, gid=ROOT_GID)) != pin(value['files'][leaf]):
             raise ValueError('Accepted tree drift')
-    for leaf in APP_LEAVES:
-        absent(TARGET / leaf, ROOT_UID)
+    if value['schema'] == 2:
+        for leaf in APP_LEAVES:
+            absent(TARGET / leaf, ROOT_UID)
+    return raw
+
+def accepted_package():
+    try:
+        return _accepted_package()
+    except (OSError, TypeError) as exc:
+        raise ValueError('Accepted package proof refused') from exc
+
+def accepted14():
+    raw = accepted_package()
+    if decode(raw)['schema'] != 2:
+        raise ValueError('Expected accepted14')
     return raw
 
 def marker(path):
@@ -378,10 +392,11 @@ def start():
     health()
 
 def effective_units():
-    for service, user in zip(SERVICES, ('ai-panel', 'dwl')):
-        for prop, expected in (('User', user), ('Group', 'ai-panel'),
-                               ('ProtectSystem', 'strict'), ('ProtectHome', 'yes'),
-                               ('ReadWritePaths', str(AUTH_CONFIG.parent)), ('InaccessiblePaths', '/data')):
+    # Profiles come from the pinned R5 templates, including broker defaults.
+    profiles = (('ai-panel', 'ai-panel', 'strict', 'yes', str(AUTH_CONFIG.parent), '/data'),
+                ('dwl', 'ai-panel', 'full', 'no', '', ''))
+    for service, profile in zip(SERVICES, profiles):
+        for prop, expected in zip(('User', 'Group', 'ProtectSystem', 'ProtectHome', 'ReadWritePaths', 'InaccessiblePaths'), profile):
             if command('show', service, '-p', prop, '--value') != expected:
                 raise ValueError('Effective unit gate failed')
 
@@ -455,13 +470,12 @@ def configure():
         identities()
         with locked(LOCK, ROOT_UID, ROOT_GID):
             reject_pending(PACKAGE_PENDING, BOOTSTRAP_MARKER)
-            accepted14()
+            accepted_package()
             if digest(snapshot(HELPER, ROOT_UID, 0o755, gid=ROOT_GID)) != pin(EXPECTED_NEW_HELPER_SHA256):
                 raise ValueError('Bootstrap incomplete')
-            effective_units()
-            storage()
             current = snapshot(AUTH_CONFIG, PANEL_UID, 0o600, MAX_MANIFEST, PANEL_GID)
-            if os.path.lexists(CONFIG_MARKER):
+            pending = os.path.lexists(CONFIG_MARKER)
+            if pending:
                 raw_marker, value = marker(CONFIG_MARKER)
                 before = checked_checkpoint(CONFIG_CHECKPOINTS, value, 'auth.before', PANEL_UID, PANEL_GID)
                 if digest(before) != pin(EXPECTED_AUTH_SHA256):
@@ -469,6 +483,11 @@ def configure():
                 after = migration(before)
                 if digest(after) != value['after_sha256'] or current not in (before, after):
                     raise ValueError('Unknown config recovery state')
+            elif digest(current) != pin(EXPECTED_AUTH_SHA256):
+                raise ValueError('Config preflight drift')
+            effective_units()
+            storage()
+            if pending:
                 if current == after:
                     try:
                         health()
@@ -482,8 +501,6 @@ def configure():
                 start()
                 clear(CONFIG_MARKER, ROOT_UID, raw_marker)
                 return None
-            if digest(current) != pin(EXPECTED_AUTH_SHA256):
-                raise ValueError('Config preflight drift')
             after = migration(current)
             if decode(current) == decode(after):
                 storage(create=True)

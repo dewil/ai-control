@@ -272,6 +272,62 @@ class ConfigProbes(ops.ConfigContracts):
         self.assertEqual(len(rollback_started), 1)
 
 
+class Config16Probes(ops.OperationsFixture):
+    def setUp(self):
+        self.prepare('ai-control-app-config.py')
+        self.write(self.paths['HELPER'], self.paths['NEW_HELPER'].read_bytes(), 0o755)
+        self.install_accepted(self.before16, 3, 6)
+        self.op.EXPECTED_ACCEPTED_SHA256 = ops.fixture.sha(self.state.read_bytes())
+        self.write(self.paths['AUTH_DB'], b'unchanged persistent grants', 0o600)
+
+    def test_exact16_wrongmode_and_extra_map_are_refused_without_repair(self):
+        leaf = self.target/core.AUTH
+        leaf.chmod(0o755)
+        self.refuse_without_mutation(self.op.accepted_package)
+        self.assertEqual(leaf.stat().st_mode & 0o777, 0o755)
+        leaf.chmod(0o644)
+        state = json.loads(self.state.read_bytes())
+        state['files']['bin/unreviewed'] = 'a'*64
+        self.state.write_bytes(json.dumps(state).encode())
+        self.op.EXPECTED_ACCEPTED_SHA256 = ops.fixture.sha(self.state.read_bytes())
+        self.refuse_without_mutation(self.op.accepted_package)
+        self.assertFalse(self.commands)
+
+    def test_bootstrap_still_refuses_accepted16_before_service_mutation(self):
+        source = ops.fixture.ROOT/'deployment/ai-control-app-bootstrap.py'
+        spec = importlib.util.spec_from_file_location('author_strict_bootstrap', source)
+        bootstrap = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bootstrap)
+        for name in ('TARGET','STATE','ROOT_UID','ROOT_GID','EXPECTED_ACCEPTED_SHA256'):
+            setattr(bootstrap, name, getattr(self.op, name))
+        self.refuse_without_mutation(bootstrap.accepted14)
+        self.assertFalse(self.commands)
+
+    def test_known16_failed_rollback_then_separate_retry_preserves_before_replay_grants(self):
+        protected = self.protected()
+        replay = Path(self.config['totp_state_path']).read_bytes()
+        def fail_start(argv):
+            if argv[1] == 'start':
+                raise subprocess.TimeoutExpired(argv[0], 40)
+        self.command_failure = fail_start
+        with self.assertRaises(ValueError):
+            self.op.configure()
+        self.assertEqual(self.paths['AUTH_CONFIG'].read_bytes(), self.auth_raw)
+        self.assertTrue(self.paths['CONFIG_MARKER'].exists())
+        self.command_failure = None
+        self.op.configure()
+        self.assertFalse(self.paths['CONFIG_MARKER'].exists())
+        # This invocation completes recovery; a separate invocation performs migration.
+        self.assertEqual(self.paths['AUTH_CONFIG'].read_bytes(), self.auth_raw)
+        self.op.configure()
+        self.assertEqual(json.loads(self.paths['AUTH_CONFIG'].read_bytes()), self.config | {
+            'android_auth_db':str(self.paths['AUTH_DB']), 'android_download_dir':str(self.paths['CATALOG'])})
+        self.assertEqual(Path(self.config['totp_state_path']).read_bytes(), replay)
+        self.assertEqual(self.paths['AUTH_DB'].read_bytes(), b'unchanged persistent grants')
+        for name in ('STATE','HELPER','KEY'):
+            self.assertEqual(self.protected()[name], protected[name])
+
+
 class PublisherProbes(ops.PublisherContracts):
     def prepare(self, filename):
         super().prepare(filename)
