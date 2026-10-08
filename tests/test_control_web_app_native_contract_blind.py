@@ -20,11 +20,11 @@ class NativePublicContract(unittest.TestCase):
         return path.read_text()
 
     def test_release_identity_and_sdk_contract(self):
-        # INV-APP-08: accepted 2026-10-08 Android UX package supersedes
-        # historical 0.1.4/code5 release identity with 0.1.5/code6 only.
+        # INV-APP-08: accepted 2026-10-08 startup incident release supersedes
+        # historical 0.1.5/code6 release identity with 0.1.6/code7 only.
         source = self.source(ROOT / 'android/app/build.gradle.kts')
         for pattern in (r'applicationId\s*=\s*"ru\.dewil\.aicontrol"',
-            r'versionName\s*=\s*"0\.1\.5"', r'versionCode\s*=\s*6\b',
+            r'versionName\s*=\s*"0\.1\.6"', r'versionCode\s*=\s*7\b',
             r'minSdk\s*=\s*26\b', r'targetSdk\s*=\s*36\b'):
             self.assertRegex(source, pattern)
 

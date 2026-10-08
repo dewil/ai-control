@@ -43,6 +43,8 @@ Gid reference только механизм build/updater; dwl подтверд�
 Контракт device token принят 07.10 в app-auth и активной app release feature spec; предыдущий DESIGN PASS не заменяет review нового API. Server integration, key/feed и N->N+1 acceptance требуют отдельных доказательств. Durable draft и фон имеют отдельных backlog owners в клиентском
 корне. Web контракты не ослабляются этим проектированием.
 
+- INV-AND-19: Native startup обращается к WindowInsetsController только после создания DecorView через setContentView; SDK>=30 и nullable-controller guards сохраняются. Инцидент и проверочные ограничения: [startup 0.1.5](../dev/2026-10-08-android-startup-015.md). Исправление 0.1.6/code7 не меняет auth, grants, updater transport или package/signature.
+
 ## Трассировка
 
 INV01..12 -> группы матрицы в feature spec; реальные Android tests пока
