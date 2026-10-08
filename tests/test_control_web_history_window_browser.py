@@ -1,4 +1,7 @@
 """Independent INV-WSESS-22/23 DOM-window acceptance; synthetic local backend only."""
+# Accepted INV-WSESS-47 (2026-10-08-spec-live-observability-package.md):
+# bottom navigation remains reachable through the explicit compact disclosure.
+
 import datetime
 import importlib
 import json
@@ -247,7 +250,10 @@ class HistoryWindowBrowser(unittest.TestCase):
         self.assertEqual(self.cap(),list(range(900,1000))); self.assertEqual(self.requests(),before)
         self.reader(); self.activate_older()
         before=list(self.requests())
-        bottom=self.page.get_by_role('button',name='↓ В конец',exact=True)
+        bottom=self.page.get_by_role('button',name='↓ В конец',exact=True,include_hidden=True)
+        for summary in bottom.last.locator('xpath=ancestor::details[not(@open)]/summary').all():
+            summary.click()
+        self.assertTrue(bottom.first.is_visible()); self.assertTrue(bottom.last.is_visible())
         self.assertEqual(bottom.count(),2); bottom.first.evaluate('button=>button.click()')
         self.page.wait_for_timeout(150)
         self.assertEqual(self.cap(),list(range(900,1000))); self.assertEqual(self.requests(),before)
