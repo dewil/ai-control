@@ -1,5 +1,5 @@
 """INV44 public DOM + synthetic HTTP oracle. No implementation reads/private IO."""
-import json,re,unittest
+import json,re,time,unittest
 from urllib.parse import parse_qs,urlsplit
 from playwright.sync_api import expect
 import test_control_web_model_controls_browser as fixture
@@ -23,10 +23,11 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
     wait_for_option=fixture.ModelControlsBrowserContract.wait_for_option
     send_button=fixture.ModelControlsBrowserContract.send_button
     send_requests=fixture.ModelControlsBrowserContract.send_requests
-    def mount(self,snapshot=None):
+    def mount(self,snapshot=None,delay_ms=0):
         self.snapshot=snapshot;self.history_error=False;self.older_error=False;self.held=[];self.hold=False
         def route(request):
             query=parse_qs(urlsplit(request.request.url).query)
+            if delay_ms:time.sleep(delay_ms/1000)
             if self.hold:self.held.append(request);return
             if self.history_error or ('cursor' in query and self.older_error):request.fulfill(status=503,json={'error':'unavailable'});return
             response=history(self.snapshot)
@@ -60,9 +61,13 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
         for value in invalid:
             with self.subTest(value=value):self.snapshot=value;self.refresh();self.unknown();expect(self.page.locator('.chat-items')).to_contain_text('Synthetic history stays visible')
     def test_missing_failed_latest_and_local_expiry_are_unknown(self):
-        self.mount(settings(age=14500));self.known();self.page.wait_for_timeout(650);self.unknown()
+        self.mount(settings(age=14500));self.known();before=sum('/api/session-history?' in r.url for r in self.network)
+        self.page.wait_for_timeout(650);self.unknown();self.assertEqual(before,sum('/api/session-history?' in r.url for r in self.network),'Expiry timer must not issue an extra GET')
         self.snapshot=settings();self.refresh();self.known();self.snapshot=None;self.refresh();self.unknown()
         self.snapshot=settings();self.refresh();self.known();self.history_error=True;self.refresh();self.unknown()
+    def test_request_duration_reduces_remaining_snapshot_lifetime(self):
+        self.mount(settings(age=14500),delay_ms=650);self.unknown()
+        expect(self.page.locator('.chat-items')).to_contain_text('Synthetic history stays visible')
     def test_older_response_cannot_replace_latest_settings(self):
         self.mount(settings());self.known()
         self.page.get_by_role('button',name='Загрузить более старые сообщения',exact=True).first.click();self.known()
