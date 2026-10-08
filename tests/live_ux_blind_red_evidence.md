@@ -74,3 +74,52 @@ weakened; conscious semantic migration remains a separate regression step.
 Synthetic proof does not close installed Android/IME/mobile/public HTTPS or real
 publication acceptance. Usage receipt unknown, coverage partial; no cost/tokens
 were invented.
+
+## Review corrections, 2026-10-09
+
+Review input: `ux-red-geometry-4cbd10cc.md` and
+`ux-red-models-4cbd10cc.md` under
+`/home/dwl/.ai-control-review/live-observability/`, reviewing candidate
+`4cbd10cc4f0834b587971296ff0e5593b2686874`. Review text was treated as data;
+root adjudications define the accepted corrections. No runtime source was read.
+
+Geometry corrections wait for selected `stle` and visible projects, resolve its
+bound disclosure, and require its exact Europe/Moscow timestamp. Numeric tokens
+cannot confuse0 with20; unknown count and activity both require `?`. Existing
+`article.chat-message` and `.message-heading` are owner-confirmed public DOM
+seams, with absent headings producing an assertion rather than a harness error.
+The accepted96.5px cloud bound is retained. Untracked runtime files participate
+in the default scope gate; the landing return hit test runs at every width.
+
+Model corrections establish a valid known state before each malformed DTO,
+control delayed responses with the paused browser clock, and assert UNKNOWN
+without retry at the exact deadline. Hint checks close the actual model details,
+start with a filled enabled draft, and reset the original catalog for each
+removed/unsupported subcase. A-B-A uses distinct scope values. Existing IDs,
+source-note text and `aria-describedby` follow INV44; a semantic common
+`chat-form` container is allowed. The accepted age+expires=15000 equation stays.
+
+The26-method correction run completed in67.183s:7PASS/19RED methods,
+40 assertions,0ERROR/0SKIP (`/var/tmp/live-ux-red-review-fixes.log`). Its D06
+refresh-after-unknown requirement was subsequently replaced following root's
+explicit adjudication; that superseded assertion is not a product finding.
+Final focused D06 ran in4.470s:1 semantic RED,0ERROR/0SKIP
+(`/var/tmp/live-ux-red-review-D06.log`). Actual UUIDv4, captured catalog/model/
+effort and all three disabled pending selection controls passed; the future
+draft was changed successfully. The observed failure is the old next caption
+`Следующая отправка: Model Alpha · high`, missing `Размышление:`. Final assertions
+also preserve the captured pair/UUID and forbid a resend. No extra pending
+refresh operation or A-B-A obligation was added; catalog races retain their
+separate tests.
+
+Focused reproduction command:
+
+```bash
+PYTHONPATH=tests:/var/tmp/control-web-browser-venv/lib/python3.12/site-packages /var/tmp/control-web-test-venv/bin/python -m unittest test_control_web_live_ux_blind_red.LiveUXBlindBrowser.test_INV49_pending_attempt_has_immutable_UUID_pair
+```
+
+Runtime remains exactly `0f4cbe3d2b5f7c8983375d6c3ef9d262d19bbcde`; the
+names-only runtime diff is empty. Chromium153 remains mandatory, with no skips.
+This delta changes independent tests and this report only. Independent review
+closure is the next root gate; runtime authorGO remains pending. Usage receipt
+unknown, coverage partial.
