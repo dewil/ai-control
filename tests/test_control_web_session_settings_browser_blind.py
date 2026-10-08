@@ -16,7 +16,16 @@ def history(snapshot):
 class SessionSettingsBrowserBlind(unittest.TestCase):
     setUpClass=classmethod(fixture.ModelControlsBrowserContract.setUpClass.__func__)
     stop_server=classmethod(fixture.ModelControlsBrowserContract.stop_server.__func__)
-    setUp=fixture.ModelControlsBrowserContract.setUp
+    def setUp(self):
+        # Each test has its own synthetic login: logout must not revoke another case's cookie.
+        self.context=self.browser.new_context(viewport={'width':390,'height':844},color_scheme='dark',has_touch=True)
+        self.addCleanup(self.context.close)
+        login=self.context.new_page();login.goto(self.url)
+        login.locator('#username').fill('owner');login.locator('input[type=password]').fill(fixture.PASSWORD)
+        login.get_by_role('textbox',name=re.compile('TOTP|код|однораз',re.I)).fill(fixture.totp())
+        login.get_by_role('button',name='Войти',exact=True).click()
+        login.get_by_role('button',name='Сессии',exact=True).or_(login.get_by_role('tab',name='Сессии',exact=True)).wait_for()
+        login.close();fixture.ModelControlsBrowserContract.setUp(self)
     tearDown=fixture.ModelControlsBrowserContract.tearDown
     calls=fixture.ModelControlsBrowserContract.calls
     assert_controls=fixture.ModelControlsBrowserContract.assert_controls
@@ -104,7 +113,9 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
         self.page.wait_for_timeout(100);self.known('fresh-A','fresh-A')
         self.hold=True;self.refresh();self.page.wait_for_timeout(50)
         self.page.get_by_role('button',name='Выйти',exact=True).click()
+        expect(self.page.locator('#login')).to_be_visible();expect(self.line).not_to_be_visible()
         for route in self.held:route.fulfill(json=history(settings('logout-poison','logout-poison')))
-        self.held=[];self.assertFalse(self.line.is_visible());self.assertNotIn('stale-A',self.page.locator('body').inner_text())
+        self.held=[];self.page.wait_for_timeout(100);expect(self.line).not_to_be_visible()
+        self.assertNotIn('logout-poison',self.page.locator('body').inner_text());self.assertNotIn('stale-A',self.page.locator('body').inner_text())
 
 if __name__=='__main__':unittest.main()

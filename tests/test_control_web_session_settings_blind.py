@@ -64,15 +64,23 @@ class SessionSettingsBlind(unittest.TestCase):
         for phase in ['before','thread/read','thread/items/list']:
             for key,value in mutations:
                 with self.subTest(phase=phase,key=key):
-                    self.context=dict(CONTEXT)
+                    self.context=dict(CONTEXT);self.rpc.calls.clear()
                     if phase=='before':self.context[key]={'transport_generation':True,'context_generation':-1,'context_id':'not-a-digest'}.get(key,value)
                     self.rpc.hook=lambda method:self.context.update({key:value}) if method==phase else None
-                    result=self.chat().history('demo',SID);self.assertIn('turns',result);self.assertNotIn('session_settings',result)
+                    result=self.chat().history('demo',SID)
+                    # Explicit model_context also owns receipts (existing INV26): never weaken its refusal.
+                    if key in ('vendor','schema') or (phase=='before' and key!='native_version'):
+                        self.assertEqual(result,{'error':'unavailable'})
+                        if phase=='before':self.assertEqual(self.rpc.calls,[])
+                    elif key=='context_id':self.assertEqual(result,{'error':'stale'})
+                    else:self.assertIn('turns',result)
+                    self.assertNotIn('session_settings',result)
         for key,value in [('schema',1.0),('context_generation',.5),('transport_generation',None),('context_id',None),('context_kind','unverified_bound')]:
-            self.context={**CONTEXT,key:value};self.rpc.hook=None
-            self.assertNotIn('session_settings',self.chat().history('demo',SID))
+            self.context={**CONTEXT,key:value};self.rpc.hook=None;self.rpc.calls.clear()
+            self.assertEqual(self.chat().history('demo',SID),{'error':'unavailable'});self.assertEqual(self.rpc.calls,[])
         def broken():raise RuntimeError('synthetic disconnected')
-        self.rpc.hook=None;self.assertNotIn('session_settings',self.chat(getter=broken).history('demo',SID))
+        self.rpc.hook=None;self.rpc.calls.clear()
+        self.assertEqual(self.chat(getter=broken).history('demo',SID),{'error':'unavailable'});self.assertEqual(self.rpc.calls,[])
     def test_plain_generic_history_older_and_bad_scope_unchanged(self):
         self.assertNotIn('session_settings',self.chat(trusted=False).history('demo',SID))
         result=self.chat().history('demo',SID,'older');self.assertIn('turns',result);self.assertNotIn('session_settings',result)
