@@ -10,6 +10,7 @@ public final class NativeDarkProbe {
   View root=activity.getWindow().getDecorView();
   LoginLifecycleProbe.check(root.getBackgroundColor()==0xff141414,name+" native root remains light");
   for(View view:LoginLifecycleProbe.flatten(root)) {
+   if(view instanceof android.view.ViewGroup && view.getBackgroundColor()!=0)LoginLifecycleProbe.check(view.getBackgroundColor()==0xff141414,name+" native container remains light");
    if(view instanceof TextView){TextView t=(TextView)view;int background=view.getBackgroundColor();if(background==0)background=0xff141414;
     double contrast=(luminance(t.getCurrentTextColor())+.05)/(luminance(background)+.05);
     LoginLifecycleProbe.check(contrast>=4.5,name+" text lacks4.5:1 contrast");

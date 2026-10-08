@@ -1,2 +1,2 @@
 package ru.dewil.aicontrol.updater;
-public interface UpdateRepositoryOwner {Repository getUpdateRepository();}
+public interface UpdateRepositoryOwner {UpdateRepository getUpdateRepository();}
