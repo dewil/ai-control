@@ -102,4 +102,4 @@ def landing(value=None, broken=False):
     if value is not None:
         path = PREFIX + f'ai-control-{value["versionCode"]}.apk'
         body = f'<p>Версия {html.escape(value["versionName"])}</p><p><a href="{path}" download>Скачать APK</a></p><p>SHA-256: <code>{value["sha256"]}</code></p>'
-    return '<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ai-control для Android</title><body><main><h1>ai-control для Android</h1>' + body + '</main></body></html>'
+    return '<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>ai-control для Android</title><link rel="stylesheet" href="/web.css"></head><body><main class="android-download"><header><h1>ai-control для Android</h1><a href="/">В главное меню</a></header><section>' + body + '</section></main></body></html>'

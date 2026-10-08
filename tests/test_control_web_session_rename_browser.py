@@ -1,4 +1,7 @@
 """Source-blind synthetic browser contracts for INV-WSESS-30."""
+# Accepted INV-WSESS-47..50 (2026-10-08-spec-live-observability-package.md):
+# canonical captions/chips and native disclosures replace the previous labels/layout.
+
 from control_browser_helpers import choose_project
 import importlib
 import json
@@ -287,11 +290,14 @@ class SessionRenameBrowser(unittest.TestCase):
         self.assertEqual(self.row(OTHER_TITLE).count(), 1, 'Other session row keeps its title')
         self.assertEqual(self.page.get_by_text('Synthetic history for ' + OLD_TITLE, exact=True).count(), 1)
 
-        model = self.page.get_by_role('combobox', name='Модель', exact=True)
-        effort = self.page.get_by_role('combobox', name='Уровень размышления', exact=True)
+        model = self.page.get_by_role('combobox', name='Модель', exact=True, include_hidden=True)
+        effort = self.page.get_by_role('combobox', name='Уровень размышления', exact=True, include_hidden=True)
+        for summary in model.locator('xpath=ancestor::details[not(@open)]/summary').all():
+            summary.click()
+        self.assertTrue(model.is_visible()); self.assertTrue(effort.is_visible())
         self.assertEqual(model.count(), 1, 'Existing model control remains available')
         self.assertEqual(effort.count(), 1, 'Existing effort control remains available')
-        self.assertEqual(model.locator('option').first.inner_text(), 'Настройки сессии: неизвестно')
+        self.assertEqual(model.locator('option').first.inner_text(), 'Использовать текущую модель')
         self.page.locator('textarea').fill('Synthetic message after rename')
         self.page.get_by_role('button', name='Отправить', exact=True).click()
         self.page.get_by_role('status').filter(has_text=re.compile('принято', re.I)).wait_for()

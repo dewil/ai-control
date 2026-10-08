@@ -1,4 +1,7 @@
 """INV44 public DOM + synthetic HTTP oracle. No implementation reads/private IO."""
+# Accepted INV-WSESS-47..50 (2026-10-08-spec-live-observability-package.md):
+# canonical captions/chips and native disclosures replace the previous labels/layout.
+
 import json,re,time,unittest
 from urllib.parse import parse_qs,urlsplit
 from playwright.sync_api import expect
@@ -65,14 +68,15 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
         self.alpha_session.click();self.page.locator('textarea').wait_for(state='visible')
         self.line=self.page.locator('#current-model-status')
         expect(self.line).to_be_visible(timeout=1500)
+        self.assert_controls()  # Explicitly reveal the accepted model-settings disclosure.
     def known(self,model='producer-model',effort='custom effort'):
-        expect(self.line).to_have_text('Сессия: '+model+' · '+effort)
-    def unknown(self):expect(self.line).to_have_text('Сессия: неизвестно · уровень неизвестен')
+        expect(self.line).to_have_text('Сессия: '+model+' · Размышление: '+effort)
+    def unknown(self):expect(self.line).to_have_text('Сессия: модель неизвестна · Размышление: уровень неизвестен')
     def refresh(self):
         self.page.get_by_role('button',name='Обновить переписку',exact=True).click()
     def test_positive_configured_label_note_inherit_and_catalog_not_authority(self):
         self.mount(settings());self.known()
-        expect(self.page.locator('#chat-model option[value=""]')).to_have_text('Настройки сессии: producer-model')
+        expect(self.page.locator('#chat-model option[value=""]')).to_have_text('Использовать текущую модель')
         note=self.page.locator('#session-settings-note');expect(note).to_contain_text('активный ответ может')
         binding=(self.line.get_attribute('aria-describedby') or '')+' '+(self.page.locator('textarea').get_attribute('aria-describedby') or '')
         title=(self.line.get_attribute('title') or '')+' '+(self.page.locator('textarea').get_attribute('title') or '')
@@ -82,7 +86,7 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
         self.assertFalse(any(r.method=='POST' for r in self.network))
     def test_independent_null_custom_and_exact_browser_validation(self):
         self.mount(settings())
-        variants=[(settings(None,'custom:X'),'неизвестно','custom:X'),(settings('😀'*256,None),'😀'*256,'уровень неизвестен')]
+        variants=[(settings(None,'custom:X'),'модель неизвестна','custom:X'),(settings('😀'*256,None),'😀'*256,'уровень неизвестен')]
         for value,model,effort in variants:
             self.snapshot=value;self.refresh();self.known(model,effort)
         invalid=[{**settings(),'schema':True},{**settings(),'age_ms':True},{**settings(),'age_ms':.5},{**settings(),'expires_in_ms':15000.5},{**settings(),'expires_in_ms':14999},{**settings(),'age_ms':-1},{**settings(),'extra':'private context'}, {**settings(),'source':'catalog'}, {**settings(),'scope':'active'}, {**settings(),'model':'😀'*257},{**settings(),'model':'bad\nvalue'}, {**settings(),'effort':'token=synthetic-private-token-value'}]
@@ -106,7 +110,7 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
     def test_explicit_future_pair_and_ack_do_not_become_current(self):
         self.mount(settings());model,effort=self.assert_controls();self.wait_for_option('Model Alpha')
         model.select_option(label='Model Alpha');effort.select_option(label='high')
-        expect(self.page.locator('#next-model-status')).to_have_text('Следующая отправка: Model Alpha · high');self.known()
+        expect(self.page.locator('#next-model-status')).to_have_text('Следующая отправка: Model Alpha · Размышление: high');self.known()
         self.page.locator('textarea').fill('Synthetic explicit attempt');self.send_button().click()
         self.page.locator('#send-status').filter(has_text=re.compile('принято',re.I)).wait_for();self.known()
     def test_pending_future_line_retains_immutable_attempt_across_selection(self):
@@ -118,7 +122,7 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
         self.known();self.beta_session.click();model,effort=self.assert_controls();self.wait_for_option('Model Beta')
         model.select_option(label='Model Beta');effort.select_option(label='medium')
         self.alpha_session.click();self.assert_controls()
-        expect(self.page.locator('#next-model-status')).to_contain_text('Model Alpha · high')
+        expect(self.page.locator('#next-model-status')).to_contain_text('Model Alpha · Размышление: high')
         body=json.loads(self.send_requests()[0].post_data)
         self.assertEqual(body['selection'],{'catalog_id':fixture.MODEL_CATALOG_ID,'model_id':'alpha-ui','effort':'high'})
         self.assertEqual(len(self.send_requests()),1);self.known()

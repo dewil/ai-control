@@ -1,4 +1,7 @@
 """Source-blind real browser acceptance for INV-AND-12 FR-AND-07 US-AND-004."""
+# Accepted INV-WSESS-47..50 (2026-10-08-spec-live-observability-package.md):
+# canonical captions/chips and native disclosures replace the previous labels/layout.
+
 import importlib
 import hashlib
 import json
@@ -142,7 +145,7 @@ class AndroidDownloadBrowserContract(unittest.TestCase):
         return self.page.locator('a[href$=".apk"]')
 
     def assert_panel_link(self, page):
-        link = page.get_by_role('link', name='Скачать Android-приложение', exact=True)
+        link = page.get_by_role('link', name='Андроид', exact=True)
         self.assertEqual(link.count(), 1, 'permanent common download link required')
         self.assertTrue(link.is_visible())
         self.assertEqual(link.get_attribute('href'), PREFIX)
