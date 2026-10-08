@@ -1,4 +1,7 @@
 """Independent browser RED for INV-WSESS-19 visible activity and cloud layout."""
+# Accepted INV-WSESS-47..50 (2026-10-08-spec-live-observability-package.md):
+# canonical captions/chips and native disclosures replace the previous labels/layout.
+
 from datetime import datetime, timezone
 import re
 import time
@@ -51,11 +54,14 @@ class ProjectCloudVisibleActivityLayoutRed(fixture.ProjectCloudBrowserContract):
                          'Project button accessible name includes the exact date')
         self.assertRegex(self.tile('stle').inner_text(), '(?i)устар|stale')
         self.assertEqual(self.tile('zero').locator('time').count(), 0, 'Confirmed null activity has no fabricated time')
-        self.assertRegex(self.tile('zero').inner_text(), '(?i)нет активност|no activity')
+        self.assertIn('—', self.tile('zero').inner_text())
+        self.assertRegex(self.tile('zero').get_attribute('aria-label'), '(?i)нет активност|no activity')
         unknown = self.tile('unkn').inner_text().lower()
         unavailable = self.tile('down').inner_text().lower()
-        self.assertRegex(unknown, '(?i)неизвест|unknown')
-        self.assertRegex(unavailable, '(?i)недоступ|unavailable')
+        self.assertIn('?', unknown)
+        self.assertRegex(self.tile('unkn').get_attribute('aria-label'), '(?i)неизвест|unknown')
+        self.assertIn('недост.', unavailable)
+        self.assertRegex(self.tile('down').get_attribute('aria-label'), '(?i)недоступ|unavailable')
         self.assertNotEqual(unknown, unavailable, 'Unknown and unavailable metadata have distinct explanations')
 
         before = list(self.network)

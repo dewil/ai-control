@@ -1,4 +1,7 @@
 """Source-blind INV-WSESS-27 browser contracts with synthetic HTTP fixtures."""
+# Accepted INV-WSESS-47..50 (2026-10-08-spec-live-observability-package.md):
+# canonical captions/chips and native disclosures replace the previous labels/layout.
+
 from control_browser_helpers import choose_project
 import importlib
 import json
@@ -209,10 +212,14 @@ class ModelControlsBrowserContract(unittest.TestCase):
         self.assert_controls()
 
     def assert_controls(self):
-        model = self.page.get_by_role('combobox', name='Модель', exact=True)
-        effort = self.page.get_by_role('combobox', name='Уровень размышления', exact=True)
+        model = self.page.get_by_role('combobox', name='Модель', exact=True, include_hidden=True)
+        effort = self.page.get_by_role('combobox', name='Уровень размышления', exact=True, include_hidden=True)
         self.assertEqual(model.count(), 1, 'INV-WSESS-27 must render one labelled native model select')
         self.assertEqual(effort.count(), 1, 'INV-WSESS-27 must render one labelled native effort select')
+        # INV47: the same native selectors are reachable through a real disclosure.
+        for summary in model.locator('xpath=ancestor::details[not(@open)]/summary').all():
+            summary.click()
+        self.assertTrue(model.is_visible()); self.assertTrue(effort.is_visible())
         return model, effort
 
     def wait_for_option(self, label):
@@ -228,7 +235,7 @@ class ModelControlsBrowserContract(unittest.TestCase):
         self.open_alpha()
         model, effort = self.assert_controls()
         self.wait_for_option('Model Alpha')
-        self.assertEqual(model.locator('option').all_text_contents()[:2], ['Настройки сессии: неизвестно', 'Model Alpha'])
+        self.assertEqual(model.locator('option').all_text_contents()[:2], ['Использовать текущую модель', 'Model Alpha'])
         self.assertEqual(effort.locator('option').first.inner_text(), 'Выберите уровень размышления')
         self.assertEqual(effort.input_value(), '', 'Catalog default is not effective thread state')
         body = self.page.locator('body').inner_text()
@@ -283,7 +290,7 @@ class ModelControlsBrowserContract(unittest.TestCase):
     def test_INV_WSESS_27_unsupported_catalog_keeps_inherit_send_without_model_fallback(self):
         private_json(self.evidence / 'control.json', {'default_models': unavailable()})
         self.open_alpha(); model, _ = self.assert_controls()
-        self.assertEqual(model.locator('option').all_text_contents(), ['Настройки сессии: неизвестно'])
+        self.assertEqual(model.locator('option').all_text_contents(), ['Использовать текущую модель'])
         self.assertRegex(self.page.locator('body').inner_text(), r'(?i)недоступ|не поддерж|модел|выбор')
         self.page.locator('textarea').fill('Synthetic inherit under unavailable catalog')
         self.assertTrue(self.send_button().is_enabled(), 'Unavailable discovery cannot remove ordinary inherit send')
