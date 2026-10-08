@@ -58,6 +58,17 @@ class BootstrapContract(unittest.TestCase):
         self.assertNotIn(SUDOERS,installed)
         self.assertEqual(installed,{HELPER:(self.helper,0o755)})
         events,installed=self.fixture();self.api.bootstrap();self.assertEqual(installed[SUDOERS],(RULE,0o440))
+    def test_existing_exact_root_file_old_access_time_is_valid(self):
+        import os,stat,tempfile,time
+        actual_fstat=os.fstat;actual_stat=os.stat;actual_lstat=os.lstat
+        def trusted(info):
+            fields=list(info);fields[4]=fields[5]=0
+            if stat.S_ISDIR(info.st_mode):fields[0]=stat.S_IFDIR|0o755
+            return os.stat_result(fields)
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'exact.py';path.write_bytes(self.publisher);path.chmod(0o644);os.utime(path,(1,time.time()))
+            with patch('os.fstat',lambda fd:trusted(actual_fstat(fd))),patch('os.stat',lambda *a,**k:trusted(actual_stat(*a,**k))),patch('os.lstat',lambda *a,**k:trusted(actual_lstat(*a,**k))):
+                self.api.validate_existing(path,self.publisher,0o644)
     def test_generated_runtime_noargs_isolated_root_refusal(self):
         for isolated,uid,euid,argv in [(0,0,0,['packet']),(1,1000,1000,['packet']),(1,0,1000,['packet']),(1,0,0,['packet','argument'])]:
             with self.subTest(argv=argv,isolated=isolated,uid=uid,euid=euid),patch.object(sys,'flags',types.SimpleNamespace(isolated=isolated)),patch.object(sys,'argv',argv),patch('os.getuid',return_value=uid),patch('os.geteuid',return_value=euid):

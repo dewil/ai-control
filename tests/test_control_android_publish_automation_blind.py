@@ -32,6 +32,12 @@ class PersistentPublisherContract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             stage=self.stage(directory)
             with patch.dict(os.environ,{'STAGE':'/unapproved','APK_PATH':'/unapproved','VERSION_CODE':'1'}):self.assertEqual(self.api.load_release(stage,os.getuid()),metadata())
+    def test_valid_private_release_with_old_access_time_remains_loadable(self):
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            stage=self.stage(directory)
+            for path in [stage/'release.json',stage/'release.apk']:os.utime(path,(1,time.time()))
+            self.assertEqual(self.api.load_release(stage,os.getuid()),metadata())
     def test_stage_metadata_modes_links_owner_and_size_fail_closed(self):
         for case in ['directory-mode','file-mode','symlink','hardlink','fifo','oversize','wrong-owner','stage-link','apk-link','apk-hardlink','apk-mode','apk-oversize']:
             with self.subTest(case=case),tempfile.TemporaryDirectory() as directory:
@@ -119,9 +125,12 @@ class PersistentPublisherContract(unittest.TestCase):
     def test_root_publisher_snapshot_metadata_nofollow_bounds(self):
         import stat
         actual_fstat=os.fstat;actual_stat=os.stat;actual_lstat=os.lstat
-        for case in ['safe','file-mode','file-owner','hardlink','symlink','fifo','oversize','ancestor-mode','ancestor-link']:
+        for case in ['safe','old-atime','file-mode','file-owner','hardlink','symlink','fifo','oversize','ancestor-mode','ancestor-link']:
             with self.subTest(case=case),tempfile.TemporaryDirectory() as directory:
                 parent=Path(directory)/'trusted';parent.mkdir(mode=0o755);publisher=parent/'publisher.py';publisher.write_bytes(b'PUBLIC_SYNTHETIC_SOURCE=1\n');publisher.chmod(0o644)
+                if case=='old-atime':
+                    import time
+                    os.utime(publisher,(1,time.time()))
                 if case=='file-mode':publisher.chmod(0o666)
                 if case=='hardlink':os.link(publisher,parent/'alias')
                 if case=='symlink':publisher.rename(parent/'saved');publisher.symlink_to(parent/'saved')
@@ -140,7 +149,7 @@ class PersistentPublisherContract(unittest.TestCase):
                         fields=list(value);fields[0]=stat.S_IFDIR|0o777;return os.stat_result(fields)
                     return value
                 with patch.object(self.api,'PUBLISHER',publisher),patch('os.fstat',fdstat),patch('os.stat',lambda *a,**k:trusted(actual_stat(*a,**k))),patch('os.lstat',lambda *a,**k:trusted(actual_lstat(*a,**k))):
-                    if case=='safe':self.assertEqual(self.api.validate_publisher_source(),b'PUBLIC_SYNTHETIC_SOURCE=1\n')
+                    if case in ['safe','old-atime']:self.assertEqual(self.api.validate_publisher_source(),b'PUBLIC_SYNTHETIC_SOURCE=1\n')
                     else:
                         with self.assertRaises(ValueError):self.api.validate_publisher_source()
 
