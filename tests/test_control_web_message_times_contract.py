@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from test_control_web_session_chat_contract import RPC, SID, TURN, feature, turn
+from test_control_web_session_chat_contract import RPC, SID, TURN, MID, feature, turn
 
 
 class MessageTimesContract(unittest.TestCase):
@@ -41,7 +41,13 @@ class MessageTimesContract(unittest.TestCase):
             self.assertIn('time_precision', item, 'INV-WSESS-20 additive precision missing')
             self.assertEqual(item['timestamp'], timestamp)
             self.assertEqual(item['time_precision'], precision)
-            self.assertEqual(set(item), {'id', 'role', 'text', 'truncated', 'timestamp', 'time_precision'})
+            expected_keys = {'id', 'role', 'text', 'truncated', 'timestamp', 'time_precision'}
+            # INV-WSESS-46: project() supplies canonical MID only on its user item.
+            # Assistant allowlist and all existing timestamp assertions stay exact.
+            if item['role'] == 'user':
+                expected_keys.add('client_id')
+                self.assertEqual(item.get('client_id'), MID)
+            self.assertEqual(set(item), expected_keys)
             self.assertFalse(item['truncated'])
 
     def test_valid_integer_bounds_zero_and_future_preserved_for_both_roles(self):

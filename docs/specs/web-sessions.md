@@ -17,7 +17,7 @@
 
 ## Контракты и трассируемость
 
-Публичный SessionChat, HTTP и broker wire закреплены в feature specification. Независимые тесты должны нести INV-WSESS-01..08; на момент принятия этой спеки implementation, RED/GREEN, review, CI и installed acceptance ещё не выполнены. Существующие web/task/auth checks остаются обязательными.
+Публичный SessionChat, HTTP и broker wire закреплены в feature specification. Независимые тесты должны нести INV-WSESS-01..08; исходный docs-only приём этой спеки предшествовал implementation и проверкам. Текущие source/validation checkpoints указаны в соответствующих feature sections; installed acceptance учитывается отдельно. Существующие web/task/auth checks остаются обязательными.
 
 ## Известные дыры
 
@@ -137,3 +137,32 @@ DESIGN/RED ещё впереди; source/installed capability не заявле�
   list и UI проходят отдельный контракт/RED; source не installed acceptance.
 
 Per-item time amendment: ../dev/2026-10-06-spec-web-item-message-times.md.
+
+## Compact UX package — implemented source, contract08.10
+
+[CONTROL-WEB-UX-PACKAGE](../dev/2026-10-08-spec-web-ux-package.md) объединяет
+следующие новые инварианты; существующие security/delivery/history bounds сохраняются.
+
+- INV-WSESS-42: компактные panels/actions/articles с readable fonts и ≥44px targets;
+  geometry320/390/1280, safe wrapping, keyboard/focus и reader anchor без overlay.
+- INV-WSESS-43: projects open до valid generation-fenced session selection, затем
+  collapse; явный reopen переживает polls/refresh, новая selection/reload имеют
+  описанные transitions; project counts/activity/sort остаются доступны.
+- INV-WSESS-44: factual session configured-or-persisted model/effort из existing
+  scoped thread/read metadata, отдельно от unknown active-turn telemetry и requested
+  next selection. Optional latest-history session_settings с context/generation fences
+  и15s sampled freshness; Older/catalog/ACK/default не authoritative snapshot.
+  Реализация после accepted docs и отдельного independent RED/GO сохраняет
+  existing receipt-authority refusals и не добавляет native requests.
+- INV-WSESS-45: немедленная memory-only outgoing entry exact send UUID/status;
+  lagging history не удаляет unmatched entry, no unknown resend, scope fences,
+  canonical merge только по producer correlation, не text/time/turn guess.
+- INV-WSESS-46: optional public user item client_id из canonical native clientId,
+  сохранённый через обе history projection layers и budget clipping; assistant не
+  получает correlation, существующие RPC/96KiB/redaction/budgets не расширяются.
+
+INV42/43/45/46 source checkpoint6e495da: independent RED→GREEN, backend91 и focused38
+PASS; full SOURCE/CI/installed acceptance пока отсутствуют. INV44 implemented contract
+опирается на proven session-configured producer, не active-turn telemetry.
+Финальный MODEL gate20 unique PASS; затронутые backend75, model/rename browser16
+и geometry/width2 PASS. Full SOURCE/CI/installed acceptance остаются отдельными gates.
