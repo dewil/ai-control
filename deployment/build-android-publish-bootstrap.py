@@ -67,6 +67,13 @@ def parent_fd(path, create=False):
         raise
 
 
+def stable_metadata(info):
+    # Access time can advance on a valid read; identity/content metadata cannot.
+    return tuple(getattr(info, field) for field in (
+        'st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid',
+        'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+
+
 def validate_existing(path, raw, mode):
     parent = parent_fd(path)
     if parent is None:
@@ -91,8 +98,8 @@ def validate_existing(path, raw, mode):
                 total += len(chunk)
                 if total > len(raw):
                     raise ValueError('Installation changed')
-            if (b''.join(chunks) != raw or os.fstat(fd) != info or
-                    os.stat(path.name, dir_fd=parent, follow_symlinks=False) != info):
+            if (b''.join(chunks) != raw or stable_metadata(os.fstat(fd)) != stable_metadata(info) or
+                    stable_metadata(os.stat(path.name, dir_fd=parent, follow_symlinks=False)) != stable_metadata(info)):
                 raise ValueError('Unknown installation collision')
         finally:
             os.close(fd)

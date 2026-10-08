@@ -37,3 +37,12 @@ production exact-repeat proof без новой подписи/пересбор�
 Это local synthetic proof. Independent SOURCE/full CI, physical root install,
 real noargs sudo publication и anonymous HTTPS proof еще не выполнены этим автором.
 Device acceptance не следует из publisher tests. Receipt unknown.
+
+Same-author atime follow-up: snapshot/existing-file guards compare dev/ino/mode/
+nlink/uid/gid/size/mtime_ns/ctime_ns and exclude only access time, which can advance
+on a valid read. Byte equality and nofollow path-to-fd binding remain enforced.
+Independent old-atime regressions precede this fix; generated packet must be
+regenerated with its own new checksum before review/install.
+
+Root-adjudicated supplementary groups are exactly {1000,987}; real/effective/
+saved uid/gid are dwl1000, not a panel-only group987 policy.

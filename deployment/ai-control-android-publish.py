@@ -64,6 +64,13 @@ def file_info(fd, uid, mode, limit, gid=None):
     return info
 
 
+def stable_metadata(info):
+    # Reading may update atime; retain every identity/content mutation guard.
+    return tuple(getattr(info, field) for field in (
+        'st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid',
+        'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+
+
 def read_snapshot(parent, name, uid, mode, limit, gid=None):
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
     try:
@@ -77,8 +84,8 @@ def read_snapshot(parent, name, uid, mode, limit, gid=None):
             total += len(chunk)
             if total > limit:
                 raise ValueError('Oversized file')
-        if (os.fstat(fd) != before or
-                os.stat(name, dir_fd=parent, follow_symlinks=False) != before):
+        if (stable_metadata(os.fstat(fd)) != stable_metadata(before) or
+                stable_metadata(os.stat(name, dir_fd=parent, follow_symlinks=False)) != stable_metadata(before)):
             raise ValueError('File changed')
         return b''.join(chunks)
     finally:
