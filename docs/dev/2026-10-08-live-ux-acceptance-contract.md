@@ -57,15 +57,9 @@ Baseline: textarea105px; stacked model-controls176px mobile; send-status empty r
 - Count sorting exact current semantics: known fresh/stale numeric desc, unknown/unavailable last; lowercase alias asc then original alias tie-break. Activity: fresh timestamps desc; stale timestamps desc; confirmed no-activity; unknown/unavailable; same stable alias tie-break. Browser persists только enum `count|activity`. Не переносить project name/count/activity/history/drafts в storage.
 - Accordion existing INV43: open до selection proof; close после successful generation-fenced history selection, failed attempt остаётся open; restored valid selected session послеreload collapsed; manual reopen переживает polls/SSE/refresh. Current project header и toggle44px доступны. Inflight-toggle новый контракт не включён: поведение не менять. Late A response после B/manual reopen/logout не схлопывает актуальное состояние.
 
-## UXC-MODEL — ясный reasoning caption без новых источников
+## UXC-MODEL — подписи и producer
 
-INV-WSESS-44/24..27 сохраняются; polish existing renderer/HTML placeholder, не new native RPC/producer.
-
-- Factual permanent secondary line: **`Сессия: gpt-6.1-sol · размышление: high`**. Custom safe effort сохраняется дословно, не мапится в medium и не выводится из model/catalog. Независимые nullable fields: `Сессия: неизвестно · размышление: high`; `Сессия: gpt-6.1-sol · размышление: неизвестно`; оба unknown аналогично. Шрифт>=12px; line wrapping normal, 256 Unicode codepoints не обрезаются и не вызывают horizontal overflow.
-- Default model option initial HTML и JS совпадают: `Настройки сессии: <model или неизвестно>`; inherit не превращается в explicit pair и не отправляет model/effort keys. Existing note «Настройки загруженной сессии или последние сохранённые; активный ответ может использовать другие настройки» остаётся в DOM, доступен через `aria-describedby` и явное disclosure без hover. Его допустимо перенести из постоянного многострочного блока в compact explanation disclosure, сохранив связь.
-- Separate future line: inherit **`Следующая отправка: настройки сессии`**; explicit pair **`Следующая отправка: Model Alpha · размышление: high`**; missing effort **`Следующая отправка: Model Alpha · размышление: выберите уровень`**. Нельзя писать «Сейчас»/«активная модель» на основании configured snapshot/select/ACK. Pending/unknown attempt берёт immutable selection+label из latestAttempt, не live dropdown/state другой сессии; choices не меняют ранее dispatched attempt.
-- Snapshot authority ровно existing latest `session_settings`, schema1/source thread_read/scope configured_or_persisted,15s sampled freshness; browser request elapsed reduces lifetime. Missing/invalid/failed latest → unknown; Older response/failure не меняют fresh latest; catalog/default/send ACK не authoritative. Existing root/SID/account/selection/request/auth generations и safe value validation не ослабляются; expiry local, zero extra GET.
-- Независимые browser tests с exact old captions надо обновить **сознательно**, только caption expectations; unknown custom/clock/receipt authority/redaction assertions остаются. Existing module DTO shape не меняется. Return to foreground expired snapshot unknown до existing refresh; no active-turn telemetry claim.
+Дословные строки определяет только таблица Frozen canonical strings в2026-10-08-spec-live-observability-package.md. Producer existing latest.session_settings/source=thread_read/scope=configured_or_persisted,15s freshness неизменен. Older/catalog/default/ACK не являютсяauthoritative. Snapshotmissing/null/custom/stale/expiry/generation races сохраняются. Пояснение configured-vs-active доступно черезaria-describedby иявноераскрытие. Requestedpair отдельный, dispatchedpairimmutable.
 
 ## UXC-NEXT-STALE — requested label и catalogue availability
 
@@ -122,3 +116,6 @@ Existing source fact: landing on `/download/android/` is **dynamic** `helper.lan
 
 
 D11/D12amendment: additionallyallcontrolsband=maxbottomвсехcontrols/notes/navпередfooter−chatitems.bottom с ceiling620/560/560/560. Datedbutton44×44в44header, staticarticleheightgrowth≤24px, readerasyncmovement≤8px. Optionalexceptionдля20pxtimetargetнепринята.
+
+
+N05baselineC иединственныйcanonicalstringsoracle перенесенывглавнуюfeature-spec. ЭтаUXзаписьописываетfixtures/races, не второйисточникстрок. N04раннийUXdiffтолькоcurrent16, nonewleafimports/authchanges.

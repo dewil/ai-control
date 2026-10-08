@@ -49,3 +49,5 @@ Installed Control PONG, owner integration, fixed14 package/dependency extension
 
 INV-DEVBUS-01..09 -> tests/test_control_web_devbus*.py (теги строками).
 FR-BUS-01..03, US-BUS-001 -> те же tests; installed критерий отдельно.
+
+INV-DEVBUS-10/11 reserved integration: ownerbrokerhosting / bounded owneronly API, contract ../dev/2026-10-08-spec-live-observability-package.md; dedicated integrationtests required, acceptedPR74aloneisnotproof.
