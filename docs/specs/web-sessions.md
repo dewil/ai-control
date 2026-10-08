@@ -148,10 +148,11 @@ Per-item time amendment: ../dev/2026-10-06-spec-web-item-message-times.md.
 - INV-WSESS-43: projects open до valid generation-fenced session selection, затем
   collapse; явный reopen переживает polls/refresh, новая selection/reload имеют
   описанные transitions; project counts/activity/sort остаются доступны.
-- INV-WSESS-44: постоянный factual current model/effort с честным unknown, отдельно
-  requested next selection. Catalog/default/ACK не effective proof. Положительная
-  factual ветка требует принятого read-only producer snapshot; scope fallback в этом
-  пакете ожидает явного решения пользователя.
+- INV-WSESS-44: factual session configured-or-persisted model/effort из existing
+  scoped thread/read metadata, отдельно от unknown active-turn telemetry и requested
+  next selection. Optional latest-history session_settings с context/generation fences
+  и15s sampled freshness; Older/catalog/ACK/default не authoritative snapshot. Docs
+  приняты перед отдельным independent RED/GO; runtime INV44 пока отсутствует.
 - INV-WSESS-45: немедленная memory-only outgoing entry exact send UUID/status;
   lagging history не удаляет unmatched entry, no unknown resend, scope fences,
   canonical merge только по producer correlation, не text/time/turn guess.
@@ -159,5 +160,6 @@ Per-item time amendment: ../dev/2026-10-06-spec-web-item-message-times.md.
   сохранённый через обе history projection layers и budget clipping; assistant не
   получает correlation, существующие RPC/96KiB/redaction/budgets не расширяются.
 
-Independent RED и реализация этого пакета ещё не выполнены; honest unknown branch
-не считается закрытием полной потребности factual current settings.
+INV42/43/45/46 source checkpoint6e495da: independent RED→GREEN, backend91 и focused38
+PASS; full SOURCE/CI/installed acceptance пока отсутствуют. INV44 updated docs-only
+contract опирается на proven session-configured producer; implementation ждёт RED/GO.
