@@ -130,7 +130,7 @@ Sonnet принимаетfrozenREDкаждогоchild доauthorGO: meaningfulfa
 
 ## UX freeze evidence N04/N05
 
-Обе B/C метрики измерены Chromium на неизменённом runtime0f4cbe3; proofscript /var/tmp/control-live-ux-bottom-baseline.py и JSON+.md. B=formbottom−chatitemsbottom; C=lastlowermeaningful/control/navbottom−chatitemsbottom доfooter.
+Обе B/C метрики измерены Chromium на неизменённом runtime0f4cbe3; proofscript /var/tmp/control-live-ux-bottom-baseline.py и JSON+.md. B=formbottom−chatitemsbottom; C определяется по всем видимым элементам между #chat-items и build-footer, по правилу ниже; контрольный повтор измерения фиксируется в RED fixtures.
 
 | Viewport | Baseline B | Baseline C | Ceiling обоих |
 |---|---:|---:|---:|
@@ -144,3 +144,35 @@ Sonnet принимаетfrozenREDкаждогоchild доauthorGO: meaningfulfa
 РаннийUXsourcecommit содержиттолькоправкиcurrent16, включаяbin/_control_web_android_download.py (явновcurrent16). Ниimports/referenceslive/devbusleaf, ниowner-tag, ниbrokerops/unit/bootstrapпопадаютвUXcommit. SOURCEпроверяетdiffcurrent16 инаглухуюmissingnewleafruntimefixture. СледующиеgatesдобавляютсяпослеUXfreezeпоследовательнооднимписателем; еслиобщийпакетустановленсразу22, отдельныйUXcommitвсёравнодаётreviewedbaseline. Full final CI/integrationвключаетпоследниебайтывсехchild.
 
 IDs47..53 отсутствоваливbaseline0f4cbe3:web-sessions.md доэтойdraftreservation, провереноrootrg. Acceptedobservertests/docs списокзафиксироватьдоreuse frozenRED изexact723048a; sourceblobтаблицасохраняется. DeploymentD10specимеетотдельногоMarkdownвладельцагейта/sourceproof, parentchildнеисключён.
+
+
+## Закрытие UX-D01..04: точные правила до RED
+
+Подпись настроек всегда видна у выбранной сессии. Valid означает существующий свежий (15s) snapshot того же project/session/generation, с ожидаемыми producer/source/scope и корректными типами полей. В valid snapshot null model даёт строку Unknown model, null effort — Unknown effort, оба null — Both unknown из canonical table. Непустые валидные строки отображаются буквально через textContent, не HTML; custom model допустима. Отсутствующий, loading, expired, malformed, error или чужой snapshot никогда не отображает прошлые значения: показывается Both unknown. Некорректный тип поля инвалидирует весь snapshot. Это не утверждение текущей active-turn модели. Длинные значения допускают ellipsis, полное значение доступно в keyboard/touch disclosure, без переполнения. Для next explicit label используется последняя известная подпись выбранной модели, иначе её сохранённый raw ID; каталог не подменяет requested pair.
+
+Catalog hint расположен только у next selection/locked model controls. Он не появляется у immutable pending/dispatched attempt и не изменяет его подпись или UUID. Строка Gap canonical table принадлежит только LIVE gate; UX RED и runtime её не вводят.
+
+Geometry oracle: fixture находится в режиме following после scroll-to-end. Document bottom каждого rect = getBoundingClientRect().bottom + scrollY. B = form.bottom − chat-items.bottom. C = max document bottom всех видимых элементов после #chat-items и перед build-footer − chat-items.bottom; учитываются все nonzero rect, включая notes, navigation, status и controls. display:none и содержимое закрытого details исключаются. Обязательные элементы нельзя выводить из oracle посредством absolute/fixed, transform, clipping или отрицательных отступов. Sticky элементы измеряются также в normal-flow, чтобы их визуальная позиция не уменьшала C. Замороженные baseline script/JSON с Chromium version и computed font stack входят в committed RED fixtures. Dated fixture фиксирует baseline высоты статей; новый header имеет 44px без overlay, timestamp hit rect 44×44. elementFromPoint по четырём внутренним углам и центру подтверждает принадлежность hit target и отсутствие перекрытия соседнего текста/controls.
+
+Current16 — точный установленный scope baseline0f4cbe3:
+
+| Путь | Mode |
+|---|---|
+| bin/ai-control-web | 0755 |
+| bin/_control_web.py | 0644 |
+| bin/_control_web_broker.py | 0644 |
+| bin/_control_web_sessions.py | 0644 |
+| bin/_codex_rc.py | 0644 |
+| bin/_rc_projects.sh | 0755 |
+| bin/_control_web.html | 0644 |
+| bin/_control_web.css | 0644 |
+| bin/_control_web.js | 0644 |
+| requirements-web.lock | 0644 |
+| systemd/ai-control-web.service.tmpl | 0644 |
+| systemd/ai-control-web-broker.service.tmpl | 0644 |
+| bin/_control_web.svg | 0644 |
+| bin/_control_web_configured_create.py | 0644 |
+| bin/_control_web_android_auth.py | 0644 |
+| bin/_control_web_android_download.py | 0644 |
+
+В UX runtime commit разрешены только bin/_control_web.html, bin/_control_web.css, bin/_control_web.js и bin/_control_web_android_download.py, плюс docs/tests. EventSource, session-events, live/devbus imports, owner-tag/auth изменения, units и deploy helper в UX commit запрещены. Header содержит ровно одну ссылку «Андроид»; accessible name содержит видимое слово. Landing использует анонимно доступный /web.css (HTTP200 без cookie), соблюдает существующий CSP и не требует JS. Chip box-sizing:border-box; ширина short fixture фиксирована 112+4×bucket, высота44px, длинный текст обрезается с доступной полной расшифровкой. Cloud: две строки четырёх short chips ≤96px (+0.5px tolerance), без дополнительных top margins за пределами8px. Browser safe-area geometry не считается installed Android proof.
