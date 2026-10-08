@@ -39,7 +39,7 @@ class HistoryClientIdBlind(unittest.TestCase):
         agent={'id':'native-agent','type':'agentMessage','clientId':MID,'text':'Synthetic reply'}
         self.assertNotIn('client_id',self.history([agent])['turns'][0]['items'][0])
     def test_INV46_clipped_prefix_keeps_correlation_and_existing_budget(self):
-        items=[dict(user(MID,'x'*9000),id='u-'+str(i)) for i in range(18)]
+        items=[dict(user(MID,'synthetic body '*700),id='u-'+str(i)) for i in range(18)]
         result=self.history(items)
         self.assertIn('turns',result)
         projected=[i for t in result['turns'] for i in t['items']]
