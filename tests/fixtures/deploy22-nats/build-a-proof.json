@@ -1,0 +1,25 @@
+{
+  "uid": 1000,
+  "python": "3.12.3",
+  "python_detail": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+  "source_date_epoch": 1700000000,
+  "builder_versions": {
+    "pip": "25.0.1",
+    "setuptools": "75.8.0",
+    "wheel": "0.45.1"
+  },
+  "wheel": "nats_py-2.9.0-py3-none-any.whl",
+  "wheel_sha256": "132a8e4b646ad058c7b242b7161621832ee8737ca6f6cbd47dcb6d3ad09490ed",
+  "wheel_size": 82408,
+  "isolated_network_namespace": true,
+  "home_empty_at_start": true,
+  "user_home_absent": true,
+  "data_absent": true,
+  "smoke": {
+    "version": "2.9.0",
+    "observer_apis": true,
+    "consumer_config": true,
+    "network_calls": 0
+  },
+  "runtime_owner_import_certified": false
+}

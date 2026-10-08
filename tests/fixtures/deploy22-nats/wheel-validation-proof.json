@@ -1,0 +1,20 @@
+{
+  "filename": "nats_py-2.9.0-py3-none-any.whl",
+  "sha256": "132a8e4b646ad058c7b242b7161621832ee8737ca6f6cbd47dcb6d3ad09490ed",
+  "size": 82408,
+  "member_count": 29,
+  "uncompressed_bytes": 308765,
+  "inventory_sha256": "40b35159d50cf2bf0f645f5ab1564f5a3fd0efcee266405fffeb6a496dc7bb43",
+  "inventory_encoding": "UTF-8 canonical JSON, sorted keys, compact separators, no terminal newline",
+  "inventory_file_sha256": "a90f99cd99a013e157185d15e0dd0b7d93a6a2e23aa89dbff100a3c3450c279e",
+  "record_validated": true,
+  "purelib": true,
+  "wheel_tag": "py3-none-any",
+  "two_build_bytes_identical": true,
+  "archive_mode_exception": {
+    "path": "nats_py-2.9.0.dist-info/RECORD",
+    "archive_mode": 436,
+    "required_install_mode": 420
+  },
+  "runtime_owner_import_certified": false
+}
