@@ -17,17 +17,33 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
     setUpClass=classmethod(fixture.ModelControlsBrowserContract.setUpClass.__func__)
     stop_server=classmethod(fixture.ModelControlsBrowserContract.stop_server.__func__)
     def setUp(self):
-        # Existing auth rejects TOTP replay. Logout gets an independent synthetic server/session,
-        # while other cases clone the original cookie only in RAM and never share DOM state.
-        owner=type(self)
-        if self._testMethodName=='test_late_selection_and_auth_generations_do_not_restore_stale_settings':
-            owner=type('IsolatedLogoutFixture',(unittest.TestCase,),{'stop_server':classmethod(fixture.ModelControlsBrowserContract.stop_server.__func__)})
-            try:fixture.ModelControlsBrowserContract.setUpClass.__func__(owner)
-            except BaseException:owner.doClassCleanups();raise
-            self.addCleanup(owner.doClassCleanups)
-            self.url=owner.url;self.evidence=owner.evidence;self.browser=owner.browser
-        self.context=self.browser.new_context(viewport={'width':390,'height':844},color_scheme='dark',has_touch=True,storage_state=owner.context.storage_state())
-        self.addCleanup(self.context.close)
+        # Preserve real TOTP replay rules: logout uses a separate synthetic server,
+        # but shares the already-running Playwright browser rather than nesting runners.
+        logout_case=self._testMethodName=='test_late_selection_and_auth_generations_do_not_restore_stale_settings'
+        options={'viewport':{'width':390,'height':844},'color_scheme':'dark','has_touch':True}
+        if logout_case:
+            temporary=fixture.tempfile.TemporaryDirectory(prefix='model-logout-',dir='/var/tmp');self.addCleanup(temporary.cleanup)
+            self.evidence=fixture.Path(temporary.name);fixture.private_json(self.evidence/'control.json',{'default_models':fixture.available()})
+            interpreter=fixture.os.environ.get('CONTROL_MODEL_CONTROLS_SERVER_PYTHON',fixture.sys.executable)
+            server=fixture.subprocess.Popen([interpreter,fixture.__file__,'--serve',str(type(self).root),str(self.evidence)],stdout=fixture.subprocess.DEVNULL,stderr=fixture.subprocess.DEVNULL)
+            def stop():
+                server.terminate()
+                try:server.wait(4)
+                except fixture.subprocess.TimeoutExpired:server.kill();server.wait()
+            self.addCleanup(stop);deadline=time.monotonic()+8
+            while not (self.evidence/'ready.json').exists():
+                if server.poll() is not None or time.monotonic()>deadline:raise RuntimeError('Synthetic logout fixture not ready')
+                time.sleep(.02)
+            self.url=json.loads((self.evidence/'ready.json').read_text())['url']
+        else:options['storage_state']=type(self).context.storage_state()
+        self.context=self.browser.new_context(**options);self.addCleanup(self.context.close)
+        if logout_case:
+            login=self.context.new_page();login.goto(self.url)
+            login.locator('#username').fill('owner');login.locator('input[type=password]').fill(fixture.PASSWORD)
+            login.get_by_role('textbox',name=re.compile('TOTP|код|однораз',re.I)).fill(fixture.totp())
+            login.get_by_role('button',name='Войти',exact=True).click()
+            login.get_by_role('button',name='Сессии',exact=True).or_(login.get_by_role('tab',name='Сессии',exact=True)).wait_for(timeout=5000)
+            login.close()
         fixture.ModelControlsBrowserContract.setUp(self)
     tearDown=fixture.ModelControlsBrowserContract.tearDown
     calls=fixture.ModelControlsBrowserContract.calls
