@@ -62,6 +62,56 @@ class PersistentPublisherContract(unittest.TestCase):
         self.assertEqual(Path(self.api.PUBLISHER),Path('/usr/local/lib/ai-control/publish-android-release.py'))
         self.assertEqual(Path(self.api.HELPER),Path('/usr/local/sbin/ai-control-publish-android'))
 
+    def run_fixture(self):
+        events=[];state={'dropped':False};snapshot=b'synthetic reviewed publisher'
+        def root_runtime():events.append('root')
+        def identity(name):
+            events.append('identity-'+name)
+            return {'root':(0,0),'dwl':(1000,1000),'ai-panel':(993,987)}[name]
+        def validate():
+            self.assertFalse(state['dropped']);events.append('validate-root-source');return snapshot
+        def drop(*args):state['dropped']=True;events.append('drop')
+        def loader(raw):
+            self.assertTrue(state['dropped']);self.assertEqual(raw,snapshot);events.append('compile-source')
+            def publish(path,**kwargs):
+                self.assertTrue(state['dropped']);events.append(('publish',path,kwargs));return 'synthetic-proof'
+            return types.SimpleNamespace(publish=publish)
+        releases=iter([metadata(8),metadata(9)])
+        def release(stage,uid):
+            self.assertTrue(state['dropped']);self.assertEqual(Path(stage),Path('/home/dwl/ai-control-android-publish-stage'));self.assertEqual(uid,1000);events.append('read-stage');return next(releases)
+        for name,value in [('root_runtime',root_runtime),('account_identity',identity),('validate_publisher_source',validate),('drop_privileges',drop),('load_publisher',loader),('load_release',release)]:
+            patcher=patch.object(self.api,name,value);patcher.start();self.addCleanup(patcher.stop)
+        return events,state
+    def test_root_source_before_drop_stage_and_compilation_after_drop_reuse(self):
+        events,state=self.run_fixture();before=SOURCE.read_bytes()
+        with patch('os.chdir'),patch('os.umask'),patch.dict(os.environ,{'STAGE':'/hostile','PUBLISHER':'/hostile','VERSION_CODE':'1'}):
+            for code in [8,9]:
+                state['dropped']=False;events.clear();self.assertEqual(self.api.run(),'synthetic-proof')
+                self.assertLess(events.index('validate-root-source'),events.index('drop'))
+                self.assertLess(events.index('drop'),events.index('compile-source'));self.assertLess(events.index('drop'),events.index('read-stage'))
+                published=[event for event in events if type(event) is tuple][0]
+                self.assertEqual(published,('publish',Path('/home/dwl/ai-control-android-publish-stage/release.apk'),dict(version_code=code,version_name=metadata(code)['versionName'],sha256='a'*64,certificate_sha256=CERT)))
+        self.assertEqual(SOURCE.read_bytes(),before)
+    def test_failed_root_metadata_or_identity_never_reads_stage_or_compiles(self):
+        for failure in ['root','identity','metadata','drop']:
+            with self.subTest(failure=failure):
+                events,state=self.run_fixture()
+                def refuse(*args):raise ValueError('Synthetic refusal')
+                seam={'root':'root_runtime','identity':'account_identity','metadata':'validate_publisher_source','drop':'drop_privileges'}[failure]
+                with patch.object(self.api,seam,refuse),patch('os.chdir'),patch('os.umask'),patch.dict(os.environ,{}):
+                    with self.assertRaises(ValueError):self.api.run()
+                self.assertNotIn('read-stage',events);self.assertNotIn('compile-source',events)
+    def test_noargs_main_refuses_cli_before_operation(self):
+        from contextlib import redirect_stdout,redirect_stderr
+        import io
+        for arguments in [['helper','/arbitrary'],['helper','--version-code','8'],['helper','rollback']]:
+            with self.subTest(arguments=arguments),patch.object(sys,'argv',arguments),patch.object(self.api,'run') as operation,redirect_stdout(io.StringIO()),redirect_stderr(io.StringIO()):
+                self.assertNotEqual(self.api.main(),0);operation.assert_not_called()
+    def test_root_runtime_rejects_nonisolated_or_nonroot(self):
+        for isolated,uid,euid,argv in [(0,0,0,['helper']),(1,1000,1000,['helper']),(1,0,1000,['helper']),(1,0,0,['helper','argument'])]:
+            with self.subTest(isolated=isolated,uid=uid,euid=euid,argv=argv),patch.object(sys,'flags',types.SimpleNamespace(isolated=isolated)),patch.object(sys,'argv',argv),patch('os.getuid',return_value=uid),patch('os.geteuid',return_value=euid):
+                with self.assertRaises(ValueError):self.api.root_runtime()
+
 @unittest.skipUnless(os.environ.get('RUN_FIXED_WRAPPER_BASELINE')=='1','Explicit diagnostic baseline only; expected RED')
 class ExistingFixedWrapperArchitecture(unittest.TestCase):
     def test_stage_code8_cannot_be_published_by_unchanged_fixed_wrapper(self):
