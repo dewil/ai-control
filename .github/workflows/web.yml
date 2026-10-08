@@ -27,6 +27,8 @@ jobs:
           curl -fsSL -o yq https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64
           echo 'fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4  yq' | sha256sum -c -
           sudo install -m 0755 yq /usr/local/bin/yq
+      - name: Permanent Android publication boundary contracts
+        run: python -m unittest discover -s tests -p 'test_control_android_publish*.py'
       - name: Web boundary contracts and writer integration
         run: |
           python -m unittest discover -s tests -p 'test_control_web*.py'
