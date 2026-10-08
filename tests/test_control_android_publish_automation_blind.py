@@ -112,6 +112,34 @@ class PersistentPublisherContract(unittest.TestCase):
             with self.subTest(isolated=isolated,uid=uid,euid=euid,argv=argv),patch.object(sys,'flags',types.SimpleNamespace(isolated=isolated)),patch.object(sys,'argv',argv),patch('os.getuid',return_value=uid),patch('os.geteuid',return_value=euid):
                 with self.assertRaises(ValueError):self.api.root_runtime()
 
+    def test_root_publisher_snapshot_metadata_nofollow_bounds(self):
+        import stat
+        actual_fstat=os.fstat;actual_stat=os.stat;actual_lstat=os.lstat
+        for case in ['safe','file-mode','file-owner','hardlink','symlink','fifo','oversize','ancestor-mode','ancestor-link']:
+            with self.subTest(case=case),tempfile.TemporaryDirectory() as directory:
+                parent=Path(directory)/'trusted';parent.mkdir(mode=0o755);publisher=parent/'publisher.py';publisher.write_bytes(b'PUBLIC_SYNTHETIC_SOURCE=1\n');publisher.chmod(0o644)
+                if case=='file-mode':publisher.chmod(0o666)
+                if case=='hardlink':os.link(publisher,parent/'alias')
+                if case=='symlink':publisher.rename(parent/'saved');publisher.symlink_to(parent/'saved')
+                if case=='fifo':publisher.unlink();os.mkfifo(publisher,0o644)
+                if case=='oversize':
+                    with publisher.open('wb') as stream:stream.truncate(2*1024*1024+1)
+                if case=='ancestor-link':alias=Path(directory)/'alias';alias.symlink_to(parent);publisher=alias/'publisher.py'
+                def trusted(info):
+                    fields=list(info);fields[4]=fields[5]=0
+                    if stat.S_ISDIR(info.st_mode):fields[0]=stat.S_IFDIR|0o755
+                    elif case=='file-owner':fields[4]=1000
+                    return os.stat_result(fields)
+                def fdstat(fd):
+                    info=actual_fstat(fd);value=trusted(info)
+                    if case=='ancestor-mode' and stat.S_ISDIR(info.st_mode):
+                        fields=list(value);fields[0]=stat.S_IFDIR|0o777;return os.stat_result(fields)
+                    return value
+                with patch.object(self.api,'PUBLISHER',publisher),patch('os.fstat',fdstat),patch('os.stat',lambda *a,**k:trusted(actual_stat(*a,**k))),patch('os.lstat',lambda *a,**k:trusted(actual_lstat(*a,**k))):
+                    if case=='safe':self.assertEqual(self.api.validate_publisher_source(),b'PUBLIC_SYNTHETIC_SOURCE=1\n')
+                    else:
+                        with self.assertRaises(ValueError):self.api.validate_publisher_source()
+
 @unittest.skipUnless(os.environ.get('RUN_FIXED_WRAPPER_BASELINE')=='1','Explicit diagnostic baseline only; expected RED')
 class ExistingFixedWrapperArchitecture(unittest.TestCase):
     def test_stage_code8_cannot_be_published_by_unchanged_fixed_wrapper(self):
