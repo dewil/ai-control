@@ -137,3 +137,27 @@ DESIGN/RED ещё впереди; source/installed capability не заявле�
   list и UI проходят отдельный контракт/RED; source не installed acceptance.
 
 Per-item time amendment: ../dev/2026-10-06-spec-web-item-message-times.md.
+
+## Compact UX package — contract08.10, implementation pending
+
+[CONTROL-WEB-UX-PACKAGE](../dev/2026-10-08-spec-web-ux-package.md) объединяет
+следующие новые инварианты; существующие security/delivery/history bounds сохраняются.
+
+- INV-WSESS-42: компактные panels/actions/articles с readable fonts и ≥44px targets;
+  geometry320/390/1280, safe wrapping, keyboard/focus и reader anchor без overlay.
+- INV-WSESS-43: projects open до valid generation-fenced session selection, затем
+  collapse; явный reopen переживает polls/refresh, новая selection/reload имеют
+  описанные transitions; project counts/activity/sort остаются доступны.
+- INV-WSESS-44: постоянный factual current model/effort с честным unknown, отдельно
+  requested next selection. Catalog/default/ACK не effective proof. Положительная
+  factual ветка требует принятого read-only producer snapshot; scope fallback в этом
+  пакете ожидает явного решения пользователя.
+- INV-WSESS-45: немедленная memory-only outgoing entry exact send UUID/status;
+  lagging history не удаляет unmatched entry, no unknown resend, scope fences,
+  canonical merge только по producer correlation, не text/time/turn guess.
+- INV-WSESS-46: optional public user item client_id из canonical native clientId,
+  сохранённый через обе history projection layers и budget clipping; assistant не
+  получает correlation, существующие RPC/96KiB/redaction/budgets не расширяются.
+
+Independent RED и реализация этого пакета ещё не выполнены; honest unknown branch
+не считается закрытием полной потребности factual current settings.
