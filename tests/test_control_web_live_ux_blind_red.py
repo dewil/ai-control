@@ -20,6 +20,9 @@ import tarfile
 import time
 import unittest
 import urllib.request
+from urllib.parse import parse_qs, urlsplit
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from playwright.sync_api import expect, sync_playwright
 expect.set_options(timeout=1500)
 
@@ -86,6 +89,8 @@ class LiveUXScopeContract(unittest.TestCase):
         args = ["git", "-C", str(ROOT), "diff", "--name-only", BASELINE]
         if revision is not None: args.append(revision)
         changed = subprocess.check_output([*args, "--"], text=True).splitlines()
+        if revision is None:
+            changed += subprocess.check_output(["git", "-C", str(ROOT), "ls-files", "--others", "--exclude-standard"], text=True).splitlines()
         runtime = {p for p in changed if not p.startswith(("docs/", "tests/"))}
         self.assertLessEqual(runtime, UX_RUNTIME, "UX gate expanded beyond four accepted runtime paths")
         self.assertEqual(len(CURRENT16), 16)
@@ -215,10 +220,22 @@ class LiveUXBlindBrowser(unittest.TestCase):
     def open(self, dated=False):
         if dated:
             self.control(history=fixture.history(dated=True))
+        self.select_session()
+        self.wait_history()
+
+    def select_session(self):
         self.sessions(); choose_project(self.page, "demo")
         self.page.get_by_role("button", name=re.compile("^UX synthetic session")).click()
+
+    def wait_history(self):
         self.page.get_by_text("Fixture readable message 23", exact=True).wait_for()
         self.page.locator("#chat-model option").filter(has_text="Model Alpha").wait_for(state="attached")
+
+    def wait_until(self, condition, message, timeout=3):
+        deadline = time.monotonic() + timeout
+        while not condition() and time.monotonic() < deadline:
+            self.page.wait_for_timeout(20)
+        self.assertTrue(condition(), message)
 
     def reveal(self, locator):
         if locator.is_visible(): return
@@ -238,8 +255,39 @@ class LiveUXBlindBrowser(unittest.TestCase):
 
     def refresh(self):
         button = self.page.get_by_role("button", name="Обновить переписку", exact=True)
+        self.reveal(button)
+        with self.page.expect_response(lambda r: "/api/session-history?" in r.url): button.click()
+
+    def start_refresh(self):
+        button = self.page.get_by_role("button", name="Обновить переписку", exact=True)
         self.reveal(button); button.click()
-        self.page.wait_for_timeout(120)
+
+    def refresh_models(self):
+        button = self.page.get_by_role("button", name="Обновить список моделей", exact=True)
+        self.reveal(button)
+        with self.page.expect_response(lambda r: "/api/session-models?" in r.url): button.click()
+
+    def close_model_disclosure(self):
+        model = self.page.locator("#chat-model")
+        details = model.locator("xpath=ancestor::details")
+        count = details.count()
+        # Do not mandate a new layout: if controls use a details disclosure,
+        # actually close it before checking that the adjacent hint stays visible.
+        for detail in details.all(): detail.evaluate("e=>e.open=false")
+        if count:
+            self.assertFalse(model.is_visible(), "Actual model disclosure must be closed for this hint oracle")
+            self.assertTrue(all(not d.evaluate("e=>e.open") for d in details.all()))
+
+    def ready_pair(self, draft="Synthetic nonempty model draft"):
+        model = self.page.locator("#chat-model"); self.reveal(model)
+        model.select_option(label="Model Alpha")
+        self.page.locator("#chat-effort").select_option("high")
+        self.page.locator("textarea").fill(draft)
+        expect(self.page.get_by_role("button", name="Отправить", exact=True)).to_be_enabled()
+        return model, self.page.locator("#chat-effort")
+
+    def history_models_requests(self):
+        return [r for r in self.requests if "/api/session-history?" in r.url or "/api/session-models?" in r.url]
 
     def follow(self):
         button = self.page.locator('[data-page-scroll="down"]').last
@@ -292,6 +340,9 @@ class LiveUXBlindBrowser(unittest.TestCase):
                 self.assertTrue(all(slot["height"] <= .5 for slot in result["emptySlots"]), result["emptySlots"])
 
     def test_INV47_dated_actual_hit_and_bubble_growth(self):
+        # Existing public DOM seams confirmed by owner: baseline JS838/857,
+        # CSS29 and preserved proof show article.chat-message/.message-heading.
+        # No new implementation hook is introduced here.
         self.open(dated=True)
         baseline = json.loads((Path(__file__).parent / "fixtures/live-ux-baseline/control-live-ux-bottom-baseline.json").read_text())
         for width in WIDTHS:
@@ -301,8 +352,9 @@ class LiveUXBlindBrowser(unittest.TestCase):
                 self.assertEqual(times.count(), 24)
                 old = next(r for r in baseline["dated_rows"] if r["width"] == width)
                 for index in (0, 12, 23): self.assert_hit(times.nth(index))
-                observed = self.page.locator("#chat-items article.chat-message").evaluate_all("nodes=>nodes.map(e=>({height:e.getBoundingClientRect().height,header:e.querySelector('.message-heading').getBoundingClientRect().height}))")
+                observed = self.page.locator("#chat-items article.chat-message").evaluate_all("nodes=>nodes.map(e=>({height:e.getBoundingClientRect().height,header:e.querySelector('.message-heading')?.getBoundingClientRect().height??null}))")
                 for index, row in enumerate(observed):
+                    self.assertIsNotNone(row["header"], "Existing public message heading missing")
                     self.assertLessEqual(row["height"], old["messages"][index]["rect"]["document"]["height"] + 24.5)
                     self.assertAlmostEqual(row["header"], 44, delta=.5)
 
@@ -338,7 +390,7 @@ class LiveUXBlindBrowser(unittest.TestCase):
                 rects = []
                 for name, count in (("zero", 0), ("loww", 3), ("high", 12), ("stle", 20)):
                     tile = self.page.get_by_role("button", name=re.compile("^" + name + r"(?:\b|\s)"))
-                    expect(tile).to_contain_text(str(count)); expect(tile).to_contain_text("5м")
+                    expect(tile).to_contain_text(re.compile(r"(?<!\d)" + str(count) + r"(?!\d)")); expect(tile).to_contain_text("5м")
                     self.assertEqual(tile.get_attribute("type"), "button")
                     box = tile.bounding_box(); rects.append(box)
                     expected = 112 + 4 * min(5, math.floor(math.log2(count + 1)))
@@ -356,19 +408,46 @@ class LiveUXBlindBrowser(unittest.TestCase):
         self.sessions()
         for name, count, activity in (("zero", "0", "—"), ("unkn", "?", "?"), ("stle", "20", "2ч"), ("futr", "1", "?")):
             tile = self.page.get_by_role("button", name=re.compile("^" + name + r"(?:\b|\s)"))
-            expect(tile).to_contain_text(count); expect(tile).to_contain_text(activity)
+            if name == "unkn": expect(tile).to_contain_text(re.compile(r"\?[\s\S]*\?"))
+            else: expect(tile).to_contain_text(re.compile(r"(?<!\d)" + count + r"(?!\d)"))
+            text = tile.inner_text()
+            if name == "unkn":
+                self.assertGreaterEqual(text.count("?"), 2, "Unknown count and unknown activity must both be explicit")
+                self.assertNotIn("—", text)
+            else:
+                self.assertRegex(text, r"(?<!\d)" + count + r"(?!\d)")
+                expect(tile).to_contain_text(activity)
+                if name == "zero": self.assertNotIn("?", text)
+                if name == "futr": self.assertNotIn("—", text)
             if name == "stle": expect(tile).to_contain_text("устар.")
             self.assertNotIn("сейчас", tile.inner_text().lower())
             self.assert_hit(tile)
+        # UXC-PROJECTS explicitly allows details of the selected project. Activate
+        # stle, wait for its proven selection, then resolve only its bound details.
         tile = self.page.get_by_role("button", name=re.compile("^stle")); tile.focus(); tile.press("Enter")
-        # Details are semantic accessible content; hover/title alone cannot pass.
-        details = self.page.get_by_text(re.compile(r"20\s+сессий"))
-        if not details.count() or not details.first.is_visible():
-            disclosure = self.page.get_by_role("button", name=re.compile("сведени|подроб|информац", re.I)).or_(self.page.locator("summary").filter(has_text=re.compile("проект|сведени|подроб", re.I)))
-            self.assertGreater(disclosure.count(), 0, "Explicit touch project information disclosure absent")
-            disclosure.first.click()
-        expect(details.first).to_be_visible()
-        self.assertRegex(self.page.locator("body").inner_text(), r"\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}\s+МСК")
+        expect(tile).to_have_attribute("aria-pressed", "true")
+        self.page.get_by_role("button", name=re.compile("^UX synthetic session")).wait_for()
+        toggle = self.page.locator("#projects-toggle")
+        if toggle.count() and toggle.get_attribute("aria-expanded") == "false": toggle.click()
+        related = tile.evaluate("e=>[...new Set([e.id,...(e.getAttribute('aria-describedby')||'').split(/\\s+/),...(e.getAttribute('aria-controls')||'').split(/\\s+/)].filter(Boolean))]")
+        containers = []
+        for identity in related:
+            candidate = self.page.locator("[id=" + json.dumps(identity) + "]")
+            if candidate.count(): containers.append(candidate)
+        semantic = self.page.get_by_role("region", name=re.compile("stle", re.I)).or_(self.page.get_by_role("group", name=re.compile("stle", re.I)))
+        containers += semantic.all()
+        # A selected-project disclosure can be a sibling labelled from stle.
+        triggers = self.page.get_by_role("button", name=re.compile("stle.*(?:сведени|подроб|информац)|(?:сведени|подроб|информац).*stle", re.I)).or_(
+            self.page.locator("summary").filter(has_text=re.compile("stle", re.I)))
+        for trigger in triggers.all():
+            if trigger.is_visible(): trigger.click()
+            control = trigger.get_attribute("aria-controls")
+            if control: containers.append(self.page.locator("[id=" + json.dumps(control) + "]"))
+            if trigger.evaluate("e=>e.parentElement.tagName==='DETAILS'"): containers.append(trigger.locator(".."))
+        matching = [c for c in containers if c.is_visible() and re.search(r"20\s+сессий", c.inner_text())]
+        self.assertTrue(matching, "Visible project details must be bound to selected stle by ARIA/name, not unrelated page text")
+        exact = datetime.fromtimestamp(now - 7200, ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M") + " МСК"
+        self.assertTrue(any(exact in c.inner_text() for c in matching), "stle details must show the actual Europe/Moscow activity time: " + exact)
 
     def test_INV48_long_unbroken_project_wraps_without_clipping(self):
         name = "long_" + "unbroken" * 14
@@ -404,6 +483,8 @@ class LiveUXBlindBrowser(unittest.TestCase):
         self.assertEqual(len(self.calls("send_status")), 1)
 
     def test_INV49_known_current_next_and_initial_HTML_placeholder(self):
+        # INV-WSESS-44 / UXC-MODEL preserves these existing IDs, source-note text
+        # and aria-describedby. Canonical captions come only from feature D13.
         response = self.context.request.get(self.url + "/")
         self.assertRegex(response.text(), r'<option[^>]*value=""[^>]*>\s*Использовать текущую модель\s*</option>')
         self.open(); self.assert_caption()
@@ -427,24 +508,46 @@ class LiveUXBlindBrowser(unittest.TestCase):
         malformed = [{**fixture.settings(), "schema": True}, {**fixture.settings(), "model": ""}, {**fixture.settings(), "effort": 1},
             {**fixture.settings(), "model": "😀" * 257}, {**fixture.settings(), "model": " \u2003 "}, {**fixture.settings(), "age_ms": .5},
             {**fixture.settings(), "expires_in_ms": 14999}, {**fixture.settings(), "extra": "unsupported"}]
+        # Feature "Уточнение UX-D01 и D03": expires_in_ms equals15000-age_ms,
+        # so age0/expires14999 is explicitly invalid, not an inferred restriction.
         for settings in malformed:
             with self.subTest(settings=settings):
+                # Every invalid input starts from independently confirmed known
+                # state. A previous UNKNOWN must never satisfy the next case.
+                self.control(history=fixture.history()); self.refresh(); self.assert_caption()
+                before = len(self.calls("history"))
                 value = fixture.history(); value["session_settings"] = settings
-                self.control(history=value); self.refresh(); expect(self.page.locator("#current-model-status")).to_have_text(UNKNOWN)
+                self.control(history=value); self.refresh()
+                self.assertGreater(len(self.calls("history")), before)
+                expect(self.page.locator("#current-model-status")).to_have_text(UNKNOWN)
 
     def test_INV49_local_expiry_uses_request_start_without_extra_network(self):
+        now = int(time.time() * 1000)
+        self.page.clock.install(time=now); self.page.clock.pause_at(now + 1000)
         data = fixture.history(); data["session_settings"] = fixture.settings(age_ms=14600)
-        self.control(history=data); self.open()
-        before = len(self.requests)
-        self.page.wait_for_timeout(500)
-        expect(self.page.locator("#current-model-status")).to_have_text(UNKNOWN)
-        self.assertEqual(len(self.requests), before, "Settings expiry issued an extra network read")
+        self.page.route("**/api/session-history?*", lambda route: route.fulfill(json=data))
+        self.open(); self.assert_caption()
+        before = len(self.history_models_requests())
+        self.page.clock.run_for(399); self.assert_caption()
+        self.page.clock.run_for(1)
+        self.assertEqual(self.page.locator("#current-model-status").text_content(), UNKNOWN, "No retry: caption must expire exactly at its own request-start deadline")
+        self.assertEqual(len(self.history_models_requests()), before, "Settings expiry issued an extra history/model read")
 
     def test_INV49_delayed_response_does_not_extend_settings_lease(self):
+        now = int(time.time() * 1000)
+        self.page.clock.install(time=now); self.page.clock.pause_at(now + 1000)
+        held = []
+        self.page.route("**/api/session-history?*", lambda route: held.append(route))
         data = fixture.history(); data["session_settings"] = fixture.settings(age_ms=14600)
-        self.control(history=data, history_delay=.65); self.open()
-        expect(self.page.locator("#current-model-status")).to_have_text(UNKNOWN)
-        self.assertEqual(len(self.calls("history")), 1)
+        self.select_session()
+        self.wait_until(lambda: len(held) == 1, "Public initial history request must be held")
+        before = sum("/api/session-history?" in r.url for r in self.requests)
+        self.page.clock.run_for(700)
+        held.pop().fulfill(json=data); self.wait_history()
+        # Receipt-start lease would remain known for400ms on this paused clock.
+        # A retry would conceal the bug, so test the first committed render exactly.
+        self.assertEqual(self.page.locator("#current-model-status").text_content(), UNKNOWN, "Delayed response must already be expired, without retry")
+        self.assertEqual(sum("/api/session-history?" in r.url for r in self.requests), before)
 
     def test_INV49_deterministic_deadline_minus_one_and_deadline_no_network(self):
         # Playwright controls only the test browser clock. API/DTO and rendered
@@ -454,17 +557,17 @@ class LiveUXBlindBrowser(unittest.TestCase):
         data = fixture.history(); data["session_settings"] = fixture.settings(age_ms=14000)
         self.page.route("**/api/session-history?*", lambda route: route.fulfill(json=data))
         self.open(); self.assert_caption()
-        count = len(self.requests)
+        count = len(self.history_models_requests())
         self.page.clock.run_for(999); self.assert_caption()
         self.page.clock.run_for(1)
-        expect(self.page.locator("#current-model-status")).to_have_text(UNKNOWN)
-        self.assertEqual(len(self.requests), count, "Exact deadline created an extra network read")
+        self.assertEqual(self.page.locator("#current-model-status").text_content(), UNKNOWN)
+        self.assertEqual(len(self.history_models_requests()), count, "Exact deadline created an extra history/model read")
 
     def test_INV49_samekey_refresh_retains_until_deadline_then_failure_clears(self):
         self.open(); self.assert_caption()
         held = []
         self.page.route("**/api/session-history?*", lambda route: held.append(route))
-        self.refresh(); self.assertTrue(held)
+        self.start_refresh(); self.wait_until(lambda: bool(held), "Same-key public refresh must be held")
         self.assert_caption()
         held.pop().fulfill(status=503, json={"error": "unavailable"})
         expect(self.page.locator("#current-model-status")).to_have_text(UNKNOWN)
@@ -474,7 +577,7 @@ class LiveUXBlindBrowser(unittest.TestCase):
         self.open()
         held = []
         self.page.route("**/api/session-history?*", lambda route: held.append(route))
-        self.refresh(); self.assertTrue(held)
+        self.start_refresh(); self.wait_until(lambda: bool(held), "Old A public refresh must be held")
         old_A = held.pop()
         self.page.get_by_role("button", name="Other UX synthetic session", exact=False).click()
         self.page.wait_for_timeout(80)
@@ -483,7 +586,8 @@ class LiveUXBlindBrowser(unittest.TestCase):
         self.page.wait_for_timeout(80)
         expect(self.page.locator("#current-model-status")).to_have_text(UNKNOWN)
         for route in held:
-            value = fixture.history(); value["session_settings"] = fixture.settings("fresh-selected", "high")
+            sid = parse_qs(urlsplit(route.request.url).query)["sid"][0]
+            value = fixture.history(); value["session_settings"] = fixture.settings("foreign-B" if sid == fixture.OTHER else "fresh-selected", "high")
             route.fulfill(json=value)
         held.clear()
         self.assert_caption("fresh-selected", "high")
@@ -493,9 +597,8 @@ class LiveUXBlindBrowser(unittest.TestCase):
 
     def test_INV49_stale_catalog_hint_near_selection_retains_pair_draft(self):
         self.control(catalog=fixture.catalog(expires_in_ms=3000)); self.open()
-        model = self.page.locator("#chat-model"); self.reveal(model)
-        model.select_option(label="Model Alpha"); effort = self.page.locator("#chat-effort"); effort.select_option(label="high")
-        self.page.locator("textarea").fill("Retained synthetic catalog draft")
+        model, effort = self.ready_pair("Retained synthetic catalog draft")
+        self.close_model_disclosure()
         before = len(self.calls("models")); self.page.wait_for_timeout(3150)
         hint = self.page.get_by_text("Каталог устарел", exact=True)
         expect(hint).to_be_visible(); self.assert_caption()
@@ -504,25 +607,26 @@ class LiveUXBlindBrowser(unittest.TestCase):
         self.assertTrue(self.page.get_by_role("button", name="Отправить", exact=True).is_disabled())
         self.assertEqual(len(self.calls("models")), before, "Catalog expiry timer created a model read")
         self.assertFalse(hint.evaluate("e=>!!e.closest('#send-status,[data-local-outgoing],details:not([open])')"), "Hint must be visible outside pending/live region and closed model details")
-        self.assertTrue(hint.evaluate("e=>{const next=document.querySelector('#next-model-status');for(let n=e.parentElement;n&&n!==document.querySelector('#chat-form')&&n!==document.body;n=n.parentElement){if(n.contains(next)&&n.querySelector('select'))return true;}return false;}"), "Hint and next caption must share the model-selection group")
+        self.assertTrue(hint.evaluate("e=>{const next=document.querySelector('#next-model-status');for(let n=e.parentElement;n&&n!==document.body;n=n.parentElement){if(n.contains(next)&&n.querySelector('select'))return true;if(n===document.querySelector('#chat-form'))break;}return false;}"), "Hint and next caption must share the semantic model-selection group; chat-form is allowed")
 
     def test_INV49_missing_effort_hint_and_inherit_remains_usable(self):
-        self.open(); model = self.page.locator("#chat-model"); self.reveal(model)
-        model.select_option(label="Model Alpha"); self.page.locator("#chat-effort").select_option("")
+        self.open(); model, effort = self.ready_pair("Synthetic inherited choice")
+        effort.select_option("")
         expect(self.page.get_by_text("Выберите уровень", exact=True)).to_be_visible()
         expect(self.page.locator("#next-model-status")).to_have_text("Следующая отправка: Model Alpha · Размышление: выберите уровень")
         self.assertTrue(self.page.get_by_role("button", name="Отправить", exact=True).is_disabled())
-        model.select_option(""); self.page.locator("textarea").fill("Synthetic inherited choice")
+        model.select_option("")
         expect(self.page.locator("#next-model-status")).to_have_text("Следующая отправка: настройки сессии")
         self.assertFalse(self.page.get_by_role("button", name="Отправить", exact=True).is_disabled())
 
     def test_INV49_loading_then_unavailable_hint_visible_outside_closed_menu(self):
-        self.open(); model = self.page.locator("#chat-model"); self.reveal(model)
-        model.select_option(label="Model Alpha"); self.page.locator("#chat-effort").select_option("high")
+        self.open(); model, effort = self.ready_pair()
         held = []
         self.page.route("**/api/session-models?*", lambda route: held.append(route))
         refresh = self.page.get_by_role("button", name="Обновить список моделей", exact=True)
         self.reveal(refresh); refresh.click()
+        self.wait_until(lambda: bool(held), "Public model refresh must be held")
+        self.close_model_disclosure()
         expect(self.page.get_by_text("Проверяем выбор", exact=True)).to_be_visible()
         self.assertTrue(held)
         for route in held: route.fulfill(status=503, json={"error": "unavailable"})
@@ -532,31 +636,39 @@ class LiveUXBlindBrowser(unittest.TestCase):
         self.assert_caption()
 
     def test_INV49_removed_model_and_unsupported_effort_hints(self):
-        self.open(); model = self.page.locator("#chat-model"); self.reveal(model)
-        model.select_option(label="Model Alpha"); self.page.locator("#chat-effort").select_option("high")
-        for rows, expected in (([{"id":"model-beta","label":"Model Beta","efforts":["high"]}], "Модель недоступна"),
-                               ([{"id":"model-alpha","label":"Model Alpha","efforts":["medium"]}], "Уровень недоступен")):
+        self.open()
+        for index, (rows, expected) in enumerate((([{ "id":"model-beta","label":"Model Beta","efforts":["high"]}], "Модель недоступна"),
+                               ([{"id":"model-alpha","label":"Model Alpha","efforts":["medium"]}], "Уровень недоступен"))):
             with self.subTest(hint=expected):
-                value = fixture.catalog(); value["catalog_id"] = "b" * 64; value["rows"] = rows
+                self.control(catalog=fixture.catalog()); self.refresh_models()
+                self.ready_pair("Nonempty removed/unsupported case " + str(index))
+                value = fixture.catalog(); value["catalog_id"] = ("b" if index == 0 else "c") * 64; value["rows"] = rows
                 self.control(catalog=value)
-                refresh = self.page.get_by_role("button", name="Обновить список моделей", exact=True)
-                self.reveal(refresh); refresh.click()
+                self.refresh_models(); self.close_model_disclosure()
                 expect(self.page.get_by_text(expected, exact=True)).to_be_visible()
                 self.assertTrue(self.page.get_by_role("button", name="Отправить", exact=True).is_disabled())
                 self.assertEqual(len(self.calls("send")), 0)
 
     def test_INV49_pending_attempt_has_immutable_UUID_pair(self):
-        self.control(send_delay=1.5); self.open()
-        model = self.page.locator("#chat-model"); self.reveal(model)
-        model.select_option(label="Model Alpha"); self.page.locator("#chat-effort").select_option(label="high")
-        self.page.locator("textarea").fill("Synthetic immutable attempt")
+        self.control(send_delay=.8, send_status="delivery_unknown"); self.open()
+        model, effort = self.ready_pair("Synthetic immutable attempt")
         self.page.get_by_role("button", name="Отправить", exact=True).click()
-        self.page.wait_for_timeout(100)
+        self.wait_until(lambda: bool(self.calls("send")), "Actual send must be observed")
         sends = self.calls("send"); self.assertEqual(len(sends), 1)
         immutable = sends[0]
+        self.assertRegex(immutable["message_id"], r"\A[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z")
         self.assertEqual(immutable["selection"], {"catalog_id": "a" * 64, "model_id": "model-alpha", "effort": "high"})
+        # Owner adjudication of review D06: existing pending flow locks these
+        # controls. Do not require an extra catalog RPC or bypass disabled UI.
+        refresh = self.page.get_by_role("button", name="Обновить список моделей", exact=True)
+        self.assertTrue(model.is_disabled(), "Pending model selector must remain locked")
+        self.assertTrue(effort.is_disabled(), "Pending effort selector must remain locked")
+        self.assertTrue(refresh.is_disabled(), "Pending catalog refresh must remain locked")
+        expect(self.page.locator("#send-status")).to_contain_text(re.compile("доставк.*неизвест", re.I))
+        self.page.locator("textarea").fill("Changed future draft must not resend the unknown attempt")
+        self.assertEqual(self.page.locator("textarea").input_value(), "Changed future draft must not resend the unknown attempt")
         expect(self.page.locator("#next-model-status")).to_have_text("Следующая отправка: Model Alpha · Размышление: high")
-        self.page.wait_for_timeout(1600); self.assert_caption()
+        self.assert_caption()
         self.assertEqual(self.calls("send"), [immutable])
 
     def assert_landing(self, code=None, version=None):
@@ -579,7 +691,7 @@ class LiveUXBlindBrowser(unittest.TestCase):
         for width in WIDTHS:
             self.page.set_viewport_size({"width": width, "height": 900 if width == 1280 else 844})
             self.assertLessEqual(self.page.evaluate("Math.max(document.body.scrollWidth,document.documentElement.scrollWidth)-innerWidth"), 1)
-        self.assert_hit(self.page.get_by_role("link", name="В главное меню", exact=True))
+            self.assert_hit(self.page.get_by_role("link", name="В главное меню", exact=True))
 
     def test_INV50_actual_anonymous_dark_empty_broken_public_css_return(self):
         anon = self.browser.new_context(); self.addCleanup(anon.close)
@@ -617,11 +729,11 @@ class LiveUXBlindBrowser(unittest.TestCase):
             context = self.browser.new_context(**({"storage_state": self.storage} if admitted else {})); self.addCleanup(context.close)
             page = context.new_page(); page.goto(self.url)
             link = page.get_by_role("link", name="Андроид", exact=True)
-            self.assertEqual(link.count(), 1); expect(link).to_be_visible()
+            expect(link).to_have_count(1); expect(link).to_be_visible()
             self.assertEqual(link.get_attribute("href"), "/download/android/")
         self.open()
         link = self.page.get_by_role("link", name="Андроид", exact=True)
-        self.assertEqual(link.count(), 1); self.assert_hit(link)
+        expect(link).to_have_count(1); self.assert_hit(link)
 
 
 if __name__ == "__main__":
