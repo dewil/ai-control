@@ -55,7 +55,11 @@ class PersistentPublisherContract(unittest.TestCase):
         def groups(v):events.append(('groups',v));state['groups']=v
         def gid(v):events.append(('gid',v));state['gid']=v
         def uid(v):events.append(('uid',v));state['uid']=v
-        with patch('os.setgroups',groups),patch('os.setgid',gid),patch('os.setuid',uid),patch('os.getuid',lambda:state['uid']),patch('os.geteuid',lambda:state['uid']),patch('os.getgid',lambda:state['gid']),patch('os.getegid',lambda:state['gid']),patch('os.getgroups',lambda:state['groups']),patch('os.getresuid',lambda:(state['uid'],)*3),patch('os.getresgid',lambda:(state['gid'],)*3):self.api.drop_privileges(1000,1000,987)
+        def resgid(real,effective,saved):
+            self.assertEqual((real,effective,saved),(1000,1000,1000));gid(real)
+        def resuid(real,effective,saved):
+            self.assertEqual((real,effective,saved),(1000,1000,1000));uid(real)
+        with patch('os.setgroups',groups),patch('os.setgid',gid),patch('os.setuid',uid),patch('os.setresgid',resgid),patch('os.setresuid',resuid),patch('os.getuid',lambda:state['uid']),patch('os.geteuid',lambda:state['uid']),patch('os.getgid',lambda:state['gid']),patch('os.getegid',lambda:state['gid']),patch('os.getgroups',lambda:state['groups']),patch('os.getresuid',lambda:(state['uid'],)*3),patch('os.getresgid',lambda:(state['gid'],)*3):self.api.drop_privileges(1000,1000,987)
         self.assertEqual(events,[('groups',[1000,987]),('gid',1000),('uid',1000)])
     def test_fixed_paths(self):
         self.assertEqual(Path(self.api.STAGE),Path('/home/dwl/ai-control-android-publish-stage'))
