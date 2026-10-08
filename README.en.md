@@ -5,9 +5,9 @@
 [![shellcheck](https://github.com/dewil/ai-control/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/dewil/ai-control/actions/workflows/shellcheck.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-`ai-control` manages Claude Code and Codex sessions and background tasks through Telegram and a task-focused web panel.
+`ai-control` manages Claude Code and Codex sessions and background tasks through Telegram and a web panel for tasks and sessions.
 
-> The related [**claude-toolkit**](https://github.com/dewil/claude-toolkit) contains rules, roles and skills. Updates use manual SHA-pinned AI sync; harvest retains upstream brief delivery.
+> The related [**ai-toolkit**](https://github.com/dewil/ai-toolkit) contains rules, roles and skills. Updates use manual SHA-pinned AI sync; harvest retains upstream brief delivery.
 
 > [!NOTE]
 > The core (remote-control) sits on top of the [`claude remote-control`](https://code.claude.com/docs/en/remote-control.md) feature — a **research preview** at the time of writing. Requires Claude Code CLI **≥ 2.1.51** and a Claude-subscription login (`claude /login`); Anthropic API keys do not work for remote-control.
@@ -37,7 +37,7 @@ flowchart TB
       end
     end
 
-    toolkit["claude-toolkit<br/>rules + skills"]
+    toolkit["ai-toolkit<br/>rules + skills"]
 
     phone <--> tgbot
     tgbot --> menu
@@ -119,8 +119,14 @@ The **acceptor** ([stage 7](./docs/design-2026-07-12-stage7-acceptor-role.md)) i
 ### limits-digest — LLM limits digest
 Every 15 minutes it reads the remaining Claude/Codex subscription limits (quota metadata, not inference — it does not spend the quota) and pushes a panel to Telegram **only when the numbers change** (dedup by a signature of percentages/statuses; reset times do not count as a change). [Runbook](./docs/runbook-limits-digest.md).
 
-### Web task panel
-The web panel shows task questions and completed results. It supports text replies, retrying delivery of saved replies, permitted approve/reject decisions, and accepting or rejecting results. It does not launch sessions; user accounts and per-project access are not currently supported. Sign-in uses a password and TOTP, and the web process runs under a separate UID through a narrow owner broker. [Installation](./docs/web-install.md) requires pinned Python dependencies, a separate service account, HTTPS, and local enrollment.
+### Web panel for tasks and sessions
+The web panel shows task questions and completed results. It supports text replies, retrying delivery of saved replies, permitted approve/reject decisions, and accepting or rejecting results. The sessions view provides projects, Codex conversation history and message sending. Sign-in uses a username, password and TOTP; web sessions in the current installation last 3 hours. The web process runs under a separate UID through a narrow owner broker. [Installation](./docs/web-install.md) requires pinned Python dependencies, a separate service account, HTTPS, and local enrollment.
+
+R7 makes the layout more compact and collapses projects after a confirmed session selection. Outgoing text appears locally immediately; when the message appears in history, its identifier merges the records without a duplicate. The panel shows saved model and reasoning settings, which may differ from the settings used by the current execution. Settings for the next send appear separately. History still updates through polling; SSE is the next stage.
+
+As of 8 October 2026, r7 is installed and verified; evidence is recorded in the [release report](./docs/dev/2026-10-08-web-ux-build-review.md). Authenticated phone acceptance remains pending. Multiuser support, the remote NATS manager and a web limits UI are not declared ready.
+
+The Android client retains its login form when switching to KeePass and back while the login screen remains alive. As of 8 October 2026, the [APK channel](https://llm-web.dewil.ru:18443/download/android/) publishes 0.1.3/code4. Signed 0.1.5/code6 is ready for publication by an administrator but has not been published.
 
 ---
 
