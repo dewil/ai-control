@@ -59,7 +59,7 @@ class SessionSettingsBlind(unittest.TestCase):
             for key,value in mutations:
                 with self.subTest(phase=phase,key=key):
                     self.context=dict(CONTEXT)
-                    if phase=='before':self.context[key]=value
+                    if phase=='before':self.context[key]={'transport_generation':True,'context_generation':-1,'context_id':'not-a-digest'}.get(key,value)
                     self.rpc.hook=lambda method:self.context.update({key:value}) if method==phase else None
                     result=self.chat().history('demo',SID);self.assertIn('turns',result);self.assertNotIn('session_settings',result)
         def broken():raise RuntimeError('synthetic disconnected')
