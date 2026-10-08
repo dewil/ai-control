@@ -2,7 +2,7 @@
 
 Статус: INV42/43/45/46 реализованы в source checkpoint
 `6e495da2c9753231da43afdb5c8fa15b02456217`; INV44 реализован после accepted218a05e
-и отдельного независимого RED/GO. SOURCE review/CI/installed acceptance пакета ещё впереди. Владелец —
+и отдельного независимого RED/GO. SOURCE и same-context delta review прошли; CI и installed acceptance учитываются отдельно. Владелец —
 `CONTROL-WEB-UX-PACKAGE` в клиентском `docs/backlog/`; дети —
 `CONTROL-WEB-COMPACT-UX`, `CONTROL-WEB-CURRENT-MODEL` и только immediate-send
 часть `CONTROL-WEB-LIVE-STREAM`. Разрешение пользователя на пакет — 08.10.2026.
@@ -272,10 +272,10 @@ metadata generation/freshness и browser request/auth fences. Финальный
 и supplemental author3. Затронутые backend75 PASS (4.765s), legacy model-controls/
 rename browser16 PASS (20.472s), geometry/width2 PASS (5.224s). Эти наборы содержат
 пересечения с предыдущими validation checkpoints и не суммируются с ними.
-SOURCE review/CI/installed acceptance
-полного пакета ещё НЕ выполнены. Independent writer должен реально
-прогнать baseline и показать assertions по новым поведению/geometry, не только
-missing symbol/import. Fixtures исключительно synthetic root/project/thread/catalog/
+SOURCE на integration e50985d и same-context delta a22d73d прошли без блокеров;
+findings02/04/05 закрыты. Independent baseline assertions и targeted GREEN зафиксированы.
+CI и installed/device acceptance учитываются отдельно в отчёте выпуска и владельце.
+Fixtures исключительно synthetic root/project/thread/catalog/
 receipts; real credentials/native provider не читаются.
 
 Обязательные races: send ACK после switch A→B→A, logout, history-before-ACK и ACK-before-
