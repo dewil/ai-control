@@ -1,6 +1,7 @@
 package ru.dewil.aicontrol
 
 import android.os.Bundle
+import android.os.Build
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -28,6 +29,7 @@ class UpdatesActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val box = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;setPadding(32,64,32,32) }
         setContentView(box)
+        box.addView(TextView(this).apply { text=installedVersionText();textSize=18f })
         status=TextView(this).apply { textSize=18f };box.addView(status)
         fun button(text:String,action:()->Unit)=Button(this).apply { this.text=text;setOnClickListener { action() };box.addView(this) }
         check=button("Проверить обновления") { manualMessage=null;repository.requestManualCheck() }
@@ -52,7 +54,7 @@ class UpdatesActivity : ComponentActivity() {
                     }
                 }
                 status.text=buildString {
-                    append("ai-control ").append(BuildConfig.VERSION_NAME)
+                    append("Обновления ai-control")
                     when {
                         state.installIncomplete -> append("\nРезультат установки пока неизвестен.")
                         state.installing -> append("\nОжидаем подтверждение Android.")
@@ -82,4 +84,12 @@ class UpdatesActivity : ComponentActivity() {
     }
     override fun onStop(){observing?.cancel();super.onStop()}
     override fun onDestroy(){scope.cancel();super.onDestroy()}
+    @Suppress("DEPRECATION")
+    private fun installedVersionText(): String = try {
+        val info=packageManager.getPackageInfo(packageName,0)
+        val name=info.versionName
+        val code=if(Build.VERSION.SDK_INT>=28)info.longVersionCode else info.versionCode.toLong()
+        if(name.isNullOrBlank()||code<=0) "Установлена: неизвестно"
+        else "Установлена: $name (сборка $code)"
+    } catch (_: Exception) { "Установлена: неизвестно" }
 }

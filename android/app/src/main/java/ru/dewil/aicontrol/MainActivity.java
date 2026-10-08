@@ -67,7 +67,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
         if(password!=null)password.setText("");if(totp!=null)totp.setText("");
         if(overlay!=null)root.removeView(overlay);
         overlay=new LinearLayout(this);overlay.setOrientation(LinearLayout.VERTICAL);overlay.setGravity(Gravity.CENTER);
-        overlay.setPadding(32,32,32,32);overlay.setBackgroundColor(Color.WHITE);overlay.setClickable(true);
+        overlay.setPadding(32,32,32,32);overlay.setBackgroundColor(0xff141414);overlay.setClickable(true);
         root.addView(overlay,new FrameLayout.LayoutParams(-1,-1));
         if(!login)overlay.addView(updatesEntry());
         status=new TextView(this);status.setTextSize(18);overlay.addView(status);return overlay;
