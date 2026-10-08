@@ -16,8 +16,10 @@ class ProjectMetadataSourceBlind(unittest.TestCase):
         for width in (320,390,1280):
             with self.subTest(width=width):
                 self.page.set_viewport_size({'width':width,'height':900})
-                detail=self.page.locator('.project-activity-detail');expect(detail.first).to_be_visible()
-                observed=detail.evaluate_all('els=>els.filter(e=>e.getBoundingClientRect().width&&e.getBoundingClientRect().height).map(e=>({text:e.textContent,font:parseFloat(getComputedStyle(e).fontSize)}))')
+                detail=self.page.locator('.project-activity-detail')
+                # Public keyboard focus exposes activity detail; default hidden state is intentional.
+                detail.first.locator('xpath=ancestor::button').focus();expect(detail.first).to_be_visible()
+                observed=detail.evaluate_all('els=>els.filter(e=>e.getBoundingClientRect().width&&e.getBoundingClientRect().height&&getComputedStyle(e).visibility!=="hidden").map(e=>({text:e.textContent,font:parseFloat(getComputedStyle(e).fontSize)}))')
                 self.assertTrue(observed,'Fixture must render actual activity metadata')
                 self.assertTrue(all(row['font']>=12 for row in observed),f'INV42 metadata minimum12px violated at{width}px: {observed}')
 
