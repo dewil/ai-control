@@ -62,6 +62,9 @@ class SessionSettingsBlind(unittest.TestCase):
                     if phase=='before':self.context[key]={'transport_generation':True,'context_generation':-1,'context_id':'not-a-digest'}.get(key,value)
                     self.rpc.hook=lambda method:self.context.update({key:value}) if method==phase else None
                     result=self.chat().history('demo',SID);self.assertIn('turns',result);self.assertNotIn('session_settings',result)
+        for key,value in [('schema',1.0),('context_generation',.5),('transport_generation',None),('context_id',None),('context_kind','unverified_bound')]:
+            self.context={**CONTEXT,key:value};self.rpc.hook=None
+            self.assertNotIn('session_settings',self.chat().history('demo',SID))
         def broken():raise RuntimeError('synthetic disconnected')
         self.rpc.hook=None;self.assertNotIn('session_settings',self.chat(getter=broken).history('demo',SID))
     def test_plain_generic_history_older_and_bad_scope_unchanged(self):

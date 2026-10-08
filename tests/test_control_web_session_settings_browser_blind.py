@@ -24,11 +24,11 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
     send_button=fixture.ModelControlsBrowserContract.send_button
     send_requests=fixture.ModelControlsBrowserContract.send_requests
     def mount(self,snapshot=None):
-        self.snapshot=snapshot;self.history_error=False;self.held=[];self.hold=False
+        self.snapshot=snapshot;self.history_error=False;self.older_error=False;self.held=[];self.hold=False
         def route(request):
             query=parse_qs(urlsplit(request.request.url).query)
             if self.hold:self.held.append(request);return
-            if self.history_error:request.fulfill(status=503,json={'error':'unavailable'});return
+            if self.history_error or ('cursor' in query and self.older_error):request.fulfill(status=503,json={'error':'unavailable'});return
             response=history(self.snapshot)
             if 'cursor' in query:response['session_settings']=settings('older-poison','older-poison')
             request.fulfill(json=response)
@@ -45,7 +45,9 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
         self.mount(settings());self.known()
         expect(self.page.locator('#chat-model option[value=""]')).to_have_text('Настройки сессии: producer-model')
         note=self.page.locator('#session-settings-note');expect(note).to_contain_text('активный ответ может')
-        self.assertIn('session-settings-note',(self.line.get_attribute('aria-describedby') or '')+' '+(self.page.locator('textarea').get_attribute('aria-describedby') or ''))
+        binding=(self.line.get_attribute('aria-describedby') or '')+' '+(self.page.locator('textarea').get_attribute('aria-describedby') or '')
+        title=(self.line.get_attribute('title') or '')+' '+(self.page.locator('textarea').get_attribute('title') or '')
+        self.assertTrue('session-settings-note' in binding or 'активный ответ' in title,'Configured-vs-active note must be accessible through describedby/title')
         expect(self.page.locator('#next-model-status')).to_have_text('Следующая отправка: настройки сессии')
         self.wait_for_option('Model Alpha');self.known()
         self.assertFalse(any(r.method=='POST' for r in self.network))
@@ -64,6 +66,10 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
     def test_older_response_cannot_replace_latest_settings(self):
         self.mount(settings());self.known()
         self.page.get_by_role('button',name='Загрузить более старые сообщения',exact=True).first.click();self.known()
+    def test_older_failure_does_not_invalidate_fresh_latest_settings(self):
+        self.mount(settings());self.known();self.older_error=True
+        self.page.get_by_role('button',name='Загрузить более старые сообщения',exact=True).click()
+        self.page.wait_for_timeout(100);self.known()
     def test_explicit_future_pair_and_ack_do_not_become_current(self):
         self.mount(settings());model,effort=self.assert_controls();self.wait_for_option('Model Alpha')
         model.select_option(label='Model Alpha');effort.select_option(label='high')
@@ -74,9 +80,10 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
         self.mount(settings());self.known();self.hold=True;self.refresh()
         self.page.wait_for_timeout(50);self.assertTrue(self.held,'Latest GET held before switch')
         self.beta_session.click();self.page.wait_for_timeout(50)
-        for route in self.held:route.fulfill(json=history(settings('stale-A','stale-A')))
-        self.held=[];self.unknown()
-        self.hold=False;self.snapshot=settings('fresh-A','fresh-A');self.alpha_session.click();self.known('fresh-A','fresh-A')
+        stale=list(self.held);self.held=[];self.hold=False
+        self.snapshot=settings('fresh-A','fresh-A');self.alpha_session.click();self.known('fresh-A','fresh-A')
+        for route in stale:route.fulfill(json=history(settings('stale-A','stale-A')))
+        self.page.wait_for_timeout(100);self.known('fresh-A','fresh-A')
         self.hold=True;self.refresh();self.page.wait_for_timeout(50)
         self.page.get_by_role('button',name='Выйти',exact=True).click()
         for route in self.held:route.fulfill(json=history(settings('logout-poison','logout-poison')))
