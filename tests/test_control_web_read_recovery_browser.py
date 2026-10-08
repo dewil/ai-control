@@ -309,6 +309,8 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
         self.assertEqual(len(sends), 1)
         self.network.clear()
         calls = self.route_sequence('session-project-summary', [(200, summaries('unknown')), (200, summaries())])
+        # INV43 closes Projects after confirmed history selection; explicit refresh requires reopening.
+        self.page.locator('#projects-toggle').click()
         self.refresh()
         self.assertEqual(len(calls), 2)
         self.quiet()

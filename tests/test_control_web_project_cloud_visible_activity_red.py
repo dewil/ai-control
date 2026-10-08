@@ -91,6 +91,9 @@ class ProjectCloudVisibleActivityLayoutRed(fixture.ProjectCloudBrowserContract):
         self.assertTrue(composer.is_enabled(), 'Chat composer remains usable below the cloud')
 
         self.page.set_viewport_size({'width': 390, 'height': 844})
+        # INV43 closes Projects after confirmed history selection; expose it before geometry checks.
+        self.page.locator('#projects-toggle').click()
+        self.tile('high').wait_for(state='visible')
         self.assertLessEqual(max(self.page.evaluate('document.documentElement.scrollWidth'),
                                  self.page.evaluate('document.body.scrollWidth')), 390,
                              'Mobile cloud and chat do not cause horizontal page overflow')

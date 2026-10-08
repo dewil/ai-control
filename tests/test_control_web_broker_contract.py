@@ -184,8 +184,18 @@ class BrokerContract(unittest.TestCase):
             return json.loads(data)
     def test_INV_WEB_03_socket_peer_refusal_no_writer(self):
         path = self.socket_server(os.getuid()+1)
-        result = self.request(path, {'op':'answer','agent':'task-one','qid':QID,'decision':'text','text':'hello'})
-        self.assertIn('error',result)
+        # Peer authentication precedes request reads: wrong UID receives denial without sending bytes.
+        # Read first also avoids sendall racing the server's intentional refusal/close.
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(2)
+            client.connect(str(path))
+            data=b''
+            while b'\n' not in data:
+                block=client.recv(131073)
+                if not block:
+                    break
+                data+=block
+        self.assertEqual(json.loads(data),{'error':'forbidden'})
         self.assertEqual(self.calls,[])
     def test_INV_WEB_03_socket_strict_fields_and_roundtrip(self):
         path = self.socket_server(os.getuid())
