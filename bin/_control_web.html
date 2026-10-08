@@ -9,9 +9,12 @@
   <section id="sessions-panel" role="tabpanel" aria-labelledby="tab-sessions" hidden>
     <div class="page-navigation"><button type="button" class="secondary" data-page-scroll="up">↑ В начало</button><button type="button" class="secondary" data-page-scroll="down">↓ В конец</button></div>
     <div class="project-navigation">
+    <div class="projects-header"><span id="projects-heading">Проекты</span><button id="projects-toggle" type="button" class="secondary" aria-controls="projects-body" aria-expanded="true">Проекты</button></div>
+    <div id="projects-body">
     <div class="project-picker"><button id="create-open" type="button" class="secondary">Новая сессия</button><label for="project-sort">Сортировка проектов<select id="project-sort"><option value="count">По числу сессий</option><option value="activity">По последней активности</option></select></label><button id="projects-refresh" type="button" class="secondary">Обновить проекты</button></div>
     <div id="project-cloud" class="project-cloud" role="group" aria-label="Проекты"></div>
     <p id="project-summary-status" class="meta" role="status" aria-live="polite"></p>
+    </div>
     </div>
     <aside class="session-navigation" aria-label="Сессии проекта">
     <div id="session-list-status" class="message" role="status" aria-live="polite"></div><div id="session-list" class="session-list"></div>

@@ -948,6 +948,8 @@ class SessionChat:
                                 content.append({'type': 'text', 'text': part['text']})
                         page_projection.append({'id': item['id'], 'type': item['type'],
                                                 'content': content})
+                        if valid_uuid(item.get('clientId')):
+                            page_projection[-1]['clientId'] = item['clientId']
                     elif item['type'] == 'agentMessage':
                         _need(type(item.get('text')) is str)
                         page_projection.append({'id': item['id'], 'type': item['type'],
@@ -1281,6 +1283,8 @@ class SessionChat:
             item_truncated = clipped_to_chars
             exported = {'id': native_item['id'], 'role': role,
                         'text': text, 'truncated': item_truncated, **timing}
+            correlation = {'client_id': native_item['clientId']} if role == 'user' and valid_uuid(native_item.get('clientId')) else {}
+            exported.update(correlation)
             encoded_item_size = len(_json(exported))
             separator_size = 1 if selected_counts[turn_index] else 0
             if base_size + used_size + separator_size + encoded_item_size <= HISTORY_LIMIT:
@@ -1304,7 +1308,7 @@ class SessionChat:
                         self._remaining()
                     middle = (low + high) // 2
                     partial = {'id': native_item['id'], 'role': role,
-                               'text': text[:middle], 'truncated': True, **timing}
+                               'text': text[:middle], 'truncated': True, **timing, **correlation}
                     if len(_json(partial)) <= remaining:
                         best = middle
                         low = middle + 1
@@ -1312,7 +1316,7 @@ class SessionChat:
                         high = middle - 1
                 if best >= 0:
                     partial = {'id': native_item['id'], 'role': role,
-                               'text': text[:best], 'truncated': True, **timing}
+                               'text': text[:best], 'truncated': True, **timing, **correlation}
                     selected[turn_index].append((item_index, partial))
                     selected_counts[turn_index] += 1
                     used_size += comma_size + len(_json(partial))
