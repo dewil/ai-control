@@ -166,3 +166,8 @@ PASS; full SOURCE/CI/installed acceptance пока отсутствуют. INV44
 опирается на proven session-configured producer, не active-turn telemetry.
 Финальный MODEL gate20 unique PASS; затронутые backend75, model/rename browser16
 и geometry/width2 PASS. Full SOURCE/CI/installed acceptance остаются отдельными gates.
+
+
+## Объединённый live/compact цикл — DESIGN draft08.10
+
+Спецификация: ../dev/2026-10-08-spec-live-observability-package.md. Новые INV-WSESS-47..53 зарезервированы для служебной geometry, project badges, model caption, Android landing, private bounded owner live source, authenticated SSE и frontend merge/lifecycle. Пока это DESIGN draft, runtime отсутствует; прежние инварианты не отменены. Новые INV-DEVBUS-10/11 относятся к ownerbroker hosting и safe bounded web integration; source PR74 не означает установленную интеграцию.
