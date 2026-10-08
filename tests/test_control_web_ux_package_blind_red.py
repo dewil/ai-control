@@ -48,8 +48,8 @@ def serve(root, evidence):
             sends=[r for r in calls() if r['kind']=='send' and r['sid']==sid and r['project']==project]
             if data.get('canonical'):
                 for n, send in enumerate(sends):
-                    item={'id':'canonical-'+str(n),'role':data.get('canonical_role','user'),
-                          'text':'Canonical redacted '+str(n),'truncated':data.get('truncated',False)}
+                    item={'id':data.get('canonical_key','canonical')+'-'+str(n),'role':data.get('canonical_role','user'),
+                          'text':data.get('canonical_text','Canonical redacted ')+str(n),'truncated':data.get('truncated',False)}
                     if not data.get('missing_id'): item['client_id']=data.get('client_id',send['message_id'])
                     items.append(item)
             return {'turns':[{'id':'fixture-turn','status':'completed','items':items}],
@@ -100,13 +100,13 @@ class WebUXBlindBrowser(unittest.TestCase):
         page.locator('#username').fill('owner');page.locator('input[type=password]').fill(PASSWORD)
         page.get_by_role('textbox',name=re.compile('TOTP|код|однораз',re.I)).fill(totp())
         page.get_by_role('button',name='Войти',exact=True).click()
-        page.get_by_role('button',name='Сессии',exact=True).wait_for();page.close()
+        page.get_by_role('button',name='Сессии',exact=True).or_(page.get_by_role('tab',name='Сессии',exact=True)).wait_for();page.close()
 
     def setUp(self):
         self.control();(self.evidence/'calls.jsonl').unlink(missing_ok=True)
         self.page=self.context.new_page();self.addCleanup(self.page.close)
         self.page.set_default_timeout(4000);self.errors=[];self.page.on('pageerror',lambda e:self.errors.append(str(e)))
-        self.page.goto(self.url);self.page.get_by_role('button',name='Сессии',exact=True).click()
+        self.page.goto(self.url);self.page.get_by_role('button',name='Сессии',exact=True).or_(self.page.get_by_role('tab',name='Сессии',exact=True)).click()
         choose_project(self.page,'demo');self.session=self.page.get_by_role('button',name=re.compile('^UX synthetic session'))
         self.session.wait_for()
     def tearDown(self):self.assertEqual(self.errors,[])
@@ -179,10 +179,10 @@ class WebUXBlindBrowser(unittest.TestCase):
 
     def test_INV45_exact_role_id_canonical_and_truncated_reconciliation(self):
         self.open();self.control(send_delay=1);mid=self.send();self.page.wait_for_timeout(1300)
-        for invalid in ({'canonical_role':'assistant'},{'missing_id':True},{'client_id':'invalid'},
-                        {'client_id':'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}):
+        for number,invalid in enumerate(({'canonical_role':'assistant'},{'missing_id':True},{'client_id':'invalid'},
+                        {'client_id':'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'})):
             with self.subTest(invalid=invalid):
-                self.control(canonical=True,**invalid);self.poll()
+                self.control(canonical=True,canonical_key='unmatched-'+str(number),canonical_text='Unmatched fixture '+str(number)+' ',**invalid);self.poll()
                 self.assertEqual(self.local().count(),1,'Nonmatching/nonuser canonical entry removed outgoing bubble')
         self.control(canonical=True,truncated=True);self.poll()
         self.assertEqual(self.local().count(),0)
@@ -194,15 +194,16 @@ class WebUXBlindBrowser(unittest.TestCase):
     def test_INV45_ack_outcomes_and_scope(self):
         for outcome,label in [('rejected','Не принято'),('delivery_unknown','Доставка неизвестна')]:
             with self.subTest(outcome=outcome):
+                prior=len(self.calls('send'))
                 self.open();self.control(send_delay=1,send_status=outcome);self.send()
                 self.page.get_by_role('button',name=re.compile('^Other UX')).click()
                 self.page.get_by_text('Fixture readable message 23',exact=True).wait_for();self.page.wait_for_timeout(1300)
                 self.assertEqual(self.local().count(),0,'Late A ACK leaked into B')
                 self.session.click();self.page.get_by_text('Fixture readable message 23',exact=True).wait_for()
                 self.assertIn(label,self.local().inner_text())
-                self.assertEqual(len(self.calls('send')),1,'Unknown/rejected receipt caused automatic resend')
+                self.assertEqual(len(self.calls('send')),prior+1,'Unknown/rejected receipt caused automatic resend')
                 # New context for next outcome; no stale local text persistence.
-                self.page.reload();self.page.get_by_role('button',name='Сессии',exact=True).click()
+                self.page.reload();self.page.get_by_role('button',name='Сессии',exact=True).or_(self.page.get_by_role('tab',name='Сессии',exact=True)).click()
                 choose_project(self.page,'demo');self.session.wait_for()
 
 if __name__=='__main__':
