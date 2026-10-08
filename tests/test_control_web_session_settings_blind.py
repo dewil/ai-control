@@ -52,6 +52,12 @@ class SessionSettingsBlind(unittest.TestCase):
                 result=self.chat().history('demo',SID);self.assertIn('turns',result)
                 if math.isfinite(elapsed) and 0<=elapsed<15:self.snapshot(result,age=math.floor((self.now-100)*1000))
                 else:self.assertNotIn('session_settings',result)
+    def test_clock_invalid_before_proof_or_expired_during_projection_omits_only_snapshot(self):
+        for initial in [float('nan'),float('inf')]:
+            self.now=initial;result=self.chat().history('demo',SID)
+            self.assertIn('turns',result);self.assertNotIn('session_settings',result)
+        self.now=100.;self.rpc.hook=lambda method:self.advance(16.) if method=='thread/items/list' else None
+        result=self.chat().history('demo',SID);self.assertIn('turns',result);self.assertNotIn('session_settings',result)
     def advance(self,elapsed):self.now=100.+elapsed
     def test_context_before_after_and_final_changes_are_never_authority(self):
         mutations=[('transport_generation',4),('context_generation',8),('context_id','b'*64),('native_version','0.160.1'),('vendor','other'),('schema',True)]
