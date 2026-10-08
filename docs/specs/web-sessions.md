@@ -17,7 +17,7 @@
 
 ## Контракты и трассируемость
 
-Публичный SessionChat, HTTP и broker wire закреплены в feature specification. Независимые тесты должны нести INV-WSESS-01..08; на момент принятия этой спеки implementation, RED/GREEN, review, CI и installed acceptance ещё не выполнены. Существующие web/task/auth checks остаются обязательными.
+Публичный SessionChat, HTTP и broker wire закреплены в feature specification. Независимые тесты должны нести INV-WSESS-01..08; исходный docs-only приём этой спеки предшествовал implementation и проверкам. Текущие source/validation checkpoints указаны в соответствующих feature sections; installed acceptance учитывается отдельно. Существующие web/task/auth checks остаются обязательными.
 
 ## Известные дыры
 
@@ -138,7 +138,7 @@ DESIGN/RED ещё впереди; source/installed capability не заявле�
 
 Per-item time amendment: ../dev/2026-10-06-spec-web-item-message-times.md.
 
-## Compact UX package — contract08.10, implementation pending
+## Compact UX package — implemented source, contract08.10
 
 [CONTROL-WEB-UX-PACKAGE](../dev/2026-10-08-spec-web-ux-package.md) объединяет
 следующие новые инварианты; существующие security/delivery/history bounds сохраняются.

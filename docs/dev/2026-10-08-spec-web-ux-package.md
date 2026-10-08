@@ -29,20 +29,20 @@ routing, authentication, receipt storage/dedup, RPC набор, серверны
 helper не меняются. Browser history/drafts/receipts/outgoing text остаются memory-only.
 Android WebView использует ту же страницу; native Android source не входит.
 
-## Проверенная база и отсутствующие части
+## Проверенная база до реализации и закрытые части пакета
 
 Read-only `ls-remote` и origin ref совпали: approved `release/web-fixed14-base`
 `b75d6790b1262671b78c2dd1dbd34b43dc6b4123`. Локальная одноимённая ветка устарела;
 worktree создан от этого immutable SHA. HTML базы содержит build-info r6. Это
 проверка исходника, не новая проверка установленного production экземпляра.
 
-| Поведение | Что уже есть в базе | Чего ещё нет |
+| Поведение | Что было в базе | Что реализовал пакет |
 | --- | --- | --- |
-| Плотность | System sans, 44px controls, project cloud, history window100, safe Markdown, reader/focus preservation | Служебные панели по-прежнему имеют крупные gaps/padding; мобильные chat actions складываются в full-width столбец |
-| Проекты | Counts/activity/sort, доступность, выбранный project, URL fullSID | Раскрываемого блока и отдельного компактного заголовка нет |
-| Модель | Native catalog, exact explicit model/effort, sticky/future-work notes, immutable pending selection | Session-configured snapshot DTO и постоянной factual line нет; active-turn telemetry не доказана |
-| Отправка | UUID до POST, durable once-only sender, receipt statuses, manual unknown check, draft preservation | Локального сообщения в истории нет; latestAttempts хранит только последнюю попытку |
-| Correlation | Native userMessage.clientId валидируется в owner history scan; send_status ищет exact clientId | clientId теряется при внутренней и публичной history projection |
+| Плотность | System sans, 44px controls, project cloud, history window100, safe Markdown, reader/focus preservation | INV42 сократил gaps/padding и дал мобильным chat actions компактное wrapping расположение |
+| Проекты | Counts/activity/sort, доступность, выбранный project, URL fullSID | INV43 добавил раскрываемый блок с компактным persistent заголовком |
+| Модель | Native catalog, exact explicit model/effort, sticky/future-work notes, immutable pending selection | INV44 добавил session-configured snapshot DTO и factual line; active-turn telemetry не доказана и не заявляется |
+| Отправка | UUID до POST, durable once-only sender, receipt statuses, manual unknown check, draft preservation | INV45 добавил локальные сообщения с памятью каждой попытки и exact-ID reconciliation |
+| Correlation | Native userMessage.clientId валидируется в owner history scan; send_status ищет exact clientId | INV46 сохраняет clientId в обеих history projections и budget clipping |
 
 Проверенные функции: browser `openChat`, `renderProjects`, `loadHistory`,
 `renderHistory`, `submitMessage`, `applyReceipt`, `renderModelControls`; owner
@@ -121,8 +121,9 @@ Effort допускает model-defined Custom string, а не только фи
 null означает unset/unavailable, не medium/none.
 [ReasoningEffort](https://github.com/openai/codex/blob/a956835d020762cb2b570053af06f643a11c0ecc/codex-rs/protocol/src/openai_models.rs#L54-L145).
 
-Текущий source checkpoint уже читает тот же scoped `thread/read` в history._proof,
-но не проецирует эти поля. Каталог, receipt.selection и ACK по-прежнему доказывают
+База до INV44 уже читала тот же scoped `thread/read` в history._proof,
+но не проецировала эти поля. Реализация INV44 экспортирует проверенный optional
+session_settings снимок из этого же metadata proof без дополнительного RPC. Каталог, receipt.selection и ACK по-прежнему доказывают
 capability/запрос/приём, не активный result. Native steering сохраняет active context;
 его factual model/effort остаются unknown. Ранний аудит пакета искал только active
 telemetry и пропустил available session-configured поля; настоящая секция заменяет
@@ -282,3 +283,18 @@ history, matching ID в truncated page, два identical text с разными 
 manually reopened projects во время polling, reload good/bad deep link, rejected и
 unknown. Browser receipts/feed/focus/scroll проверяются совместно. Acceptance телефона
 и WebView остаётся отдельным шагом; source/browser proofs не объявляют её выполненной.
+
+### SOURCE corrections08.10
+
+Initial independent SOURCE e50985d2: no material blockers; принятие пакета требует
+закрытия low findings02/04/05. Activity detail metadata теперь12px (independent
+computed-font RED11→GREEN на320/390/1280). Manual receipt completion использует
+existing applyReceipt passive label update и не вызывает полную history reconciliation:
+отложенное изменение другого canonical сообщения не должно сдвигать читаемый абзац.
+Independent public-DOM oracle RED840px→GREEN≤8px также проверяет accepted label,
+zero extra history GET, exact sends/no resend, сохранение draft/focus.
+Targeted reader/metadata/HTTP/local-status7 tests PASS/0errors/0skips (14.634s);
+metadata/HTTP/geometry/width5 PASS (9.780s), с пересечением этих наборов.
+Docs отличают исторический checkpoint от реализованного source. Same-context SOURCE
+delta/exact integration CI/installed acceptance ещё отдельные gates. Build footer
+готовится existing CLI в доставляемой integration branch до этих gates.

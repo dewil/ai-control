@@ -308,10 +308,10 @@ HTTP и broker обновляются согласованно: старый bro
 «Уровень размышления» (labels/aria-labelledby, без зависимости теста от CSS/ID).
 После CONTROL-WEB-UX-PACKAGE INV44 (08.10) inherit caption —
 «Настройки сессии: <model>» либо «Настройки сессии: неизвестно»; value остаётся пустой
-строкой и не задаёт explicit model override. Исторический caption «Наследовать текущую»
+строкой и не задаёт explicit model override. Предыдущий inherit caption
 заменён без изменения send authority. Effort placeholder «Выберите уровень размышления».
-Два accessible labelled controls показывают «Модель: наследовать текущую» или
-row.label; при explicit модели «Выберите уровень размышления» либо exact
+Два accessible labelled controls показывают inherit caption «Настройки сессии: <model>»
+(либо «неизвестно») или row.label; при explicit модели «Выберите уровень размышления» либо exact
 supported effort. Submit explicit выбора запрещён до выбора effort. Default catalog
 metadata не является effective thread state.
 Всегда видимая подсказка для доступного explicit выбора: «Выбор сохраняется для
@@ -380,6 +380,6 @@ Thread/history/turn/account/auth запросы не выполнялись. Liv
 передача thread/history/turn/account/auth requests исключена. Diagnostic version
 за existing trusted-owner boundary — compatibility hint, не attested artifact.
 
-## Состояние реализации06.10
+## Исторический checkpoint реализации06.10 (не статус поставки08.10)
 
 Discovery и HTTPcatalog PR44/45, sender/schema2receipts/HTTPselection PR47 объединены в main. Независимые тесты19/9/14/5/9 и source review другой моделью PASS; противоречивый vendor metadata отказ до send закрыт. UI source588fbfb: native labelled controls, explicit sticky/futurework notes и immutable pending state; independent10 + соответствующие browser regressions прошли, порядок последней HTML правки сохранён в privateproof. Combined vendorbadge/UI final browser sweep и source review/точныйCI выполняются. Production остаётся прежней: installed native/phone acceptance не выполнены, effective model/entitlement/multi-account proof не объявляются.
