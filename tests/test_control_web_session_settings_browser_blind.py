@@ -17,19 +17,17 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
     setUpClass=classmethod(fixture.ModelControlsBrowserContract.setUpClass.__func__)
     stop_server=classmethod(fixture.ModelControlsBrowserContract.stop_server.__func__)
     def setUp(self):
-        # Clone the original synthetic cookie in RAM; ordinary cases neither log in repeatedly nor share DOM.
-        logout_case=self._testMethodName=='test_late_selection_and_auth_generations_do_not_restore_stale_settings'
-        options={'viewport':{'width':390,'height':844},'color_scheme':'dark','has_touch':True}
-        if not logout_case:options['storage_state']=type(self).context.storage_state()
-        self.context=self.browser.new_context(**options);self.addCleanup(self.context.close)
-        if logout_case:
-            # A separate synthetic session makes logout independent of all other tests' cookies.
-            login=self.context.new_page();login.goto(self.url)
-            login.locator('#username').fill('owner');login.locator('input[type=password]').fill(fixture.PASSWORD)
-            login.get_by_role('textbox',name=re.compile('TOTP|код|однораз',re.I)).fill(fixture.totp())
-            login.get_by_role('button',name='Войти',exact=True).click()
-            login.get_by_role('button',name='Сессии',exact=True).or_(login.get_by_role('tab',name='Сессии',exact=True)).wait_for(timeout=5000)
-            login.close()
+        # Existing auth rejects TOTP replay. Logout gets an independent synthetic server/session,
+        # while other cases clone the original cookie only in RAM and never share DOM state.
+        owner=type(self)
+        if self._testMethodName=='test_late_selection_and_auth_generations_do_not_restore_stale_settings':
+            owner=type('IsolatedLogoutFixture',(unittest.TestCase,),{'stop_server':classmethod(fixture.ModelControlsBrowserContract.stop_server.__func__)})
+            try:fixture.ModelControlsBrowserContract.setUpClass.__func__(owner)
+            except BaseException:owner.doClassCleanups();raise
+            self.addCleanup(owner.doClassCleanups)
+            self.url=owner.url;self.evidence=owner.evidence;self.browser=owner.browser
+        self.context=self.browser.new_context(viewport={'width':390,'height':844},color_scheme='dark',has_touch=True,storage_state=owner.context.storage_state())
+        self.addCleanup(self.context.close)
         fixture.ModelControlsBrowserContract.setUp(self)
     tearDown=fixture.ModelControlsBrowserContract.tearDown
     calls=fixture.ModelControlsBrowserContract.calls
