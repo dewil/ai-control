@@ -26,6 +26,9 @@ APK updater. Mac остается браузером. Provider auth, NATS и roo
 - INV-AND-13: До первого входа обычный stop/start той же Activity сохраняет текущую видимую форму, точные username/password/TOTP и доступный фокус только в RAM. Submission очищает пароль/TOTP; явная смена auth экрана/reset создаёт новую пустую форму. Bundle, disk, logs и восстановление секретов после process death не используются. Пользователь должен успеть скопировать пароль и TOTP из KeePass по отдельности. Точный [контракт lifecycle](../dev/2026-10-07-spec-android-login-lifecycle.md).
 - INV-AND-14: На login экране компактный читаемый переход к обновлениям находится внизу после отправки с отдельным touch target; большая кнопка над полями не мешает входу. Login контракт и критерии — в lifecycle addendum. Authenticated update control определяется последующим INV-AND-15.
 - INV-AND-15: Authenticated WebView не имеет верхней полосы обновлений; компактный тёмный переход внизу занимает48dp отдельного места, без overlay и перекрытия web content. Native bars #141414, системные insets сохранены. Явный переход к UpdatesActivity не меняет auth/document lifecycle. Точный [контракт компактных обновлений](../dev/2026-10-07-spec-android-compact-updates.md).
+- INV-AND-16: Все принадлежащие приложению native экраны тёмные с первого frame; текст/подсказки/ошибки читаемы, focus/pressed/disabled состояния различимы. SDK26 theme resources совместимы, system/IME insets и auth/updater поведение сохраняются. Точный [UX-пакет](../dev/2026-10-08-spec-android-ux-package.md).
+- INV-AND-17: UpdatesActivity постоянно показывает installed versionName/code собственного пакета из локального PackageManager, без зависимости от feed/сети/входа; candidate не подменяет installed. API28+ long code не сужается; неизвестные metadata честно показываются как неизвестные. Контракт в UX-пакете.
+- INV-AND-18: Launcher compatibility проверяется по actual compiled manifest/resources и read-only device resolution. Наличие приложения в Settings и запуск установщиком не доказывают причину отсутствия в drawer; launcher fix требует подтверждённой причины и отдельного независимого RED. Package/certificate/auth data сохраняются; UNKNOWN не объявляется device PASS.
 
 ## Решения 06.10.2026
 
@@ -46,3 +49,5 @@ INV01..12 -> группы матрицы в feature spec; реальные Andro
 отсутствуют, покрытие NOT RUN. Наличие этого документа не означает readiness.
 
 INV-AND-13/14 -> критерии lifecycle addendum; independent RED/SOURCE и реальный KeePass round trip требуют отдельных доказательств.
+
+INV-AND-15/16/17/18 -> общая child matrix UX-пакета; compiled resources, независимый RED/SOURCE и device acceptance отражаются отдельно.
