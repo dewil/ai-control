@@ -2,9 +2,11 @@ package ru.dewil.aicontrol
 
 import android.os.Bundle
 import android.os.Build
+import android.view.WindowInsets
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.ScrollView
 import androidx.activity.ComponentActivity
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.combine
@@ -27,8 +29,23 @@ class UpdatesActivity : ComponentActivity() {
     private lateinit var reconcile: Button
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val box = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;setPadding(32,64,32,32) }
-        setContentView(box)
+        val density=resources.displayMetrics.density
+        val side=(16*density).toInt()
+        val top=(32*density).toInt()
+        val scroll=ScrollView(this).apply { isFillViewport=true;setPadding(side,top,side,side) }
+        scroll.setOnApplyWindowInsetsListener { view,insets ->
+            if(Build.VERSION.SDK_INT>=30) {
+                val bars=insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime())
+                view.setPadding(side+bars.left,top+bars.top,side+bars.right,side+bars.bottom)
+            } else {
+                @Suppress("DEPRECATION")
+                view.setPadding(side+insets.systemWindowInsetLeft,top+insets.systemWindowInsetTop,side+insets.systemWindowInsetRight,side+insets.systemWindowInsetBottom)
+            }
+            insets
+        }
+        val box = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+        scroll.addView(box)
+        setContentView(scroll)
         box.addView(TextView(this).apply { text=installedVersionText();textSize=18f })
         status=TextView(this).apply { textSize=18f };box.addView(status)
         fun button(text:String,action:()->Unit)=Button(this).apply { this.text=text;setOnClickListener { action() };box.addView(this) }

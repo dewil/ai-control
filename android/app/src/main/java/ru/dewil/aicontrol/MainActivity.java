@@ -3,6 +3,7 @@ package ru.dewil.aicontrol;
 import android.app.*;
 import android.os.*;
 import android.content.*;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.net.Uri;
 import android.net.http.SslError;
@@ -180,7 +181,9 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
         });
         int footerHeight=(int)(48*getResources().getDisplayMetrics().density);
         web.setWebChromeClient(new WebChromeClient());FrameLayout.LayoutParams layout=new FrameLayout.LayoutParams(-1,-1);layout.bottomMargin=footerHeight;root.addView(web,0,layout);
-        Button updates=new Button(this);updates.setText("Обновления");updates.setTextSize(14);updates.setBackgroundColor(0xff141414);updates.setTextColor(Color.WHITE);updates.setFocusable(true);updates.setOnClickListener(v->startActivity(new Intent(this,UpdatesActivity.class)));updates.setTag("updates");FrameLayout.LayoutParams bar=new FrameLayout.LayoutParams(-2,footerHeight,Gravity.BOTTOM|Gravity.END);root.addView(updates,1,bar);
+        Button updates=new Button(this);updates.setText("Обновления");updates.setTextSize(14);
+        updates.setBackgroundTintList(new ColorStateList(new int[][]{{android.R.attr.state_enabled,android.R.attr.state_pressed},{android.R.attr.state_enabled,android.R.attr.state_focused},{-android.R.attr.state_enabled},{}},new int[]{0xff3a3a3a,0xff3a3a3a,0xff242424,0xff141414}));
+        updates.setFocusable(true);updates.setOnClickListener(v->startActivity(new Intent(this,UpdatesActivity.class)));updates.setTag("updates");FrameLayout.LayoutParams bar=new FrameLayout.LayoutParams(-2,footerHeight,Gravity.BOTTOM|Gravity.END);root.addView(updates,1,bar);
     }
     private void destroyPage(){View bar=root.findViewWithTag("updates");if(bar!=null)root.removeView(bar);nativeCookie=null;pageLoaded=false;if(web!=null){root.removeView(web);web.stopLoading();web.removeJavascriptInterface("AndroidAuth");web.clearHistory();web.clearCache(true);web.destroy();web=null;}WebStorage.getInstance().deleteAllData();}
     private void terminal(){epoch++;gate.deny();destroyPage();
