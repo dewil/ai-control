@@ -1,2 +1,2 @@
 package android.util;
-public class DisplayMetrics { public float density=1; }
+public class DisplayMetrics { public static float fixtureDensity=1; public float density=fixtureDensity; }

@@ -29,7 +29,7 @@ if not jar.is_file():
     subprocess.run([str(ROOT/'android/gradlew'), '-p', str(ROOT/'android'), ':policy:jar', '--offline', '--console=plain'], check=True)
 cp = os.pathsep.join(map(str,[json_jars[-1],jar,kotlin_classes,updater_classes,*runtime,sdk/'platforms/android-36/android.jar']))
 with tempfile.TemporaryDirectory(prefix='ai-login-host-') as out:
-    sources = sorted(HERE.glob('stubs/**/*.java')) + [HERE/'LoginLifecycleProbe.java', HERE/'CompactUpdatesProbe.java', HERE/'NativeDarkProbe.java',HERE/'InstalledVersionProbe.java', ROOT/'android/app/src/main/java/ru/dewil/aicontrol/MainActivity.java']
+    sources = sorted(HERE.glob('stubs/**/*.java')) + [HERE/'LoginLifecycleProbe.java', HERE/'CompactUpdatesProbe.java', HERE/'NativeDarkProbe.java',HERE/'InstalledVersionProbe.java',HERE/'FooterInteractionProbe.java',HERE/'UpdatesInsetsProbe.java', ROOT/'android/app/src/main/java/ru/dewil/aicontrol/MainActivity.java']
     subprocess.run([str(jdk/'bin/javac'), '-d', out, '-cp', cp, *map(str,sources)], check=True)
     failures=[]
     theme_properties=properties(ROOT)
@@ -45,5 +45,11 @@ with tempfile.TemporaryDirectory(prefix='ai-login-host-') as out:
         for case in ['installed','unknown','empty','invalid','missing','observer','reopen']:
             result=subprocess.run([str(jdk/'bin/java'),*theme_properties,'-Dfixture.sdk='+str(sdk_level),'-cp',out+os.pathsep+cp,'ru.dewil.aicontrol.InstalledVersionProbe',case])
             if result.returncode:failures.append('installed-'+str(sdk_level)+'-'+case)
+    result=subprocess.run([str(jdk/'bin/java'),*theme_properties,'-cp',out+os.pathsep+cp,'ru.dewil.aicontrol.FooterInteractionProbe'])
+    if result.returncode:failures.append('footer-interaction')
+    for sdk_level in [26,30]:
+        for case in ['scroll','insets','density']:
+            result=subprocess.run([str(jdk/'bin/java'),*theme_properties,'-Dfixture.sdk='+str(sdk_level),'-cp',out+os.pathsep+cp,'ru.dewil.aicontrol.UpdatesInsetsProbe',case])
+            if result.returncode:failures.append('updates-'+str(sdk_level)+'-'+case)
     print('Host contract failures:', ', '.join(failures) if failures else 'none', flush=True)
     raise SystemExit(bool(failures))
