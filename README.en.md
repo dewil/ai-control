@@ -108,7 +108,7 @@ On top of the spool: a full task lifecycle with no open session. `/new <project>
 - **The agent has no git.** Three audit rounds found three independent ways to execute agent-authored code before human acceptance via git machinery (hooks, flags like `git log --output=`, clean filters, fsmonitor) — silencing them one by one proved an unwinnable race. Git is removed entirely: the runtime commits, after the done claim ([V2.10](./docs/design-2026-07-28-v2.10-task-actually-works.md)).
 
 ### tgbot — fleet dashboard
-A long-poll Telegram bot (getUpdates, not webhooks — webhooks are DPI-filtered in some networks). Commands `/agents`, `/agent <name>`, `/new <project> <text>` (birth a task), `/task <name> <text>` (an event for an existing agent), `/menu` and `/limits` (remaining Claude/Codex subscription limits); question and acceptance cards carry inline buttons, answered by tap or reply. Private chats + a `from.id` whitelist; all agent output is untrusted, HTML-escaped and sent as `<pre>`.
+A long-poll Telegram bot (getUpdates, not webhooks — webhooks are DPI-filtered in some networks). Commands `/agents`, `/agent <name>`, `/new <project> <text>` (birth a task), `/task <name> <text>` (an event for an existing agent), `/menu` and `/limits` (remaining Claude/Codex/Kimi Code subscription limits); question and acceptance cards carry inline buttons, answered by tap or reply. Private chats + a `from.id` whitelist; all agent output is untrusted, HTML-escaped and sent as `<pre>`.
 
 ### takeover — cross-machine handoff
 Moves a live mission Mac → VM **not by transferring the transcript** (fundamentally unsafe — it would drag along foreign context) but as a fresh, brief-seeded session: a new agent starts on the VM from a self-contained brief anchored at a base commit. [Stage 5 design](./docs/design-2026-07-13-stage5-takeover.md).
@@ -117,16 +117,18 @@ Moves a live mission Mac → VM **not by transferring the transcript** (fundamen
 The **acceptor** ([stage 7](./docs/design-2026-07-12-stage7-acceptor-role.md)) is a role-based judge of artifacts in an independent context (deterministic / role-review / both), with a corpus-runner and a confusion matrix for calibration. The **harvester** ([stage 7b](./docs/design-2026-07-13-stage7b-harvester.md)) turns operator edits (revise/reject) into candidate role rules: collect → propose → digest → approve.
 
 ### limits-digest — LLM limits digest
-Every 15 minutes it reads the remaining Claude/Codex subscription limits (quota metadata, not inference — it does not spend the quota) and pushes a panel to Telegram **only when the numbers change** (dedup by a signature of percentages/statuses; reset times do not count as a change). [Runbook](./docs/runbook-limits-digest.md).
+Every 15 minutes it reads the remaining Claude/Codex/Kimi Code subscription limits (quota metadata, not inference — it does not spend the quota) and pushes a panel to Telegram **only when the numbers change** (dedup by a signature of percentages/statuses; reset times do not count as a change). [Runbook](./docs/runbook-limits-digest.md).
 
 ### Web panel for tasks and sessions
 The web panel shows task questions and completed results. It supports text replies, retrying delivery of saved replies, permitted approve/reject decisions, and accepting or rejecting results. The sessions view provides projects, Codex conversation history and message sending. Sign-in uses a username, password and TOTP; web sessions in the current installation last 3 hours. The web process runs under a separate UID through a narrow owner broker. [Installation](./docs/web-install.md) requires pinned Python dependencies, a separate service account, HTTPS, and local enrollment.
+
+This release does not establish readiness for session creation, launch, cancellation or diff views; those scenarios require separate acceptance.
 
 R7 makes the layout more compact and collapses projects after a confirmed session selection. Outgoing text appears locally immediately; when the message appears in history, its identifier merges the records without a duplicate. The panel shows saved model and reasoning settings, which may differ from the settings used by the current execution. Settings for the next send appear separately. History still updates through polling; SSE is the next stage.
 
 As of 8 October 2026, r7 is installed and verified; evidence is recorded in the [release report](./docs/dev/2026-10-08-web-ux-build-review.md). Authenticated phone acceptance remains pending. Multiuser support, the remote NATS manager and a web limits UI are not declared ready.
 
-The Android client retains its login form when switching to KeePass and back while the login screen remains alive. As of 8 October 2026, the [APK channel](https://llm-web.dewil.ru:18443/download/android/) publishes 0.1.3/code4. Signed 0.1.5/code6 is ready for publication by an administrator but has not been published.
+The Android client retains its login form when switching to KeePass and back while the login screen remains alive; a dedicated device test is still pending. As of 8 October 2026, the [APK channel](https://llm-web.dewil.ru:18443/download/android/) publishes 0.1.3/code4. Signed 0.1.5/code6 is ready for publication by an administrator but has not been published.
 
 ---
 
