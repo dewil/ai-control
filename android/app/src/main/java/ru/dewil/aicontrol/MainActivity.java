@@ -41,10 +41,11 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     @Override public void onCreate(Bundle saved){
         super.onCreate(saved);
         getWindow().setStatusBarColor(0xff141414);getWindow().setNavigationBarColor(0xff141414);
-        if(Build.VERSION.SDK_INT>=30){WindowInsetsController bars=getWindow().getInsetsController();if(bars!=null)bars.setSystemBarsAppearance(0,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);}
         getOnBackPressedDispatcher().addCallback(this,new androidx.activity.OnBackPressedCallback(true){@Override public void handleOnBackPressed(){handleBack();}});
         store=new CredentialStore(this);
         root=new FrameLayout(this);root.setBackgroundColor(0xff141414);setContentView(root);
+        // PhoneWindow requires an initialized DecorView before querying its controller.
+        if(Build.VERSION.SDK_INT>=30){WindowInsetsController bars=getWindow().getInsetsController();if(bars!=null)bars.setSystemBarsAppearance(0,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);}
         root.setOnApplyWindowInsetsListener((view,insets)->{
             if(Build.VERSION.SDK_INT>=30){imeVisible=insets.isVisible(WindowInsets.Type.ime());android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());
                 view.setPadding(bars.left,bars.top,bars.right,bars.bottom);
