@@ -291,7 +291,7 @@ class SessionRenameBrowser(unittest.TestCase):
         effort = self.page.get_by_role('combobox', name='Уровень размышления', exact=True)
         self.assertEqual(model.count(), 1, 'Existing model control remains available')
         self.assertEqual(effort.count(), 1, 'Existing effort control remains available')
-        self.assertEqual(model.locator('option').first.inner_text(), 'Наследовать текущую')
+        self.assertEqual(model.locator('option').first.inner_text(), 'Настройки сессии: неизвестно')
         self.page.locator('textarea').fill('Synthetic message after rename')
         self.page.get_by_role('button', name='Отправить', exact=True).click()
         self.page.get_by_role('status').filter(has_text=re.compile('принято', re.I)).wait_for()

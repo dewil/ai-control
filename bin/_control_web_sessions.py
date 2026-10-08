@@ -948,6 +948,8 @@ class SessionChat:
                                 content.append({'type': 'text', 'text': part['text']})
                         page_projection.append({'id': item['id'], 'type': item['type'],
                                                 'content': content})
+                        if valid_uuid(item.get('clientId')):
+                            page_projection[-1]['clientId'] = item['clientId']
                     elif item['type'] == 'agentMessage':
                         _need(type(item.get('text')) is str)
                         page_projection.append({'id': item['id'], 'type': item['type'],
@@ -1191,12 +1193,55 @@ class SessionChat:
                   and self._configured_identity() == origin_identity, 'stale')
         return {'rows': rows, 'has_more': result['has_more']}
 
+    def _settings_capture(self):
+        try:
+            context = self._catalog_context()
+            if self._catalog_reason(context) is not None:
+                return None
+            started = self._model_clock()
+            if type(started) not in (int, float) or not math.isfinite(started):
+                return None
+            return context, started
+        except Exception:
+            return None
+
+    def _settings_projection(self, thread, capture):
+        if capture is None:
+            return None
+        from _control_web_broker import valid_session_setting
+        try:
+            context, started = capture
+            if self._catalog_context() != context:
+                return None
+            now = self._model_clock()
+            if type(now) not in (int, float) or not math.isfinite(now):
+                return None
+            elapsed = now - started
+            if not 0 <= elapsed < 15:
+                return None
+            values = [thread.get(key) for key in ('model', 'reasoningEffort')]
+            model, effort = [value if valid_session_setting(value) else None for value in values]
+            if model is None and effort is None:
+                return None
+            age = math.floor(elapsed * 1000)
+            return dict(schema=1, source='thread_read', scope='configured_or_persisted',
+                        model=model, effort=effort, age_ms=age, expires_in_ms=15000-age)
+        except Exception:
+            return None
+
     @_operation
     def history(self, project, sid, cursor=None):
         _need(valid_uuid(sid) and valid_cursor(cursor), 'invalid_request')
         context = self._receipt_context()
         root = self._root(project)
+        capture = self._settings_capture() if cursor is None else None
         thread = self._proof(root, sid)
+        if capture is not None:
+            try:
+                if self._catalog_context() != capture[0]:
+                    capture = None
+            except Exception:
+                capture = None
         try:
             page = self._history_page(sid, cursor, 4 if cursor is None else 8, context)
         except RPCRejected:
@@ -1209,6 +1254,9 @@ class SessionChat:
                 recent = self.receipts.recent(ns, root, sid, self._local.deadline, context['context_id'])
             _need(self._root(project) == root and self._catalog_context() == dict(witness.context), 'stale')
             result = {'history_state': 'unavailable', 'reason': 'unavailable', 'recent_sends': recent}
+            settings = self._settings_projection(thread, capture)
+            if settings is not None:
+                result['session_settings'] = settings
             if witness.needs_native_attention:
                 result['needs_native_attention'] = True
             return result
@@ -1238,9 +1286,15 @@ class SessionChat:
                   'truncated': page['truncated'] or eligible_count > item_limit, 'recent_sends': recent}
         if _attention(thread):
             result['needs_native_attention'] = True
+        settings = self._settings_projection(thread, capture)
+        if settings is not None:
+            result['session_settings'] = settings
         # The empty item arrays reserve exact metadata/cursor/receipt bytes.
         # Adding one item replaces [] with [item]; later items add a comma.
         base_size = len(_json(result))
+        if settings is not None:
+            # Reserve the maximum combined decimal width as snapshot age grows.
+            base_size += 9 - len(str(settings['age_ms'])) - len(str(settings['expires_in_ms']))
         self._remaining()
         _need(base_size <= HISTORY_LIMIT)
         used_size = 0
@@ -1281,6 +1335,8 @@ class SessionChat:
             item_truncated = clipped_to_chars
             exported = {'id': native_item['id'], 'role': role,
                         'text': text, 'truncated': item_truncated, **timing}
+            correlation = {'client_id': native_item['clientId']} if role == 'user' and valid_uuid(native_item.get('clientId')) else {}
+            exported.update(correlation)
             encoded_item_size = len(_json(exported))
             separator_size = 1 if selected_counts[turn_index] else 0
             if base_size + used_size + separator_size + encoded_item_size <= HISTORY_LIMIT:
@@ -1304,7 +1360,7 @@ class SessionChat:
                         self._remaining()
                     middle = (low + high) // 2
                     partial = {'id': native_item['id'], 'role': role,
-                               'text': text[:middle], 'truncated': True, **timing}
+                               'text': text[:middle], 'truncated': True, **timing, **correlation}
                     if len(_json(partial)) <= remaining:
                         best = middle
                         low = middle + 1
@@ -1312,7 +1368,7 @@ class SessionChat:
                         high = middle - 1
                 if best >= 0:
                     partial = {'id': native_item['id'], 'role': role,
-                               'text': text[:best], 'truncated': True, **timing}
+                               'text': text[:best], 'truncated': True, **timing, **correlation}
                     selected[turn_index].append((item_index, partial))
                     selected_counts[turn_index] += 1
                     used_size += comma_size + len(_json(partial))
@@ -1322,10 +1378,16 @@ class SessionChat:
         self._remaining()
         for turn, turn_items in zip(turns, selected):
             turn['items'] = [item for _, item in sorted(turn_items, key=lambda entry: entry[0])]
+        _need(self._root(project) == root and self._receipt_context() == context, 'stale')
+        if settings is not None:
+            latest_settings = self._settings_projection(thread, capture)
+            if latest_settings is None:
+                result.pop('session_settings', None)
+            else:
+                result['session_settings'] = latest_settings
         encoded_result = _json(result)
         self._remaining()
         _need(len(encoded_result) <= HISTORY_LIMIT)
-        _need(self._root(project) == root and self._receipt_context() == context, 'stale')
         return result
 
     @staticmethod

@@ -133,7 +133,8 @@ class ProjectCloudBrowserContract(unittest.TestCase):
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def tile(self, name):
-        button = self.page.get_by_role('button', name=re.compile(r'^' + name + r'(?:\b|\s)'))
+        # INV-WSESS-43: a confirmed deep link collapses projects; selected state remains inspectable.
+        button = self.page.get_by_role('button', name=re.compile(r'^' + name + r'(?:\b|\s)'), include_hidden=True)
         self.assertEqual(button.count(), 1, 'INV-WSESS-19 requires actual project cloud button ' + name)
         return button
 

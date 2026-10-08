@@ -228,7 +228,7 @@ class ModelControlsBrowserContract(unittest.TestCase):
         self.open_alpha()
         model, effort = self.assert_controls()
         self.wait_for_option('Model Alpha')
-        self.assertEqual(model.locator('option').all_text_contents()[:2], ['Наследовать текущую', 'Model Alpha'])
+        self.assertEqual(model.locator('option').all_text_contents()[:2], ['Настройки сессии: неизвестно', 'Model Alpha'])
         self.assertEqual(effort.locator('option').first.inner_text(), 'Выберите уровень размышления')
         self.assertEqual(effort.input_value(), '', 'Catalog default is not effective thread state')
         body = self.page.locator('body').inner_text()
@@ -247,7 +247,7 @@ class ModelControlsBrowserContract(unittest.TestCase):
         status = self.page.get_by_role('status').all_inner_texts()
         self.assertTrue(any(re.search(r'уров|размыш', value, re.I) for value in status),
                         'Incompatible effort reset needs a visible polite announcement')
-        model.select_option(label='Наследовать текущую')
+        model.select_option(value='')
         self.assertEqual(effort.input_value(), '', 'Inherit clears explicit effort')
 
     def test_INV_WSESS_27_explicit_send_waits_for_effort_and_posts_exact_ui_selection_shape(self):
@@ -270,7 +270,7 @@ class ModelControlsBrowserContract(unittest.TestCase):
 
     def test_INV_WSESS_27_inherit_request_omits_selection_entirely(self):
         self.open_alpha(); model, effort = self.assert_controls(); self.wait_for_option('Model Alpha')
-        model.select_option(label='Наследовать текущую')
+        model.select_option(value='')
         self.page.locator('textarea').fill('Synthetic inherit request')
         self.send_button().click()
         self.page.get_by_role('status').filter(has_text=re.compile('принято', re.I)).wait_for()
@@ -283,7 +283,7 @@ class ModelControlsBrowserContract(unittest.TestCase):
     def test_INV_WSESS_27_unsupported_catalog_keeps_inherit_send_without_model_fallback(self):
         private_json(self.evidence / 'control.json', {'default_models': unavailable()})
         self.open_alpha(); model, _ = self.assert_controls()
-        self.assertEqual(model.locator('option').all_text_contents(), ['Наследовать текущую'])
+        self.assertEqual(model.locator('option').all_text_contents(), ['Настройки сессии: неизвестно'])
         self.assertRegex(self.page.locator('body').inner_text(), r'(?i)недоступ|не поддерж|модел|выбор')
         self.page.locator('textarea').fill('Synthetic inherit under unavailable catalog')
         self.assertTrue(self.send_button().is_enabled(), 'Unavailable discovery cannot remove ordinary inherit send')

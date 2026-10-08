@@ -306,7 +306,10 @@ HTTP и broker обновляются согласованно: старый bro
 
 Рядом с draft два native select с accessible names «Модель» и
 «Уровень размышления» (labels/aria-labelledby, без зависимости теста от CSS/ID).
-Модель содержит вариант «Наследовать текущую»; effort placeholder «Выберите уровень размышления».
+После CONTROL-WEB-UX-PACKAGE INV44 (08.10) inherit caption —
+«Настройки сессии: <model>» либо «Настройки сессии: неизвестно»; value остаётся пустой
+строкой и не задаёт explicit model override. Исторический caption «Наследовать текущую»
+заменён без изменения send authority. Effort placeholder «Выберите уровень размышления».
 Два accessible labelled controls показывают «Модель: наследовать текущую» или
 row.label; при explicit модели «Выберите уровень размышления» либо exact
 supported effort. Submit explicit выбора запрещён до выбора effort. Default catalog
