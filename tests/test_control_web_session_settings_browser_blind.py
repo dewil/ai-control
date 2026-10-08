@@ -2,7 +2,8 @@
 import json,re,unittest
 from urllib.parse import parse_qs,urlsplit
 from playwright.sync_api import expect
-from test_control_web_model_controls_browser import ModelControlsBrowserContract as Fixture, SID, OTHER
+import test_control_web_model_controls_browser as fixture
+from test_control_web_model_controls_browser import SID, OTHER
 
 
 def settings(model='producer-model',effort='custom effort',age=0):
@@ -13,15 +14,15 @@ def history(snapshot):
     return data
 
 class SessionSettingsBrowserBlind(unittest.TestCase):
-    setUpClass=classmethod(Fixture.setUpClass.__func__)
-    stop_server=classmethod(Fixture.stop_server.__func__)
-    setUp=Fixture.setUp
-    tearDown=Fixture.tearDown
-    calls=Fixture.calls
-    assert_controls=Fixture.assert_controls
-    wait_for_option=Fixture.wait_for_option
-    send_button=Fixture.send_button
-    send_requests=Fixture.send_requests
+    setUpClass=classmethod(fixture.ModelControlsBrowserContract.setUpClass.__func__)
+    stop_server=classmethod(fixture.ModelControlsBrowserContract.stop_server.__func__)
+    setUp=fixture.ModelControlsBrowserContract.setUp
+    tearDown=fixture.ModelControlsBrowserContract.tearDown
+    calls=fixture.ModelControlsBrowserContract.calls
+    assert_controls=fixture.ModelControlsBrowserContract.assert_controls
+    wait_for_option=fixture.ModelControlsBrowserContract.wait_for_option
+    send_button=fixture.ModelControlsBrowserContract.send_button
+    send_requests=fixture.ModelControlsBrowserContract.send_requests
     def mount(self,snapshot=None):
         self.snapshot=snapshot;self.history_error=False;self.held=[];self.hold=False
         def route(request):
@@ -39,7 +40,7 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
         expect(self.line).to_have_text('Сессия: '+model+' · '+effort)
     def unknown(self):expect(self.line).to_have_text('Сессия: неизвестно · уровень неизвестен')
     def refresh(self):
-        self.page.get_by_role('button',name=re.compile('^Обновить историю$',re.I)).click()
+        self.page.get_by_role('button',name='Обновить переписку',exact=True).click()
     def test_positive_configured_label_note_inherit_and_catalog_not_authority(self):
         self.mount(settings());self.known()
         expect(self.page.locator('#chat-model option[value=""]')).to_have_text('Настройки сессии: producer-model')
@@ -55,14 +56,14 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
             self.snapshot=value;self.refresh();self.known(model,effort)
         invalid=[{**settings(),'schema':True},{**settings(),'age_ms':True},{**settings(),'age_ms':.5},{**settings(),'expires_in_ms':15000.5},{**settings(),'expires_in_ms':14999},{**settings(),'age_ms':-1},{**settings(),'extra':'private context'}, {**settings(),'source':'catalog'}, {**settings(),'scope':'active'}, {**settings(),'model':'😀'*257},{**settings(),'model':'bad\nvalue'}, {**settings(),'effort':'token=synthetic-private-token-value'}]
         for value in invalid:
-            with self.subTest(value=value):self.snapshot=value;self.refresh();self.unknown();expect(self.page.locator('#history')).to_contain_text('Synthetic history stays visible')
+            with self.subTest(value=value):self.snapshot=value;self.refresh();self.unknown();expect(self.page.locator('.chat-items')).to_contain_text('Synthetic history stays visible')
     def test_missing_failed_latest_and_local_expiry_are_unknown(self):
         self.mount(settings(age=14500));self.known();self.page.wait_for_timeout(650);self.unknown()
         self.snapshot=settings();self.refresh();self.known();self.snapshot=None;self.refresh();self.unknown()
         self.snapshot=settings();self.refresh();self.known();self.history_error=True;self.refresh();self.unknown()
     def test_older_response_cannot_replace_latest_settings(self):
         self.mount(settings());self.known()
-        self.page.get_by_role('button',name=re.compile('Старые|Ранее|Older',re.I)).first.click();self.known()
+        self.page.get_by_role('button',name='Загрузить более старые сообщения',exact=True).first.click();self.known()
     def test_explicit_future_pair_and_ack_do_not_become_current(self):
         self.mount(settings());model,effort=self.assert_controls();self.wait_for_option('Model Alpha')
         model.select_option(label='Model Alpha');effort.select_option(label='high')
@@ -75,7 +76,10 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
         self.beta_session.click();self.page.wait_for_timeout(50)
         for route in self.held:route.fulfill(json=history(settings('stale-A','stale-A')))
         self.held=[];self.unknown()
+        self.hold=False;self.snapshot=settings('fresh-A','fresh-A');self.alpha_session.click();self.known('fresh-A','fresh-A')
+        self.hold=True;self.refresh();self.page.wait_for_timeout(50)
         self.page.get_by_role('button',name='Выйти',exact=True).click()
-        self.assertFalse(self.line.is_visible());self.assertNotIn('stale-A',self.page.locator('body').inner_text())
+        for route in self.held:route.fulfill(json=history(settings('logout-poison','logout-poison')))
+        self.held=[];self.assertFalse(self.line.is_visible());self.assertNotIn('stale-A',self.page.locator('body').inner_text())
 
 if __name__=='__main__':unittest.main()

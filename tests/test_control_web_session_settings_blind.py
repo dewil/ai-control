@@ -69,7 +69,7 @@ class SessionSettingsBlind(unittest.TestCase):
         result=self.chat().history('demo',SID,'older');self.assertIn('turns',result);self.assertNotIn('session_settings',result)
         self.rpc.read_id='44444444-4444-4444-8444-444444444444';self.assertEqual(self.chat().history('demo',SID),{'error':'stale'})
     def test_snapshot_included_in_clipped_projection_budget(self):
-        self.rpc.pages[None]={'data':[turn('😀'*8000,turn_id=TURN)],'nextCursor':None}
+        self.rpc.pages[None]={'data':[{'id':TURN,'status':'completed','items':[{'id':'agent-'+str(i),'type':'agentMessage','text':'😀'*8000} for i in range(18)]}],'nextCursor':None}
         self.snapshot(self.chat().history('demo',SID))
 
 if __name__=='__main__':unittest.main()
