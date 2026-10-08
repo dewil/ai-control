@@ -8,9 +8,11 @@
 
 Actual reviewer — Anthropic Sonnet5.5 medium, OpenRouter pinned Anthropic/no fallback; один full public context, затем та же история/system для дельты. Full17files e509 и supplemental HTTP/new tests в deltaa22. Ниже исходные независимые verdicts.
 
-CI: запуск на exact final commit обязателен до установки. Deployment: signed schema3/fixed16 manifest проверен тем же pinned helper локально и на сервере, временный candidate ещё не активирован. APK публикуется отдельно; этот отчёт не подтверждает его публикацию или device acceptance.
+Состояние на 08.10.2026: CI `37803973117` PASS; PR83 merged в production `52edca0818dc3169cbcb0b7d41ba0ecb0dd886dd`. R7 реально установлен существующим signed schema3/fixed16 helper: все 16 installed payload hashes совпали, обе службы активны, public HTML/CSS/JS вернули 200 с точными bytes. Этот docs-only refresh не меняет payload или подпись.
 
-Installed/browser acceptance: до деплоя NOTRUN. Проверки реального телефона/WebView и Nexus launcher NOTRUN. Source/browser proof не является физической приёмкой.
+Installed anonymous login geometry 320/390/1280 PASS. Authenticated phone/WebView acceptance и Nexus launcher NOT RUN; source/browser proof не является физической приемкой. Configured/persisted model/effort snapshot не доказывает active-turn настройки. Polling сохранен, SSE - следующий этап.
+
+Android 0.1.5/code6 опубликован: публичные feed и страница загрузки HTTP200, APK2162437 байт с SHA-256 `0c0b45681ea70d8b50df5f7b3123ecc9d3ebd03ed6c0a6527cce71fe14354e5b`. Это позднейшая проверка канала 08.10; приёмка на устройстве и обновление N→N+1 ещё NOTRUN.
 
 Не блокирующие улучшения SOURCE01/03 заведены в клиентском backlog. SOURCE08 начальная HTML подпись заменяется JS; выравнивание относится к отдельной косметической доработке. SOURCE07 отметка стадии в спецификации исправлена docs-only после delta.
 
