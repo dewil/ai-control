@@ -128,7 +128,7 @@ R7 makes the layout more compact and collapses projects after a confirmed sessio
 
 As of 8 October 2026, r7 is installed and verified; evidence is recorded in the [release report](./docs/dev/2026-10-08-web-ux-build-review.md). Authenticated phone acceptance remains pending. Multiuser support, the remote NATS manager and a web limits UI are not declared ready.
 
-The Android client retains its login form when switching to KeePass and back while the login screen remains alive; a dedicated device test is still pending. As of 8 October 2026, the [APK channel](https://llm-web.dewil.ru:18443/download/android/) publishes 0.1.3/code4. Signed 0.1.5/code6 is ready for publication by an administrator but has not been published.
+The Android client retains its login form when switching to KeePass and back while the login screen remains alive; a dedicated device test is still pending. As of 8 October 2026, the [APK channel](https://llm-web.dewil.ru:18443/download/android/) publishes signed 0.1.5/code6. The feed, download page and APK checksum are verified; device acceptance remains pending.
 
 ---
 

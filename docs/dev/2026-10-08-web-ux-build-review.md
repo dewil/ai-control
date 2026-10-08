@@ -12,7 +12,7 @@ Actual reviewer — Anthropic Sonnet5.5 medium, OpenRouter pinned Anthropic/no f
 
 Installed anonymous login geometry 320/390/1280 PASS. Authenticated phone/WebView acceptance и Nexus launcher NOT RUN; source/browser proof не является физической приемкой. Configured/persisted model/effort snapshot не доказывает active-turn настройки. Polling сохранен, SSE - следующий этап.
 
-Android 0.1.5/code6 подписан и готов к отдельной root-публикации, но НЕ опубликован. Актуальный канал пока 0.1.3/code4. Публикация APK и device acceptance учитываются отдельно от установленного web r7.
+Android 0.1.5/code6 опубликован: публичные feed и страница загрузки HTTP200, APK2162437 байт с SHA-256 `0c0b45681ea70d8b50df5f7b3123ecc9d3ebd03ed6c0a6527cce71fe14354e5b`. Это позднейшая проверка канала 08.10; приёмка на устройстве и обновление N→N+1 ещё NOTRUN.
 
 Не блокирующие улучшения SOURCE01/03 заведены в клиентском backlog. SOURCE08 начальная HTML подпись заменяется JS; выравнивание относится к отдельной косметической доработке. SOURCE07 отметка стадии в спецификации исправлена docs-only после delta.
 
