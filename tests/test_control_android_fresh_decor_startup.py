@@ -1,11 +1,11 @@
-"""Incident regression: actual MainActivity with lazy PhoneWindow decor, no device claim."""
+"""INV-AND-19 incident regression: actual MainActivity with lazy PhoneWindow decor, no device claim."""
 from pathlib import Path
 import os, subprocess, tempfile, unittest
 ROOT=Path(os.environ.get('APP_CONTRACT_ROOT',Path(__file__).resolve().parents[1]))
 HERE=Path(__file__).resolve().parent/'android_login_host'
 JDK=Path('/home/dwl/android-tools/jdk-17.0.20.1+1')
 class FreshDecorStartup(unittest.TestCase):
-    def test_actual_fresh_activity_api26_27_30_36(self):
+    def test_actual_fresh_activity_api26_27_30_35_36(self):
         dependencies=Path(os.environ.get('ANDROID_HOST_DEPENDENCIES_ROOT','/data/git/ai-control-android-ux-package'))
         jar=dependencies/'android/policy/build/libs/policy.jar'
         self.assertTrue(jar.is_file(),'Existing policy fixture jar required; no downloads')
@@ -28,7 +28,7 @@ class FreshDecorStartup(unittest.TestCase):
             sources=[p for p in HERE.glob('stubs/**/*.java') if p.name!='Window.java']+list(temp.glob('*.java'))
             subprocess.run([str(JDK/'bin/javac'),'-d',directory,'-cp',cp,*map(str,sources)],check=True)
             failures=[]
-            for sdk in [26,27,30,36]:
+            for sdk in [26,27,30,35,36]:
                 result=subprocess.run([str(JDK/'bin/java'),'-Dfixture.sdk='+str(sdk),'-cp',directory+os.pathsep+cp,'ru.dewil.aicontrol.StartupProbe'],capture_output=True,text=True)
                 if result.returncode:failures.append(f'SDK{sdk}: '+result.stderr.strip())
             self.assertEqual(failures,[], '\n'.join(failures))
