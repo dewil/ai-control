@@ -19,7 +19,7 @@
 - INV-DEVBUS-06: DTO allowlist, bounded reads/memory/deadlines. Credentials
   server-only; секреты и произвольный payload не попадают в API, DOM или logs.
 - INV-DEVBUS-07: обзор доступен только действующему owner; project users не
-  получают доступ. Отдельный process observer, вкладки читают одну проекцию.
+  получают доступ. Один observer в отдельном asyncio loopthread единственного ownerbroker; вкладки читают одну проекцию черезsafeDTO. Failure observer не завершаетbroker (amendment08.10).
 - INV-DEVBUS-08: ошибки transport/auth/replay явны, generic. Reconnect с
   retained replay без повторного выполнения/submit; stop очищает consumer.
 - INV-DEVBUS-09: компонент компактный и доступный, textContent для внешнего

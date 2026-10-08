@@ -18,7 +18,9 @@ INV-WSESS-42..46 уже описывают поставленные partial UX, 
 - Latest history дополнительно содержит `session_settings = {schema:1, scope:'configured_or_persisted', source:'thread_read', model:'gpt-6.1-sol', effort:'high', age_ms:0, expires_in_ms:15000}`. Snapshot мерить до expiry.
 - GET `/api/session-models?...`: `{schema:1, vendor:'codex', context_kind:'legacy_unbound', selection_support:'available', catalog_id:'a' repeated 64, expires_in_ms:60000, rows:[{id:'model-alpha',label:'Model Alpha',efforts:['high','medium']}]}`. Каталог loaded, не loading/stale/error. Полученные из public fixture API запросы остаются существующими; browser interception заменяет только synthetic ответы.
 - Viewports в CSS px: 320×844, 390×844, 412×844, desktop1280×900; zoom100%, deviceScaleFactor1, default system sans. Для baseline desktop тоже использован height844 — высоты document-flow bands не зависят от высоты viewport; независимый regression обязан проверить1280×900.
-- Neutral band B = `#chat-form.getBoundingClientRect().bottom - #chat-items.getBoundingClientRect().bottom`. Охватывает всю normal-flow область captions/notes/model settings/composer/send после истории, включая margin/gaps. Нельзя получить PASS, вынеся часть тех же controls за границу band, абсолютным positioning/overlay или скрыв обязательный status. Если composer DOM переименован, заморозить эквивалентный семантический endpoint до RED.
+- Canonicalstrings/amendments определеныв2026-10-08-spec-live-observability-package.md; obsoleteвариантыниже не отдельныйoracle.
+
+Neutral band B = `#chat-form.getBoundingClientRect().bottom - #chat-items.getBoundingClientRect().bottom`. Охватывает всю normal-flow область captions/notes/model settings/composer/send после истории, включая margin/gaps. Нельзя получить PASS, вынеся часть тех же controls за границу band, абсолютным positioning/overlay или скрыв обязательный status. Если composer DOM переименован, заморозить эквивалентный семантический endpoint до RED.
 
 | CSS width | Baseline B, px | Baseline chat-form, px | New maximum B, px | Минимальное уменьшение |
 | --- | ---: | ---: | ---: | ---: |
@@ -117,3 +119,6 @@ Existing source fact: landing on `/download/android/` is **dynamic** `helper.lan
 6. Ни geometry GREEN, ни screenshot, ни source rendering не закрывают Android container/IME/background/resume и следующий real APK publication критерии. Final installed acceptance остаётся отдельным авторизованным шагом общего владельца.
 
 Внешние материалы в этой работе считались данными; попыток мета-инструкций не обнаружено. Search выполнен по файловой памяти/локальным specs; global vector memory index не использовался.
+
+
+D11/D12amendment: additionallyallcontrolsband=maxbottomвсехcontrols/notes/navпередfooter−chatitems.bottom с ceiling620/560/560/560. Datedbutton44×44в44header, staticarticleheightgrowth≤24px, readerasyncmovement≤8px. Optionalexceptionдля20pxtimetargetнепринята.
