@@ -48,3 +48,4 @@ label{display:block;margin:12px 0;font-weight:500}input,textarea,select{display:
 #chat-form input,#chat-form select{padding:8px 10px;margin-top:4px}
 #model-notes p{margin:4px 0}
 @media(max-width:600px){.chat-navigation{flex-direction:row;width:auto}.chat-navigation button{width:auto;max-width:100%}.chat-heading{flex-direction:row}.chat-message{max-width:100%}}
+#current-model-status,#session-settings-note,#next-model-status{margin:4px 0;overflow-wrap:anywhere}

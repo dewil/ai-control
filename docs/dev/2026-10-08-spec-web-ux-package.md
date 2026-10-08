@@ -1,8 +1,8 @@
 # CONTROL-WEB-UX-PACKAGE — компактный и понятный чат
 
 Статус: INV42/43/45/46 реализованы в source checkpoint
-`6e495da2c9753231da43afdb5c8fa15b02456217`; INV44 — docs-only contract перед
-отдельным независимым RED/GO. SOURCE review/CI/installed acceptance пакета ещё впереди. Владелец —
+`6e495da2c9753231da43afdb5c8fa15b02456217`; INV44 реализован после accepted218a05e
+и отдельного независимого RED/GO. SOURCE review/CI/installed acceptance пакета ещё впереди. Владелец —
 `CONTROL-WEB-UX-PACKAGE` в клиентском `docs/backlog/`; дети —
 `CONTROL-WEB-COMPACT-UX`, `CONTROL-WEB-CURRENT-MODEL` и только immediate-send
 часть `CONTROL-WEB-LIVE-STREAM`. Разрешение пользователя на пакет — 08.10.2026.
@@ -265,7 +265,13 @@ Browser принимает correlation только user-role + canonical UUID; 
 
 INV42/43/45/46: independent RED→GREEN и source checkpoint6e495da зафиксированы.
 38 focused tests PASS/0errors/0skips (201.221s), backend regressions91PASS.
-INV44 пока docs-only перед independent RED/GO. SOURCE review/CI/installed acceptance
+INV44 implemented после independent RED/GO; проверяет existing receipt refusals,
+metadata generation/freshness и browser request/auth fences. Финальный MODEL gate:
+20 unique tests PASS/0errors/0skips (10.451s), включая independent module8/browser9
+и supplemental author3. Затронутые backend75 PASS (4.765s), legacy model-controls/
+rename browser16 PASS (20.472s), geometry/width2 PASS (5.224s). Эти наборы содержат
+пересечения с предыдущими validation checkpoints и не суммируются с ними.
+SOURCE review/CI/installed acceptance
 полного пакета ещё НЕ выполнены. Independent writer должен реально
 прогнать baseline и показать assertions по новым поведению/geometry, не только
 missing symbol/import. Fixtures исключительно synthetic root/project/thread/catalog/

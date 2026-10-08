@@ -134,13 +134,34 @@ def configured_create_result(result, project, operation_id=None):
     return dict(operation_id=operation_id, status='accepted', session=dict(session, title=title))
 
 
+def valid_session_setting(value):
+    return (type(value) is str and 0 < len(value) <= 256
+            and not any(ord(char) < 32 or 127 <= ord(char) <= 159
+                        or 0xd800 <= ord(char) <= 0xdfff for char in value)
+            and SECRET_RE.search(value) is None)
+
+
+def session_settings_result(value):
+    fields = {'schema', 'source', 'scope', 'model', 'effort', 'age_ms', 'expires_in_ms'}
+    if (type(value) is not dict or set(value) != fields
+            or type(value['schema']) is not int or value['schema'] != 1
+            or value['source'] != 'thread_read' or value['scope'] != 'configured_or_persisted'
+            or any(value[key] is not None and not valid_session_setting(value[key])
+                   for key in ('model', 'effort'))
+            or type(value['age_ms']) is not int or not 0 <= value['age_ms'] < 15000
+            or type(value['expires_in_ms']) is not int
+            or value['expires_in_ms'] != 15000 - value['age_ms']):
+        return None
+    return dict(value)
+
+
 def history_result(result):
     """Validate the honest unavailable variant, leaving ordinary history unchanged."""
     if type(result) is not dict:
         return {'error': 'unavailable'}
     if 'history_state' not in result:
         return result
-    if (set(result) not in ({'history_state', 'reason', 'recent_sends'},
+    if (set(result) - {'session_settings'} not in ({'history_state', 'reason', 'recent_sends'},
                            {'history_state', 'reason', 'recent_sends', 'needs_native_attention'})
             or result['history_state'] != 'unavailable' or result['reason'] != 'unavailable'
             or 'needs_native_attention' in result and result['needs_native_attention'] is not True
@@ -157,6 +178,9 @@ def history_result(result):
             return {'error': 'unavailable'}
         recent.append(dict(row))
     safe = dict(history_state='unavailable', reason='unavailable', recent_sends=recent)
+    settings = session_settings_result(result.get('session_settings'))
+    if settings is not None:
+        safe['session_settings'] = settings
     if result.get('needs_native_attention') is True:
         safe['needs_native_attention'] = True
     try:

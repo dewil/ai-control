@@ -31,6 +31,9 @@
       <div id="receipt-list" class="receipt-list"></div>
       <p id="model-status" class="meta" role="status" aria-live="polite"></p>
       <div id="model-notes" class="meta" hidden><p>Выбор сохраняется для следующих сообщений; перед отправкой можно изменить</p><p>Уже начатая работа сохраняет свои настройки; выбор действует при следующем запуске</p></div>
+      <p id="current-model-status" class="meta" aria-describedby="session-settings-note">Сессия: неизвестно · уровень неизвестен</p>
+      <p id="session-settings-note" class="meta">Настройки загруженной сессии или последние сохранённые; активный ответ может использовать другие настройки.</p>
+      <p id="next-model-status" class="meta">Следующая отправка: настройки сессии</p>
       <form id="chat-form">
         <div class="model-controls"><label for="chat-model">Модель<select id="chat-model"><option value="">Наследовать текущую</option></select></label><label for="chat-effort">Уровень размышления<select id="chat-effort"><option value="">Выберите уровень размышления</option></select></label></div>
         <button id="models-refresh" type="button" class="secondary">Обновить список моделей</button>

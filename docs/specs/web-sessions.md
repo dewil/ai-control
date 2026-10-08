@@ -151,8 +151,9 @@ Per-item time amendment: ../dev/2026-10-06-spec-web-item-message-times.md.
 - INV-WSESS-44: factual session configured-or-persisted model/effort из existing
   scoped thread/read metadata, отдельно от unknown active-turn telemetry и requested
   next selection. Optional latest-history session_settings с context/generation fences
-  и15s sampled freshness; Older/catalog/ACK/default не authoritative snapshot. Docs
-  приняты перед отдельным independent RED/GO; runtime INV44 пока отсутствует.
+  и15s sampled freshness; Older/catalog/ACK/default не authoritative snapshot.
+  Реализация после accepted docs и отдельного independent RED/GO сохраняет
+  existing receipt-authority refusals и не добавляет native requests.
 - INV-WSESS-45: немедленная memory-only outgoing entry exact send UUID/status;
   lagging history не удаляет unmatched entry, no unknown resend, scope fences,
   canonical merge только по producer correlation, не text/time/turn guess.
@@ -161,5 +162,7 @@ Per-item time amendment: ../dev/2026-10-06-spec-web-item-message-times.md.
   получает correlation, существующие RPC/96KiB/redaction/budgets не расширяются.
 
 INV42/43/45/46 source checkpoint6e495da: independent RED→GREEN, backend91 и focused38
-PASS; full SOURCE/CI/installed acceptance пока отсутствуют. INV44 updated docs-only
-contract опирается на proven session-configured producer; implementation ждёт RED/GO.
+PASS; full SOURCE/CI/installed acceptance пока отсутствуют. INV44 implemented contract
+опирается на proven session-configured producer, не active-turn telemetry.
+Финальный MODEL gate20 unique PASS; затронутые backend75, model/rename browser16
+и geometry/width2 PASS. Full SOURCE/CI/installed acceptance остаются отдельными gates.
