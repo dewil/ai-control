@@ -142,3 +142,8 @@ B06 handoff is setup only; accepted start creates background task without awaiti
 ### RED ownership correction after actual inventory
 
 Actual frozen LIVE owner suite contains LIVE-only checks, not a combined devbus+live+two legacy workers case. One independent BUS writer owns new `tests/test_control_web_live_bus_shared_gate_blind.py`: actual socket combined reservations≤2/4, two remaining legacy slots, no release before actual IO completion, bus malformed/unsupported and cancellation interactions. Existing frozen LIVE suite stays unchanged; this fills missing evidence rather than duplicating existing coverage. This wording supersedes earlier live-test-seams ownership table only for the combined gate. No runtime budget or authority change.
+
+
+### Public test seam spelling
+
+`bin/_control_web_broker.py::DEVBUS_CONFIG_PATH` is Path with the fixed production literal; pointer comparison uses str(DEVBUS_CONFIG_PATH). Tests patch this same constant, never a second path namespace. `DevbusFrontend` lives in existing `bin/_control_web.py`. For actual CLI signal tests, a synthetic test launcher may import the public broker module, wrap DevbusRuntime construction with its documented injected factories/probe, then run the real CLI through runpy. No production env override, new CLI option, source rewriting or service mutation. Actual SIGTERM scheduling/worker drain remain exercised by the real CLI.
