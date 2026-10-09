@@ -1,4 +1,5 @@
 """Author regressions for independently reported DEPLOY22 gate failure windows."""
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -121,7 +122,9 @@ class RollbackStatusAuthor(s.BootstrapFixture):
             with self.assertRaises(ProcessDeath):
                 self.invoke()
         self.assertTrue(self.paths['BOOTSTRAP_PENDING'].exists())
+        self.assertEqual(json.loads(self.paths['BOOTSTRAP_PENDING'].read_bytes())['stage'], 'rollback')
         self.assertFalse(self.receipt.exists())
+        self.trace.clear()
         wrapper = s.module_bytes(packet['wrapper.py'], 'deploy22_author_wrapper_rollback')
         # Execute actual verified bootstrap code. The fixture's source-final paths
         # and runner are synthetic bindings, applied only to the loaded test module.
@@ -155,6 +158,7 @@ class RollbackStatusAuthor(s.BootstrapFixture):
             status = wrapper.run_packet(packet['manifest.json'], packet['bootstrap.py'])
         self.assertEqual(results, [1])
         self.assertEqual(status, 1)
+        self.assertFalse(any(row['argv'][0] == '/usr/bin/setpriv' for row in self.trace))
         self.assertEqual(self.state.read_bytes(), self.initial_state)
         self.assertEqual(self.helper.read_bytes(), s.pinned_source())
         self.assertEqual(self.unit.read_bytes(), self.before_unit)
