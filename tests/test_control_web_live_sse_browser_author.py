@@ -104,7 +104,8 @@ class LiveBrowserAuthor(unittest.TestCase):
         self.transport.json_status=403
         self.page.clock.fast_forward(5500)
         self.until(lambda:len(self.requests('/api/session-live-snapshot'))>count)
-        expect(self.page.get_by_text('Войдите снова для обновления переписки.',exact=True)).to_be_visible()
+        # BUS integration shares the owner403 hint; keep exact copy and terminal timer assertions.
+        expect(self.page.get_by_text('Войдите снова для обновления данных.',exact=True)).to_be_visible()
         count=len(self.requests('/api/session-live-snapshot'))
         self.page.clock.fast_forward(120000); self.page.wait_for_timeout(100)
         self.assertEqual(len(self.requests('/api/session-events')),streams+1)

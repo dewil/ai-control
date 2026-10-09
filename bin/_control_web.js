@@ -137,8 +137,8 @@ function renderMarkdown(text){
 function notice(text){$('notice').textContent=text;}
 let androidResumeGeneration=0;
 function androidAuth(){return window.AndroidAuth&&typeof window.AndroidAuth.requestAuth==='function'?window.AndroidAuth:null;}
-function requestNativeAuth(){const native=androidAuth();stopPolling();stopDevbusView();devbusAdmitted=false;androidResumeGeneration++;if(native&&liveAndroidAuthGeneration!==chatAuthGeneration){liveAndroidAuthGeneration=chatAuthGeneration;native.requestAuth();}return Boolean(native);}
-function ownerForbidden(){requestNativeAuth();notice('Войдите снова для обновления данных.');}
+function requestNativeAuth(notify=true){const native=androidAuth();stopPolling();stopDevbusView();devbusAdmitted=false;androidResumeGeneration++;if(native&&notify)native.requestAuth();return Boolean(native);}
+function ownerForbidden(){const notify=liveAndroidAuthGeneration!==chatAuthGeneration;liveAndroidAuthGeneration=chatAuthGeneration;requestNativeAuth(notify);notice('Войдите снова для обновления данных.');}
 function authExpired(){if(!requestNativeAuth())signedOut();}
 async function api(path,body,signal,isCurrent=()=>true){let response;try{response=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',signal,headers:body===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});}catch(_){throw new Error(messages.unavailable);}let data;try{data=await response.json();}catch(_){throw new Error(messages.unavailable);}if(signal&&signal.aborted)throw new Error(messages.unavailable);if(!response.ok){if(response.status===401&&path!=='/api/login'&&isCurrent())authExpired();const error=new Error(messages[data.error]||messages.unavailable);error.code=data.error;error.status=response.status;error.data=data;throw error;}return data;}
 function signedOut(){stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();if(acceptedStatusTimer!==null){clearTimeout(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
@@ -210,6 +210,7 @@ function syncDevbusView(){
   }});
 }
 async function admitDevbusView(){
+  if(!csrf||$('workspace').hidden||currentTab!=='devbus'||document.visibilityState!=='visible')return;
   const generation=devbusGeneration,auth=chatAuthGeneration;
   try{const data=await api('/api/session',undefined,undefined,()=>generation===devbusGeneration&&auth===chatAuthGeneration);
     if(generation!==devbusGeneration||auth!==chatAuthGeneration||currentTab!=='devbus'||document.visibilityState!=='visible')return;
@@ -1183,7 +1184,7 @@ window.addEventListener('scroll',noteHistoryScrollPosition,{passive:true});
 
 async function restoreSession(){if(busy)return;stopDevbusView();devbusAdmitted=false;busy=true;const retry=$('session-retry');retry.hidden=true;retry.disabled=true;$('session-loading').hidden=false;$('login').hidden=true;$('workspace').hidden=true;$('logout').hidden=true;notice('Восстанавливаем сессию…');try{const data=await api('/api/session');if(typeof data.csrf!=='string'||!data.csrf)throw new Error(messages.unavailable);csrf=data.csrf;devbusAdmitted=true;devbusTerminal=false;$('session-loading').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;notice('');const link=parseDeepLink();if(link){showTab('sessions',false);await loadProjects();}else{showTab('tasks',false);updateUrl();await refresh();}}catch(err){if(err.status===401){if(!androidAuth())signedOut();notice('');}else{notice(err.message+' Повторите восстановление сессии.');retry.hidden=false;}}finally{busy=false;retry.disabled=false;}}
 window.aiControlAndroidResume=async function(){
-  stopPolling();stopDevbusView();devbusAdmitted=false;
+  stopDevbusView();devbusAdmitted=false;
   const generation=++androidResumeGeneration;
   try{const data=await api('/api/session',undefined,undefined,()=>generation===androidResumeGeneration);
     if(generation!==androidResumeGeneration||typeof data.csrf!=='string'||!data.csrf)return false;

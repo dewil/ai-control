@@ -195,6 +195,60 @@ class FrontendBrowserAuthor(s.HttpCase):
         expect(self.page.locator('#devbus-root')).to_be_empty()
         self.assertEqual(self.page.locator('#chat-draft').input_value(), 'Synthetic retained native auth draft')
 
+    def test_native_401_after_owner403_resume_requests_auth_again(self):
+        self.open(android=True); self.enter_bus()
+        self.fixture.sessions[self.fixture.cookie.split('=', 1)[1]]['principal'] = 'project'
+        self.until(lambda: self.page.evaluate('syntheticAuth.length') == 1, timeout=4)
+        expect(self.page.locator('#devbus-root')).to_be_empty()
+        self.fixture.sessions.clear()
+        with self.page.expect_response(lambda response: response.url.endswith('/api/session') and response.status == 401):
+            self.assertFalse(self.page.evaluate('window.aiControlAndroidResume()'))
+        self.assertEqual(self.page.evaluate('syntheticAuth'), [[], []])
+        expect(self.page.locator('#devbus-root')).to_be_empty()
+
+    def resume_failure_preserves_live(self, network):
+        self.open(android=True)
+        self.page.get_by_role('tab', name='Сессии', exact=True).click()
+        choose_project(self.page, 'demo')
+        self.page.get_by_role('button', name='LIVE synthetic A', exact=False).click()
+        expect(self.page.get_by_text('LIVE original synthetic text', exact=True)).to_have_count(1)
+        self.until(lambda: any('/api/session-events?' in row.url for row in self.requests))
+        expect(self.page.locator('#current-model-status')).to_contain_text('producer-A')
+        self.page.locator('#chat-draft').fill('Synthetic draft survives failed resume')
+        def fail(route):
+            if network:
+                route.abort('failed')
+            else:
+                route.fulfill(status=503, content_type='application/json', body='{"error":"unavailable"}')
+        self.page.route('**/api/session', fail)
+        streams = sum('/api/session-events?' in row.url for row in self.requests)
+        self.assertFalse(self.page.evaluate('window.aiControlAndroidResume()'))
+        expect(self.page.locator('#current-model-status')).to_contain_text('producer-A')
+        marker = 'Actual LIVE after failed native resume ' + ('network' if network else '503')
+        self.backend.value = s.live.history(marker)
+        expect(self.page.get_by_text(marker, exact=True)).to_have_count(1, timeout=4000)
+        self.assertEqual(sum('/api/session-events?' in row.url for row in self.requests), streams)
+        self.assertEqual(self.page.locator('#chat-draft').input_value(), 'Synthetic draft survives failed resume')
+        self.assertEqual(self.page.evaluate('syntheticAuth'), [])
+
+    def test_native_resume_503_keeps_existing_live_and_lease(self):
+        self.resume_failure_preserves_live(network=False)
+
+    def test_native_resume_network_error_keeps_existing_live_and_lease(self):
+        self.resume_failure_preserves_live(network=True)
+
+    def test_signed_out_visibility_does_not_start_BUS_admission(self):
+        self.open(); self.enter_bus()
+        self.page.get_by_role('button', name='Выйти', exact=True).click()
+        expect(self.page.locator('#login')).to_be_visible()
+        before = len(self.requests)
+        self.visibility('hidden'); self.visibility('visible')
+        # A normal component interval must elapse without a new admission/poll.
+        self.page.wait_for_timeout(2200)
+        self.assertFalse(any('/api/session' in row.url or '/api/devbus/' in row.url
+                             for row in self.requests[before:]))
+        expect(self.page.locator('#devbus-root')).to_be_empty()
+
     def test_native_resume_on_BUS_avoids_retained_chat_and_logout_stops_before_bridge(self):
         self.open(android=True)
         self.page.get_by_role('tab', name='Сессии', exact=True).click()
