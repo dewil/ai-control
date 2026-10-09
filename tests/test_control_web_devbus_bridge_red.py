@@ -134,9 +134,15 @@ class BusWireBlind(s.SocketCase):
             except Exception as error: errors.append(type(error).__name__)
         worker=threading.Thread(target=run,daemon=True);worker.start()
         try:
-            deadline=time.monotonic()+2
-            while not Path(path).exists() and time.monotonic()<deadline:time.sleep(.01)
-            self.assertTrue(Path(path).exists());self.assertEqual(errors,[])
+            # bind creates the pathname before listen; this no-request probe sends no private payload.
+            deadline=time.monotonic()+2;ready=False
+            while not errors and time.monotonic()<deadline:
+                try:
+                    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as probe:
+                        probe.settimeout(.1);probe.connect(path)
+                    ready=True;break
+                except (FileNotFoundError,ConnectionRefusedError):time.sleep(.01)
+            self.assertTrue(ready,'Denied-peer socket must be listening before the one real request');self.assertEqual(errors,[])
             with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as peer:
                 peer.settimeout(1);peer.connect(path)
                 try:
