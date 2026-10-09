@@ -19,10 +19,10 @@ public final class NativeDarkProbe {
   }
  }
  public static void main(String[] args)throws Exception{
-  MainActivity activity=new MainActivity();try{activity.onCreate(null);activity.onStart();checkScreen(activity,"login");
+  MainActivity activity=new MainActivity();try{activity.onCreate(null);activity.onStart();LoginLifecycleProbe.callback(activity,"onResume");checkScreen(activity,"login");
    Method wait=MainActivity.class.getDeclaredMethod("showWait",String.class);wait.setAccessible(true);wait.invoke(activity,"Synthetic wait");checkScreen(activity,"wait");
    Method failure=MainActivity.class.getDeclaredMethod("showFailure",String.class,boolean.class);failure.setAccessible(true);failure.invoke(activity,"Synthetic error",true);checkScreen(activity,"error");
    System.out.println("PASS dark native login/wait/error");
-  }finally{activity.onStop();activity.onDestroy();}
+  }finally{LoginLifecycleProbe.callback(activity,"onPause");activity.onStop();activity.onDestroy();}
  }
 }

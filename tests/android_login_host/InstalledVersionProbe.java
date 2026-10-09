@@ -20,11 +20,11 @@ public final class InstalledVersionProbe {
 
 
    activity.getApplication().getUpdateRepository().available=new ru.dewil.aicontrol.updater.UpdateInfo("0.1.5");
-   activity.onStart();android.os.Handler.runPosted();expect(activity,expected);
+   activity.onStart();LoginLifecycleProbe.callback(activity,"onResume");android.os.Handler.runPosted();expect(activity,expected);
    LoginLifecycleProbe.check(PackageManager.queriedPackage.equals(activity.getPackageName()),"Metadata lookup is not own installed package");
    LoginLifecycleProbe.check(activity.getWindow().getDecorView().getBackgroundColor()==0xff141414,"Updates native screen remains light");
    boolean controls=false;for(View view:LoginLifecycleProbe.flatten(activity.getWindow().getDecorView()))if(view instanceof TextView && "Проверить обновления".contentEquals(((TextView)view).getText()))controls=view.isEnabled();LoginLifecycleProbe.check(controls,"Package metadata failure disabled independent updater controls");
-   activity.onStop();
+   LoginLifecycleProbe.callback(activity,"onPause");activity.onStop();
    if(args[0].equals("reopen")){PackageInfo newer=new PackageInfo();newer.versionName="0.1.6";newer.versionCode=7;newer.setLongVersionCode(7);PackageManager.fixture=newer;UpdatesActivity fresh=new UpdatesActivity();try{fresh.onCreate(null);expect(fresh,"Установлена: 0.1.6 (сборка 7)");}finally{fresh.onDestroy();}}
    System.out.println("PASS installed label "+args[0]);
   }finally{activity.onDestroy();}

@@ -34,8 +34,8 @@ public final class LoginLifecycleProbe {
     static void check(boolean condition, String message) {
         if (!condition) throw new AssertionError(message);
     }
-    static void callback(MainActivity activity, String name) throws Exception {
-        Class<?> type = MainActivity.class;
+    static void callback(androidx.activity.ComponentActivity activity, String name) throws Exception {
+        Class<?> type = activity.getClass();
         while (type != null) {
             try {
                 java.lang.reflect.Method method = type.getDeclaredMethod(name);

@@ -47,6 +47,7 @@ class AndroidBackgroundHostBlind(unittest.TestCase):
     def test_native_sets_v2_user_agent_marker(self):self.case('ua')
     def test_unsubmitted_login_focus_selection_retained(self):self.case('login')
     def test_exact_bootstrap_allowlist(self):self.case('bootstrap')
+    def test_unfinished_bootstrap_stops_without_JS_and_recovers_on_return(self):self.case('bootstrap-stop')
     def test_valid_ACK_cancels_independent_deadline(self):self.case('ack')
     def test_wrong_serial_ACK_is_not_confirmation(self):self.case('wrongack')
     def test_late_ACK_does_not_pause_twice(self):self.case('lateack')

@@ -9,17 +9,29 @@ public final class ReviewConditionsProbe {
  static void check(boolean value,String message){BackgroundProbe.check(value,message);}
  static int pauses(){return BackgroundProbe.count("pauseTimers");}
  static void run(String scenario)throws Exception {
-  MainActivity activity=BackgroundProbe.login();WebView page=BackgroundProbe.page();
-  WebView.events.clear();page.evals.clear();BackgroundProbe.pause(activity);
+  MainActivity activity=BackgroundProbe.login(!scenario.equals("unconfirmed-return"));WebView page=BackgroundProbe.page();
+  WebView.events.clear();page.evals.clear();
   if(scenario.equals("unconfirmed-return")){
-   Handler.advance(500);check(pauses()==1,"INV-BATT-05: missing callback must establish timer pause at blocktime+500ms");
+   page.client.onPageFinished(page,page.url);check(page.evals.size()==1,"Foreground preflight eval prerequisite missing");
+   Handler.advance(500);check(pauses()==1,"INV-BATT-05: hung foreground preflight must establish bounded timer pause");
    int admissions=AuthHttp.calls,evaluations=page.evals.size(),loads=BackgroundProbe.count("load");
-   activity.onStop();activity.onStart();BackgroundProbe.lifecycle(activity,"onResume");Handler.runPosted();Handler.advance(65000);
+   BackgroundProbe.pause(activity);activity.onStop();activity.onStart();BackgroundProbe.lifecycle(activity,"onResume");Handler.runPosted();Handler.advance(65000);
    Thread.sleep(25);Handler.runPosted();
    check(AuthHttp.calls==admissions,"blocked_unconfirmed onResume started forbidden native admission");
    check(page.evals.size()==evaluations,"blocked_unconfirmed onResume started forbidden production reprobe");
    check(BackgroundProbe.count("load")==loads&&!page.destroyed,"blocked_unconfirmed return reloaded/destroyed retained page");
    check(page.getSettings().blocked,"blocked_unconfirmed return reopened native network gate");return;
+  }
+  BackgroundProbe.pause(activity);
+  if(scenario.equals("background-timeout-recovery")){
+   Handler.advance(500);check(pauses()==1,"Ordinary background timeout did not pause native timers");
+   int admissions=AuthHttp.calls,evaluations=page.evals.size();activity.onStop();activity.onStart();BackgroundProbe.lifecycle(activity,"onResume");
+   long until=System.nanoTime()+1_000_000_000L;
+   while((AuthHttp.calls==admissions||page.evals.size()==evaluations)&&System.nanoTime()<until){Handler.runPosted();Thread.sleep(2);}Handler.runPosted();
+   check(AuthHttp.calls>admissions,"Ordinary SUSPENDED_UNCONFIRMED was incorrectly latched terminal on foreground return");
+   check(page.evals.size()>evaluations,"Ordinary background timeout did not initiate fresh foreground preflight");
+   String script=BackgroundProbe.latest(page).script;check(script.contains("aiControlAndroidLifecycleProtocol")&&script.contains("aiControlAndroidSuspend"),"Recovery bypassed same-eval protocol+preflight");
+   check(page.getSettings().blocked&&!page.destroyed&&WebView.instances.size()==1,"Background timeout recovery unblocked or replaced retained page before preflight ACK");return;
   }
   check(page.evals.size()==1,"INV-BATT-01: one suspend command required before callback-fence scenario");
   WebView.Eval pending=page.evals.get(0);long serial=BackgroundProbe.serial(pending);

@@ -31,7 +31,7 @@ public final class CompactUpdatesProbe {
     public static void main(String[] args) throws Exception {
         MainActivity activity=new MainActivity();
         try {
-            activity.onCreate(null);activity.onStart();
+            activity.onCreate(null);activity.onStart();LoginLifecycleProbe.callback(activity,"onResume");
             call(activity,"ensureWeb");call(activity,"hideOverlay");
             WebView web=page(activity);TextView updates=update(activity);
             FrameLayout.LayoutParams viewport=(FrameLayout.LayoutParams)web.getLayoutParams();
@@ -72,6 +72,6 @@ public final class CompactUpdatesProbe {
                     check(!(view instanceof WebView) && view!=updates,"destroyPage retained web/control");
             }
             System.out.println("PASS compact updates "+args[0]);
-        } finally {activity.onStop();activity.onDestroy();}
+        } finally {LoginLifecycleProbe.callback(activity,"onPause");activity.onStop();activity.onDestroy();}
     }
 }

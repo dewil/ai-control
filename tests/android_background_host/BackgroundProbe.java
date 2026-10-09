@@ -20,6 +20,22 @@ public final class BackgroundProbe {
   while(WebView.instances.isEmpty()&&System.nanoTime()<deadline){Handler.runPosted();Thread.sleep(2);}
   Handler.runPosted();check(!WebView.instances.isEmpty(),"Synthetic native login did not create WebView");return a;
  }
+ static MainActivity login(boolean loaded)throws Exception{MainActivity activity=login();if(loaded)finishPage(activity);return activity;}
+ static WebView.Eval latest(WebView page){check(!page.evals.isEmpty(),"Expected native lifecycle evaluation");return page.evals.get(page.evals.size()-1);}
+ static String result(org.json.JSONObject value){return org.json.JSONObject.quote(value.toString());}
+ static void completeResume(WebView page,String phase)throws Exception{
+  WebView.Eval command=latest(page);long commandSerial=serial(command);
+  check(command.script.contains("aiControlAndroidResume"),"Loaded fixture expected Resume command");
+  command.callback.onReceiveValue(result(new org.json.JSONObject().put("started",true)));
+  Handler.advance(100);WebView.Eval poll=latest(page);check(poll!=command,"Loaded fixture expected bounded result polling");
+  poll.callback.onReceiveValue(result(new org.json.JSONObject().put("serial",commandSerial).put("phase",phase).put("ok",true)));Handler.runPosted();
+ }
+ static void finishPage(MainActivity activity)throws Exception{
+  WebView page=page();check(page.client!=null,"Loaded fixture requires WebView client");page.client.onPageFinished(page,page.url);
+  WebView.Eval preflight=latest(page);check(preflight.script.contains("aiControlAndroidSuspend"),"Loaded fixture requires structured protocol/preflight");
+  preflight.callback.onReceiveValue(ack(serial(preflight)));completeResume(page,"admit");completeResume(page,"activate");
+  check(page.client.shouldInterceptRequest(page,request("/api/session-send","POST"))==null,"Loaded fixture did not reach native ACTIVE");
+ }
  static WebView page(){return WebView.instances.get(0);}
  static int count(String action){int n=0;for(String s:WebView.events)if(s.equals(page().id+":"+action))n++;return n;}
  static void pause(MainActivity a)throws Exception{lifecycle(a,"onPause");}
@@ -31,7 +47,8 @@ public final class BackgroundProbe {
  static WebResourceRequest request(String path,String method){return new WebResourceRequest(){public android.net.Uri getUrl(){java.net.URI origin=java.net.URI.create(page().url);return android.net.Uri.parse(origin.getScheme()+"://"+origin.getRawAuthority()+path);}public boolean isForMainFrame(){return path.startsWith("/")&&path.length()<2;}public boolean isRedirect(){return false;}public boolean hasGesture(){return false;}public String getMethod(){return method;}public Map<String,String> getRequestHeaders(){return Collections.emptyMap();}};}
  public static void main(String[] args){try{run(args);System.out.println("PASS host "+args[0]);System.exit(0);}catch(Throwable e){e.printStackTrace();System.exit(1);}}
  public static void run(String[] args)throws Exception {
-  MainActivity a=login();WebView p=page();String test=args[0];WebView.events.clear();p.evals.clear();
+  String test=args[0];boolean loaded=!(test.equals("ua")||test.equals("login")||test.equals("bootstrap")||test.equals("bootstrap-stop")||test.startsWith("protocol"));
+  MainActivity a=login(loaded);WebView p=page();WebView.events.clear();p.evals.clear();
   if(test.equals("ua")){check(p.getSettings().getUserAgentString().contains("AiControlLifecycle/2"),"INV-BATT-04: missing UA protocol marker");return;}
   if(test.equals("bootstrap")){
    check(p.client!=null,"Missing native interceptor");
@@ -61,6 +78,16 @@ public final class BackgroundProbe {
    check(target.hasFocus()&&target.getSelectionStart()==2&&target.getSelectionEnd()==7&&"retained synthetic password".contentEquals(target.getText()),"INV-BATT-07: Home replaced login focus/text");return;
   }
   pause(a);
+  if(test.equals("bootstrap-stop")){
+   check(p.getSettings().blocked,"Unfinished BOOTSTRAP onPause did not block network");
+   check(p.evals.isEmpty(),"Unfinished BOOTSTRAP must not execute missing page JS");
+   check(count("stopLoading")==1,"Unfinished shell load was not stopped");
+   Handler.advance(499);check(count("pauseTimers")==0,"Unfinished shell paused before bounded deadline");Handler.advance(1);check(count("pauseTimers")==1,"Unfinished shell missing bounded native pause");
+   int admissions=AuthHttp.calls;a.onStop();a.onStart();lifecycle(a,"onResume");long until=System.nanoTime()+1_000_000_000L;
+   while(AuthHttp.calls==admissions&&System.nanoTime()<until){Handler.runPosted();Thread.sleep(2);}Handler.runPosted();
+   check(AuthHttp.calls>admissions,"Stopped initial shell was falsely latched unsupported instead of foreground admission");
+   check(p.evals.isEmpty()&&!p.destroyed,"Initial shell recovery evaluated JS before page finish or discarded retained WebView");return;
+  }
   if(test.equals("ack")||test.equals("wrongack")||test.equals("lateack")){
    check(p.evals.size()==1,"INV-BATT-01: missing one explicit suspend operation");WebView.Eval pending=p.evals.get(0);long serial=serial(pending);
    if(test.equals("lateack")){Handler.advance(500);check(count("pauseTimers")==1,"Missing deadline pause");pending.callback.onReceiveValue(ack(serial));check(count("pauseTimers")==1,"Late ACK duplicated timer pause");return;}

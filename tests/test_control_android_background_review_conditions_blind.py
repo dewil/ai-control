@@ -18,6 +18,8 @@ class AndroidBackgroundReviewConditionsBlind(unittest.TestCase):
 
     def test_unconfirmed_return_never_reprobes_or_readmits(self):
         self.scenario('unconfirmed-return')
+    def test_ordinary_background_timeout_recovers_through_fresh_preflight(self):
+        self.scenario('background-timeout-recovery')
 
     def test_monotonic_deadline_is_not_reset_or_bypassed_by_late_ACK(self):
         for scenario in ['invalid-at400','late-ack-before-timer']:
