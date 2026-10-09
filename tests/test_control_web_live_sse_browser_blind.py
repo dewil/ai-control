@@ -229,7 +229,9 @@ class NativeTransportFixtureProof(unittest.TestCase):
         deadline=time.monotonic()+3
         while fixture.transport.streams<1 and time.monotonic()<deadline:page.wait_for_timeout(20)
         self.assertEqual(fixture.transport.streams,1)
-        fixture.transport.emit(s.snapshot());page.wait_for_function('window.fixtureEvent!==null')
+        fixture.transport.emit(s.snapshot());deadline=time.monotonic()+30
+        # Poll the observed native event without a page-side eval waiter blocked by strict CSP.
+        while page.evaluate('window.fixtureEvent') is None and time.monotonic()<deadline:page.wait_for_timeout(20)
         self.assertEqual(page.evaluate('window.fixtureEvent'),s.snapshot())
         page.evaluate('window.fixtureES.close()');deadline=time.monotonic()+3
         while fixture.transport.closed<1 and time.monotonic()<deadline:page.wait_for_timeout(20)
