@@ -26,3 +26,9 @@ Terminal test сохранил zero admission/eval/load, retained page и blocke
 Новые RED различают уточнённый контракт и existing implementation, import/compile/fixture prerequisites проходят. Full CI/source-author GREEN остаются root; широкого повторного CI не было. Targeted test names: `test_ordinary_background_timeout_recovers_through_fresh_preflight`, `test_unconfirmed_return_never_reprobes_or_readmits`, `test_unfinished_bootstrap_stops_without_JS_and_recovers_on_return`. Для exact baseline использовано только runtime переназначение `test_control_android_background_host_blind.ROOT` на detached worktree перед unittest compilation, не чтение product source.
 
 Usage unknown/partial; единый ledger пишет root. APK/prod/auth config не затронуты.
+
+## Release metadata test migration
+
+Owner requested exact candidate pair `0.1.7/code8`. `NativePublicContract.test_release_identity_and_sdk_contract` теперь требует именно эту пару вместо historical `0.1.6/code7`; applicationId/minSdk/targetSdk regex assertions сохранены. Signing assertions в остальных тестах не изменены и этим узким прогоном не проверялись. Product metadata этим test-only commit не менялась.
+
+Узкая команда: `APP_CONTRACT_ROOT=/data/git/ai-control-battery-implementation PYTHONPATH=tests python3 -m unittest test_control_web_app_native_contract_blind.NativePublicContract.test_release_identity_and_sdk_contract -v` — **1/1 GREEN**. Тест читает только публичный build.gradle metadata; implementation bodies не читались. Broad CI не повторялся; usage этого шага unknown/partial.
