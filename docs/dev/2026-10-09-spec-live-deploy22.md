@@ -378,3 +378,7 @@ Source `/home/dwl/.ai-control-review/live-observability/deploy-narrow-46fbe15f.m
 | D20 |§4anchoredlstatENOENT only; dangling/matchinghash present refusesprejournal, acceptedonlyinterruptedjournalproof|absence/raceRED|
 
 No DESIGN/authorityPASS or installed readiness claimed. Source/runtime/root/config/owner/ledger unchanged; usageunknown.
+
+## Final clarification for RED after scoped DESIGN closure (09.10)
+
+Root consolidates the prior scoped review chain and D01–D05 PASS; these clarifications add no deployment authority. Public `run_packet` may be exercised directly for internal logic only after the pinned-input precondition; pin/identity/read-once/TOCTOU tests exercise the sole production `launch()` path. Final packet proof records equality of the filled launcher's `EXPECTED_WRAPPER_SHA256`, filled stage's `WRAPPER_SHA256`, and SHA256 of the builder's exact wrapper bytes. Launcher literal filling uses the existing closed AST/span verifier, allowing only that one name; mismatches refuse. Stage exact reuse fsyncs its three files, directory and parent before success; no content repair. Preflight refuses a foreign/partial stage, with no automatic cleanup. Where a path is genuinely shared by accepted state and after-proof, both pins must agree; a later change causes read-only refusal, never downgrade. Helper, actual unit and package unit-template are distinct paths and must not be conflated to invent an overlap.
