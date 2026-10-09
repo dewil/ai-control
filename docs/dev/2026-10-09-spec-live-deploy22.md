@@ -382,3 +382,77 @@ No DESIGN/authorityPASS or installed readiness claimed. Source/runtime/root/conf
 ## Final clarification for RED after scoped DESIGN closure (09.10)
 
 Root consolidates the prior scoped review chain and D01–D05 PASS; these clarifications add no deployment authority. Public `run_packet` may be exercised directly for internal logic only after the pinned-input precondition; pin/identity/read-once/TOCTOU tests exercise the sole production `launch()` path. Final packet proof records equality of the filled launcher's `EXPECTED_WRAPPER_SHA256`, filled stage's `WRAPPER_SHA256`, and SHA256 of the builder's exact wrapper bytes. Launcher literal filling uses the existing closed AST/span verifier, allowing only that one name; mismatches refuse. Stage exact reuse fsyncs its three files, directory and parent before success; no content repair. Preflight refuses a foreign/partial stage, with no automatic cleanup. Where a path is genuinely shared by accepted state and after-proof, both pins must agree; a later change causes read-only refusal, never downgrade. Helper, actual unit and package unit-template are distinct paths and must not be conflated to invent an overlap.
+
+
+## 10. Frozen test seams — 09.10
+
+## 1. EXPECTED_RUNTIME_STAT_PINS — exact closed shape
+
+Production default remains None/failclosed. Filled value is a dict with **exactly** these eight semantic keys (constant names, NOT arbitrary paths):
+
+```python
+{
+    'LOCK': file_identity_row,
+    'SITE_PACKAGES': directory_identity_row,
+    'VENV_ROOT': directory_identity_row,
+    'BROKER_UNIT_MODE': 0o644,  # actual admitted mode: exactly 0o644 OR 0o600
+    'SYSTEM_PYTHON': executable_chain_row,
+    'VENV_PYTHON': executable_chain_row,
+    'OWNER_IMPORT_LAUNCHER': executable_chain_row,
+    'SYSTEMCTL': executable_chain_row,
+}
+```
+
+There are no optional fields and no per-pin enable/disable flags.
+
+Fixed object/path bindings:
+
+| Key | Existing object / fixed entry path |
+|---|---|
+|LOCK|`/var/lib/ai-control-deploy/checkpoints/lock`, existing regular root:root0600/nlink1|
+|SITE_PACKAGES|`/opt/ai-control-web/venv/lib/python3.12/site-packages`, root:root0755 directory|
+|VENV_ROOT|`/opt/ai-control-web/venv`, admitted root-owned non-writable directory; exact actual mode is pinned|
+|BROKER_UNIT_MODE|actual mode of `/etc/systemd/system/ai-control-web-broker.service`, scalar0644 or0600; root:root/regular/nlink1 required independently|
+|SYSTEM_PYTHON|production stdin entry `/usr/bin/python3`|
+|VENV_PYTHON|owner smoke/service entry `/opt/ai-control-web/venv/bin/python`|
+|OWNER_IMPORT_LAUNCHER|`/usr/bin/setpriv`|
+|SYSTEMCTL|`/usr/bin/systemctl`|
+
+`directory_identity_row` has EXACT keys `{dev,ino,uid,gid,mode}`. `LOCK` has the SAME five-key identity row; its expected kind regular, mode0600/nlink1 are fixed by source and independently checked. `SITE_PACKAGES` expected kind directory/mode0755 are source-final; `VENV_ROOT` directory/mode from row, source requires non-writable root ownership. All row scalars exact Python ints/nonbool, dev>=0, ino>0, uid=gid=0, mode in0..07777 with filetype bits stripped. LOCK/SITE_PACKAGES modes must agree with their fixed source modes. No size, timestamps, hash or nlink field is needed in these three persistent inode pins: lock/site/venv inode/dev/owner/mode must remain unchanged, while directory size/mtime/nlink can legitimately change during dependency installation.
+
+`executable_chain_row` has EXACT keys `{links,resolved}`:
+
+- `links`: ordered list (possibly empty, bounded≤8 rows) representing each symlink encountered from its fixed entry through the admitted interpreter chain. Each row EXACT `{path,target,dev,ino,uid,gid,mode}`. path is the exact absolute link node path admitted in trusted host binding; target is exact raw readlink string (relative stays relative), nonempty/NUL-free. Identity ints as above, root ownership, actual symlinkmode pinned; kind symlink and nlink1 are separately required. Every next path is the lexical normalized target resolved against that link parent, never a runtime-discovered arbitrary path. No duplicate/cycle, skipped link, extra link or changed target allowed.
+- `resolved`: EXACT `{path,dev,ino,uid,gid,mode,size,sha256}`. path is the exact admitted absolute terminal executable path; regular/nlink1, root:root, non-writable and executable required independently. dev/ino/uid/gid/mode as above; size positive integer/nonbool; sha256 lowercase64hex. Compare actual anchored terminal fstat size and hash of bounded descriptor bytes, never only supplied fields. Resolved path must be exactly the result of the pinned links, or fixed entry itself when links empty.
+
+All entrypaths are source literals; link/terminal paths and targets are frozen trusted host stat bindings, not CLI/env/discovered candidate authority. Validator walks every ancestor using existing nofollow root/non-writable proof. Ancestor rows are NOT copied into this dict: the existing anchored walk checks type/UID/no group/world write each time. Every directory ancestor remains nofollow/normal-directory; structural ancestor symlinks are not silently followed and are not admitted by the leaf-link schema. A different host ancestor topology requires separate trusted/spec binding. Unknown topology refuses until its actual trusted binding is reviewed; this schema invents no host values. Owner1000 must be able to traverse/read the already admitted interpreter/venv chain, as existing operational readiness requires.
+
+**Important distinction:** `(dev,ino,type,mode,nlink,uid,gid,size,mtime_ns,ctime_ns)` from the existing descriptor race-proof contract is a *transient before/after/fresh-stat equality tuple*, not nine additional persistent packet fields. Atime ignored. Use it for each bounded snapshot/unlink/replace, with content hash as separately required. Do NOT freeze mutable unit/helper/STATE/dependency inode/size/timestamps across their atomic replacements. Unit mode comes from BROKER_UNIT_MODE; unit/helper/state content pins remain existing BEFORE/AFTER_UNIT/OLD/NEW_HELPER/EXPECTED_ACCEPTED constants and actual receipt gates. No duplicate content hash or arbitrary path table added here.
+
+Meaningful RED: exact eight-key shape (None/missing/extra/bool/type refuse), mismatched persistent inode/dev/mode/UID, unsafe ancestor, changed symlink/rawtarget/chain order, shadow terminal/hash/size, unchanged stat but changed content, and transient stat swap while comparing a snapshot. Mutating unit/helper/new dependency inode does not itself violate an unrelated before inode pin; root mode/content/observed proof still must pass.
+
+## 2. Compiled inventory + canonical serializer public names
+
+Both `deployment/ai-control-web-deploy.py` and `deployment/ai-control-live-bootstrap.py` expose the SAME source-final names:
+
+```python
+WHEEL_MEMBERS                 # tuple of exactly29 by-path sorted dict rows
+WHEEL_INVENTORY_SHA256        # '40b35159d50cf2bf0f645f5ab1564f5a3fd0efcee266405fffeb6a496dc7bb43'
+canonical_inventory(rows)    # -> bytes, no filesystem/subprocess/import side effects
+```
+
+`WHEEL_MEMBERS` exact29 rows from committed `tests/fixtures/deploy22-nats/wheel-inventory.json`. Each row EXACT `{path,sha256,size,archive_mode,install_mode}`; no directory rows. path is normalized relative POSIX path from the frozen29-file map, sha256 lowercase64hex, size integer>=0/nonbool, modes exact ints. All install_mode420; archive_mode420 except RECORD436. Tuple preserves sorted-by-path order; dict content is immutable source-final binding (not operation-filler input). Existing wheel SHA132a8e…/size82408 and member count29 remain unchanged. Helper/bootstrap row equality is a RED gate; never infer a different map from a submitted ZIP.
+
+`canonical_inventory(rows: list[dict] | tuple[dict,...]) -> bytes` validates five-key row shape/types, unique paths and deterministic sorting, then returns EXACT:
+
+```python
+json.dumps(sorted(rows, key=lambda row: row['path']),
+           sort_keys=True, separators=(',', ':'),
+           ensure_ascii=True).encode('utf-8')
+```
+
+No LF. It is a data-only serializer, not filesystem authority: caller separately enforces frozen29 membership, root ownership/nlink/dirs/shadows and observed descriptor hash/size/install_mode, as existing §4 requires. Dynamic observed rows annotate archive_mode from compiled provenance, not current stat. Digest is hashlib.sha256(canonical_inventory(observed_rows)).hexdigest() and must equal the full WHEEL_INVENTORY_SHA256. `canonical_inventory` does not substitute compiled values for observations. Tests load the committed independent rows and invoke this actual public serializer; permuted input yields same bytes, mutations change digest/refuse semantic gate. Inventory file-with-LF SHAa90f… is distinct. No new serialized form, runtime nats import or root wheel build.
+
+## 3. Exact synthetic fixture constructor choices
+
+Tests bind `EXPECTED_RUNTIME_STAT_PINS` from the tempfixture's own os.lstat results for the above eight fixed-name entries, patching existing production path constants only inside loaded synthetic module. Minimal resolved fixture files can be regular executable root-identity emulations; links may be empty for all four executor entries. Separate symlink tests populate exact ordered links. Do not use zeros as a wildcard; numeric identities are exact synthetic observed values. Production binding remains trusted actual preflight/out-of-band reviewed packet. No real host or secret access required to make RED deterministic.
