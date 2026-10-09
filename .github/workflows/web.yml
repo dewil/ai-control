@@ -16,12 +16,18 @@ jobs:
           python-version: '3.12'
       - name: Install pinned web dependencies
         run: |
-          python -m pip install -r requirements-web.lock
+          python -m pip install -r requirements-web.lock -r requirements-devbus.lock
           python -m pip install httpx==0.28.1
       - name: Install pinned browser test tooling
         run: |
           python -m pip install playwright==1.63.0
           python -m playwright install --with-deps chromium
+      - name: Disposable local NATS server
+        run: |
+          curl -fsSL https://github.com/nats-io/nats-server/releases/download/v2.15.0/nats-server-v2.15.0-linux-amd64.tar.gz -o "$RUNNER_TEMP/nats.tar.gz"
+          echo "5d2c51caca950333aba84911df7d377f826f3a59ec36061c6539105084f65c92  $RUNNER_TEMP/nats.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/nats.tar.gz" -C "$RUNNER_TEMP"
+          echo "CONTROL_DEVBUS_NATS_TEST_SERVER=$RUNNER_TEMP/nats-server-v2.15.0-linux-amd64/nats-server" >> "$GITHUB_ENV"
       - name: Existing trusted writer prerequisite
         run: |
           yq_download=$(mktemp "$RUNNER_TEMP/control-web-yq.XXXXXX")
