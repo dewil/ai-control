@@ -1251,7 +1251,10 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                     else:
                         if reservation is not None:
                             reservation.release()
-                        result = {'error': 'busy'}
+                        # New bounded reads and the combined gate's general
+                        # snapshot expose busy privately. Keep legacy session
+                        # operations' unavailable wire outcome for compatibility.
+                        result = {'error': 'busy' if live or bus or request['op'] == 'snapshot' else 'unavailable'}
                 reply(conn, result)
             except Exception:
                 try:
