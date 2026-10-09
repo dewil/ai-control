@@ -147,3 +147,8 @@ Actual frozen LIVE owner suite contains LIVE-only checks, not a combined devbus+
 ### Public test seam spelling
 
 `bin/_control_web_broker.py::DEVBUS_CONFIG_PATH` is Path with the fixed production literal; pointer comparison uses str(DEVBUS_CONFIG_PATH). Tests patch this same constant, never a second path namespace. `DevbusFrontend` lives in existing `bin/_control_web.py`. For actual CLI signal tests, a synthetic test launcher may import the public broker module, wrap DevbusRuntime construction with its documented injected factories/probe, then run the real CLI through runpy. No production env override, new CLI option, source rewriting or service mutation. Actual SIGTERM scheduling/worker drain remain exercised by the real CLI.
+
+
+### Accepted DESIGN / final RED notes
+
+Independent Sonnet5.5/high DESIGN PASS at817b3e55 (report bus-integration-delta-817b3e55.md). Low N03: bridge test uses accepted Observer with connect_factory delayed >1s; handoff returns before network finishes, state connecting/retry, no duplicate start, stop cancels connect; setup-timeout cleanup stays on same loopthread with no second thread. Low N04: strict DTO validator rejects contradictory first_seq=None with mode!=unknown as unavailable; reachable surrogate result + first_seq=None retains unknown through sanitation/clipping. Combined gate ownership and public seam spellings in later docs-only amendments do not change authority/runtime budgets.
