@@ -1,7 +1,13 @@
 """Narrow owner-side task interface. Never returns raw registry documents."""
+import asyncio
+from concurrent.futures import TimeoutError as FutureTimeout
+import copy
 import hashlib
+import importlib.util
 import json
+import math
 import os
+from pathlib import Path
 import re
 import socket
 import stat
@@ -10,6 +16,458 @@ import subprocess
 import threading
 import time
 import uuid
+
+from _control_web_devbus import Observer, Projection, _timestamp, valid_id, valid_metadata
+from _control_web_devbus_nats import NatsConfig, connect
+
+DEVBUS_CONFIG_PATH = Path('/home/dwl/.config/ai-control/devbus-observer.json')
+DEVBUS_LIMIT = 96 * 1024
+_BUS_STATES = {'accepted', 'running', 'completed', 'failed', 'needs_attention'}
+_BUS_ISSUES = {'local_eviction', 'invalid_event', 'id_conflict', 'retention_gap', 'stream_reset', 'replay_incomplete'}
+
+
+def load_devbus_config():
+    """Owner startup ingress; never consult ambient transport credentials."""
+    disabled = NatsConfig()
+    pointer = os.environ.get('CONTROL_DEVBUS_CONFIG')
+    if pointer is None:
+        return disabled, None
+    if pointer != str(DEVBUS_CONFIG_PATH) or os.geteuid() != 1000:
+        return disabled, 'invalid_config'
+    try:
+        fd = os.open(DEVBUS_CONFIG_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return disabled, None
+    except Exception:
+        return disabled, 'invalid_config'
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != 1000
+                or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1
+                or not 0 <= before.st_size <= 16384):
+            raise ValueError('invalid_config')
+        data = bytearray()
+        while len(data) < 16385:
+            block = os.read(fd, 16385 - len(data))
+            if not block:
+                break
+            data.extend(block)
+        after = os.fstat(fd)
+        leaf = os.stat(DEVBUS_CONFIG_PATH, follow_symlinks=False)
+        fields = ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid',
+                  'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        identity = lambda info: tuple(getattr(info, name) for name in fields)
+        if (identity(before) != identity(after) or identity(after) != identity(leaf)
+                or len(data) > 16384 or len(data) != before.st_size):
+            raise ValueError('invalid_config')
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result:
+                    raise ValueError('invalid_config')
+                result[key] = value
+            return result
+        def nonfinite(_):
+            raise ValueError('invalid_config')
+        value = json.loads(data.decode('utf-8'), object_pairs_hook=pairs, parse_constant=nonfinite)
+        if (type(value) is not dict or set(value) != {'CONTROL_DEVBUS_ENABLED',
+                'CONTROL_DEVBUS_STREAM', 'DEVBUS_NATS_URL', 'DEVBUS_NATS_TOKEN'}
+                or any(type(item) is not str or any(ord(c) < 32 or 127 <= ord(c) <= 159
+                    or 0xd800 <= ord(c) <= 0xdfff for c in item) for item in value.values())
+                or value['CONTROL_DEVBUS_ENABLED'] not in ('0', '1')
+                or not valid_id(value['CONTROL_DEVBUS_STREAM'])
+                or (value['CONTROL_DEVBUS_ENABLED'] == '1' and not value['DEVBUS_NATS_TOKEN'])):
+            raise ValueError('invalid_config')
+        return NatsConfig.from_env(value), None
+    except Exception:
+        return disabled, 'invalid_config'
+    finally:
+        os.close(fd)
+
+
+def _devbus_empty(state='disabled', reason=None):
+    return dict(schema=1, connection=dict(state=state, reason=reason),
+                coverage=dict(mode='unknown', first_seq=None, last_seq=None,
+                    ttl_seconds=None, max_bytes=None, replay_complete=False, truncated=False, issues=[]),
+                tasks=[], agents=[], events=[])
+
+
+def _devbus_bytes(value):
+    return json.dumps(value, ensure_ascii=False, separators=(',', ':'), sort_keys=True,
+                      allow_nan=False).encode('utf-8')
+
+
+def _valid_devbus_dto(value):
+    """Validate exact accepted public shapes, including types below containers."""
+    def shape(item, keys):
+        return type(item) is dict and set(item) == set(keys.split())
+    def member(item, choices):
+        return type(item) is str and item in choices
+    def nullable(item, predicate):
+        return item is None or predicate(item)
+    def timestamp(item):
+        return nullable(item, lambda v: _timestamp(v)[0] is not None)
+    def integer(item, low=0):
+        return type(item) is int and item >= low
+    def bound(item, maximum):
+        return nullable(item, lambda v: type(v) in (int, float) and math.isfinite(v) and 0 < v <= maximum)
+    def event(item):
+        return (shape(item, 'message_id task_id agent kind event_at sequence')
+                and valid_id(item['message_id']) and nullable(item['task_id'], valid_id)
+                and valid_id(item['agent']) and member(item['kind'], _BUS_STATES | {'registration', 'heartbeat'})
+                and timestamp(item['event_at']) and integer(item['sequence'], 1))
+    if (not shape(value, 'schema connection coverage tasks agents events')
+            or type(value['schema']) is not int or value['schema'] != 1):
+        return False
+    connection, coverage = value['connection'], value['coverage']
+    if (not shape(connection, 'state reason')
+            or not member(connection['state'], {'disabled', 'connecting', 'replaying', 'live', 'disconnected'})
+            or not nullable(connection['reason'], lambda v: member(v, {'disabled', 'unavailable',
+                'invalid_config', 'dependency_unavailable', 'stream_policy', 'connection_lost'}))
+            or not shape(coverage, 'mode first_seq last_seq ttl_seconds max_bytes replay_complete truncated issues')
+            or not member(coverage['mode'], {'unknown', 'partial', 'window', 'replaying'})
+            or not nullable(coverage['first_seq'], integer) or not nullable(coverage['last_seq'], integer)
+            or not bound(coverage['ttl_seconds'], 86400) or not bound(coverage['max_bytes'], 104857600)
+            or type(coverage['replay_complete']) is not bool or type(coverage['truncated']) is not bool
+            or type(coverage['issues']) is not list
+            or any(not member(issue, _BUS_ISSUES) for issue in coverage['issues'])
+            or coverage['issues'] != sorted(set(coverage['issues']))):
+        return False
+    if coverage['first_seq'] is None and coverage['mode'] != 'unknown':
+        return False
+    for key, maximum in (('tasks', 256), ('agents', 128), ('events', 512)):
+        if type(value[key]) is not list or len(value[key]) > maximum:
+            return False
+    if not all(event(item) for item in value['events']):
+        return False
+    for item in value['tasks']:
+        if (not shape(item, 'task_id agent state delivery quality event_at submitted_at duration_seconds result error output_truncated transitions')
+                or not valid_id(item['task_id']) or not valid_id(item['agent'])
+                or not member(item['state'], _BUS_STATES) or not member(item['delivery'], {'unknown'})
+                or not member(item['quality'], {'unreviewed'}) or not timestamp(item['event_at'])
+                or item['submitted_at'] is not None or item['duration_seconds'] is not None
+                or not nullable(item['result'], lambda v: type(v) is str and len(v) <= 4096)
+                or not nullable(item['error'], lambda v: member(v, {'timeout', 'output_limit', 'executor_exit',
+                    'local_executor_error', 'interrupted', 'unknown_error'}))
+                or type(item['output_truncated']) is not bool or type(item['transitions']) is not list
+                or len(item['transitions']) > 32 or not all(event(row) for row in item['transitions'])):
+            return False
+    for item in value['agents']:
+        if (not shape(item, 'agent registered capabilities executor version heartbeat_at heartbeat_status')
+                or not valid_id(item['agent']) or type(item['registered']) is not bool
+                or type(item['capabilities']) is not list or len(item['capabilities']) > 32
+                or not all(valid_metadata(row) for row in item['capabilities'])
+                or not nullable(item['executor'], lambda v: member(v, {'codex', 'echo-test-only'}))
+                or not nullable(item['version'], valid_metadata) or not timestamp(item['heartbeat_at'])
+                or not member(item['heartbeat_status'], {'unknown', 'stale', 'fresh'})):
+            return False
+    # UTF-8 serialization rejects lone surrogates everywhere (wire validation
+    # never repairs data). Measurement is separate so clipping can validate first.
+    _devbus_bytes(value)
+    return True
+
+
+def devbus_result(value):
+    try:
+        if _valid_devbus_dto(value) and len(_devbus_bytes(value)) <= DEVBUS_LIMIT:
+            return copy.deepcopy(value)
+    except Exception:
+        pass
+    return {'error': 'unavailable'}
+
+
+def _devbus_private_result(value):
+    if (type(value) is dict and set(value) == {'error'} and type(value['error']) is str
+            and value['error'] in {'busy', 'unsupported', 'unavailable'}):
+        return dict(value)
+    return devbus_result(value)
+
+
+def _devbus_limited(value):
+    coverage = value['coverage']
+    coverage['truncated'] = True
+    coverage['issues'] = sorted(set(coverage['issues']) | {'local_eviction'})
+    coverage['mode'] = 'partial' if coverage['first_seq'] is not None else 'unknown'
+
+
+def bounded_devbus_snapshot(projection, task=None, agent=None):
+    """Export a filtered copy only; accepted retention is never mutated."""
+    try:
+        if not all(item is None or valid_id(item) for item in (task, agent)):
+            return {'error': 'unavailable'}
+        value = copy.deepcopy(projection.snapshot(task, agent))
+        # Only known producer result text has this transport-local exception.
+        if type(value) is dict and type(value.get('tasks')) is list:
+            sanitized = False
+            for row in value['tasks']:
+                if type(row) is dict and type(row.get('result')) is str:
+                    result = row['result']
+                    if any(0xd800 <= ord(c) <= 0xdfff for c in result):
+                        row['result'] = ''.join('\ufffd' if 0xd800 <= ord(c) <= 0xdfff else c for c in result)
+                        row['output_truncated'] = True
+                        sanitized = True
+            # Validate before applying coverage helpers to untrusted structures.
+            if not _valid_devbus_dto(value):
+                return {'error': 'unavailable'}
+            if sanitized:
+                _devbus_limited(value)
+        if not _valid_devbus_dto(value):
+            return {'error': 'unavailable'}
+        if len(_devbus_bytes(value)) <= DEVBUS_LIMIT:
+            return value
+        ranks = sorted((max((row['sequence'] for row in item['transitions']), default=0), item['task_id'])
+                       for item in value['tasks'])
+        for item in value['tasks']:
+            if item['result'] is not None and len(item['result']) > 256:
+                item['result'] = item['result'][:256]
+                item['output_truncated'] = True
+        _devbus_limited(value)
+        if len(_devbus_bytes(value)) <= DEVBUS_LIMIT:
+            return value
+
+        def minimum_prefix(count, apply):
+            # Monotonic serialized size permits bounded binary search; at most
+            # 8192 transitions, never one full serialization per removed row.
+            original = copy.deepcopy(value)
+            def candidate(n):
+                data = copy.deepcopy(original)
+                apply(data, n)
+                return data
+            full = candidate(count)
+            if len(_devbus_bytes(full)) > DEVBUS_LIMIT:
+                value.clear(); value.update(full)
+                return False
+            low, high = 1, count
+            while low < high:
+                middle = (low + high) // 2
+                if len(_devbus_bytes(candidate(middle))) <= DEVBUS_LIMIT:
+                    high = middle
+                else:
+                    low = middle + 1
+            value.clear(); value.update(candidate(low))
+            return True
+
+        ordered = sorted(value['events'], key=lambda row: (row['sequence'], row['message_id']))
+        if ordered and minimum_prefix(len(ordered), lambda data, n: data.update(events=ordered[n:])):
+            return value
+        transitions = sorted((row['sequence'], row['message_id'], item['task_id'])
+                             for item in value['tasks'] for row in item['transitions'])
+        def remove_transitions(data, n):
+            removed = set(transitions[:n])
+            for item in data['tasks']:
+                item['transitions'] = [row for row in item['transitions']
+                    if (row['sequence'], row['message_id'], item['task_id']) not in removed]
+        if transitions and minimum_prefix(len(transitions), remove_transitions):
+            return value
+        def remove_tasks(data, n):
+            removed = {item[1] for item in ranks[:n]}
+            data['tasks'] = [item for item in data['tasks'] if item['task_id'] not in removed]
+        if ranks and minimum_prefix(len(ranks), remove_tasks):
+            return value
+        if value['agents'] and minimum_prefix(len(value['agents']),
+                lambda data, n: data.update(agents=data['agents'][n:])):
+            return value
+        return devbus_result(value)
+    except Exception:
+        return {'error': 'unavailable'}
+
+
+class DevbusRuntime:
+    """One owner loop and one export token retained through actual completion."""
+    def __init__(self, *, config_loader=load_devbus_config, projection_factory=Projection,
+                 observer_factory=Observer, connect_factory=connect, dependency_probe=None):
+        self._loader, self._projection_factory = config_loader, projection_factory
+        self._observer_factory, self._connect_factory = observer_factory, connect_factory
+        self._probe = dependency_probe if dependency_probe is not None else lambda: importlib.util.find_spec('nats') is not None
+        self._lock = threading.Lock()
+        self._ready = threading.Event()
+        self._stopping = threading.Event()
+        self._started = False
+        self._failed = False
+        self._loop = self._thread = self._observer = self._projection = None
+        self._cleanup_task = None
+        self._cleanup_failed = False
+        self._export_token = None
+        self._fallback = _devbus_empty()
+
+    def start(self):
+        with self._lock:
+            if self._started or self._stopping.is_set():
+                return
+            self._started = True
+        try:
+            config, reason = self._loader()
+            if reason is not None:
+                self._fallback = _devbus_empty('disconnected', 'invalid_config')
+                return
+            if not config.enabled:
+                return
+            self._fallback = _devbus_empty('disconnected', 'unavailable')
+            present = self._probe()
+            if present is not True:
+                if present is False:
+                    self._fallback = _devbus_empty('disconnected', 'dependency_unavailable')
+                return
+            self._thread = threading.Thread(target=self._run, args=(config,), daemon=True, name='control-devbus')
+            self._thread.start()
+            if not self._ready.wait(1):
+                with self._lock:
+                    self._failed = True
+                self.request_stop()
+        except Exception:
+            self._fallback = _devbus_empty('disconnected', 'unavailable')
+            with self._lock:
+                self._failed = True
+            self.request_stop()
+
+    def _run(self, config):
+        try:
+            loop = asyncio.new_event_loop()
+            self._loop = loop
+            asyncio.set_event_loop(loop)
+        except Exception:
+            with self._lock:
+                self._failed = True
+            self._ready.set()
+            if self._loop is not None:
+                self._loop.close()
+            return
+        async def setup():
+            if self._stopping.is_set():
+                return
+            self._projection = self._projection_factory(secrets=(config.token,) if config.token else ())
+            if self._stopping.is_set():
+                return
+            self._observer = self._observer_factory(self._projection, lambda: self._connect_factory(config))
+            if self._stopping.is_set():
+                return
+            await self._observer.start()
+        try:
+            loop.run_until_complete(setup())
+            self._ready.set()
+            if self._stopping.is_set():
+                loop.run_until_complete(self._cleanup())
+            else:
+                loop.run_forever()
+        except Exception:
+            with self._lock:
+                self._failed = True
+            self._ready.set()
+        finally:
+            # Pending cleanup stays on this same thread/loop, even when startup
+            # timed out during a synchronous injected factory.
+            try:
+                try:
+                    loop.run_until_complete(self._cleanup())
+                except Exception:
+                    self._cleanup_failed = True
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    _, alive = loop.run_until_complete(asyncio.wait(pending, timeout=.5))
+                    if alive:
+                        self._cleanup_failed = True
+                        # A noncompliant coroutine keeps this same loop/thread
+                        # alive. stop() reports failure at its 12s bound; closing
+                        # beneath live callbacks would falsely claim cleanup.
+                        loop.run_until_complete(asyncio.gather(*alive, return_exceptions=True))
+            finally:
+                loop.close()
+
+    async def _cleanup(self):
+        if self._cleanup_task is None:
+            async def close():
+                if self._observer is not None:
+                    await asyncio.wait_for(self._observer.stop(), 10.1)
+            self._cleanup_task = asyncio.create_task(close())
+        await asyncio.shield(self._cleanup_task)
+
+    def request_stop(self):
+        """Nonblocking signal hook; cleanup runs alongside legacy worker drain."""
+        self._stopping.set()
+        loop = self._loop
+        if loop is not None and not loop.is_closed():
+            def submit():
+                async def finish():
+                    try:
+                        await self._cleanup()
+                    except Exception:
+                        self._cleanup_failed = True
+                    finally:
+                        loop.stop()
+                if not getattr(self, '_shutdown_submitted', False):
+                    self._shutdown_submitted = True
+                    asyncio.create_task(finish())
+            try:
+                loop.call_soon_threadsafe(submit)
+            except RuntimeError:
+                pass
+
+    def snapshot(self, task=None, agent=None):
+        if not all(value is None or valid_id(value) for value in (task, agent)):
+            return {'error': 'unavailable'}
+        with self._lock:
+            if self._failed or self._stopping.is_set():
+                return _devbus_empty('disconnected', 'unavailable')
+            if self._thread is None:
+                return copy.deepcopy(self._fallback)
+            if not self._ready.is_set() or not self._thread.is_alive() or self._loop.is_closed():
+                return _devbus_empty('disconnected', 'unavailable')
+            if self._export_token is not None:
+                return {'error': 'busy'}
+            token = self._export_token = object()
+        deadline = time.monotonic() + 1
+        cancellation = threading.Event()
+        export_task = None
+        async def export():
+            nonlocal export_task
+            try:
+                export_task = asyncio.current_task()
+                if cancellation.is_set() or self._stopping.is_set() or time.monotonic() >= deadline:
+                    return {'error': 'unavailable'}
+                value = bounded_devbus_snapshot(self._projection, task, agent)
+                return value if time.monotonic() < deadline else {'error': 'unavailable'}
+            finally:
+                with self._lock:
+                    if self._export_token is token:
+                        self._export_token = None
+        coroutine = export()
+        try:
+            future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+        except Exception:
+            coroutine.close()
+            with self._lock:
+                if self._export_token is token:
+                    self._export_token = None
+            return {'error': 'unavailable'}
+        try:
+            return _devbus_private_result(future.result(max(0, deadline - time.monotonic())))
+        except FutureTimeout:
+            # Cancel on the owner loop, not the concurrent Future. Cancelling
+            # that Future before coroutine entry can skip its finally entirely.
+            # A queued export observes this flag and releases its own token.
+            cancellation.set()
+            def cancel_export():
+                if export_task is not None:
+                    export_task.cancel()
+            try:
+                self._loop.call_soon_threadsafe(cancel_export)
+            except RuntimeError:
+                pass
+            return {'error': 'unavailable'}
+        except Exception:
+            return {'error': 'unavailable'}
+
+    def stop(self):
+        self.request_stop()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(12)
+            if thread.is_alive():
+                raise RuntimeError('devbus cleanup unavailable')
+            if self._cleanup_failed:
+                raise RuntimeError('devbus cleanup unavailable')
 
 LIMIT = 128 * 1024
 FIELD_LIMIT = 16000
@@ -309,12 +767,23 @@ def _field(doc, key, default=''):
 
 
 class RegistryBackend:
-    def __init__(self, registry, bin_dir, runner=None, sessions=None, configured_creator=None):
+    def __init__(self, registry, bin_dir, runner=None, sessions=None, configured_creator=None, *, devbus=None):
         self.registry = os.path.abspath(registry)
         self.bin_dir = os.path.abspath(bin_dir)
         self.runner = runner or subprocess.run
         self.sessions = sessions
         self.configured_creator = configured_creator
+        self.devbus = devbus
+
+    def devbus_overview(self, task=None, agent=None):
+        if not all(value is None or valid_id(value) for value in (task, agent)):
+            return {'error': 'unavailable'}
+        if self.devbus is None:
+            return _devbus_empty()
+        try:
+            return _devbus_private_result(self.devbus.snapshot(task, agent))
+        except Exception:
+            return {'error': 'unavailable'}
 
     def _session(self, request):
         if not _valid_session(request):
@@ -655,10 +1124,12 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     slots = threading.BoundedSemaphore(4)
     live_slot = threading.BoundedSemaphore(1)
+    bus_slot = threading.BoundedSemaphore(1)
     workers = set()
     workers_lock = threading.Lock()
     fields = {'snapshot': {'op'}, 'answer': {'op', 'agent', 'qid', 'decision', 'text'},
-              'verdict': {'op', 'agent', 'generation', 'decision', 'comment'}, **SESSION_FIELDS}
+              'verdict': {'op', 'agent', 'generation', 'decision', 'comment'},
+              'devbus_overview': {'op', 'task', 'agent'}, **SESSION_FIELDS}
 
     def reply(conn, result):
         wire = json.dumps(result, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8') + b'\n'
@@ -673,6 +1144,11 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                     op = request['op']
                     if op == 'snapshot':
                         result = backend.snapshot()
+                    elif op == 'devbus_overview':
+                        deadline = time.monotonic() + 5
+                        result = _devbus_private_result(backend.devbus_overview(request['task'], request['agent']))
+                        if time.monotonic() >= deadline:
+                            result = {'error': 'unavailable'}
                     elif op == 'answer':
                         result = backend.answer(request['agent'], request['qid'], request['decision'], request['text'])
                     elif op == 'verdict':
@@ -719,6 +1195,8 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
         finally:
             if request['op'] == 'session_live_snapshot':
                 live_slot.release()
+            elif request['op'] == 'devbus_overview':
+                bus_slot.release()
             slots.release()
             with workers_lock:
                 workers.discard(threading.current_thread())
@@ -741,26 +1219,39 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                 else:
                     request = _receive(conn)
                     live = type(request) is dict and request.get('op') == 'session_live_snapshot'
+                    bus = type(request) is dict and request.get('op') == 'devbus_overview'
+                    reservation = live_slot if live else bus_slot if bus else None
                     if (type(request) is not dict or type(request.get('op')) is not str
                             or request['op'] not in fields):
                         result = {'error': 'unsupported'}
                     elif (set(request) != fields[request['op']] and not (
                             request['op'] == 'session_send' and set(request) == fields[request['op']] | {'selection'})):
-                        result = {'error': 'unavailable' if live else 'invalid_request' if request['op'] == 'session_project_summary' else 'invalid_or_stale'}
+                        result = {'error': 'unavailable' if live or bus else 'invalid_request' if request['op'] == 'session_project_summary' else 'invalid_or_stale'}
                     elif request['op'] in SESSION_FIELDS and not _valid_session(request):
                         result = {'error': 'unavailable' if live else 'invalid_request'}
-                    elif live and not live_slot.acquire(blocking=False):
+                    elif bus and not all(request[key] is None or valid_id(request[key]) for key in ('task', 'agent')):
+                        result = {'error': 'unavailable'}
+                    elif reservation is not None and not reservation.acquire(blocking=False):
                         result = {'error': 'busy'}
                     elif slots.acquire(blocking=False):
-                        worker = threading.Thread(target=execute, args=(conn, request), daemon=True)
-                        with workers_lock:
-                            workers.add(worker)
-                        worker.start()
+                        worker = None
+                        try:
+                            worker = threading.Thread(target=execute, args=(conn, request), daemon=True)
+                            with workers_lock:
+                                workers.add(worker)
+                            worker.start()
+                        except Exception:
+                            with workers_lock:
+                                workers.discard(worker)
+                            slots.release()
+                            if reservation is not None:
+                                reservation.release()
+                            raise
                         continue
                     else:
-                        if live:
-                            live_slot.release()
-                        result = {'error': 'busy' if live else 'unavailable'}
+                        if reservation is not None:
+                            reservation.release()
+                        result = {'error': 'busy'}
                 reply(conn, result)
             except Exception:
                 try:
@@ -785,13 +1276,21 @@ class SocketBackend:
     def __init__(self, socket_path):
         self.socket_path = socket_path
 
+    def devbus_overview(self, task=None, agent=None):
+        if not all(value is None or valid_id(value) for value in (task, agent)):
+            return {'error': 'unavailable'}
+        value = self._call(dict(op='devbus_overview', task=task, agent=agent), timeout=6)
+        if value == {'error': 'invalid_or_stale'}:
+            return {'error': 'unsupported'}
+        return _devbus_private_result(value)
+
     def _call(self, request, timeout=65):
         try:
             wire = json.dumps(request, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8') + b'\n'
             if len(wire) > LIMIT:
                 return {'error': 'invalid_or_stale'}
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-                deadline = time.monotonic() + timeout if request.get('op') == 'session_live_snapshot' else None
+                deadline = time.monotonic() + timeout if request.get('op') in ('session_live_snapshot', 'devbus_overview') else None
                 conn.settimeout(timeout)
                 conn.connect(self.socket_path)
                 if deadline is not None:
