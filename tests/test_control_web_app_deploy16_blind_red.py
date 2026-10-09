@@ -60,6 +60,7 @@ class Deploy16(unittest.TestCase):
             self.api = types.ModuleType(label)
             self.api.__file__ = str(fixture.SOURCE) + '@accepted73eb36b4'
             sys.modules[label] = self.api
+            self.addCleanup(sys.modules.pop, label, None)
             exec(compile(pinned, self.api.__file__, 'exec'), self.api.__dict__)
         self.before14 = dict(self.current)
         self.before16 = {**self.before14, AUTH: b'# synthetic auth before\n', DOWNLOAD: b'# synthetic download before\n'}

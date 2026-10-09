@@ -38,6 +38,80 @@ class Deploy22ControllerBlind(s.ControllerFixture):
         self.assertEqual(self.state.read_bytes(),raw);self.assertFalse(self.stops())
         self.assertFalse(any(call[1]=='start' for call in self.calls))
 
+    def test_current_helper_refuses_fresh_schema3_full16_before_mutation(self):
+        # INV-DEPLOY-20: historical recovery does not authorize a fresh full16 release.
+        self.dependency_after();self.signed(files=self.before16,base=self.before16,schema=3)
+        raw=self.state.read_bytes();before=self.tree()
+        with self.assertRaises(self.api.Rejected):self.deploy().run()
+        self.assertEqual(self.state.read_bytes(),raw);self.assertEqual(self.tree(),before)
+        self.assertFalse(self.calls);self.assertFalse((self.checkpoints/'pending.json').exists())
+
+    def test_sameID_unhealthy_refuses_without_state_or_package_repair(self):
+        # INV-DEPLOY-20: identical signed4 bytes cannot bypass current health.
+        self.dependency_after();self.signed();self.accepted(dict(result='installed',release_id=8))
+        raw=self.state.read_bytes();before=self.tree();self.calls.clear();self.unhealthy=True
+        with self.assertRaises(self.api.Rejected):self.deploy().run()
+        self.assertEqual(self.state.read_bytes(),raw);self.assertEqual(self.tree(),before)
+        self.assertFalse(self.stops());self.assertFalse(any(call[1]=='start' for call in self.calls))
+        self.assertFalse((self.checkpoints/'pending.json').exists())
+
+    def test_current_markers_block_otherwise_valid_signed22_before_later_seams(self):
+        # INV-DEPLOY-20: standalone operations precede all package recovery/admission.
+        self.dependency_after();self.signed();raw=self.state.read_bytes();before=self.tree()
+        for name in ('bootstrap-pending.json','config-pending.json'):
+            with self.subTest(marker=name):
+                marker=self.state.parent/name;self.write(marker,b'{malformed',0o600)
+                controller=self.deploy();self.calls.clear()
+                with patch.object(controller,'read_state',side_effect=AssertionError('Later state read')), \
+                     patch.object(controller,'recover',side_effect=AssertionError('Later recovery')), \
+                     patch.object(controller,'staged',side_effect=AssertionError('Later stage verification')):
+                    with self.assertRaisesRegex(self.api.Rejected,'Separate operation pending'):controller.run()
+                self.assertEqual(marker.read_bytes(),b'{malformed');self.assertEqual(self.tree(),before)
+                self.assertEqual(self.state.read_bytes(),raw);self.assertFalse(self.calls)
+                self.assertFalse((self.checkpoints/'pending.json').exists());marker.unlink()
+
+    def test_signed22_payload_uses_verified_snapshot_despite_owner_stage_swap(self):
+        # INV-DEPLOY-20: only bytes in the verified signed snapshot reach target22.
+        self.dependency_after();self.signed();original=self.runner;swapped=[]
+        def swap_after_verification(args):
+            if args[1]=='stop' and not swapped:
+                for path in s.FULL22:(self.stage/path).write_bytes(b'unsigned synthetic replacement')
+                swapped.append(True)
+            return original(args)
+        self.runner=swap_after_verification;self.accepted(dict(result='installed',release_id=8))
+        self.assertEqual(swapped,[True]);self.assertEqual(self.tree(),self.after22)
+        self.assertEqual(json.loads(self.state.read_bytes())['files'],self.hashes(self.after22))
+
+    def test_install_renames_every_leaf_in_fixed22_order(self):
+        # INV-DEPLOY-21: all22 target leaves use the public fixed table order.
+        self.dependency_after();self.signed();replace=os.replace;installed=[]
+        def observed_replace(source,destination,*args,**kwargs):
+            path=Path(destination)
+            if not path.is_absolute() and kwargs.get('dst_dir_fd') is not None:
+                path=Path(os.readlink('/proc/self/fd/'+str(kwargs['dst_dir_fd'])))/path
+            result=replace(source,destination,*args,**kwargs)
+            if path.is_relative_to(self.target):installed.append(str(path.relative_to(self.target)))
+            return result
+        with patch('os.replace',side_effect=observed_replace):self.accepted(dict(result='installed',release_id=8))
+        self.assertEqual(installed,list(s.FULL22));self.assertEqual(self.tree(),self.after22)
+
+    def test_two_forward22_releases_repeat_and_stale16_base_refusal(self):
+        # INV-DEPLOY-20: first16 base exception never authorizes a later stale base.
+        self.dependency_after();self.signed();self.accepted(dict(result='installed',release_id=8))
+        current=self.after22
+        for number in (9,10):
+            after={path:data+str(number).encode() for path,data in current.items()}
+            self.signed(files=after,number=number,base=current)
+            self.accepted(dict(result='installed',release_id=number));self.assertEqual(self.tree(),after)
+            raw=self.state.read_bytes();self.calls.clear()
+            self.accepted(dict(result='already_installed',release_id=number))
+            self.assertEqual(self.state.read_bytes(),raw);self.assertFalse(self.stops())
+            self.assertFalse(any(call[1]=='start' for call in self.calls));current=after
+        self.signed(files=current,number=11,base=self.before16);self.calls.clear()
+        with self.assertRaises(self.api.Rejected):self.deploy().run()
+        self.assertEqual(self.state.read_bytes(),raw);self.assertEqual(self.tree(),current)
+        self.assertFalse(self.stops());self.assertFalse((self.checkpoints/'pending.json').exists())
+
     def test_subsets_extra_schema_boolean_and_direct14_rejected_before_mutation(self):
         self.required22();self.dependency_after()
         for label,files,schema,base in (('subset',dict(self.before16),4,self.before16),
@@ -165,7 +239,8 @@ class Deploy22ControllerBlind(s.ControllerFixture):
                 if len(starts)==3:raise RuntimeError('Synthetic fresh22 failure after recovered journal4')
             return result
         self.runner=fail_third_start;self.calls.clear()
-        with self.assertRaises(self.api.RollbackFailed):self.deploy().run()
+        controller=self.deploy()
+        with self.assertRaises(self.api.RollbackFailed):controller.run()
         self.assertEqual(len(starts),3,'Spent invocation budget must prevent a second rollback')
         self.assertEqual(self.state.read_bytes(),raw);self.assertEqual(self.tree(),after)
         pending=self.checkpoints/'pending.json';self.assertTrue(pending.exists())
@@ -175,6 +250,14 @@ class Deploy22ControllerBlind(s.ControllerFixture):
         self.assertEqual(journal['after']['files'],self.hashes(after))
         self.assertTrue((self.checkpoints/journal['checkpoint']).is_dir())
         self.assertLessEqual(len(self.calls),20,'Recovery plus failed fresh install must remain bounded')
+        # A separate invocation on the same public object may recover its retained journal.
+        (self.stage/'release.sig').write_bytes(bytes(64));self.calls.clear()
+        with self.assertRaises(self.api.Rejected):controller.run()
+        self.assertEqual(len(starts),5);self.assertEqual(self.state.read_bytes(),raw)
+        self.assertEqual(self.tree(),before);self.assertFalse(pending.exists())
+        self.assertLessEqual(len(self.calls),16,'The next invocation permits one bounded recovery')
+        with self.assertRaises(self.api.Rejected):controller.run()
+        self.assertEqual(len(starts),5);self.assertFalse(controller.rollback_used)
 
     def test_journal4_rollback_ignores_dependency_unit_gate_fault(self):
         self.required22();raw,before,after,_,_=self.make_journal(mask=63)
