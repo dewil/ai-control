@@ -15,6 +15,25 @@ import live_devbus_blind_support as support
 
 
 class OwnerRuntimeRegression(unittest.TestCase):
+    def test_event_task_id_is_required_for_registration_and_heartbeat_too(self):
+        from _control_web_broker import devbus_result
+        from _control_web_devbus import Projection
+        import json
+        projection = Projection()
+        for sequence, kind in enumerate(('registration', 'heartbeat'), 1):
+            payload = dict(message_id='event' + str(sequence), task_id='agent-task',
+                correlation_id='agent-task', source='worker1', target='control',
+                kind=kind, payload={})
+            self.assertTrue(projection.ingest(json.dumps(payload).encode(),
+                                             'devbus.events.worker1', sequence))
+        value = projection.snapshot()
+        self.assertEqual(len(value['events']), 2)
+        self.assertEqual(devbus_result(value), value)
+        for event in value['events']:
+            event['task_id'] = None
+            self.assertEqual(devbus_result(value), {'error': 'unavailable'})
+            event['task_id'] = 'agent-task'
+
     def test_dynamic_redactor_import_without_bin_on_sys_path_performs_no_owner_IO(self):
         code = '''
 import importlib.util, os, pathlib, sys

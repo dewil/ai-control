@@ -133,7 +133,7 @@ def _valid_devbus_dto(value):
         return nullable(item, lambda v: type(v) in (int, float) and math.isfinite(v) and 0 < v <= maximum)
     def event(item):
         return (shape(item, 'message_id task_id agent kind event_at sequence')
-                and valid_id(item['message_id']) and nullable(item['task_id'], valid_id)
+                and valid_id(item['message_id']) and valid_id(item['task_id'])
                 and valid_id(item['agent']) and member(item['kind'], _BUS_STATES | {'registration', 'heartbeat'})
                 and timestamp(item['event_at']) and integer(item['sequence'], 1))
     if (not shape(value, 'schema connection coverage tasks agents events')
