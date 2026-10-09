@@ -133,8 +133,10 @@ class AndroidBackgroundBrowserBlind(unittest.TestCase):
 
     def test_pending_HTTP_renewal_aborted_and_background_401_cannot_auth(self):
         # INV-BATT-02 INV-BATT-03 INV-BATT-09: unlike POST, observation GET is canceled.
-        self.select();held=[];self.page.route('**/api/session-live-snapshot?*',lambda r:held.append(r))
-        self.page.clock.install();self.page.clock.fast_forward(5000);self.until(lambda:len(held)==1)
+        self.select();self.page.clock.install();held=[];self.page.route('**/api/session-live-snapshot?*',lambda r:held.append(r))
+        self.transport.emit(live.snapshot(value=live.history('Synthetic accepted renewal anchor')))
+        expect(self.page.get_by_text('Synthetic accepted renewal anchor',exact=True)).to_have_count(1)
+        self.page.clock.fast_forward(5000);self.until(lambda:len(held)==1)
         before=self.page.evaluate('batteryAborts');self.suspend();self.assertGreater(self.page.evaluate('batteryAborts'),before)
         start=len(self.api());held[0].fulfill(status=401,json={'error':'unauthorized'})
         self.page.clock.fast_forward(65000);self.page.wait_for_timeout(100)
