@@ -307,6 +307,7 @@ class DevbusRuntime:
         self._loop = self._thread = self._observer = self._projection = None
         self._cleanup_task = None
         self._cleanup_failed = False
+        self._serving = False
         self._export_token = None
         self._fallback = _devbus_empty()
 
@@ -368,7 +369,11 @@ class DevbusRuntime:
             if self._stopping.is_set():
                 loop.run_until_complete(self._cleanup())
             else:
-                loop.run_forever()
+                self._serving = True
+                try:
+                    loop.run_forever()
+                finally:
+                    self._serving = False
         except Exception:
             with self._lock:
                 self._failed = True
@@ -415,7 +420,11 @@ class DevbusRuntime:
                     except Exception:
                         self._cleanup_failed = True
                     finally:
-                        loop.stop()
+                        # Only interrupt the serving loop. Failed setup and
+                        # final cleanup use run_until_complete; stopping those
+                        # turns genuine completed cleanup into a false failure.
+                        if self._serving:
+                            loop.stop()
                 if not getattr(self, '_shutdown_submitted', False):
                     self._shutdown_submitted = True
                     asyncio.create_task(finish())

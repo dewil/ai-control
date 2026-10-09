@@ -131,6 +131,41 @@ assert module.redact('Bearer synthetic-value') == 'Bearer ***'
                          {'state': 'disconnected', 'reason': 'unavailable'})
         runtime.stop()
 
+    def test_stop_after_failed_setup_does_not_interrupt_final_cleanup(self):
+        def projection(**_):
+            raise RuntimeError('synthetic-private-detail')
+        runtime = self.runtime(projection=projection)
+        original_cleanup = runtime._cleanup
+        entered = threading.Event()
+        release = None
+        calls = 0
+        async def coordinated_cleanup():
+            nonlocal calls, release
+            calls += 1
+            first = calls == 1
+            await original_cleanup()
+            if first:
+                # Hold the owner's final run_until_complete after genuine
+                # cleanup. The concurrent stop callback must not stop that loop
+                # before this already-clean coroutine can finish its handoff.
+                release = asyncio.Event()
+                entered.set()
+                await release.wait()
+            else:
+                release.set()
+        runtime._cleanup = coordinated_cleanup
+        runtime.start()
+        try:
+            self.assertTrue(entered.wait(2), 'Owner must enter final cleanup')
+            runtime.stop()
+            self.assertFalse(runtime._thread.is_alive())
+            self.assertTrue(runtime._loop.is_closed())
+            self.assertFalse(runtime._cleanup_failed)
+        finally:
+            if runtime._thread.is_alive():
+                runtime._loop.call_soon_threadsafe(release.set)
+                runtime._thread.join(2)
+
     def test_noncompliant_stop_keeps_loop_alive_and_reports_bounded_failure(self):
         entered, release = threading.Event(), threading.Event()
         class Observer:
