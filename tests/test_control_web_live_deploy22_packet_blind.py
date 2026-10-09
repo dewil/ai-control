@@ -69,7 +69,8 @@ class PacketBuilderBlind(s.BootstrapFixture):
         packet=self.build()
         self.assertEqual(masked(packet['bootstrap.py'],BOOT_BINDINGS),masked(self.inputs['bootstrap_template'],BOOT_BINDINGS))
         self.assertEqual(masked(packet['wrapper.py'],{'MANIFEST_SHA256'}),masked(self.inputs['wrapper_template'],{'MANIFEST_SHA256'}))
-        _,carrier=literal_nodes(packet['bootstrap.py'],{'PACKET_SHA256'});self.assertIsNone(ast.literal_eval(carrier['PACKET_SHA256']))
+        _,carrier=literal_nodes(packet['bootstrap.py'],{'PACKET_SHA256','PACKET_MANIFEST_SNAPSHOT'})
+        for node in carrier.values():self.assertIsNone(ast.literal_eval(node))
 
     def test_input_keysets_unknown_binding_and_wrong_blob_hash_refuse(self):
         for inputs,bindings in [(self.inputs|{'foreign':b'candidate'},self.bindings),
@@ -105,11 +106,48 @@ class PacketBuilderBlind(s.BootstrapFixture):
         for changed in (packet|{'foreign':b'unknown'},packet|{'bootstrap.py':packet['bootstrap.py']+b'\n# drift'}):
             with self.assertRaises(ValueError):self.builder.fill_stage(template,changed)
 
+    def test_filled_wrapper_verifies_then_assigns_both_carriers_and_calls_public_bootstrap_once(self):
+        import builtins
+        import types
+        packet=self.build();wrapper=s.module_bytes(packet['wrapper.py'],'deploy22_filled_wrapper_fixture')
+        real_exec=builtins.exec;namespaces=[];calls=[]
+        def execute(code,globals=None,locals=None,**kwargs):
+            result=real_exec(code,globals,locals,**kwargs)
+            if isinstance(code,types.CodeType) and 'bootstrap' in code.co_names and 'PACKET_SHA256' in code.co_names:
+                self.assertEqual(len(namespaces),0);namespaces.append(globals)
+                # Public operation callback isolates wrapper transport from bootstrap IO.
+                # Bootstrap resource/lifecycle cases separately exercise actual bootstrap().
+                def operation():
+                    self.assertEqual(globals['PACKET_SHA256'],s.sha(packet['manifest.json']))
+                    self.assertIs(globals['PACKET_MANIFEST_SNAPSHOT'],packet['manifest.json'])
+                    calls.append(True)
+                globals['bootstrap']=operation
+            return result
+        with self.root_boundary(),patch.object(builtins,'exec',side_effect=execute):
+            self.assertEqual(wrapper.run_packet(packet['manifest.json'],packet['bootstrap.py']),0)
+        self.assertEqual(len(namespaces),1);self.assertEqual(calls,[True]);self.assertEqual(self.trace,[])
+
+    def test_filled_wrapper_manifest_blob_caps_hash_env_and_root_refuse_before_exec(self):
+        import builtins
+        packet=self.build();wrapper=s.module_bytes(packet['wrapper.py'],'deploy22_filled_wrapper_refusal')
+        for manifest,bootstrap in [(packet['manifest.json']+b'\n',packet['bootstrap.py']),
+            (packet['manifest.json'],packet['bootstrap.py']+b'\n# changed'),
+            (b'{}',packet['bootstrap.py']), (b' '*(65536+1),packet['bootstrap.py'])]:
+            with self.subTest(sizes=(len(manifest),len(bootstrap))):
+                with self.root_boundary(),patch.object(builtins,'exec',side_effect=AssertionError('Invalid packet executed code')):
+                    self.assertEqual(wrapper.run_packet(manifest,bootstrap),1)
+        for env in ({'LD_PRELOAD':'synthetic-unsafe'},{'PYTHONPATH':'synthetic-unsafe'}):
+            with self.root_boundary(),patch.dict(os.environ,env),patch.object(builtins,'exec',side_effect=AssertionError('Unsafe environment executed code')):
+                self.assertEqual(wrapper.run_packet(packet['manifest.json'],packet['bootstrap.py']),1)
+        with self.root_boundary(),patch.object(os,'geteuid',return_value=1000),patch.object(builtins,'exec',side_effect=AssertionError('Nonroot executed code')):
+            self.assertEqual(wrapper.run_packet(packet['manifest.json'],packet['bootstrap.py']),1)
+
+
 class StageBoundaryBlind(unittest.TestCase):
     module_leaf='ai-control-live-bootstrap-stage.py'
     def setUp(self):
         self.op=s.source_module(self,self.module_leaf)
-        temp=tempfile.TemporaryDirectory(prefix='control-deploy22-stage-',dir='/var/tmp');self.addCleanup(temp.cleanup)
+        temp=tempfile.TemporaryDirectory(prefix='control-deploy22-stage-',dir='/home/dwl');self.addCleanup(temp.cleanup)
         self.root=Path(temp.name);self.root.chmod(0o700);self.stage_path=self.root/'live-bootstrap-packet';self.op.STAGE=self.stage_path
         self.payload={'wrapper.py':b'def run_packet(manifest_snapshot, bootstrap_snapshot):\n    return 0\n',
             'manifest.json':b'{"schema":1}', 'bootstrap.py':b'PACKET_SHA256 = None\n'}
@@ -121,8 +159,7 @@ class StageBoundaryBlind(unittest.TestCase):
         stack=ExitStack();stack.enter_context(patch.dict(os.environ,{},clear=True));stack.enter_context(patch.object(sys,'argv',['-']))
         for name in ('getuid','geteuid','getgid','getegid'):stack.enter_context(patch.object(os,name,return_value=0))
         def stat(call,path,*args,**kwargs):
-            mode=0o755 if not isinstance(path,int) and os.fspath(path) in ('/tmp','/var/tmp') else None
-            return s.RootStat(call(path,*args,**kwargs),mode)
+            return s.RootStat(call(path,*args,**kwargs))
         stack.enter_context(patch.object(os,'stat',side_effect=lambda path,*a,**k:stat(self.original_stat,path,*a,**k)))
         stack.enter_context(patch.object(os,'lstat',side_effect=lambda path,*a,**k:stat(self.original_lstat,path,*a,**k)))
         stack.enter_context(patch.object(os,'fstat',side_effect=lambda fd:s.RootStat(self.original_fstat(fd))))

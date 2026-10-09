@@ -117,8 +117,26 @@ class Live22BootstrapBlind(s.BootstrapFixture):
         self.assertEqual(self.state.read_bytes(),raw);self.assertEqual(self.helper.read_bytes(),s.pinned_source())
         self.assertEqual(self.unit.read_bytes(),self.before_unit)
         self.assertFalse(self.paths['DEP_PACKAGE'].exists());self.assertFalse(self.paths['DEP_INFO'].exists())
-        self.assertFalse(self.receipt.exists());self.assertLessEqual(len([row for row in self.trace if row['argv'][0]=='/usr/bin/systemctl']),26)
+        self.assertFalse(self.receipt.exists());self.assertEqual(len([row for row in self.trace if row['argv'][0]=='/usr/bin/systemctl']),26)
+        self.assertLessEqual(sum(row['timeout'] for row in self.trace),1050)
         self.assertEqual(sum(row['argv'][0]=='/usr/bin/setpriv' for row in self.trace),1)
+
+    def test_first_stop_failure_uses_only_bounded_bounce_and_never_dependency_mutation(self):
+        command=self.command;failures=[];raw=self.state.read_bytes()
+        def failed(argv,**kwargs):
+            if argv[:2]==['/usr/bin/systemctl','stop'] and not failures:
+                failures.append(True);self.trace.append(dict(argv=list(argv),**kwargs))
+                return subprocess.CompletedProcess(argv,1,b'',b'')
+            return command(argv,**kwargs)
+        self.op.run_command=failed
+        with self.assertRaises(ValueError):self.invoke()
+        self.assertEqual(failures,[True]);self.assertEqual(self.state.read_bytes(),raw)
+        self.assertEqual(self.helper.read_bytes(),s.pinned_source());self.assertEqual(self.unit.read_bytes(),self.before_unit)
+        self.assertFalse(self.paths['DEP_PACKAGE'].exists());self.assertFalse(self.paths['DEP_INFO'].exists());self.assertFalse(self.receipt.exists())
+        self.assertLessEqual(sum(row['argv'][0]=='/usr/bin/systemctl' for row in self.trace),12)
+        self.assertFalse(any(row['argv'][0]=='/usr/bin/setpriv' for row in self.trace))
+        self.assertEqual([row['argv'][1:] for row in self.trace if row['argv'][1]=='start'],
+            [['start',s.SERVICES[1]],['start',s.SERVICES[0]]])
 
     def test_smoke_strict_json_oversize_wrong_source_schema_bool_refuses(self):
         # Every malformed successful-child result gets a fresh complete before16 fixture.

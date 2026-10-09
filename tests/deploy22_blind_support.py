@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import types
+import tempfile
 import unittest
 from unittest.mock import patch
 import test_control_web_app_deploy16_blind_red as prior
@@ -60,7 +61,9 @@ class ControllerFixture(unittest.TestCase):
 
     def setUp(self):
         # Narrow accepted public fixture setup; no legacy inherited tests/source inspection.
-        prior.fixture.SignedDeploy.setUp(self)
+        temp_constructor=tempfile.TemporaryDirectory
+        with patch.object(tempfile,'TemporaryDirectory',side_effect=lambda **kwargs:temp_constructor(**(kwargs|{'dir':'/home/dwl'}))):
+            prior.fixture.SignedDeploy.setUp(self)
         self.before16=self.current|{prior.AUTH:b'# invented auth16\n',prior.DOWNLOAD:b'# invented download16\n'}
         self.after22=self.before16|{p:('/* invented signed22 '+p+' */\n').encode() for p in NEW}
         self.install_state(self.before16,3,7)
@@ -182,10 +185,24 @@ class BootstrapFixture(ControllerFixture):
         for name in ('SYSTEM_PYTHON','VENV_PYTHON','OWNER_IMPORT_LAUNCHER','SYSTEMCTL'):
             fixed={'SYSTEM_PYTHON':'/usr/bin/python3','VENV_PYTHON':'/opt/ai-control-web/venv/bin/python',
                 'OWNER_IMPORT_LAUNCHER':'/usr/bin/setpriv','SYSTEMCTL':'/usr/bin/systemctl'}[name]
-            node=self.root/'executors'/name;self.write(node,('# synthetic never-executed '+name+'\n').encode(),0o755)
+            node=(self.paths['VENV_ROOT']/'bin/python') if name=='VENV_PYTHON' else self.root/'executor-vfs'/fixed.lstrip('/')
+            self.write(node,('# synthetic never-executed '+name+'\n').encode(),0o755)
+            for parent in node.parents:
+                if parent==self.root:break
+                parent.chmod(0o755)
             self.virtual[fixed]=node;stat=node.lstat()
             self.stat_pins[name]=dict(links=[],resolved=dict(path=fixed,dev=stat.st_dev,ino=stat.st_ino,
                 uid=0,gid=0,mode=stat.st_mode&0o7777,size=stat.st_size,sha256=sha(node.read_bytes())))
+        for fixed,node in list(self.virtual.items()):
+            for parent in Path(fixed).parents:
+                if str(parent)=='/':break
+                if str(parent) not in self.virtual:
+                    mapped=self.root/'executor-vfs'/str(parent).lstrip('/')
+                    mapped.mkdir(parents=True,exist_ok=True,mode=0o755);mapped.chmod(0o755)
+                    self.virtual[str(parent)]=mapped
+        self.virtual['/opt/ai-control-web/venv']=self.paths['VENV_ROOT']
+        self.virtual['/opt/ai-control-web/venv/bin']=self.paths['VENV_ROOT']/'bin'
+        self.fd_logical={}
         for name in ('LOCK','SITE_PACKAGES','VENV_ROOT'):
             stat=self.paths[name].lstat();self.stat_pins[name]=dict(dev=stat.st_dev,ino=stat.st_ino,uid=0,gid=0,mode=stat.st_mode&0o7777)
         self.stat_pins['BROKER_UNIT_MODE']=0o644
@@ -197,24 +214,30 @@ class BootstrapFixture(ControllerFixture):
             BEFORE_BROKER_UNIT_BLOB_B64=self.before_unit,AFTER_BROKER_UNIT_BLOB_B64=self.after_unit)
         for name,value in self.bindings.items():setattr(self.op,name,deepcopy(value))
         for name,value in blobs.items():setattr(self.op,name,base64.b64encode(value).decode())
-        self.op.OLD_HELPER_SHA256=OLD_SHA;self.op.KEY_SHA256=sha(self.key.read_bytes());self.op.PACKET_SHA256='b'*64
+        self.op.OLD_HELPER_SHA256=OLD_SHA;self.op.KEY_SHA256=sha(self.key.read_bytes())
+        bootstrap_snapshot=(ROOT/'deployment/ai-control-live-bootstrap.py').read_bytes()
+        manifest=dict(schema=1,bootstrap=dict(sha256=sha(bootstrap_snapshot),size=len(bootstrap_snapshot)))
+        for key,raw in dict(helper=self.new_helper,wheel=WHEEL.read_bytes(),unit_before=self.before_unit,unit_after=self.after_unit).items():
+            manifest[key]=dict(sha256=sha(raw),size=len(raw))
+        self.packet_manifest=canonical(manifest)
+        self.op.PACKET_MANIFEST_SNAPSHOT=self.packet_manifest;self.op.PACKET_SHA256=sha(self.packet_manifest)
         self.trace=[];self.after_command=None;self.smoke_result=None;self.active={service:True for service in SERVICES}
         self.actual_run_command=self.op.run_command
         self.op.run_command=self.command
         self.original_stat=os.stat;self.original_lstat=os.lstat;self.original_fstat=os.fstat
         self.original_open=os.open;self.original_builtin_open=__import__('builtins').open
 
-    def identity(self,path):
-        text=os.fspath(path) if not isinstance(path,int) else None
-        actual=self.virtual.get(text,path)
-        return actual
+    def identity(self,path,dir_fd=None):
+        if isinstance(path,int):return path
+        text=os.fspath(path)
+        if not os.path.isabs(text) and dir_fd is not None:
+            parent=self.fd_logical.get(dir_fd,os.readlink('/proc/self/fd/'+str(dir_fd)))
+            text=os.path.normpath(os.path.join(parent,text))
+        return self.virtual.get(text,text)
 
     def root_stat(self,call,path,*args,**kwargs):
-        actual=self.identity(path);result=call(actual,*args,**kwargs)
-        # Temp container ancestors are explicit root/non-writable emulations;
-        # this changes neither the host mode nor filesystem content.
-        directory_mode=0o755 if not isinstance(actual,int) and os.fspath(actual) in ('/var/tmp','/tmp') else None
-        return RootStat(result,directory_mode)
+        actual=self.identity(path,kwargs.get('dir_fd'))
+        return RootStat(call(actual,*args,**kwargs))
 
     def command(self,argv,*,timeout=40,env=None,cwd='/'):
         self.trace.append(dict(argv=list(argv),timeout=timeout,env=env,cwd=cwd))
@@ -265,12 +288,18 @@ class BootstrapFixture(ControllerFixture):
         stack.enter_context(patch.object(os,'lstat',side_effect=lambda path,*a,**k:self.root_stat(self.original_lstat,path,*a,**k)))
         stack.enter_context(patch.object(os,'fstat',side_effect=lambda fd:RootStat(self.original_fstat(fd))))
         def opened(path,*args,**kwargs):
-            actual=self.identity(path)
+            actual=self.identity(path,kwargs.get('dir_fd'))
             text=os.fspath(actual)
             if text.startswith('/home/dwl/.config/ai-control'):raise AssertionError('Root touched forbidden owner config/parent')
             if not isinstance(actual,int) and text.startswith(('/opt/ai-control','/var/lib/ai-control','/etc/ai-control','/etc/systemd')):
                 raise AssertionError('Unmapped production filesystem access')
-            return self.original_open(actual,*args,**kwargs)
+            fd=self.original_open(actual,*args,**kwargs)
+            logical=os.fspath(path)
+            if not os.path.isabs(logical) and kwargs.get('dir_fd') is not None:
+                parent=self.fd_logical.get(kwargs['dir_fd'],os.readlink('/proc/self/fd/'+str(kwargs['dir_fd'])))
+                logical=os.path.normpath(os.path.join(parent,logical))
+            self.fd_logical[fd]=logical
+            return fd
         stack.enter_context(patch.object(os,'open',side_effect=opened))
         def builtin_open(path,*args,**kwargs):
             actual=self.identity(path)
