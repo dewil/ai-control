@@ -1,4 +1,7 @@
 """INV-WSESS-14/15: source-blind document navigation, synthetic backend only."""
+# Accepted INV-WSESS-47..50 (2026-10-08-spec-live-observability-package.md):
+# canonical captions/chips and native disclosures replace the previous labels/layout.
+
 from control_browser_helpers import project_is_selected
 import importlib
 import json
@@ -95,8 +98,12 @@ class PageNavigationBrowserContract(unittest.TestCase):
 
     def buttons(self, direction):
         name = '↑ В начало' if direction == 'up' else '↓ В конец'
-        buttons = self.page.get_by_role('button', name=name, exact=True)
+        buttons = self.page.get_by_role('button', name=name, exact=True, include_hidden=True)
         self.assertEqual(buttons.count(), 2, 'INV-WSESS-14: requires top and bottom accessible ' + name + ' buttons')
+        # INV47 amendment keeps bottom navigation in the explicit compact menu.
+        for summary in buttons.last.locator('xpath=ancestor::details[not(@open)]/summary').all():
+            summary.click()
+        self.assertTrue(buttons.first.is_visible()); self.assertTrue(buttons.last.is_visible())
         return buttons
 
     def metrics(self):

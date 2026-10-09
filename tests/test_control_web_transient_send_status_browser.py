@@ -1,4 +1,7 @@
 """INV-WSESS-16/17: source-blind transient send status, synthetic backend only."""
+# Accepted INV-WSESS-47/48 (2026-10-08-spec-live-observability-package.md):
+# empty statuses collapse; nonempty accepted status remains visible in normal flow.
+
 from control_browser_helpers import choose_project
 import importlib
 import json
@@ -172,10 +175,13 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         self.page.wait_for_timeout(200)
 
     def slot(self):
-        return self.page.locator('form').get_by_role('status')
+        return self.page.locator('form').get_by_role('status',include_hidden=True)
 
     def accepted(self):
-        return bool(re.search('принято', self.slot().inner_text(), re.I))
+        accepted = bool(re.search('принято', self.slot().inner_text(), re.I))
+        if accepted:
+            self.assertTrue(self.slot().is_visible(), 'Nonempty accepted status remains visible in normal flow')
+        return accepted
 
     def calls(self):
         path = self.evidence / 'calls.jsonl'
@@ -214,11 +220,13 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         self.page.wait_for_timeout(1600)
         self.assertGreater(len(self.history_requests()), before_requests, 'Real polling must reconcile the same UUID')
         self.assertEqual(self.slot().inner_text().strip(), '', 'Accepted clears after5s despite repeated history GET')
-        self.assertLessEqual(abs(self.page.locator('form').filter(has=self.page.locator('textarea')).bounding_box()['height']-before_form_height), 8, 'Status slot reserves form height after visual expiry')
+        self.assertEqual(self.slot().count(), 1, 'Empty polite live region remains attached after expiry')
+        self.assertLess(self.page.locator('form').filter(has=self.page.locator('textarea')).bounding_box()['height'], before_form_height, 'INV47 removes the empty status reserve after expiry')
+        self.assertLessEqual(self.slot().evaluate('el=>el.getBoundingClientRect().height'), .5, 'Empty accepted slot must collapse to0px')
         self.assertEqual(self.calls(), before_calls, 'Expiry cannot trigger status GET or send')
         self.assertEqual(self.page.locator('.chat-items').inner_html(), before_history, 'Expiry preserves rendered history')
         self.assertEqual(len(self.page.evaluate('window.statusAnnouncements')), 1, 'Repeated polling cannot repeat accepted announcement')
-        self.assertLessEqual(abs(anchor.bounding_box()['y']-before_y), 8, 'Reserved status height preserves reader anchor')
+        self.assertLessEqual(abs(anchor.bounding_box()['y']-before_y), 8, 'Status collapse preserves reader anchor')
         self.assertEqual(self.page.locator('textarea').input_value(), 'Draft survives status expiry')
         self.assertEqual([r['message_id'] for r in self.calls() if r['method'] == 'send'], before_ids)
         self.assertEqual(self.page.get_by_text(re.compile('Сообщение принято')).count(), 0, 'No accepted pile after expiry')

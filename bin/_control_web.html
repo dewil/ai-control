@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>Control</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/web.css"><script src="/web.js" defer></script></head>
-<body><main><header><div><span class="eyebrow">CONTROL</span><h1>Control</h1></div><a href="/download/android/">Скачать Android-приложение</a><button id="logout" hidden>Выйти</button></header><p id="notice" role="status" aria-live="polite"></p>
+<body><main><header><div><span class="eyebrow">CONTROL</span><h1>Control</h1></div><a href="/download/android/">Андроид</a><button id="logout" hidden>Выйти</button></header><p id="notice" role="status" aria-live="polite"></p>
 <section id="session-loading"><p>Восстанавливаем сессию…</p><button id="session-retry" hidden>Повторить</button></section>
 <section id="login" hidden><h2>Войти в Control</h2><p>Введите логин, пароль и код из приложения аутентификации.</p><form id="login-form"><label>Логин<input id="username" name="username" autocomplete="username" autocapitalize="none" required minlength="2" maxlength="32" pattern="[a-z][a-z0-9_\-]{1,31}" title="2–32 символа: строчные латинские буквы, цифры, _ и -; первый символ — буква"></label><label>Пароль<input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024"></label><label>Код подтверждения<input id="login-totp" name="totp" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required></label><button type="submit">Войти</button></form></section>
 <section id="workspace" hidden>
@@ -13,6 +13,7 @@
     <div id="projects-body">
     <div class="project-picker"><button id="create-open" type="button" class="secondary">Новая сессия</button><label for="project-sort">Сортировка проектов<select id="project-sort"><option value="count">По числу сессий</option><option value="activity">По последней активности</option></select></label><button id="projects-refresh" type="button" class="secondary">Обновить проекты</button></div>
     <div id="project-cloud" class="project-cloud" role="group" aria-label="Проекты"></div>
+    <details id="project-details" hidden><summary>Сведения о проекте</summary><div id="project-details-content" class="meta"></div></details>
     <p id="project-summary-status" class="meta" role="status" aria-live="polite"></p>
     </div>
     </div>
@@ -30,17 +31,27 @@
       <p id="history-truncated" class="truncation" hidden>История показана не полностью. Некоторые сообщения могут отсутствовать или быть сокращены.</p>
       <div id="receipt-list" class="receipt-list"></div>
       <p id="model-status" class="meta" role="status" aria-live="polite"></p>
-      <div id="model-notes" class="meta" hidden><p>Выбор сохраняется для следующих сообщений; перед отправкой можно изменить</p><p>Уже начатая работа сохраняет свои настройки; выбор действует при следующем запуске</p></div>
-      <p id="current-model-status" class="meta" aria-describedby="session-settings-note">Сессия: неизвестно · уровень неизвестен</p>
-      <p id="session-settings-note" class="meta">Настройки загруженной сессии или последние сохранённые; активный ответ может использовать другие настройки.</p>
-      <p id="next-model-status" class="meta">Следующая отправка: настройки сессии</p>
+      <p id="current-model-status" class="meta" aria-describedby="session-settings-note">Сессия: модель неизвестна · Размышление: уровень неизвестен</p>
       <form id="chat-form">
-        <div class="model-controls"><label for="chat-model">Модель<select id="chat-model"><option value="">Наследовать текущую</option></select></label><label for="chat-effort">Уровень размышления<select id="chat-effort"><option value="">Выберите уровень размышления</option></select></label></div>
-        <button id="models-refresh" type="button" class="secondary">Обновить список моделей</button>
-        <label for="chat-draft">Сообщение</label><textarea id="chat-draft" maxlength="16000" autocomplete="off"></textarea><div class="chat-actions"><button id="chat-send" type="submit">Отправить</button><button id="send-check" type="button" class="secondary" hidden>Проверить доставку</button><span id="send-status" role="status" aria-live="polite"></span></div>
+        <div class="next-selection">
+          <p id="next-model-status" class="meta">Следующая отправка: настройки сессии</p>
+          <p id="next-model-hint" class="meta" hidden></p>
+          <label for="chat-draft">Сообщение</label><textarea id="chat-draft" maxlength="16000" autocomplete="off" aria-describedby="session-settings-note"></textarea>
+          <div class="chat-actions">
+            <button id="chat-send" type="submit">Отправить</button>
+            <button id="models-refresh" type="button" class="secondary" aria-label="Обновить список моделей">↻</button>
+            <details id="chat-settings" class="chat-settings"><summary>Настройки</summary>
+              <div class="model-controls"><label for="chat-model">Модель<select id="chat-model"><option value="">Использовать текущую модель</option></select></label><label for="chat-effort">Уровень размышления<select id="chat-effort"><option value="">Выберите уровень размышления</option></select></label></div>
+              <p id="session-settings-note" class="meta">Настройки загруженной сессии или последние сохранённые; активный ответ может использовать другие настройки.</p>
+              <div id="model-notes" class="meta" hidden><p>Выбор сохраняется для следующих сообщений; перед отправкой можно изменить</p><p>Уже начатая работа сохраняет свои настройки; выбор действует при следующем запуске</p></div>
+              <div class="page-navigation"><button type="button" class="secondary" data-page-scroll="up">↑ В начало</button><button type="button" class="secondary" data-page-scroll="down">↓ В конец</button></div>
+            </details>
+            <button id="send-check" type="button" class="secondary" hidden>Проверить доставку</button>
+            <span id="send-status" role="status" aria-live="polite"></span>
+          </div>
+        </div>
       </form>
     </section>
-    <div class="page-navigation"><button type="button" class="secondary" data-page-scroll="up">↑ В начало</button><button type="button" class="secondary" data-page-scroll="down">↓ В конец</button></div>
   </section>
 </section>
 </main><dialog id="rename-dialog" role="dialog" aria-labelledby="rename-heading">
@@ -59,6 +70,6 @@
 <button id="create-check" type="button" class="secondary" hidden>Проверить статус</button>
 </dialog>
 <!-- BUILD-INFO:START -->
-<footer id="build-info" class="build-info" data-release-id="7">ai-control · r7 · Собрано: <time datetime="2026-10-08T15:27:11.818865Z">08.10.2026 18:27 МСК</time> · Ветка: integrate/web-ux-round-20261008</footer>
+<footer id="build-info" class="build-info" data-release-id="8">ai-control · r8 · Собрано: <time datetime="2026-10-09T05:32:39.328073Z">09.10.2026 08:32 МСК</time> · Ветка: feat/live-ux-implementation</footer>
 <!-- BUILD-INFO:END -->
 </body></html>

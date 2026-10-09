@@ -3,6 +3,9 @@
 Design frozen from 37f76a3 normative contract, before application source reads.
 Public HTTP routes and DOM are observations; no real account/provider calls.
 """
+# Accepted INV-WSESS-47/48 (2026-10-08-spec-live-observability-package.md):
+# empty statuses collapse; unknown project chips use visible ? plus factual ARIA.
+
 import copy
 import json
 from pathlib import Path
@@ -131,7 +134,9 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
         self.refresh()
         self.assertEqual(len(calls), 2)
         self.assertNotRegex(self.tile('high').inner_text(), r'\b0\b')
-        self.assertRegex(self.page.locator('body').inner_text(), '(?i)неизвест|не удалось|ошиб')
+        self.assertIn('?', self.tile('high').inner_text())
+        self.assertRegex(self.tile('high').get_attribute('aria-label'), '(?i)неизвест')
+        self.assertRegex(self.page.locator('body').inner_text(), '(?i)неизвест|недоступ|не удалось|ошиб')
         self.assertTrue(self.page.get_by_role('button', name='Обновить проекты', exact=True).is_enabled())
         self.quiet()
         self.assertEqual(len(calls), 2)

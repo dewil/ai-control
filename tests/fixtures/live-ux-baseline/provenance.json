@@ -1,0 +1,38 @@
+{
+  "source_sha": "0f4cbe3d2b5f7c8983375d6c3ef9d262d19bbcde",
+  "original_checkout_sha": "59d99a145c55c0d06f87deda05ba3f946f4239ca",
+  "copied_original_sha256": {
+    "control-live-ux-bottom-baseline.json": "1051924e21cffd1e19a3489d134f85dc23dc1a094c7cbbf19ca00da9063643ca",
+    "control-live-ux-bottom-baseline.md": "9f2e62233648a49eeaa06a394ff3b681fb8b36f046532e9df7729d3189ae134a",
+    "control-live-ux-bottom-baseline.py": "006427433737fda7421b94a652d4ed3dfb1e4652594fcb724775485bba4bbebe"
+  },
+  "reproduction": {
+    "source_sha": "0f4cbe3d2b5f7c8983375d6c3ef9d262d19bbcde",
+    "chromium": "153.0.8010.12",
+    "following_all": true,
+    "rows": [
+      {
+        "width": 320,
+        "B": 829.59375,
+        "C": 898.59375
+      },
+      {
+        "width": 390,
+        "B": 787.59375,
+        "C": 856.59375
+      },
+      {
+        "width": 412,
+        "B": 745.59375,
+        "C": 814.59375
+      },
+      {
+        "width": 1280,
+        "B": 594.59375,
+        "C": 683.59375
+      }
+    ]
+  },
+  "usage": "unknown",
+  "coverage": "partial"
+}

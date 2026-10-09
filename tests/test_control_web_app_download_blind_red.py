@@ -1,4 +1,7 @@
 """Independent anonymous download contract; synthetic APK bytes, no signing claim."""
+# Accepted INV-WSESS-47..50 (2026-10-08-spec-live-observability-package.md):
+# canonical captions/chips and native disclosures replace the previous labels/layout.
+
 import hashlib
 import json
 from pathlib import Path
@@ -48,7 +51,7 @@ class AppDownloadContract(unittest.TestCase):
         r = self.client.get('/')
         self.assertEqual(r.status_code, 200)
         self.assertIn('/download/android/', r.text)
-        self.assertIn('Скачать Android-приложение', r.text)
+        self.assertIn('Андроид', r.text)
 
     def test_configured_empty_and_absent_download_contract(self):
         r = self.get('/download/android/')
