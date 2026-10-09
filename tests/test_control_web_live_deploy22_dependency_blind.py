@@ -14,7 +14,7 @@ class DependencyRecoveryBlind(s.BootstrapFixture):
     def setUp(self):self.prepare()
     def snapshot(self):
         return {str(p.relative_to(self.root)):(s.sha(p.read_bytes()),p.lstat().st_mode&0o777) for p in self.root.rglob('*') if p.is_file() and not p.is_symlink()}
-    def stage(self,kind,complete=False):
+    def dependency_stage(self,kind,complete=False):
         prefix='nats/' if kind=='nats' else 'nats_py-2.9.0.dist-info/'
         directory=self.site/('.ai-control-live22-'+('nats' if kind=='nats' else 'info')+'.stage')
         directory.mkdir(mode=0o700)
@@ -30,12 +30,12 @@ class DependencyRecoveryBlind(s.BootstrapFixture):
     def test_unowned_stages_both_stages_INFO_before_NATS_and_partial_final_refuse(self):
         # No own marker: even seemingly valid staging is foreign, never adopted/removed.
         for kind in ('nats','info'):
-            directory=self.stage(kind);before=self.snapshot()
+            directory=self.dependency_stage(kind);before=self.snapshot()
             with self.assertRaises(ValueError):self.invoke()
             self.assertEqual(self.snapshot(),before);self.assertEqual(self.trace,[])
             for p in sorted(directory.rglob('*'),key=lambda p:len(p.parts),reverse=True):p.unlink() if p.is_file() else p.rmdir()
             directory.rmdir()
-        directory=self.stage('nats');self.stage('info');before=self.snapshot()
+        directory=self.dependency_stage('nats');self.dependency_stage('info');before=self.snapshot()
         with self.assertRaises(ValueError):self.invoke()
         self.assertEqual(self.snapshot(),before)
 
@@ -110,7 +110,7 @@ class DependencyRecoveryBlind(s.BootstrapFixture):
             return command(argv,**kwargs)
         self.op.run_command=kill
         with self.assertRaises(SyntheticProcessDeath):self.invoke()
-        directory=self.stage('nats');foreign=directory/'.live22-unknown.part';self.write(foreign,b'owned foreign bytes',0o600)
+        directory=self.dependency_stage('nats');foreign=directory/'.live22-unknown.part';self.write(foreign,b'owned foreign bytes',0o600)
         before=self.snapshot();self.op.run_command=command;self.trace.clear()
         with self.assertRaises(ValueError):self.invoke()
         self.assertEqual(self.snapshot(),before);self.assertEqual(foreign.read_bytes(),b'owned foreign bytes')
