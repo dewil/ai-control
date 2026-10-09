@@ -34,7 +34,21 @@ public final class LoginLifecycleProbe {
     static void check(boolean condition, String message) {
         if (!condition) throw new AssertionError(message);
     }
-    static void foreground(MainActivity activity) { activity.onStop(); activity.onStart(); }
+    static void callback(MainActivity activity, String name) throws Exception {
+        Class<?> type = MainActivity.class;
+        while (type != null) {
+            try {
+                java.lang.reflect.Method method = type.getDeclaredMethod(name);
+                method.setAccessible(true);
+                method.invoke(activity);
+                return;
+            } catch (NoSuchMethodException missing) { type = type.getSuperclass(); }
+        }
+        throw new AssertionError("Missing Android lifecycle callback: " + name);
+    }
+    static void foreground(MainActivity activity) throws Exception {
+        callback(activity, "onPause"); activity.onStop(); activity.onStart(); callback(activity, "onResume");
+    }
     static void reset(MainActivity activity) throws Exception {
         java.lang.reflect.Method method = MainActivity.class.getDeclaredMethod("showLogin");
         method.setAccessible(true);
@@ -46,6 +60,7 @@ public final class LoginLifecycleProbe {
             activity.onCreate(null);
             EditText initial = field(activity, "Логин");
             activity.onStart();
+            callback(activity, "onResume");
             if (args[0].equals("initial")) {
                 check(initial == field(activity, "Логин"), "Initial onStart replaced visible input");
             } else if (args[0].equals("updates")) {
@@ -95,6 +110,6 @@ public final class LoginLifecycleProbe {
                 }
             }
             System.out.println("PASS host contract " + args[0]);
-        } finally { activity.onStop(); activity.onDestroy(); }
+        } finally { callback(activity, "onPause"); activity.onStop(); activity.onDestroy(); }
     }
 }

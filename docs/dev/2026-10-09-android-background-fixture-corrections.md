@@ -21,3 +21,11 @@ PYTHONPATH=tests:bin /var/tmp/control-devbus-test-venv/bin/python -m unittest te
 ```
 
 Полные suites/CI, APK/device/prod не затронуты. Usage blind testwriter unknown/partial; ledger остаётся у root.
+
+## Historical login host: SDK lifecycle migration
+
+Сигнатуры независимо сверены `javap -protected` по установленному Android36 SDK: Activity onPause/onResume protected; WebView onPause/onResume/pauseTimers/resumeTimers public; WebSettings getUserAgentString/setUserAgentString public. В shared historical stubs добавлены отсутствовавшие методы, UA getter/setter хранит synthetic значение. Background compiler больше не вставляет duplicate Activity callbacks.
+
+LoginLifecycleProbe теперь выполняет initial onStart→onResume и foreground onPause→onStop→onStart→onResume. Protected callbacks вызываются reflection по иерархии Activity, чтобы одинаково исполнять override и inherited SDK signature. Все прежние login/focus/selection/submit/reset/updates assertions сохранены, no-op historical WebView не объявляется network/timer oracle.
+
+Узкая проверка на baseline: actual MainActivity отдельно скомпилирована с historical stubs; `initial`, `keepass`, `submit`, `reset`, `updates` — **5/5 GREEN**. Background host с общим ComponentActivity также компилируется без duplicate methods; его `login` — **GREEN**. Broad suites/CI не повторялись; implementation checkout не читался. Usage этого дополнения unknown/partial.

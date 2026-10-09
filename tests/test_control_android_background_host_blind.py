@@ -26,8 +26,8 @@ class AndroidBackgroundHostBlind(unittest.TestCase):
             dependency/'android/updater/build/intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes',*runtime,
             '/home/dwl/android-tools/sdk/platforms/android-36/android.jar']))
         cls.java='/home/dwl/android-tools/jdk-17.0.20.1+1/bin/java'
-        # Fixture superclass previously omitted onPause/onResume entirely.
-        component=(base/'androidx/activity/ComponentActivity.java').read_text().replace('public void onStart(){}','public void onStart(){}protected void onResume(){}protected void onPause(){}')
+        # Shared historical fixture now supplies the SDK lifecycle signatures.
+        component=(base/'androidx/activity/ComponentActivity.java').read_text()
         (directory/'ComponentActivity.java').write_text(component)
         (directory/'UpdatesActivity.java').write_text('package ru.dewil.aicontrol;public class UpdatesActivity extends androidx.activity.ComponentActivity {}')
         excluded={p.name for p in overrides.glob('*.java')}|{'ComponentActivity.java'}
