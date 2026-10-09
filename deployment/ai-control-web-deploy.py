@@ -552,7 +552,16 @@ class Deploy:
     def ctl(self, *args):
         return self.runner(['/usr/bin/systemctl', *args]).strip()
 
-    def services(self):
+    def services(self, *, live=True):
+        # Historical journals retain their accepted identity-only query protocol.
+        # Only schema4 forward paths require effective Fragment/DropIn proof.
+        if not live:
+            for service, user in zip(SERVICES, ('ai-panel', 'dwl')):
+                if (self.ctl('is-active', service) != 'active' or
+                        self.ctl('show', service, '-p', 'User', '--value') != user or
+                        self.ctl('show', service, '-p', 'Group', '--value') != 'ai-panel'):
+                    raise Rejected('Service health or account mismatch')
+            return
         for service, user in zip(SERVICES, ('ai-panel', 'dwl')):
             if self.ctl('is-active', service) != 'active':
                 raise Rejected('Service is not active')
@@ -597,10 +606,10 @@ class Deploy:
         for service in SERVICES:
             self.ctl('stop', service)
 
-    def start(self):
+    def start(self, *, live=True):
         self.ctl('start', SERVICES[1])
         self.ctl('start', SERVICES[0])
-        self.services()
+        self.services(live=live)
 
     def read_state(self):
         raw = read_file(self.state_path, owners=(self.owner_uid,),
@@ -699,17 +708,17 @@ class Deploy:
     def rollback(self, before, old, after, raw):
         if self.rollback_used:
             raise RollbackFailed('Rollback budget exhausted; pending journal retained')
-        if not os.path.lexists(self.pending):
-            raise RollbackFailed('No pending journal authorizes rollback')
         # Validation failures and timeouts also consume the single attempt.
         self.rollback_used = True
+        if not os.path.lexists(self.pending):
+            raise RollbackFailed('No pending journal authorizes rollback')
         try:
             self.interrupted_tree(before, after)
             self.stop()
             for leaf in after['files'].keys() - before['files'].keys():
                 self.transition_leaf(after['files'][leaf], remove=True, leaf=leaf)
             self.install(old)
-            self.start()
+            self.start(live=before['schema'] == 4)
             self.match(before['files'])
             atomic_write(self.state_path, raw, 0o600, self.owner_uid)
             self.accepted_raw = raw
@@ -746,10 +755,10 @@ class Deploy:
             raise Rejected('Checkpoint bytes mismatch')
         current = self.interrupted_tree(before, after)
         if accepted == after and current == after['files']:
-            if after['schema'] == 4:
-                self.live_gate()
             try:
-                self.services()
+                if after['schema'] == 4:
+                    self.live_gate()
+                self.services(live=after['schema'] == 4)
             except Exception:
                 pass
             else:
@@ -862,6 +871,9 @@ class Deploy:
         self.live_gate()
         after = {'schema': 4, 'release_id': release, 'manifest_sha256': sha, 'files': expected}
         self.services()
+        basenames = [Path(path).name for path in original] + ['accepted.json']
+        if len(set(basenames)) != len(basenames):
+            raise Rejected('Checkpoint basename collision')
         checkpoint = Path(tempfile.mkdtemp(prefix='release-', dir=self.checkpoints))
         os.chmod(checkpoint, 0o700)
         for path, data in original.items():
@@ -884,6 +896,7 @@ class Deploy:
             self.match(expected)
             self.live_gate()
             self.publish(after)
+            self.live_gate()
         except Exception as exc:
             if self.rollback_used:
                 # Pending recovery already spent this invocation's one attempt.
@@ -891,7 +904,6 @@ class Deploy:
                 raise RollbackFailed('Rollback budget exhausted; new pending journal retained') from exc
             self.rollback(before, original, after, self.accepted_raw)
             raise
-        self.live_gate()
         self.clear_pending()
         return {'result': 'installed', 'release_id': release}
 

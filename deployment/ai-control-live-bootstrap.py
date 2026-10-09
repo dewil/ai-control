@@ -1238,10 +1238,21 @@ def checkpoint_new(accepted, old, before, dependency_before):
                 raise ValueError('Unknown checkpoint evidence')
             path = LIVE_CHECKPOINTS / name
             existing_private(path)
-            for child in path.iterdir():
-                total += len(read_file(child, owners=(0,), mode=0o600, limit=1310720))
-                if total > 16777216:
-                    raise ValueError('Checkpoint byte quota reached')
+            checkpoint_files = {'helper.before': 1048576, 'broker-unit.before': 65536,
+                                'accepted.before': 65536, 'proof.json': 65536, 'manifest.json': 65536}
+            checkpoint_fd = directory(path, 0, private=True)
+            try:
+                if set(os.listdir(checkpoint_fd)) != set(checkpoint_files):
+                    raise ValueError('Unknown retained checkpoint scope')
+            finally:
+                os.close(checkpoint_fd)
+            retained = sum(len(read_file(path / child, owners=(0,), mode=0o600, limit=maximum))
+                           for child, maximum in checkpoint_files.items())
+            if retained > 1310720:
+                raise ValueError('Retained checkpoint oversized')
+            total += retained
+            if total > 16777216:
+                raise ValueError('Checkpoint byte quota reached')
     finally:
         os.close(fd)
     path = LIVE_CHECKPOINTS / ('live22-' + PACKET_SHA256)
