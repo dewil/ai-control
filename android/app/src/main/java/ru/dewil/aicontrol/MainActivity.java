@@ -35,7 +35,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     private long epoch=0,pageEpoch=0,authGeneration=0;
     private boolean imeVisible=false,clearPending=false,storageBroken=false;
     private volatile boolean foreground=false;
-    private boolean loading=false,pageLoaded=false,loginVisible=false;
+    private boolean loading=false,pageLoaded=false,loginVisible=false,mainFrameFailed=false;
     private enum Dispatch { BLOCKED, BOOTSTRAP, ADMITTING, ACTIVE }
     private volatile Dispatch dispatch=Dispatch.BLOCKED;
     private long lifecycleGeneration=0,navigationGeneration=0,commandSerial=0,commandGeneration=0;
@@ -77,7 +77,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
         ui.removeCallbacks(renewal);ui.removeCallbacks(banner);
         if(backgroundSuspended)return;
         backgroundSuspended=true;epoch++;lifecycleGeneration++;loading=false;gate.stop();cancelPageCommand();
-        if(web!=null&&!unsupportedWeb&&!blockedUnconfirmed)suspendPage(null);
+        if(web!=null&&!unsupportedWeb&&!blockedUnconfirmed)suspendPage(null,false);
     }
     @Override public void onStop(){pausePanel();super.onStop();}
     @Override public void onDestroy(){foreground=false;epoch++;lifecycleGeneration++;cancelPageCommand();ui.removeCallbacks(renewal);ui.removeCallbacks(banner);io.shutdownNow();disposeWeb();super.onDestroy();}
@@ -157,33 +157,36 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     private void blockedMessage(){if(!foreground)return;showFailure(unsupportedWeb?
         "Обновите веб-панель на сервере, затем вручную перезапустите приложение. Несохранённый черновик будет потерян; сохранённый вход останется.":
         "Панель не отвечает. Вручную перезапустите приложение. Несохранённый черновик будет потерян; сохранённый вход останется.",false);}
+    private void pausedMessage(){if(!foreground)return;if(unsupportedWeb||blockedUnconfirmed)blockedMessage();else showFailure("Не удалось восстановить панель. Повторите подключение.",true);}
     private JSONObject decoded(String value){try{Object text=new JSONTokener(value).nextValue();return text instanceof String?new JSONObject((String)text):null;}catch(Exception e){return null;}}
     private boolean commandCurrent(WebView owner,long operation,long life,long navigation,long auth){return owner==web&&operation==commandGeneration&&life==lifecycleGeneration&&navigation==navigationGeneration&&auth==authGeneration&&!isFinishing();}
     private boolean suspendAck(JSONObject value,long serial){return value!=null&&value.length()==4&&value.opt("protocol") instanceof Number&&value.optDouble("protocol")==2&&"suspend".equals(value.opt("action"))&&value.opt("serial") instanceof Number&&value.optDouble("serial")==serial&&Boolean.TRUE.equals(value.opt("ok"));}
-    private void suspendPage(Runnable admitted){
+    private void suspendPage(Runnable admitted){suspendPage(admitted,true);}
+    private void suspendPage(Runnable admitted,boolean terminalTimeout){
         blockNetwork();cancelPageCommand();final WebView owner=web;if(owner==null)return;
         final long serial=nextSerial(),operation=commandGeneration,life=lifecycleGeneration,navigation=navigationGeneration,auth=authGeneration;
-        if(serial==0)return;final long deadline=SystemClock.elapsedRealtime()+500;suspendDeadline=deadline;
-        commandDeadline=()->{if(!commandCurrent(owner,operation,life,navigation,auth))return;cancelPageCommand();blockedUnconfirmed=!unsupportedWeb;loading=false;pauseTimers();blockedMessage();};
+        if(serial==0)return;final long deadline=SystemClock.elapsedRealtime()+500;suspendDeadline=deadline;final boolean loaded=pageLoaded;
+        commandDeadline=()->{if(!commandCurrent(owner,operation,life,navigation,auth))return;cancelPageCommand();blockedUnconfirmed=terminalTimeout&&loaded&&!unsupportedWeb;loading=false;pauseTimers();pausedMessage();};
         ui.postDelayed(commandDeadline,Math.max(0,deadline-SystemClock.elapsedRealtime()));
+        if(!loaded){mainFrameFailed=true;owner.stopLoading();return;}
         String script="(function(){try{const p={protocol:2,serial:"+serial+"};let supported=false;try{supported=typeof window.aiControlAndroidLifecycleProtocol==='function'&&window.aiControlAndroidLifecycleProtocol()===2;}catch(_){}const fn=window.aiControlAndroidSuspend;if(typeof fn!=='function')return JSON.stringify({unsupported:true});const ack=fn(p);return JSON.stringify(supported?ack:{unsupported:true});}catch(_){return JSON.stringify({unsupported:true});}})()";
         owner.evaluateJavascript(script,value->{
             if(!commandCurrent(owner,operation,life,navigation,auth)||SystemClock.elapsedRealtime()>=deadline)return;
             JSONObject result=decoded(value);
-            if(suspendAck(result,serial)){suspendDeadline=0;cancelPageCommand();if(admitted!=null&&foreground&&!unsupportedWeb&&!blockedUnconfirmed)admitted.run();else{pauseTimers();if(foreground){loading=false;showFailure("Не удалось восстановить панель. Повторите подключение.",true);}}}
+            if(suspendAck(result,serial)){suspendDeadline=0;cancelPageCommand();if(admitted!=null&&foreground&&!unsupportedWeb&&!blockedUnconfirmed)admitted.run();else{pauseTimers();loading=false;pausedMessage();}}
             else if(result==null||Boolean.TRUE.equals(result.opt("unsupported"))){unsupportedWeb=true;blockNetwork();blockedMessage();}
         });
     }
     private void navigationPause(long deadline){
         if(timersPaused||deadline==0)return;final WebView owner=web;final long operation=commandGeneration,life=lifecycleGeneration,navigation=navigationGeneration,auth=authGeneration;
-        commandDeadline=()->{if(!commandCurrent(owner,operation,life,navigation,auth))return;cancelPageCommand();blockedUnconfirmed=!unsupportedWeb;loading=false;pauseTimers();blockedMessage();};
+        commandDeadline=()->{if(!commandCurrent(owner,operation,life,navigation,auth))return;cancelPageCommand();loading=false;pauseTimers();pausedMessage();};
         ui.postDelayed(commandDeadline,Math.max(0,deadline-SystemClock.elapsedRealtime()));
     }
     private void bootstrapDeadline(){
         cancelPageCommand();final WebView owner=web;final long operation=commandGeneration,life=lifecycleGeneration,navigation=navigationGeneration,auth=authGeneration;
         commandDeadline=()->{if(commandCurrent(owner,operation,life,navigation,auth)){loading=false;suspendPage(null);}};ui.postDelayed(commandDeadline,10000);
     }
-    private void failedResume(boolean unsupported){blockNetwork();cancelPageCommand();unsupportedWeb|=unsupported;suspendPage(null);}
+    private void failedResume(boolean unsupported){blockNetwork();cancelPageCommand();unsupportedWeb|=unsupported;if(timersPaused){loading=false;pausedMessage();return;}suspendPage(null);}
     private void resumePage(long version,long generation,String phase,long admissionSerial){
         if(!active(version,generation)||web==null)return;cancelPageCommand();final WebView owner=web;
         final long serial=nextSerial(),operation=commandGeneration,life=lifecycleGeneration,navigation=navigationGeneration,auth=authGeneration;
@@ -207,6 +210,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
                 else awaitResume(owner,operation,life,navigation,auth,version,generation,serial,phase,deadline);
             });};ui.postDelayed(commandPoll,100);
     }
+    private boolean shellUrl(String url){try{return OriginPolicy.INSTANCE.classify(url,true,false,"GET",false)==NavigationDecision.ALLOW_PANEL&&"/".equals(java.net.URI.create(url).getRawPath());}catch(Exception error){return false;}}
     private boolean panelRequestAllowed(WebResourceRequest request){
         if(dispatch==Dispatch.ACTIVE)return true;
         if(!"GET".equals(request.getMethod()))return false;
@@ -218,6 +222,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     }
     private void disposeWeb(){
         blockNetwork();navigationGeneration++;cancelPageCommand();WebView page=web;
+        unsupportedWeb=false;blockedUnconfirmed=false;cookieAccepted=false;mainFrameFailed=false;
         if(page==null)return;WebView receiver=timersPaused?new WebView(this):null;
         root.removeView(page);page.stopLoading();page.removeJavascriptInterface("AndroidAuth");page.destroy();web=null;
         if(receiver!=null){receiver.resumeTimers();timersPaused=false;receiver.destroy();}
@@ -249,18 +254,18 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
                 return null;
             }
             private boolean viewCurrent(){return web==instance;}
-            private void failedPage(){if(viewCurrent()&&foreground&&!unsupportedWeb&&!blockedUnconfirmed&&pageEpoch==epoch){loading=false;failedResume(false);}}
+            private void failedPage(){if(viewCurrent()&&foreground&&!unsupportedWeb&&!blockedUnconfirmed&&pageEpoch==epoch){mainFrameFailed=true;pageLoaded=false;loading=false;failedResume(false);}}
             @Override public void onReceivedError(WebView view,WebResourceRequest request,WebResourceError error){if(request.isForMainFrame())failedPage();}
             @Override public void onReceivedHttpError(WebView view,WebResourceRequest request,WebResourceResponse response){if(request.isForMainFrame())failedPage();}
             @Override public void onReceivedSslError(WebView view,SslErrorHandler handler,SslError error){handler.cancel();if(view==instance&&view==web&&error.getUrl()!=null&&error.getUrl().equals(view.getUrl()))failedPage();}
-            @Override public void onPageFinished(WebView view,String url){if(!viewCurrent())return;pageLoaded=true;if(foreground&&!unsupportedWeb&&!blockedUnconfirmed&&cookieAccepted&&pageEpoch==epoch&&dispatch==Dispatch.BOOTSTRAP&&loading){cancelPageCommand();suspendPage(()->resumePage(pageEpoch,authGeneration,"admit",0));}}
+            @Override public void onPageFinished(WebView view,String url){if(view!=instance||!viewCurrent()||mainFrameFailed||!shellUrl(url)||!url.equals(view.getUrl()))return;pageLoaded=true;if(foreground&&!unsupportedWeb&&!blockedUnconfirmed&&cookieAccepted&&pageEpoch==epoch&&dispatch==Dispatch.BOOTSTRAP&&loading){cancelPageCommand();suspendPage(()->resumePage(pageEpoch,authGeneration,"admit",0));}}
             @Override public boolean onRenderProcessGone(WebView view,RenderProcessGoneDetail detail){if(!viewCurrent())return true;navigationGeneration++;cancelPageCommand();destroyPage();loading=false;showFailure("Панель закрылась; несохранённый черновик потерян. Повторите подключение.",true);return true;}
             @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon){
-                if(view!=instance)return;long deadline=suspendDeadline;navigationGeneration++;cancelPageCommand();
+                if(view!=instance||!viewCurrent())return;mainFrameFailed=false;long deadline=suspendDeadline;navigationGeneration++;cancelPageCommand();
                 if(!foreground||unsupportedWeb||blockedUnconfirmed){blockNetwork();navigationPause(deadline);return;}
                 if(!cookieAccepted||credential==null||!"ACTIVE".equals(credential.state)){blockNetwork();loading=false;return;}
                 dispatch=Dispatch.BOOTSTRAP;loading=true;pageLoaded=false;pageEpoch=epoch;bootstrapDeadline();
-                if(OriginPolicy.INSTANCE.classify(url,true,false,"GET",false)!=NavigationDecision.ALLOW_PANEL){view.stopLoading();showFailure("Переход заблокирован.",true);}
+                if(!shellUrl(url)){mainFrameFailed=true;pageLoaded=false;loading=false;blockNetwork();view.stopLoading();showFailure("Переход заблокирован.",true);}
             }
         });
         int footerHeight=(int)(48*getResources().getDisplayMetrics().density);

@@ -1,18 +1,19 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const lifecycleV2=Boolean(window.AndroidAuth&&/(?:^|\s)AiControlLifecycle\/2(?:\s|$)/.test(navigator.userAgent));
-let pageState=lifecycleV2?'suspended':'active',pageGeneration=0,pageCommand=null;
-const observationControllers=new Set(),pageTimers=new Set();
+let pageState=lifecycleV2?'suspended':'active',pageGeneration=0,pageCommand=null,initialDeepLinkPending=true;
+const observationControllers=new Map(),pageTimers=new Set(),observationSignals=new WeakMap();
+function newObservationController(){const controller=new AbortController();observationSignals.set(controller.signal,controller);return controller;}
 function pageActive(){return pageState==='active'&&(!lifecycleV2||document.visibilityState==='visible');}
 function pageStale(){const error=new Error('Панель восстанавливается');error.stale=true;return error;}
 function pageTimeout(callback,delay){if(!pageActive())return null;const generation=pageGeneration;const timer=window.setTimeout(()=>{pageTimers.delete(timer);if(pageActive()&&generation===pageGeneration)callback();},delay);pageTimers.add(timer);return timer;}
 function pageInterval(callback,delay){if(!pageActive())return null;const generation=pageGeneration;const timer=window.setInterval(()=>{if(pageActive()&&generation===pageGeneration)callback();},delay);pageTimers.add(timer);return timer;}
 function pageClearTimer(timer){window.clearTimeout(timer);window.clearInterval(timer);pageTimers.delete(timer);}
 function closePageGate(){
-  pageState='suspended';pageGeneration++;androidResumeGeneration++;
+  pageState='suspended';pageGeneration++;androidResumeGeneration++;taskLoaded=false;
   stopPolling();stopDevbusView();devbusAdmitted=false;
-  for(const controller of observationControllers)controller.abort();observationControllers.clear();
-  for(const flight of historyFlights.values())flight.controller.abort();historyFlights.clear();
+  for(const flight of historyFlights.values())if(!observationControllers.has(flight.controller))observationControllers.set(flight.controller,0);historyFlights.clear();
+  for(const controller of observationControllers.keys())controller.abort();observationControllers.clear();
   for(const timer of pageTimers)pageClearTimer(timer);
   modelExpiryTimer=sessionSettingsTimer=acceptedStatusTimer=renameStatusTimer=messageAgeTimer=pollTimer=null;
   for(const state of historyData.values())state.sessionSettings=null;
@@ -28,12 +29,16 @@ window.aiControlAndroidSuspend=function(command){
 };
 function activatePageViews(){
   $('session-loading').hidden=true;$('login').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;notice('');
-  devbusAdmitted=true;devbusTerminal=false;liveAndroidAuthGeneration=-1;syncCurrentSessionControls();
+  devbusAdmitted=true;devbusTerminal=false;liveAndroidAuthGeneration=-1;
+  $('refresh').disabled=busy;$('projects-refresh').disabled=false;$('sessions-more').disabled=false;$('project-summary-status').textContent='';
+  const key=currentSessionKey();if(key)$('chat-draft').value=drafts.get(key)||'';
+  const link=initialDeepLinkPending&&!selectedProject&&!projectEntries.length?parseDeepLink():null;initialDeepLinkPending=false;
+  syncCurrentSessionControls();
   if(currentTab==='devbus')syncDevbusView();
   else if(currentTab==='sessions'){
     if(selectedSession){loadHistory(false,true);startPolling();}
-    else if(!projectNames.length)loadProjects();else startPolling();
-  }else{const link=parseDeepLink();if(link){showTab('sessions',false);loadProjects();}else refresh();}
+    else if(!projectNames.length)loadProjects();else if(selectedProject)loadSessionList(0,false);else startPolling();
+  }else{if(link){showTab('sessions',false);loadProjects();}else if(!busy)refresh();}
 }
 async function resumeV2(command){
   if(!command||command.protocol!==2||!lifecycleSerial(command.serial)||!['admit','activate'].includes(command.phase))return false;
@@ -195,8 +200,8 @@ async function api(path,body,signal,isCurrent=()=>true,admission=false){
   const generation=pageGeneration,get=body===undefined;
   const allowed=()=>generation===pageGeneration&&(pageActive()||admission&&pageState==='admitting'&&path==='/api/session'&&get);
   if(!allowed())throw pageStale();
-  const controller=get?new AbortController():null,abort=()=>controller?.abort();
-  if(controller){observationControllers.add(controller);if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});}
+  const controller=get?(signal&&observationSignals.get(signal)||newObservationController()):null,abort=()=>controller?.abort(),bridge=controller&&signal&&signal!==controller.signal;
+  if(controller){observationControllers.set(controller,(observationControllers.get(controller)||0)+1);if(signal?.aborted)abort();else if(bridge)signal.addEventListener('abort',abort,{once:true});}
   try{
     let response;try{response=await fetch(path,{method:get?'GET':'POST',credentials:'same-origin',signal:controller?controller.signal:signal,headers:get?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:get?undefined:JSON.stringify(body)});}catch(_){if(get&&!allowed())throw pageStale();throw new Error(messages.unavailable);}
     let data;try{data=await response.json();}catch(_){if(get&&!allowed())throw pageStale();throw new Error(messages.unavailable);}
@@ -204,12 +209,12 @@ async function api(path,body,signal,isCurrent=()=>true,admission=false){
     if(signal?.aborted)throw new Error(messages.unavailable);
     if(!response.ok){if(response.status===401&&path!=='/api/login'&&allowed()&&pageActive()&&isCurrent())authExpired();const error=new Error(messages[data.error]||messages.unavailable);error.code=data.error;error.status=response.status;error.data=data;throw error;}
     return data;
-  }finally{if(controller){observationControllers.delete(controller);signal?.removeEventListener('abort',abort);}}
+  }finally{if(controller){const remaining=(observationControllers.get(controller)||0)-1;if(remaining>0)observationControllers.set(controller,remaining);else observationControllers.delete(controller);if(bridge)signal.removeEventListener('abort',abort);}}
 }
 function signedOut(){stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();if(acceptedStatusTimer!==null){pageClearTimer(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
 function field(parent,key,label,kind='textarea'){const wrap=node('label',label);const input=node(kind);input.maxLength=16000;input.value=drafts.get(key)||'';input.addEventListener('input',()=>drafts.set(key,input.value));wrap.append(input);parent.append(wrap);return input;}
 function button(parent,label,action,cls){const b=node('button',label,cls);b.type='button';b.addEventListener('click',action);parent.append(b);return b;}
-async function mutate(card,path,body){if(!pageActive())return;const lifecycle=pageGeneration;if(busy)return;busy=true;const controls=[...document.querySelectorAll('#tasks-panel button')];controls.forEach(b=>b.disabled=true);const status=card.querySelector('.message');status.textContent='Сохраняем…';try{const data=await api(path,body);if(lifecycle!==pageGeneration||!pageActive())return;status.textContent=data.status==='already'?'Решение уже было принято.':'Решение принято.';await refresh();}catch(err){if(err.stale||lifecycle!==pageGeneration||!pageActive())return;status.textContent=err.message;if(err.code==='saved_pending'){await refresh();notice(err.message);}}finally{busy=false;if(pageActive())controls.forEach(b=>b.disabled=false);}}
+async function mutate(card,path,body){if(!pageActive())return;const lifecycle=pageGeneration,auth=chatAuthGeneration;if(busy)return;busy=true;const controls=[...document.querySelectorAll('#tasks-panel button')];controls.forEach(b=>b.disabled=true);const status=card.querySelector('.message');status.textContent='Сохраняем…';try{const data=await api(path,body);if(lifecycle!==pageGeneration||!pageActive())return;status.textContent=data.status==='already'?'Решение уже было принято.':'Решение принято.';await refresh();}catch(err){if(err.stale||lifecycle!==pageGeneration||!pageActive())return;status.textContent=err.message;if(err.code==='saved_pending'){await refresh();notice(err.message);}}finally{busy=false;if(pageActive()&&auth===chatAuthGeneration){if(lifecycle===pageGeneration)controls.forEach(b=>b.disabled=false);else{taskLoaded=false;if(currentTab==='tasks')refresh();}}}}
 function question(card,task,q){
   const box=node('div',undefined,'question');box.append(node('h3',q.kind==='permission'?'Нужно разрешение':'Нужен ваш ответ'));box.append(node('p',q.question,'content'));card.append(box);
   if(q.answered){box.append(node('h3','Ваш сохранённый ответ'));box.append(node('p',q.kind==='info'?(q.saved_answer||''):q.saved_decision==='approve'?'Вы разрешили операцию':'Вы отклонили операцию','content'));box.append(node('span',q.pending_delivery?'Ответ сохранён и ожидает доставки':'Ответ доставлен','badge'));if(q.status==='open'&&q.pending_delivery){box.append(node('p','Первый ответ уже сохранён. Повторная попытка доставит именно его.','meta'));const actions=node('div',undefined,'actions');button(actions,'Повторить доставку',()=>mutate(card,'/api/answer',{agent:task.agent,qid:q.qid,decision:'recover',text:''}));box.append(actions);}if(q.status!=='open')box.append(node('p','Вопрос закрыт','meta'));return;}
@@ -360,7 +365,7 @@ function applyLiveHistory(live,data){
   renderHistory(live.key);$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();restoreHistoryScroll(decision,live.project,live.sid,live.selection);return true;
 }
 async function liveJSON(live){
-  const controller=new AbortController();live.controller=controller;const started={perf:performance.now(),wall:Date.now(),epoch:normalizeHistoryState(live.key).liveEpoch};let timer;
+  const controller=newObservationController();live.controller=controller;const started={perf:performance.now(),wall:Date.now(),epoch:normalizeHistoryState(live.key).liveEpoch};let timer;
   try{
     const deadline=new Promise((_,reject)=>{timer=pageTimeout(()=>{controller.abort();reject(new Error(messages.unavailable));},6000);});
     const data=await Promise.race([api(queryPath('/api/session-live-snapshot',{project:live.project,sid:live.sid}),undefined,controller.signal,()=>liveCurrent(live)),deadline]);
@@ -624,7 +629,7 @@ async function loadProjects(){if(!pageActive())return;
     let summarySelection=selectionGeneration;
     const summaryCurrent=()=>current()&&summarySelection===selectionGeneration;
     let summaryFailed=false,summaryUnknown=false;
-    const controller=new AbortController(),timer=pageTimeout(()=>controller.abort(),30000);
+    const controller=newObservationController(),timer=pageTimeout(()=>controller.abort(),30000);
     const validSummary=data=>exactFields(data,['projects'])&&Array.isArray(data.projects)&&data.projects.length<=1000&&data.projects.length===projectNames.length&&new Set(data.projects.map(x=>x?.name)).size===data.projects.length&&data.projects.every(x=>exactFields(x,['name','session_count','last_activity','summary_state','as_of'])&&projectNames.includes(x.name)&&(['fresh','stale'].includes(x.summary_state)?Number.isSafeInteger(x.session_count)&&x.session_count>=0&&(x.last_activity===null||typeof x.last_activity==='number'&&Number.isFinite(x.last_activity)&&x.last_activity>=0)&&typeof x.as_of==='number'&&Number.isFinite(x.as_of)&&x.as_of>=0:['unknown','unavailable'].includes(x.summary_state)&&x.session_count===null&&x.last_activity===null&&x.as_of===null));
     const unknown=data=>data.projects.some(x=>availableProjects.has(x.name)&&x.summary_state==='unknown');
     try{
@@ -662,7 +667,7 @@ async function loadSessionList(page=0,append=false,deepSid=null){if(!pageActive(
   const generation=selectionGeneration,auth=chatAuthGeneration,request=++sessionListRequest;
   const lifecycle=pageGeneration,owns=()=>Boolean(pageActive()&&lifecycle===pageGeneration&&csrf&&auth===chatAuthGeneration&&project===selectedProject&&request===sessionListRequest);
   const current=()=>owns()&&generation===selectionGeneration;
-  const controller=new AbortController(),timer=pageTimeout(()=>controller.abort(),30000);
+  const controller=newObservationController(),timer=pageTimeout(()=>controller.abort(),30000);
   setSessionStatus(deepSid?'Ищем выбранную сессию…':'Загружаем сессии…');$('sessions-more').disabled=true;
   try{
     const path=queryPath('/api/sessions',{project,page});let data;
@@ -712,7 +717,7 @@ async function openCreateDialog(){if(!pageActive())return;
   const pendingOption=new Option('Codex','codex');pendingOption.disabled=true;
   $('create-vendor').replaceChildren(pendingOption);syncCreateControls();
   if(!$('create-dialog').open)$('create-dialog').showModal();
-  const controller=new AbortController(),timer=pageTimeout(()=>controller.abort(),15000);
+  const controller=newObservationController(),timer=pageTimeout(()=>controller.abort(),15000);
   try{const data=await api(queryPath('/api/session-create-options',{project}),undefined,controller.signal,current);if(!current())return;
     if(!validCreateOptions(data,project))throw new Error();
     state.available=data.options[0].available;const option=new Option('Codex','codex');option.disabled=!state.available;$('create-vendor').replaceChildren(option);
@@ -925,7 +930,7 @@ async function loadHistory(older=false,manual=false){if(!pageActive())return;
   const anchor=older?[...state.olderAnchors].reverse().find(candidate=>!candidate.error):null;
   if(older&&!anchor)return;
   const cursor=anchor?anchor.cursor:null,path=queryPath('/api/session-history',{project,sid,cursor});
-  const controller=new AbortController(),settingsRequestStarted={perf:performance.now(),wall:Date.now()};
+  const controller=newObservationController(),settingsRequestStarted={perf:performance.now(),wall:Date.now()};
   const capturedEpoch=state.liveEpoch,capturedLiveRevision=state.historyRevision;
   let timeout;
   const deadline=new Promise((_,reject)=>{timeout=pageTimeout(()=>{controller.abort();reject(new Error('Время загрузки переписки истекло. Повторите загрузку.'));},15000);});
