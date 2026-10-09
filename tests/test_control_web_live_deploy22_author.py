@@ -9,6 +9,26 @@ import deploy22_blind_support as s
 
 
 class GateRollbackAuthor(s.ControllerFixture):
+    # INV-DEPLOY-25: the existing frontend sandbox never gains a second writable path.
+    def test_expanded_frontend_write_paths_refuse_before_package_mutation(self):
+        self.dependency_after()
+        self.signed()
+        raw = self.state.read_bytes()
+        original = self.runner
+        def widened(argv):
+            output = original(argv)
+            if argv[1:3] == ['show', s.SERVICES[0]]:
+                output = '\n'.join('ReadWritePaths=/run/ai-control-web /var/lib/ai-control-web'
+                                   if row.startswith('ReadWritePaths=') else row for row in output.splitlines())
+            return output
+        self.runner = widened
+        with self.assertRaises(self.api.Rejected):
+            self.deploy().run()
+        self.assertEqual(self.tree(), self.before16)
+        self.assertEqual(self.state.read_bytes(), raw)
+        self.assertFalse(self.stops())
+        self.assertFalse((self.checkpoints / 'pending.json').exists())
+
     # INV-DEPLOY-21: after-state forward gate failure still permits package-before rollback.
     def test_recover_after4_unit_fault_restores_raw_before16(self):
         self.dependency_after()
@@ -58,6 +78,25 @@ class ProcessDeath(BaseException):
 class RollbackStatusAuthor(s.BootstrapFixture):
     def setUp(self):
         self.prepare()
+
+    # INV-DEPLOY-25: bootstrap preserves the same existing frontend sandbox.
+    def test_expanded_frontend_write_paths_refuse_before_bootstrap_marker(self):
+        original = self.command
+        def widened(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[1:3] == ['show', s.SERVICES[0]]:
+                output = b'\n'.join(b'ReadWritePaths=/run/ai-control-web /var/lib/ai-control-web'
+                                    if row.startswith(b'ReadWritePaths=') else row for row in result.stdout.splitlines())
+                return subprocess.CompletedProcess(argv, result.returncode, output, result.stderr)
+            return result
+        self.op.run_command = widened
+        with self.assertRaises(ValueError):
+            self.invoke()
+        self.assertFalse(self.paths['BOOTSTRAP_PENDING'].exists())
+        self.assertFalse(self.receipt.exists())
+        self.assertEqual(self.helper.read_bytes(), s.pinned_source())
+        self.assertEqual(self.unit.read_bytes(), self.before_unit)
+        self.assertFalse(any(row['argv'][1] == 'stop' for row in self.trace))
 
     # INV-DEPLOY-25: completed rollback is a refused operation through both entry layers.
     def test_rollback_resume_entry_and_wrapper_refuse_without_receipt(self):

@@ -1073,7 +1073,7 @@ class Commands:
                         'FragmentPath': '/etc/systemd/system/' + service, 'DropInPaths': ''}
             if any(observed[key] != value for key, value in expected.items()):
                 raise ValueError('Effective unit mismatch')
-            if service == SERVICES[0] and (observed['ReadWritePaths'] != '/run/ai-control-web /var/lib/ai-control-web' or observed['InaccessiblePaths'] != '/data'):
+            if service == SERVICES[0] and (observed['ReadWritePaths'] != '/var/lib/ai-control-web' or observed['InaccessiblePaths'] != '/data'):
                 raise ValueError('Frontend role mismatch')
 
     def stop(self):

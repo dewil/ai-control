@@ -573,7 +573,7 @@ class Deploy:
                         'FragmentPath': '/etc/systemd/system/' + service, 'DropInPaths': ''}
             if any(observed.get(key) != value for key, value in expected.items()):
                 raise Rejected('Service identity or effective unit mismatch')
-            if service == SERVICES[0] and (observed.get('ReadWritePaths') != '/run/ai-control-web /var/lib/ai-control-web'
+            if service == SERVICES[0] and (observed.get('ReadWritePaths') != '/var/lib/ai-control-web'
                     or observed.get('InaccessiblePaths') != '/data'):
                 raise Rejected('Frontend sandbox mismatch')
 
