@@ -212,7 +212,9 @@ class MessageTimesBrowser(unittest.TestCase):
         self.assertEqual(self.page.locator('.chat-items').inner_text(),visible,'Hidden tab cannot run age updates')
         self.page.evaluate('testVisibility(false)')
         self.assertIn('2 мин. назад',self.bubble('Time assistant 0').inner_text())
-        self.assertEqual(self.network,before)
+        # INV-WSESS-53 visible resume requires fresh LIVE admission/lease.
+        self.assertEqual([(method,url) for method,url in self.network[len(before):]
+                          if '/api/session-events?' not in url and '/api/session-live-snapshot?' not in url],[])
 
     def test_valid_future_keeps_exact_date_but_relative_age_unknown(self):
         future=NOW+3600

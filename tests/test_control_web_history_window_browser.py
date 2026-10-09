@@ -3,6 +3,7 @@
 # bottom navigation remains reachable through the explicit compact disclosure.
 
 import datetime
+from control_live_legacy_fixture import LiveHistoryFixture, replay_path
 import importlib
 import json
 import os
@@ -35,7 +36,9 @@ def serve(root, evidence):
     import uvicorn
     sys.path.insert(0, str(root/'bin'))
     web = importlib.import_module('_control_web')
-    class Backend:
+    # INV-WSESS-53: actual public LIVE backend replaces legacy automatic polling.
+    class Backend(LiveHistoryFixture):
+        _live_evidence = evidence
         def snapshot(self): return {'tasks': []}
         def answer(self, *args): return {'error': 'unavailable'}
         def verdict(self, *args): return {'error': 'unavailable'}
@@ -79,7 +82,7 @@ def serve(root, evidence):
     listener.bind(('127.0.0.1', 0)); listener.listen(128)
     origin = 'http://127.0.0.1:'+str(listener.getsockname()[1])
     app = web.create_app({'origin': origin, 'password_hash': web.hash_password(PASSWORD), 'totp_secret': SECRET,
-                          'session_ttl': 3600, 'secure_cookie': False}, Backend())
+                          'session_ttl': 3600, 'secure_cookie': False, 'totp_state_path': replay_path(evidence)}, Backend())
     private_json(evidence/'ready.json', {'url': origin})
     uvicorn.Server(uvicorn.Config(app, log_level='error', access_log=False)).run(sockets=[listener])
 
@@ -194,11 +197,22 @@ class HistoryWindowBrowser(unittest.TestCase):
         button=self.page.get_by_role('button',name='К последним сообщениям',exact=True)
         button.evaluate('button=>button.click()'); self.page.wait_for_timeout(150)
 
+    def refresh_latest(self):
+        # INV-WSESS-53 removes automatic legacy /session-history polling.
+        # This unconfigured legacy fixture retains all DOM/window/anchor
+        # assertions through explicit refresh; frozen LIVE tests cover SSE.
+        self.page.get_by_role('button',name='Обновить переписку',exact=True).evaluate('button=>button.click()')
+        self.page.wait_for_timeout(200)
+
     def poll(self, count):
-        before=len(self.requests())
+        # INV-WSESS-53: observe real owner→SSE updates, no legacy GET timer.
+        before=len((self.evidence/'calls.jsonl').read_text().splitlines())
         self.configure(count=count)
-        self.page.wait_for_timeout(6500)
-        self.assertGreater(len(self.requests()),before,'Fixture must observe a genuine existing latest poll')
+        deadline=time.monotonic()+3
+        while len((self.evidence/'calls.jsonl').read_text().splitlines())<=before and time.monotonic()<deadline:
+            self.page.wait_for_timeout(50)
+        self.assertGreater(len((self.evidence/'calls.jsonl').read_text().splitlines()),before)
+        self.page.wait_for_timeout(250)
 
     def test_initial_101_keeps_newest100_and_unchanged_draft_receipt_and_times(self):
         self.open()
@@ -330,7 +344,7 @@ class HistoryWindowBrowser(unittest.TestCase):
         self.configure(count=1000); self.open(); self.assertEqual(self.cap(),list(range(900,1000)))
         self.configure(count=1000,latest_mode='error')
         before=list(self.requests())
-        self.page.wait_for_timeout(6500)
+        self.refresh_latest()
         self.assertGreater(len(self.requests()),len(before),'Fixture must observe the failed latest refresh')
         self.assertRegex(self.page.locator('body').inner_text(),r'(?i)ошиб|не удалось|недоступ|повтор')
         before=list(self.requests()); prior=self.ids()
@@ -347,7 +361,7 @@ class HistoryWindowBrowser(unittest.TestCase):
         self.assertEqual(self.cap(),list(range(1,101)))
         self.configure(count=101,latest_mode='error')
         before=list(self.requests())
-        self.page.wait_for_timeout(6500)
+        self.refresh_latest()
         after_failure=list(self.requests())
         self.assertGreater(len(after_failure),len(before),'Fixture must observe an actual failed latest GET')
         self.assertEqual([parse_qs(urlsplit(url).query).get('cursor',[None])[0]

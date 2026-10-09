@@ -1231,6 +1231,28 @@ class SessionChat:
 
     @_operation
     def history(self, project, sid, cursor=None):
+        return self._history(project, sid, cursor)
+
+    def live_snapshot(self, project, sid):
+        # Reuse the complete latest projection with one aggregate native budget.
+        self._local.deadline = time.monotonic() + 5
+        try:
+            context = self._receipt_context()
+            native = self._catalog_context() if self._has_model_context or self._explicit_model_context else None
+            root = self._root(project)
+            history = self._history(project, sid)
+            _need(self._root(project) == root and self._receipt_context() == context)
+            current = self._catalog_context() if self._has_model_context or self._explicit_model_context else None
+            _need(current == native)
+            from _control_web_live import owner_result
+            identity = dict(root=root, sid=sid, context=context, native=native)
+            result = owner_result(dict(schema=1, scope_id=_context_token(identity), history=history))
+            self._remaining()
+            return result
+        except Exception:
+            return {'error': 'unavailable'}
+
+    def _history(self, project, sid, cursor=None):
         _need(valid_uuid(sid) and valid_cursor(cursor), 'invalid_request')
         context = self._receipt_context()
         root = self._root(project)

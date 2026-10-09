@@ -21,6 +21,7 @@ SESSION_FIELDS = {
     'session_project_summary': {'op'},
     'session_list': {'op', 'project', 'page'},
     'session_history': {'op', 'project', 'sid', 'cursor'},
+    'session_live_snapshot': {'op', 'project', 'sid'},
     'session_models': {'op', 'project', 'sid'},
     'session_send': {'op', 'project', 'sid', 'message_id', 'text'},
     'session_send_status': {'op', 'project', 'sid', 'message_id'},
@@ -342,6 +343,8 @@ class RegistryBackend:
                 result = self.sessions.list_sessions(request['project'], request['page'])
             elif op == 'session_history':
                 result = self.sessions.history(request['project'], request['sid'], request['cursor'])
+            elif op == 'session_live_snapshot':
+                result = self.sessions.live_snapshot(request['project'], request['sid'])
             elif op == 'session_models':
                 result = self.sessions.models(request['project'], request['sid'])
             elif op == 'session_send':
@@ -371,6 +374,10 @@ class RegistryBackend:
 
     def session_history(self, project, sid, cursor):
         return self._session(dict(op='session_history', project=project, sid=sid, cursor=cursor))
+
+    def session_live_snapshot(self, project, sid):
+        from _control_web_live import owner_result
+        return owner_result(self._session(dict(op='session_live_snapshot', project=project, sid=sid)))
 
     def session_models(self, project, sid):
         return self._session(dict(op='session_models', project=project, sid=sid))
@@ -601,9 +608,14 @@ class RegistryBackend:
             return {'error': 'unavailable'}
 
 
-def _receive(conn):
+def _receive(conn, deadline=None):
     data = bytearray()
     while b'\n' not in data:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('broker deadline')
+            conn.settimeout(remaining)
         block = conn.recv(min(4096, LIMIT + 1 - len(data)))
         if not block:
             raise ValueError('incomplete request')
@@ -642,6 +654,7 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                 raise ValueError('broker already running')
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     slots = threading.BoundedSemaphore(4)
+    live_slot = threading.BoundedSemaphore(1)
     workers = set()
     workers_lock = threading.Lock()
     fields = {'snapshot': {'op'}, 'answer': {'op', 'agent', 'qid', 'decision', 'text'},
@@ -672,6 +685,9 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = backend.session_list(request['project'], request['page'])
                     elif op == 'session_history':
                         result = backend.session_history(request['project'], request['sid'], request['cursor'])
+                    elif op == 'session_live_snapshot':
+                        from _control_web_live import owner_result
+                        result = owner_result(backend.session_live_snapshot(request['project'], request['sid']))
                     elif op == 'session_models':
                         result = backend.session_models(request['project'], request['sid'])
                     elif op == 'session_send':
@@ -701,6 +717,8 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                     except OSError:
                         pass
         finally:
+            if request['op'] == 'session_live_snapshot':
+                live_slot.release()
             slots.release()
             with workers_lock:
                 workers.discard(threading.current_thread())
@@ -722,14 +740,17 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                     result = {'error': 'forbidden'}
                 else:
                     request = _receive(conn)
+                    live = type(request) is dict and request.get('op') == 'session_live_snapshot'
                     if (type(request) is not dict or type(request.get('op')) is not str
-                            or request['op'] not in fields
-                            or (set(request) != fields[request['op']] and not (
-                                request['op'] == 'session_send'
-                                and set(request) == fields[request['op']] | {'selection'}))):
-                        result = {'error': 'invalid_request' if type(request) is dict and request.get('op') == 'session_project_summary' else 'invalid_or_stale'}
+                            or request['op'] not in fields):
+                        result = {'error': 'unsupported'}
+                    elif (set(request) != fields[request['op']] and not (
+                            request['op'] == 'session_send' and set(request) == fields[request['op']] | {'selection'})):
+                        result = {'error': 'unavailable' if live else 'invalid_request' if request['op'] == 'session_project_summary' else 'invalid_or_stale'}
                     elif request['op'] in SESSION_FIELDS and not _valid_session(request):
-                        result = {'error': 'invalid_request'}
+                        result = {'error': 'unavailable' if live else 'invalid_request'}
+                    elif live and not live_slot.acquire(blocking=False):
+                        result = {'error': 'busy'}
                     elif slots.acquire(blocking=False):
                         worker = threading.Thread(target=execute, args=(conn, request), daemon=True)
                         with workers_lock:
@@ -737,7 +758,9 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         worker.start()
                         continue
                     else:
-                        result = {'error': 'unavailable'}
+                        if live:
+                            live_slot.release()
+                        result = {'error': 'busy' if live else 'unavailable'}
                 reply(conn, result)
             except Exception:
                 try:
@@ -762,16 +785,19 @@ class SocketBackend:
     def __init__(self, socket_path):
         self.socket_path = socket_path
 
-    def _call(self, request):
+    def _call(self, request, timeout=65):
         try:
             wire = json.dumps(request, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8') + b'\n'
             if len(wire) > LIMIT:
                 return {'error': 'invalid_or_stale'}
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-                conn.settimeout(65)
+                deadline = time.monotonic() + timeout if request.get('op') == 'session_live_snapshot' else None
+                conn.settimeout(timeout)
                 conn.connect(self.socket_path)
+                if deadline is not None:
+                    conn.settimeout(max(.001, deadline-time.monotonic()))
                 conn.sendall(wire)
-                result = _receive(conn)
+                result = _receive(conn, deadline=deadline)
                 return result if type(result) is dict else {'error': 'unavailable'}
         except (OSError, ValueError, TypeError):
             return {'error': 'unavailable'}
@@ -806,6 +832,16 @@ class SocketBackend:
 
     def session_history(self, project, sid, cursor):
         return self._session(dict(op='session_history', project=project, sid=sid, cursor=cursor))
+
+    def session_live_snapshot(self, project, sid):
+        from _control_web_live import owner_result
+        request = dict(op='session_live_snapshot', project=project, sid=sid)
+        if not _valid_session(request):
+            return {'error': 'unavailable'}
+        result = self._call(request, timeout=6)
+        if result == {'error': 'invalid_or_stale'}:
+            return {'error': 'unsupported'}
+        return owner_result(result, private_errors=True)
 
     def session_models(self, project, sid):
         return self._session(dict(op='session_models', project=project, sid=sid))

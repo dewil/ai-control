@@ -3,6 +3,7 @@
 # empty statuses collapse; nonempty accepted status remains visible in normal flow.
 
 from control_browser_helpers import choose_project
+from control_live_legacy_fixture import LiveHistoryFixture, replay_path
 import importlib
 import json
 import os
@@ -43,7 +44,9 @@ def serve(root, evidence):
     sys.path.insert(0, str(root / 'bin'))
     web = importlib.import_module('_control_web')
 
-    class Backend:
+    # INV-WSESS-53: actual public LIVE backend replaces legacy automatic polling.
+    class Backend(LiveHistoryFixture):
+        _live_evidence = evidence
         def snapshot(self): return {'tasks': []}
         def answer(self, *args): return {'error': 'unavailable'}
         def verdict(self, *args): return {'error': 'unavailable'}
@@ -82,7 +85,7 @@ def serve(root, evidence):
     listener.bind(('127.0.0.1', 0)); listener.listen(128)
     origin = 'http://127.0.0.1:' + str(listener.getsockname()[1])
     app = web.create_app({'origin': origin, 'password_hash': web.hash_password(PASSWORD),
-                          'totp_secret': SECRET, 'session_ttl': 3600, 'secure_cookie': False}, Backend())
+                          'totp_secret': SECRET, 'session_ttl': 3600, 'secure_cookie': False, 'totp_state_path': replay_path(evidence)}, Backend())
     server = uvicorn.Server(uvicorn.Config(app, log_level='error', access_log=False))
     server_thread = threading.Thread(
         target=server.run, kwargs={'sockets': [listener]}, daemon=True,
@@ -218,7 +221,11 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         self.page.wait_for_timeout(4200)
         self.assertTrue(self.accepted(), 'Accepted remains visible through its five-second lifetime')
         self.page.wait_for_timeout(1600)
-        self.assertGreater(len(self.history_requests()), before_requests, 'Real polling must reconcile the same UUID')
+        # INV-WSESS-53 automatic receipt projection arrives through actual SSE.
+        self.assertTrue(any('/api/session-events?' in url for _,url in self.network))
+        observed=[json.loads(line) for line in (self.evidence/'live-observations.jsonl').read_text().splitlines()]
+        self.assertTrue(any(before_ids[-1] in row['recent_ids'] for row in observed),
+                        'Actual SSE source must reconcile this accepted UUID')
         self.assertEqual(self.slot().inner_text().strip(), '', 'Accepted clears after5s despite repeated history GET')
         self.assertEqual(self.slot().count(), 1, 'Empty polite live region remains attached after expiry')
         self.assertLess(self.page.locator('form').filter(has=self.page.locator('textarea')).bounding_box()['height'], before_form_height, 'INV47 removes the empty status reserve after expiry')
@@ -273,8 +280,18 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         self.control(seeds=unknowns + [self.seed(103, 'rejected'), self.seed(104, 'sending')])
         self.open_history()
         self.control(seeds=[self.seed(i+200) for i in range(8)], status_delay=1.2)
-        before = len(self.history_requests()); self.page.wait_for_timeout(6500)
-        self.assertGreater(len(self.history_requests()), before, 'Known receipt map must see second bounded seed projection')
+        # INV-WSESS-53: new seed projection is automatic via real SSE.
+        expected={self.seed(i+200)['message_id'] for i in range(8)}
+        deadline=time.monotonic()+4
+        observed=[]
+        while time.monotonic()<deadline:
+            path=self.evidence/'live-observations.jsonl'
+            observed=[json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+            if any(set(row['recent_ids'])==expected for row in observed):break
+            self.page.wait_for_timeout(50)
+        self.assertTrue(any(set(row['recent_ids'])==expected for row in observed),
+                        'Actual owner source must observe the second bounded seed projection')
+        self.page.wait_for_timeout(150)
         details = self.disclosure(4)
         checks = details.get_by_role('button', name='Проверить доставку', exact=True)
         self.assertEqual(checks.count(), 2, 'Every older unknown remains manually checkable')

@@ -3,6 +3,7 @@
 # canonical captions/chips and native disclosures replace the previous labels/layout.
 
 from control_browser_helpers import project_is_selected
+from control_live_legacy_fixture import LiveHistoryFixture, replay_path
 import importlib
 import json
 import os
@@ -27,7 +28,9 @@ def serve(root, evidence):
     sys.path.insert(0, str(root / 'bin'))
     web = importlib.import_module('_control_web')
 
-    class Backend:
+    # INV-WSESS-53: actual public LIVE backend replaces legacy automatic polling.
+    class Backend(LiveHistoryFixture):
+        _live_evidence = evidence
         def snapshot(self): return {'tasks': []}
         def answer(self, *args): return {'error': 'unavailable'}
         def verdict(self, *args): return {'error': 'unavailable'}
@@ -49,7 +52,7 @@ def serve(root, evidence):
     listener.bind(('127.0.0.1', 0)); listener.listen(128)
     origin = 'http://127.0.0.1:' + str(listener.getsockname()[1])
     app = web.create_app({'origin': origin, 'password_hash': web.hash_password(PASSWORD),
-                          'totp_secret': SECRET, 'session_ttl': 3600, 'secure_cookie': False}, Backend())
+                          'totp_secret': SECRET, 'session_ttl': 3600, 'secure_cookie': False, 'totp_state_path': replay_path(evidence)}, Backend())
     private_json(evidence / 'ready.json', {'url': origin})
     uvicorn.Server(uvicorn.Config(app, log_level='error', access_log=False)).run(sockets=[listener])
 
@@ -158,7 +161,10 @@ class PageNavigationBrowserContract(unittest.TestCase):
             for index in (0, 1):
                 before = len(self.network)
                 self.activate(direction, index)
-                self.assertEqual(self.network[before:], [], 'Navigation is local: zero click-caused requests')
+                # INV-WSESS-53 background SSE/lease requests are independent of navigation.
+                self.assertEqual([(method,url) for method,url in self.network[before:]
+                                  if '/api/session-events?' not in url and '/api/session-live-snapshot?' not in url],
+                                 [], 'Navigation is local: no existing API read/write')
                 self.assertEqual(self.page.locator('textarea').input_value(), draft)
                 self.assertTrue(project_is_selected(self.page, 'demo'))
                 self.assertEqual(self.session.get_attribute('aria-pressed'), before_selection)
@@ -191,15 +197,10 @@ class PageNavigationBrowserContract(unittest.TestCase):
         # INV-WSESS-23: incoming messages are cached while the reader stays
         # above/focused. Observe the real response and accessible pending
         # action instead of requiring those items to enter the frozen DOM.
-        with self.page.expect_response(lambda response:
-                '/api/session-history?' in response.url and response.status == 200,
-                timeout=8500) as observed:
-            pass
-        received = observed.value.json()
-        self.assertEqual(sum(len(turn['items']) for turn in received['turns']), count,
-                         'Must receive the real synthetic history update')
+        # INV-WSESS-53: this is an automatic-update test; real SSE replaces
+        # the old legacy GET response oracle. Pending action is public DOM.
         self.page.get_by_role('button', name=re.compile(
-            'Есть новые сообщения|Перейти к последним', re.I)).first.wait_for()
+            'Есть новые сообщения|Перейти к последним', re.I)).first.wait_for(timeout=4000)
 
     def test_INV_WSESS_15_up_preserves_reader_anchor_on_real_new_data(self):
         self.page.set_viewport_size({'width': 360, 'height': 900})
@@ -216,7 +217,8 @@ class PageNavigationBrowserContract(unittest.TestCase):
         before_requests = len(self.history_requests())
         private_json(self.evidence / 'control.json', {'delay': 0, 'count': 32})
         self.wait_for_buffered_history(32)
-        self.assertGreater(len(self.history_requests()), before_requests, 'Must observe a real polling update')
+        self.assertTrue(any('/api/session-events?' in url for _,url in self.network),
+                        'Must observe the actual SSE transport')
         self.assertLessEqual(abs(anchor.bounding_box()['y']-before_y), 8, 'INV-WSESS-15: update retains reader anchor')
 
     def test_INV_WSESS_15_down_resumes_follow_on_real_new_data(self):
@@ -226,7 +228,8 @@ class PageNavigationBrowserContract(unittest.TestCase):
         private_json(self.evidence / 'control.json', {'delay': 0, 'count': 28})
         self.page.get_by_text('LATEST message 27', exact=True).wait_for(state='attached', timeout=8500)
         self.page.wait_for_timeout(250)
-        self.assertGreater(len(self.history_requests()), before_requests, 'Must observe a real polling update')
+        self.assertTrue(any('/api/session-events?' in url for _,url in self.network),
+                        'Must observe the actual SSE transport')
         result = self.metrics()
         self.assertLessEqual(result['max']-result['y'], 80, 'INV-WSESS-15: down restores newest-message follow')
 
@@ -273,7 +276,8 @@ class PageNavigationBrowserContract(unittest.TestCase):
         private_json(self.evidence / 'control.json', {'delay': 0, 'count': 28})
         self.page.get_by_text('LATEST message 27', exact=True).wait_for(state='attached', timeout=8500)
         self.page.wait_for_timeout(250)
-        self.assertGreater(len(self.history_requests()), before_requests, 'Must observe a real polling update')
+        self.assertTrue(any('/api/session-events?' in url for _,url in self.network),
+                        'Must observe the actual SSE transport')
         result = self.metrics()
         private_json(self.evidence / ('manual-return-' + input_kind + '.json'), {'input': input_kind, 'events': events, 'wheel_targets': wheel_targets, **result})
         self.assertLessEqual(result['max']-result['y'], 80,
@@ -320,8 +324,8 @@ class PageNavigationBrowserContract(unittest.TestCase):
         before_requests = len(self.history_requests())
         private_json(self.evidence / 'control.json', {'delay': 0, 'count': 28})
         self.wait_for_buffered_history(28)
-        self.assertGreater(len(self.history_requests()), before_requests,
-                           'Must observe a real synthetic history update')
+        self.assertTrue(any('/api/session-events?' in url for _,url in self.network),
+                        'Must observe the actual SSE transport')
         self.assertLessEqual(abs(anchor.bounding_box()['y'] - anchor_y), 8,
                              'INV-WSESS-15: draft-only wheel must retain page reader anchor')
 

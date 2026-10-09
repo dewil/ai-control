@@ -117,6 +117,8 @@ def main():
             os.fsync(stream.fileno())
         print('Enrollment сохранён в приватный файл. Добавьте totp_secret в аутентификатор локально.')
     elif args.command == 'web':
+        if os.environ.get('WEB_CONCURRENCY', '1') != '1':
+            raise ValueError('single web worker required')
         import uvicorn
         from _control_web import create_app
         from _control_web_broker import SocketBackend
@@ -125,7 +127,9 @@ def main():
         if Path(args.auth).absolute() == Path(config['totp_state_path']):
             raise ValueError('distinct authentication and replay paths required')
         app = create_app(config, SocketBackend(args.socket))
-        uvicorn.run(app, host=args.host, port=args.port, workers=1, proxy_headers=False, access_log=False, log_level='warning')
+        # Long-lived streams must not postpone lifespan's bounded owner drain.
+        uvicorn.run(app, host=args.host, port=args.port, workers=1, reload=False, proxy_headers=False,
+                    timeout_graceful_shutdown=0, access_log=False, log_level='warning')
     else:
         from _control_web_broker import RegistryBackend, serve_broker
         from _control_web_sessions import InteractiveRPC, SessionChat
