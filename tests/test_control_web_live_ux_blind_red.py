@@ -370,13 +370,36 @@ class LiveUXBlindBrowser(unittest.TestCase):
             self.assert_hit(self.page.get_by_role("button", name="Отправить", exact=True))
         anchor = self.page.get_by_text("Fixture readable message 12", exact=True)
         anchor.scroll_into_view_if_needed(); before = anchor.bounding_box()["y"]
-        before_poll = len(self.calls("history"))
-        deadline = time.monotonic() + 7
-        while len(self.calls("history")) == before_poll and time.monotonic() < deadline:
-            self.page.wait_for_timeout(100)
-        self.assertGreater(len(self.calls("history")), before_poll, "Actual same-snapshot automatic history poll must run")
+        # Explicit independent transport-oracle amendment: INV-WSESS-53 forbids
+        # automatic legacy history polling. Native EventSource and the actual
+        # manager now deliver changes; unchanged successful observations emit
+        # no frame. No manual refresh or mocked application callback is used.
+        self.wait_until(lambda: any(urlsplit(r.url).path == "/api/session-events" and r.resource_type == "eventsource"
+                                   for r in self.requests),
+                        "Actual application must open native EventSource for selected history", timeout=7)
+        before_history = len(self.calls("history")); before_live = len(self.calls("live_snapshot"))
+
+        def retained_reader_state():
+            self.assertLessEqual(abs(anchor.bounding_box()["y"] - before), 8)
+            self.assertEqual(area.input_value(), "Retained synthetic IME draft")
+            self.assertTrue(area.evaluate("e=>e===document.activeElement"))
+            self.assertEqual(area.evaluate("e=>[e.selectionStart,e.selectionEnd]"), [3, 8])
+            self.assertEqual(len(self.calls("history")), before_history,
+                             "Automatic LIVE updates must not use legacy history polling")
+
+        self.wait_until(lambda: len(self.calls("live_snapshot")) >= before_live + 2,
+                        "Actual manager must complete unchanged successful source observations", timeout=7)
         self.page.wait_for_timeout(120)
-        self.assertLessEqual(abs(anchor.bounding_box()["y"] - before), 8)
+        self.assertEqual(self.page.locator("#chat-items article.chat-message").count(), 24)
+        retained_reader_state()
+
+        changed = fixture.history(dated=True)
+        changed["turns"][0]["items"][23]["text"] = "Fixture automatic LIVE changed marker"
+        self.control(history=changed)
+        expect(self.page.get_by_text("Fixture automatic LIVE changed marker", exact=True)).to_have_count(1, timeout=7000)
+        expect(self.page.get_by_text("Fixture readable message 23", exact=True)).to_have_count(0)
+        self.assertEqual(self.page.locator("#chat-items article.chat-message").count(), 24)
+        retained_reader_state()
         for name in ("Обновить переписку", "Переименовать"):
             button = self.page.get_by_role("button", name=name, exact=True)
             self.reveal(button); self.assert_hit(button); button.focus()
