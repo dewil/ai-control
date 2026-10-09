@@ -29,7 +29,8 @@ class BusMainBrowserBlind(s.HttpCase):
     def enter(self):
         self.page.goto(self.fixture.origin)
         button = self.page.get_by_role("button", name="Шина", exact=True).or_(self.page.get_by_role("tab", name="Шина", exact=True))
-        self.assertEqual(button.count(), 1, "Actual main navigation must include the third BUS tab")
+        # Owner-session restoration admits the hidden workspace asynchronously.
+        expect(button).to_have_count(1, timeout=4000)
         button.click(); expect(self.page.get_by_text("BUS synthetic result", exact=True)).to_have_count(1, timeout=4000)
 
     def until(self, predicate, timeout=4):
@@ -41,7 +42,8 @@ class BusMainBrowserBlind(s.HttpCase):
         self.backend.bus_value["tasks"][0]["result"] = "<img src=x onerror='window.syntheticXss=true'>"
         self.page.goto(self.fixture.origin)
         tab = self.page.get_by_role("button", name="Шина", exact=True).or_(self.page.get_by_role("tab", name="Шина", exact=True))
-        self.assertEqual(tab.count(), 1, "Third BUS navigation prerequisite")
+        # Wait for asynchronous owner restore before keyboard navigation.
+        expect(tab).to_have_count(1, timeout=4000)
         tab.focus(); tab.press("Enter")
         expect(self.page.get_by_text("<img src=x onerror='window.syntheticXss=true'>", exact=True)).to_have_count(1, timeout=4000)
         self.assertIsNone(self.page.evaluate("window.syntheticXss"))
@@ -98,7 +100,8 @@ class BusMainBrowserBlind(s.HttpCase):
         self.page.add_init_script("window.syntheticBusAuthCalls=[];window.AndroidAuth={requestAuth:(...args)=>window.syntheticBusAuthCalls.push(args),requestLogout:()=>{}};")
         self.page.goto(self.fixture.origin); self.page.evaluate("window.aiControlAndroidResume()")
         tab = self.page.get_by_role("button", name="Шина", exact=True).or_(self.page.get_by_role("tab", name="Шина", exact=True))
-        self.assertEqual(tab.count(),1,"Actual Android main BUS tab"); tab.click()
+        # Android resume still requires asynchronous owner admission.
+        expect(tab).to_have_count(1, timeout=4000); tab.click()
         expect(self.page.get_by_text("BUS synthetic result",exact=True)).to_have_count(1,timeout=4000)
         before = self.page.evaluate("window.syntheticBusAuthCalls.length")
         self.fixture.sessions[self.fixture.cookie.split("=",1)[1]]["principal"] = "project"
