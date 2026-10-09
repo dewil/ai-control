@@ -1369,7 +1369,7 @@ def bootstrap():
                 value, marker_raw = marker_write(value, 'prepared')
             if value['stage'] == 'rollback':
                 rollback_operation(commands, value, marker_raw, helper, before, after, blobs, old, dependency_before)
-                return None
+                raise ValueError('Bootstrap rolled back; completion was not installed')
             writes = False
             try:
                 commands.stop()
