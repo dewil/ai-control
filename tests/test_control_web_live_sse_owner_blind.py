@@ -102,9 +102,15 @@ class LiveBrokerBlind(unittest.TestCase):
             try:self.module.serve_broker(self.path,self.backend,os.getuid(),stop_event=self.stop)
             except Exception as error:self.errors.append(type(error).__name__)
         self.worker=threading.Thread(target=serve,daemon=True);self.worker.start();self.addCleanup(self.cleanup)
-        deadline=time.monotonic()+3
-        while not Path(self.path).exists() and time.monotonic()<deadline:time.sleep(.01)
-        self.assertEqual(self.errors,[]);self.assertTrue(Path(self.path).exists())
+        # bind() creates the pathname before listen(); probe readiness without sending an op.
+        deadline=time.monotonic()+3;ready=False
+        while not self.errors and time.monotonic()<deadline:
+            try:
+                with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as probe:
+                    probe.settimeout(.1);probe.connect(self.path)
+                ready=True;break
+            except (FileNotFoundError,ConnectionRefusedError):time.sleep(.01)
+        self.assertEqual(self.errors,[]);self.assertTrue(ready,'Actual private socket listening prerequisite')
 
     def cleanup(self):
         self.backend.gate.set();self.stop.set();self.worker.join(3)

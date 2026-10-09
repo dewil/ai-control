@@ -62,7 +62,8 @@ class ControllerFixture(unittest.TestCase):
     def setUp(self):
         # Narrow accepted public fixture setup; no legacy inherited tests/source inspection.
         temp_constructor=tempfile.TemporaryDirectory
-        with patch.object(tempfile,'TemporaryDirectory',side_effect=lambda **kwargs:temp_constructor(**(kwargs|{'dir':'/home/dwl'}))):
+        # Use the test user's home; /tmp has writable ancestors, and CI has no /home/dwl.
+        with patch.object(tempfile,'TemporaryDirectory',side_effect=lambda **kwargs:temp_constructor(**(kwargs|{'dir':Path.home()}))):
             prior.fixture.SignedDeploy.setUp(self)
         self.before16=self.current|{prior.AUTH:b'# invented auth16\n',prior.DOWNLOAD:b'# invented download16\n'}
         self.after22=self.before16|{p:('/* invented signed22 '+p+' */\n').encode() for p in NEW}

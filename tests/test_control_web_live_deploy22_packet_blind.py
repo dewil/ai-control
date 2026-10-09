@@ -147,7 +147,7 @@ class StageBoundaryBlind(unittest.TestCase):
     module_leaf='ai-control-live-bootstrap-stage.py'
     def setUp(self):
         self.op=s.source_module(self,self.module_leaf)
-        temp=tempfile.TemporaryDirectory(prefix='control-deploy22-stage-',dir='/home/dwl');self.addCleanup(temp.cleanup)
+        temp=tempfile.TemporaryDirectory(prefix='control-deploy22-stage-',dir=Path.home());self.addCleanup(temp.cleanup)
         self.root=Path(temp.name);self.root.chmod(0o700);self.stage_path=self.root/'live-bootstrap-packet';self.op.STAGE=self.stage_path
         self.payload={'wrapper.py':b'def run_packet(manifest_snapshot, bootstrap_snapshot):\n    return 0\n',
             'manifest.json':b'{"schema":1}', 'bootstrap.py':b'PACKET_SHA256 = None\n'}
