@@ -138,15 +138,43 @@ class Deploy22ControllerBlind(s.ControllerFixture):
         with self.assertRaises(self.api.Rejected):self.deploy().run()
         self.assertEqual(self.state.read_bytes(),raw);self.assertFalse(self.stops())
 
-    def test_actual_unit_fault_blocks_journal4_forward_clear_retains_journal(self):
+    def test_actual_unit_fault_blocks_journal4_forward_clear_restores_before(self):
         self.required22();self.dependency_after()
         raw,before,after,_,_=self.make_journal(accepted_after=True)
         self.unit.write_bytes(self.unit.read_bytes()+b'# changed before clear\n')
-        journal=(self.checkpoints/'pending.json').read_bytes();accepted=self.state.read_bytes()
+        faulty_unit=self.unit.read_bytes()
         self.signed(files=after,base=before);self.calls.clear()
         with self.assertRaises(self.api.Rejected):self.deploy().run()
-        self.assertEqual(self.state.read_bytes(),accepted);self.assertEqual(self.tree(),after)
-        self.assertEqual((self.checkpoints/'pending.json').read_bytes(),journal);self.assertFalse(self.stops())
+        self.assertEqual(self.state.read_bytes(),raw);self.assertEqual(self.tree(),before)
+        self.assertFalse((self.checkpoints/'pending.json').exists())
+        self.assertEqual(self.unit.read_bytes(),faulty_unit)
+        self.assertEqual(self.stops(),[['/usr/bin/systemctl','stop',service] for service in s.SERVICES])
+        self.assertEqual(sum(call[1]=='start' for call in self.calls),2)
+        self.assertLessEqual(len(self.calls),16,'Forward gate fault permits only one bounded package rollback')
+
+    def test_journal4_recovery_spends_single_budget_before_new22_install_failure(self):
+        # INV-DEPLOY-20: a recovered invocation cannot roll back a second transaction.
+        self.required22();raw,before,after,_,_=self.make_journal(before_schema=4)
+        self.write(self.target/'bin/_control_web.css',after['bin/_control_web.css'],0o644)
+        self.dependency_after();self.signed(files=after,number=9,base=before)
+        original=self.runner;starts=[]
+        def fail_third_start(args):
+            result=original(args)
+            if args[1]=='start':
+                starts.append(args[2])
+                if len(starts)==3:raise RuntimeError('Synthetic fresh22 failure after recovered journal4')
+            return result
+        self.runner=fail_third_start;self.calls.clear()
+        with self.assertRaises(self.api.RollbackFailed):self.deploy().run()
+        self.assertEqual(len(starts),3,'Spent invocation budget must prevent a second rollback')
+        self.assertEqual(self.state.read_bytes(),raw);self.assertEqual(self.tree(),after)
+        pending=self.checkpoints/'pending.json';self.assertTrue(pending.exists())
+        journal=json.loads(pending.read_bytes())
+        self.assertEqual(journal['schema'],4);self.assertEqual(journal['before'],json.loads(raw))
+        self.assertEqual(journal['after']['release_id'],9)
+        self.assertEqual(journal['after']['files'],self.hashes(after))
+        self.assertTrue((self.checkpoints/journal['checkpoint']).is_dir())
+        self.assertLessEqual(len(self.calls),20,'Recovery plus failed fresh install must remain bounded')
 
     def test_journal4_rollback_ignores_dependency_unit_gate_fault(self):
         self.required22();raw,before,after,_,_=self.make_journal(mask=63)
