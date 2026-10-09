@@ -24,13 +24,24 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Existing trusted writer prerequisite
         run: |
-          curl -fsSL -o yq https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64
-          echo 'fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4  yq' | sha256sum -c -
-          sudo install -m 0755 yq /usr/local/bin/yq
+          yq_download=$(mktemp "$RUNNER_TEMP/control-web-yq.XXXXXX")
+          trap 'rm -f "$yq_download"' EXIT
+          curl -fsSL -o "$yq_download" https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64
+          printf '%s  %s\n' 'fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4' "$yq_download" | sha256sum -c -
+          sudo install -m 0755 "$yq_download" /usr/local/bin/yq
       - name: Permanent Android publication boundary contracts
         run: python -m unittest discover -s tests -p 'test_control_android_publish*.py'
       - name: Web boundary contracts and writer integration
+        # Frozen UX scope remains the reviewed four-path candidate; this CI-only
+        # follow-up may change only this workflow. Run the actual checkout below,
+        # rejecting all other committed, working-tree or untracked source drift.
+        env:
+          CONTROL_LIVE_UX_SCOPE_REVISION: 73eb36b4eba7b13b893014e400b30b7f918de986
+          CONTROL_LIVE_UX_QA_REPO: ${{ github.workspace }}
         run: |
+          git diff --exit-code "$CONTROL_LIVE_UX_SCOPE_REVISION" HEAD -- . ':(exclude).github/workflows/web.yml'
+          git diff --exit-code HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"
           python -m unittest discover -s tests -p 'test_control_web*.py'
           python -m unittest discover -s tests -p 'test_ai_control_names.py'
           python -m py_compile bin/_control_web.py bin/_control_web_broker.py bin/_control_web_sessions.py bin/_codex_rc.py bin/ai-control-web
