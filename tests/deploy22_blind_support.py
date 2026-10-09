@@ -102,7 +102,8 @@ class ControllerFixture(unittest.TestCase):
             for prop in SAFE_PROPERTIES:self.assertIn(prop,selected)
             properties=dict(User='ai-panel' if args[2]==SERVICES[0] else 'dwl',Group='ai-panel',
                 ProtectSystem='strict' if args[2]==SERVICES[0] else 'full',
-                ProtectHome='yes' if args[2]==SERVICES[0] else 'no',ReadWritePaths='/run/ai-control-web /var/lib/ai-control-web',
+                ProtectHome='yes' if args[2]==SERVICES[0] else 'no',
+                ReadWritePaths='/var/lib/ai-control-web' if args[2]==SERVICES[0] else '/run/ai-control-web /var/lib/ai-control-web',
                 InaccessiblePaths='/data' if args[2]==SERVICES[0] else '',
                 FragmentPath='/etc/systemd/system/'+args[2],DropInPaths='')
             return '\n'.join(key+'='+value for key,value in properties.items())+'\n'
@@ -264,7 +265,7 @@ class BootstrapFixture(ControllerFixture):
             for key in SAFE_PROPERTIES:self.assertIn(key,','.join(argv[3:]))
             values=dict(User='ai-panel' if service==SERVICES[0] else 'dwl',Group='ai-panel',
                 ProtectSystem='strict' if service==SERVICES[0] else 'full',ProtectHome='yes' if service==SERVICES[0] else 'no',
-                ReadWritePaths='/run/ai-control-web /var/lib/ai-control-web' if service==SERVICES[0] else '',
+                ReadWritePaths='/var/lib/ai-control-web' if service==SERVICES[0] else '',
                 InaccessiblePaths='/data' if service==SERVICES[0] else '',FragmentPath='/etc/systemd/system/'+service,DropInPaths='')
             return subprocess.CompletedProcess(argv,0,('\n'.join(key+'='+value for key,value in values.items())+'\n').encode(),b'')
         return subprocess.CompletedProcess(argv,0,b'',b'')
