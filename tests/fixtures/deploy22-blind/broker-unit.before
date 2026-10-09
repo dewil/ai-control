@@ -1,0 +1,34 @@
+[Unit]
+Description=Control owner task and session broker
+After=network.target
+
+[Service]
+Type=simple
+# Administrator replaces these exact placeholders before installation.
+User=dwl
+Group=ai-panel
+Environment=HOME=/home/dwl
+Environment=PATH=/home/dwl/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+ExecStart=/opt/ai-control-web/venv/bin/python /opt/ai-control-web/bin/ai-control-web broker --registry /home/dwl/.local/state/ai-control/registry --bin-dir /home/dwl/.local/bin --socket /run/ai-control-web/broker.sock --allowed-uid 993
+RuntimeDirectory=ai-control-web
+RuntimeDirectoryMode=0750
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+BindReadOnlyPaths=-/tmp/codex-daemon-1000
+# Writers retain owner runtime, cgroup barriers and existing TASK policy.
+# A read-only registry here would disable trusted writers.
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
