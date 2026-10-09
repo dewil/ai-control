@@ -4,6 +4,9 @@ INV-DEVBUS-10: independent frozen suites remain unchanged. All config,
 Projection and Observer objects here are synthetic; no transport is opened.
 """
 import asyncio
+from pathlib import Path
+import subprocess
+import sys
 import threading
 import time
 import unittest
@@ -12,6 +15,23 @@ import live_devbus_blind_support as support
 
 
 class OwnerRuntimeRegression(unittest.TestCase):
+    def test_dynamic_redactor_import_without_bin_on_sys_path_performs_no_owner_IO(self):
+        code = '''
+import importlib.util, os, pathlib, sys
+from unittest.mock import patch
+path = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location('_synthetic_owner_redactor', path)
+module = importlib.util.module_from_spec(spec)
+with patch.object(os, 'open', side_effect=AssertionError('Owner config IO at import')):
+    spec.loader.exec_module(module)
+assert callable(module.redact)
+assert module.redact('Bearer synthetic-value') == 'Bearer ***'
+'''
+        path = Path(__file__).resolve().parents[1] / 'bin' / '_control_web_broker.py'
+        result = subprocess.run([sys.executable, '-I', '-c', code, str(path)],
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def runtime(self, *, observer=None, projection=None):
         from _control_web_broker import DevbusRuntime
         class Observer:

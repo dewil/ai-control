@@ -13,12 +13,32 @@ import socket
 import stat
 import struct
 import subprocess
+import sys
 import threading
 import time
 import uuid
 
-from _control_web_devbus import Observer, Projection, _timestamp, valid_id, valid_metadata
-from _control_web_devbus_nats import NatsConfig, connect
+try:
+    from _control_web_devbus import Observer, Projection, _timestamp, valid_id, valid_metadata
+    from _control_web_devbus_nats import NatsConfig, connect
+except ModuleNotFoundError as error:
+    if error.name not in {'_control_web_devbus', '_control_web_devbus_nats'}:
+        raise
+    # The attention redactor also loads this file by spec without placing bin
+    # on sys.path. Resolve only the two fixed siblings; preserve canonical module
+    # identity when a normal import/test fixture already supplied either helper.
+    for name in ('_control_web_devbus', '_control_web_devbus_nats'):
+        if name not in sys.modules:
+            spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().with_name(name + '.py'))
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            try:
+                spec.loader.exec_module(module)
+            except BaseException:
+                sys.modules.pop(name, None)
+                raise
+    from _control_web_devbus import Observer, Projection, _timestamp, valid_id, valid_metadata
+    from _control_web_devbus_nats import NatsConfig, connect
 
 DEVBUS_CONFIG_PATH = Path('/home/dwl/.config/ai-control/devbus-observer.json')
 DEVBUS_LIMIT = 96 * 1024
