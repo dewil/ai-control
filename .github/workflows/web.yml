@@ -38,7 +38,8 @@ jobs:
       - name: Permanent Android publication boundary contracts
         run: python -m unittest discover -s tests -p 'test_control_android_publish*.py'
       - name: Web boundary contracts and writer integration
-        # The immutable UX-only deployment boundary is tested separately.
+        # test_current16_startup_boundary_at_reviewed_UX_revision covers the
+        # immutable UX-only deployment boundary inside this discovery.
         # All behavior tests execute this actual LIVE/BUS checkout; never replace
         # it with the old UX snapshot. Reject working-tree/untracked drift.
         env:
