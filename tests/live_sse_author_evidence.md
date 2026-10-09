@@ -55,6 +55,12 @@ Separate author regressions use the actual module and the actual page/native tra
 
 SOURCE historical delta:47 methods,46 PASS and one response-before-DOM fixture race; after waiting for the public loading state to finish, that case and the fallback clock/network-settle case both PASS (`/var/tmp/live-sse-source-oracle-delta.log`). Extra compact/old-UX/regression20 PASS in98.368s (`/var/tmp/live-sse-source-historical-extra.log`). Combined LIVE65/author15/UX26:106 PASS in289.962s (`/var/tmp/live-sse-source-combined-focused.log`). Final exact-source full CI remains required and is reported in the handoff.
 
+Exact SOURCE correction SHA `4a7de3d321566bb1eeebe02220de9c3ce43badee`: full web951 methods,950 PASS/0 FAIL/0 ERROR/1 previous foreign-owner SKIP,781.820s, `/var/tmp/live-sse-full-web-source-fixed.log`. All other local web-workflow commands were repeated on this same SHA and PASS: provider101, codex-runtime103, signed deployment boundary40, names28, Android publication19 (one previous SKIP), agent-I/O33, installation114/11/15 (`/var/tmp/live-sse-ci-other-source-fixed.log`). These are source/synthetic checks; no hosted workflow or installed acceptance is claimed.
+
+Independent delta SOURCE closes all MGR findings and BR1..5 on4a7. Its remaining BR6a strengthens the first accepted-receipt case with the same-frame public marker, awaiting actual DOM before the unchanged original five-second expiry/anchor/draft/no-resend checks. A separate actual-browser proof found that an expired renewal's early return skipped rendering an already invalid prior lease after a wall-clock jump (`/var/tmp/live-sse-expired-renewal-clock-check.log`,1 FAIL against4a7). The one-line correction renders existing controls while preserving the old lease/deadline; a new author case covers it. The targeted final delta result is reported in the handoff; root requested the next full run only after BUS integration.
+
+Final narrow delta:9 PASS in47.607s (`/var/tmp/live-sse-final-narrow-delta.log`): all six browser author cases, strengthened accepted-receipt DOM/expiry case, and the frozen forward/rollback clock-render cases. JS syntax and diff whitespace checks PASS. No broker/CLI, frozen LIVE65/support or independent UX amendment changes.
+
 ## Actual runtime latency
 
 ```sh

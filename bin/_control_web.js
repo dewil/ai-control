@@ -239,7 +239,7 @@ function acceptLiveLease(live,data,started,merge=false){
   const snapshot=sessionSettingsSnapshot(data.history.session_settings,started);
   if(projection!==state.liveProjection){if(data.revision>=(state.settingsFloor||0)){state.sessionSettings=null;state.settingsFloor=Math.max(state.settingsFloor||0,data.revision);syncCurrentSessionControls();}return;}
   state.settingsFloor=Math.max(state.settingsFloor||0,data.revision);
-  if(!snapshot)return;
+  if(!snapshot){syncCurrentSessionControls();return;}
   state.sessionSettings={...snapshot,selection:live.selection};state.settingsFailure=false;
   syncCurrentSessionControls();
 }

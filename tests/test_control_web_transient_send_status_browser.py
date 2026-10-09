@@ -214,17 +214,24 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         self.slot().evaluate("el=>{window.statusAnnouncements=[];new MutationObserver(()=>{if(/принято/i.test(el.textContent))window.statusAnnouncements.push(el.textContent)}).observe(el,{childList:true,subtree:true,characterData:true});}")
         self.send()
         self.assertTrue(self.accepted(), 'Local transition must show accepted immediately')
+        accepted_at=time.monotonic()
         self.page.locator('textarea').fill('Draft survives status expiry')
         self.page.get_by_text('LATEST message 21', exact=True).scroll_into_view_if_needed()
         anchor = self.page.get_by_text('LATEST message 21', exact=True)
         before_form_height = self.page.locator('form').filter(has=self.page.locator('textarea')).bounding_box()['height']
         before_y = anchor.bounding_box()['y']; before_requests = len(self.history_requests())
         before_calls = self.calls()
-        before_history = self.page.locator('.chat-items').inner_html()
         before_ids = [r['message_id'] for r in self.calls() if r['method'] == 'send']
-        self.page.wait_for_timeout(4200)
+        # BR6a/INV53: prove the same UUID reconciliation frame reached the DOM,
+        # then measure expiry against the original accepted transition.
+        marker='Synthetic accepted receipt reconciliation reached the UI'
+        self.control(marker=marker)
+        self.page.get_by_text(marker,exact=True).wait_for(timeout=6000)
+        self.assertLessEqual(abs(anchor.bounding_box()['y']-before_y),8)
+        before_history = self.page.locator('.chat-items').inner_html()
+        self.page.wait_for_timeout(max(0,4.2-(time.monotonic()-accepted_at))*1000)
         self.assertTrue(self.accepted(), 'Accepted remains visible through its five-second lifetime')
-        self.page.wait_for_timeout(1600)
+        self.page.wait_for_timeout(max(0,5.8-(time.monotonic()-accepted_at))*1000)
         # INV-WSESS-53 automatic receipt projection arrives through actual SSE.
         self.assertTrue(any('/api/session-events?' in url for _,url in self.network))
         self.assertTrue(any(any(row['message_id']==before_ids[-1] for row in frame['history']['recent_sends']) for frame in self.live_frames),

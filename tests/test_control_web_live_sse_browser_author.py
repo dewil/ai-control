@@ -16,6 +16,22 @@ class LiveBrowserAuthor(unittest.TestCase):
     requests=fixture.LiveBrowserBlind.requests
     caption_known=fixture.LiveBrowserBlind.caption_known
 
+    def test_expired_renewal_renders_prior_lease_unknown_after_wallclock_jump(self):
+        now=int(time.time()*1000)
+        self.page.clock.install(time=now)
+        self.select();self.caption_known()
+        self.page.clock.set_system_time(now+20000)
+        value=s.snapshot(2,value=s.history())
+        value['history']['session_settings']=s.settings(age=14999)
+        responses=[]
+        def expired(route):
+            time.sleep(.05)
+            route.fulfill(status=200,content_type='application/json',body=json.dumps(value))
+            responses.append(True)
+        self.page.route('**/api/session-live-snapshot?*',expired)
+        self.until(lambda:bool(responses),timeout=7)
+        expect(self.page.locator('#current-model-status')).to_have_text(fixture.UNKNOWN)
+
     def test_expired_same_projection_renewal_keeps_original_lease_until_deadline(self):
         self.select(); self.caption_known()
         started=time.monotonic()
