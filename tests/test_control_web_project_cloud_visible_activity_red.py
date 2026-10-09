@@ -63,12 +63,38 @@ class ProjectCloudVisibleActivityLayoutRed(fixture.ProjectCloudBrowserContract):
         self.assertIn('недост.', unavailable)
         self.assertRegex(self.tile('down').get_attribute('aria-label'), '(?i)недоступ|unavailable')
         self.assertNotEqual(unknown, unavailable, 'Unknown and unavailable metadata have distinct explanations')
+        self.assertNotEqual(self.tile('unkn').get_attribute('aria-label'),
+                            self.tile('down').get_attribute('aria-label'),
+                            'Accessible explanations distinguish unknown from unavailable')
 
         before = list(self.network)
         self.tile('stle').hover()
         self.tile('high').focus()
         self.assertEqual(self.network, before, 'Activity rendering and disclosure add no network request')
         self.assertFalse(any(call['method'] == 'history' for call in self.calls()))
+
+    def test_unavailable_project_with_cached_null_activity_never_reports_no_activity_or_stale(self):
+        # Authoritative availability takes priority over a retained known summary (SOURCE F1).
+        rows = fixture.project_rows()
+        down = next(row for row in rows if row['name'] == 'down')
+        down.update(session_count=3, last_activity=None, summary_state='stale', as_of=int(time.time()))
+        self.control(projects=rows)
+        authoritative = {'projects': [{'name': row['name'], **({'unavailable': True} if row['name'] == 'down' else {})}
+                                      for row in rows]}
+        self.page.route('**/api/session-projects', lambda route: route.fulfill(status=200, json=authoritative))
+        self.page.reload()
+        self.page.get_by_role('button', name='Сессии', exact=True).or_(self.page.get_by_role('tab', name='Сессии', exact=True)).click()
+        self.page.wait_for_timeout(200)
+        tile = self.tile('down')
+        self.assertTrue(tile.is_visible())
+        self.assertTrue(tile.is_disabled(), 'Unavailable projects remain unselectable')
+        self.assertIn('недост.', tile.inner_text())
+        self.assertIn('?', tile.inner_text())
+        self.assertNotRegex(tile.inner_text(), '(?i)устар|stale|—')
+        self.assertIn('Активность недоступна', tile.get_attribute('aria-label'))
+        self.assertNotIn('Нет активности', tile.get_attribute('aria-label'))
+        self.assertNotRegex(tile.get_attribute('title') or '', '(?i)нет активности')
+        self.assertEqual(tile.locator('time').count(), 0, 'Unavailable activity has no fabricated date')
 
     def test_cloud_uses_wide_desktop_workspace_and_wraps_on_mobile(self):
         self.tile('high').focus()

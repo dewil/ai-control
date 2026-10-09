@@ -289,9 +289,9 @@ function confirmProjectSelection(generation){
 }
 $('projects-toggle').addEventListener('click',()=>setProjectsExpanded($('projects-body').hidden));
 document.addEventListener('keydown',event=>{
-  if(event.key!=='Escape')return;
+  if(event.key!=='Escape'||event.defaultPrevented||event.isComposing)return;
   const details=document.activeElement?.closest('details[open]');
-  if(details){event.preventDefault();details.open=false;details.querySelector(':scope>summary').focus({preventScroll:true});}
+  if(details){event.preventDefault();details.open=false;details.querySelector(':scope>summary')?.focus({preventScroll:true});}
 });
 
 function projectExactTime(timestamp){
@@ -309,14 +309,18 @@ function projectAge(timestamp){
   if(age<86400)return Math.floor(age/3600)+'ч';
   return Math.floor(age/86400)+'д';
 }
+function knownProjectSummary(name){
+  const value=projectSummaries.get(name);
+  return value&&['fresh','stale'].includes(value.summary_state)&&Number.isSafeInteger(value.session_count)&&value.session_count>=0?value:null;
+}
 function renderProjectDetails(){
   const details=$('project-details'),content=$('project-details-content');
   details.hidden=!selectedProject;content.replaceChildren();if(!selectedProject)return;
   details.querySelector('summary').textContent='Сведения о проекте '+selectedProject;
   content.setAttribute('role','region');content.setAttribute('aria-label','Сведения о проекте '+selectedProject);
-  const value=projectSummaries.get(selectedProject),available=availableProjects.has(selectedProject),known=value&&['fresh','stale'].includes(value.summary_state);
+  const value=knownProjectSummary(selectedProject),available=availableProjects.has(selectedProject),known=Boolean(value);
   content.append(node('p',selectedProject));
-  content.append(node('p',!available?'Проект недоступен':known&&Number.isSafeInteger(value.session_count)&&value.session_count>=0?value.session_count+' сессий':'Число сессий неизвестно'));
+  content.append(node('p',!available?'Проект недоступен':known?value.session_count+' сессий':'Число сессий неизвестно'));
   const exact=known&&value.last_activity!==null&&projectAge(value.last_activity)!=='?'&&projectExactTime(value.last_activity);
   content.append(node('p',!available?'Активность недоступна':exact?'Последняя активность: '+exact.replace(',','')+' МСК':known&&value.last_activity===null?'Нет активности':'Активность неизвестна'));
   const asOf=known&&projectExactTime(value.as_of);
@@ -326,11 +330,10 @@ function renderProjects(){
   $('projects-heading').textContent=selectedProject||'Проекты';
   const cloud=$('project-cloud'),focused=document.activeElement,y=window.scrollY;
   const existing=new Map([...cloud.children].map(button=>[button.dataset.project,button]));
-  const known=entry=>{const value=projectSummaries.get(entry.name);return value&&['fresh','stale'].includes(value.summary_state)&&Number.isSafeInteger(value.session_count)&&value.session_count>=0?value:null;};
   const aliasCompare=(a,b)=>{const x=a.name.toLowerCase(),z=b.name.toLowerCase();return x<z?-1:x>z?1:a.name<b.name?-1:a.name>b.name?1:0;};
   const activityGroup=value=>!value?3:value.last_activity===null?2:projectAge(value.last_activity)==='?'?3:value.summary_state==='fresh'?0:1;
   const ordered=projectEntries.slice().sort((a,b)=>{
-    const x=known(a),z=known(b);
+    const x=knownProjectSummary(a.name),z=knownProjectSummary(b.name);
     if(projectSort==='count'){if(Boolean(x)!==Boolean(z))return x?-1:1;if(x&&x.session_count!==z.session_count)return z.session_count-x.session_count;}
     else{const gx=activityGroup(x),gz=activityGroup(z);if(gx!==gz)return gx-gz;if(gx<2&&x.last_activity!==z.last_activity)return z.last_activity-x.last_activity;}
     return aliasCompare(a,b);
@@ -340,7 +343,7 @@ function renderProjects(){
     let button=existing.get(entry.name);
     if(!button){button=node('button',undefined,'project-tile');button.type='button';button.dataset.project=entry.name;button.addEventListener('click',()=>projectChanged(entry.name));}
     retained.add(button);
-    const value=known(entry),unavailable=!availableProjects.has(entry.name);
+    const value=knownProjectSummary(entry.name),unavailable=!availableProjects.has(entry.name);
     button.disabled=unavailable;button.setAttribute('aria-pressed',String(!unavailable&&selectedProject===entry.name));
     if(!unavailable&&selectedProject===entry.name)button.setAttribute('aria-controls','project-details-content');else button.removeAttribute('aria-controls');
     const bucket=value?Math.min(5,Math.floor(Math.log2(value.session_count+1))):0;
@@ -355,9 +358,9 @@ function renderProjects(){
       time.dateTime=new Date(value.last_activity*1000).toISOString();time.title=exact+' МСК';time.dataset.projectTimestamp=String(value.last_activity);
       button.append(time);
     }else button.append(node('span',activity,'meta project-badge'));
-    if(value?.summary_state==='stale')button.append(document.createTextNode(' '),node('span','устар.','meta project-badge'));
-    button.setAttribute('aria-label',entry.name+', '+details+', '+(exact?'Последняя активность: '+exact+' МСК':value?.last_activity===null?'Нет активности':'Активность неизвестна'));
-    button.title=value?'Сводка: '+(projectExactTime(value.as_of)||'время неизвестно')+(value.last_activity===null?' · нет активности':' · последняя активность: '+(exact||'время неизвестно')):'Метаданные временно недоступны. Обновите проекты, чтобы запросить их снова.';
+    if(!unavailable&&value?.summary_state==='stale')button.append(document.createTextNode(' '),node('span','устар.','meta project-badge'));
+    button.setAttribute('aria-label',entry.name+', '+details+', '+(unavailable?'Активность недоступна':exact?'Последняя активность: '+exact+' МСК':value?.last_activity===null?'Нет активности':'Активность неизвестна'));
+    button.title=unavailable?'Проект и активность недоступны.':value?'Сводка: '+(projectExactTime(value.as_of)||'время неизвестно')+(value.last_activity===null?' · нет активности':' · последняя активность: '+(exact||'время неизвестно')):'Метаданные временно недоступны. Обновите проекты, чтобы запросить их снова.';
     cloud.append(button);
   }
   for(const button of existing.values())if(!retained.has(button))button.remove();
