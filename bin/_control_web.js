@@ -137,9 +137,11 @@ function renderMarkdown(text){
 function notice(text){$('notice').textContent=text;}
 let androidResumeGeneration=0;
 function androidAuth(){return window.AndroidAuth&&typeof window.AndroidAuth.requestAuth==='function'?window.AndroidAuth:null;}
-function authExpired(){const native=androidAuth();if(native){androidResumeGeneration++;stopPolling();native.requestAuth();}else signedOut();}
+function requestNativeAuth(notify=true){const native=androidAuth();stopPolling();stopDevbusView();devbusAdmitted=false;androidResumeGeneration++;if(native&&notify)native.requestAuth();return Boolean(native);}
+function ownerForbidden(){const notify=liveAndroidAuthGeneration!==chatAuthGeneration;liveAndroidAuthGeneration=chatAuthGeneration;requestNativeAuth(notify);notice('Войдите снова для обновления данных.');}
+function authExpired(){if(!requestNativeAuth())signedOut();}
 async function api(path,body,signal,isCurrent=()=>true){let response;try{response=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',signal,headers:body===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});}catch(_){throw new Error(messages.unavailable);}let data;try{data=await response.json();}catch(_){throw new Error(messages.unavailable);}if(signal&&signal.aborted)throw new Error(messages.unavailable);if(!response.ok){if(response.status===401&&path!=='/api/login'&&isCurrent())authExpired();const error=new Error(messages[data.error]||messages.unavailable);error.code=data.error;error.status=response.status;error.data=data;throw error;}return data;}
-function signedOut(){projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();if(acceptedStatusTimer!==null){clearTimeout(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
+function signedOut(){stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();if(acceptedStatusTimer!==null){clearTimeout(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
 function field(parent,key,label,kind='textarea'){const wrap=node('label',label);const input=node(kind);input.maxLength=16000;input.value=drafts.get(key)||'';input.addEventListener('input',()=>drafts.set(key,input.value));wrap.append(input);parent.append(wrap);return input;}
 function button(parent,label,action,cls){const b=node('button',label,cls);b.type='button';b.addEventListener('click',action);parent.append(b);return b;}
 async function mutate(card,path,body){if(busy)return;busy=true;const controls=[...document.querySelectorAll('#tasks-panel button')];controls.forEach(b=>b.disabled=true);const status=card.querySelector('.message');status.textContent='Сохраняем…';try{const data=await api(path,body);status.textContent=data.status==='already'?'Решение уже было принято.':'Решение принято.';await refresh();}catch(err){status.textContent=err.message;if(err.code==='saved_pending'){await refresh();notice(err.message);}}finally{busy=false;controls.forEach(b=>b.disabled=false);}}
@@ -188,8 +190,164 @@ function queryPath(path,values){const params=new URLSearchParams();for(const [k,
 function activeSelection(project=selectedProject,sid=selectedSession&&selectedSession.sid,generation=selectionGeneration){return Boolean(csrf&&currentTab==='sessions'&&selectedSession&&selectedProject===project&&selectedSession.sid===sid&&selectionGeneration===generation);}
 function updateUrl(){const params=new URLSearchParams();if(selectedProject)params.set('project',selectedProject);if(selectedSession)params.set('sid',selectedSession.sid);const query=params.toString();history.replaceState(null,'',location.pathname+(query?'?'+query:''));}
 function parseDeepLink(){const params=new URLSearchParams(location.search);if(params.getAll('project').length>1||params.getAll('sid').length>1)return null;const project=params.get('project')||'';const sid=params.get('sid')||'';if(!project&&!sid)return null;if(!project||!UUID_RE.test(sid))return null;return {project,sid};}
-function stopPolling(){stopMessageAges();if(pollTimer!==null){clearInterval(pollTimer);pollTimer=null;}}
-function startPolling(){stopPolling();syncMessageAges();if(currentTab==='sessions'&&selectedSession&&document.visibilityState==='visible'&&csrf)pollTimer=setInterval(()=>{if(document.visibilityState==='visible'&&selectedSession&&!normalizeHistoryState(currentSessionKey()).historyError)loadHistory(false);},5000);}
+function stopPolling(){stopLive();stopMessageAges();if(pollTimer!==null){clearInterval(pollTimer);pollTimer=null;}}
+function startPolling(){stopPolling();syncMessageAges();startLive();}
+// INV-WSESS-51..53: one selected history transport; HTTP alone grants the lease.
+let liveGeneration=0,liveTransport=null,liveAndroidAuthGeneration=-1;
+let devbusView=null,devbusGeneration=0,devbusAdmitted=false,devbusTerminal=false;
+function stopDevbusView(){devbusGeneration++;if(devbusView){devbusView.stop();devbusView=null;}$('devbus-root').replaceChildren();}
+function syncDevbusView(){
+  if(!csrf||!devbusAdmitted||devbusTerminal||currentTab!=='devbus'||document.visibilityState!=='visible'){stopDevbusView();return;}
+  if(devbusView)return;
+  const generation=++devbusGeneration,auth=chatAuthGeneration;
+  const current=()=>generation===devbusGeneration&&auth===chatAuthGeneration&&devbusAdmitted&&currentTab==='devbus'&&document.visibilityState==='visible';
+  devbusView=window.ControlDevbus.mount($('devbus-root'),{fetch:async(path,options)=>{
+    if(!current())throw new DOMException('Stale BUS view','AbortError');
+    const response=await fetch(path,options);
+    if(!current()||options.signal?.aborted)throw new DOMException('Stale BUS view','AbortError');
+    if(response.status===401||response.status===403){devbusTerminal=true;if(response.status===401)authExpired();else ownerForbidden();}
+    return response;
+  }});
+}
+async function admitDevbusView(){
+  if(!csrf||$('workspace').hidden||currentTab!=='devbus'||document.visibilityState!=='visible')return;
+  const generation=devbusGeneration,auth=chatAuthGeneration;
+  try{const data=await api('/api/session',undefined,undefined,()=>generation===devbusGeneration&&auth===chatAuthGeneration);
+    if(generation!==devbusGeneration||auth!==chatAuthGeneration||currentTab!=='devbus'||document.visibilityState!=='visible')return;
+    if(typeof data.csrf!=='string'||!data.csrf)return;
+    csrf=data.csrf;devbusAdmitted=true;devbusTerminal=false;syncDevbusView();
+  }catch(_){if(generation===devbusGeneration&&auth===chatAuthGeneration){stopDevbusView();devbusAdmitted=false;}}
+}
+
+function liveVisible(){return Boolean(csrf&&currentTab==='sessions'&&selectedSession&&document.visibilityState==='visible');}
+function settingsProjection(data){
+  if(!sessionSettingsSnapshot(data,{perf:performance.now(),wall:Date.now()}))return null;
+  return JSON.stringify([data.schema,data.source,data.scope,data.model,data.effort]);
+}
+function settingsLeaseRemaining(snapshot){
+  if(!snapshot)return 0;
+  const perf=performance.now()-snapshot.perf,wall=Date.now()-snapshot.wall;
+  if(perf<0||wall<0)snapshot.discontinuous=true;
+  if(snapshot.discontinuous)return 0;
+  return snapshot.expires_in_ms-Math.max(0,perf,wall);
+}
+function stopLive(invalidate=true){
+  liveGeneration++;
+  const live=liveTransport;liveTransport=null;
+  if(live){if(live.es)live.es.close();if(live.controller)live.controller.abort();for(const timer of live.timers)clearTimeout(timer);}
+  if(invalidate){const state=currentSessionKey()&&historyData.get(currentSessionKey());if(state)state.sessionSettings=null;}
+}
+function liveCurrent(live){return liveTransport===live&&live.generation===liveGeneration&&live.auth===chatAuthGeneration&&activeSelection(live.project,live.sid,live.selection)&&liveVisible();}
+function liveLater(live,delay,callback){const timer=setTimeout(()=>{live.timers.delete(timer);if(liveCurrent(live))callback();},delay);live.timers.add(timer);return timer;}
+function validLiveSnapshot(data,live){
+  if(!exactFields(data,['schema','project','sid','epoch','revision','observation','source','observed_at','history'])||data.schema!==1||data.project!==live.project||data.sid!==live.sid||data.source!=='owner_history_poll'||!/^[a-f0-9]{32}$/.test(data.epoch)||!Number.isSafeInteger(data.revision)||data.revision<1||!Number.isSafeInteger(data.observation)||data.observation<1||!Number.isInteger(data.observed_at)||data.observed_at<0||data.observed_at>253402300799999)return false;
+  const h=data.history;
+  if(!h||typeof h!=='object'||Array.isArray(h)||new TextEncoder().encode(JSON.stringify(h)).length>96*1024)return false;
+  if(!Array.isArray(h.recent_sends)||h.recent_sends.length>8||!h.recent_sends.every(row=>exactFields(row,['status','message_id','turn_id'])&&UUID_RE.test(row.message_id)&&['accepted','delivery_unknown','rejected'].includes(row.status)&&(row.status==='accepted'?validHistoryId(row.turn_id):row.turn_id===null))||Object.hasOwn(h,'needs_native_attention')&&h.needs_native_attention!==true)return false;
+  const common=['recent_sends'];if(Object.hasOwn(h,'session_settings'))common.push('session_settings');if(Object.hasOwn(h,'needs_native_attention'))common.push('needs_native_attention');
+  if(Object.hasOwn(h,'history_state'))return exactFields(h,[...common,'history_state','reason'])&&h.history_state==='unavailable'&&h.reason==='unavailable'&&Array.isArray(h.recent_sends);
+  return exactFields(h,[...common,'turns','next_cursor','truncated'])&&Array.isArray(h.turns)&&h.turns.length<=8&&typeof h.truncated==='boolean'&&(h.next_cursor===null||typeof h.next_cursor==='string'&&h.next_cursor.length>0&&h.next_cursor.length<=4096)&&Array.isArray(h.recent_sends)&&h.recent_sends.length<=8&&(!Object.hasOwn(h,'needs_native_attention')||h.needs_native_attention===true)&&h.turns.reduce((sum,turn)=>sum+(Array.isArray(turn?.items)?turn.items.length:25),0)<=24&&h.turns.every(turn=>exactFields(turn,['id','status','items'])&&validHistoryId(turn.id)&&typeof turn.status==='string'&&Array.isArray(turn.items)&&turn.items.every(item=>{const keys=['id','role','text','truncated','timestamp','time_precision'];if(Object.hasOwn(item,'client_id'))keys.push('client_id');return exactFields(item,keys)&&validHistoryId(item.id)&&['assistant','user'].includes(item.role)&&typeof item.text==='string'&&Array.from(item.text).length<=8000&&typeof item.truncated==='boolean'&&(item.timestamp===null||Number.isInteger(item.timestamp)&&item.timestamp>=0&&item.timestamp<=253402300799)&&['item','turn','unknown'].includes(item.time_precision)&&(!Object.hasOwn(item,'client_id')||item.role==='user'&&UUID_RE.test(item.client_id));}));
+}
+function bindLiveEpoch(state,data){
+  if(state.liveEpoch&&state.liveEpoch!==data.epoch){
+    state.turns.clear();state.order=[];state.olderAnchors=[];state.initialized=false;state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;state.truncated=false;state.liveGap=false;state.sessionSettings=null;state.latestWindowIds=[];state.liveProjection=null;state.settingsFloor=0;state.leaseObservation=0;state.historyObservation=0;state.historyRevision=0;
+  }
+  state.liveEpoch=data.epoch;
+}
+function acceptLiveLease(live,data,started,merge=false){
+  if(!liveCurrent(live)||!validLiveSnapshot(data,live))return;
+  const state=normalizeHistoryState(live.key);
+  if(state.liveEpoch&&state.liveEpoch!==data.epoch){if(started.epoch!==state.liveEpoch)return;if(!merge){state.sessionSettings=null;syncCurrentSessionControls();return;}bindLiveEpoch(state,data);}
+  if(!state.liveEpoch)state.liveEpoch=data.epoch;
+  const projection=settingsProjection(data.history.session_settings);
+  if(data.revision<(state.settingsFloor||0)&&projection!==state.liveProjection)return;
+  if(data.observation<=(state.leaseObservation||0))return;
+  state.leaseObservation=data.observation;
+  const snapshot=sessionSettingsSnapshot(data.history.session_settings,started);
+  if(projection!==state.liveProjection){if(data.revision>=(state.settingsFloor||0)){state.sessionSettings=null;state.settingsFloor=Math.max(state.settingsFloor||0,data.revision);syncCurrentSessionControls();}return;}
+  state.settingsFloor=Math.max(state.settingsFloor||0,data.revision);
+  if(!snapshot){syncCurrentSessionControls();return;}
+  state.sessionSettings={...snapshot,selection:live.selection};state.settingsFailure=false;
+  syncCurrentSessionControls();
+}
+function applyLiveHistory(live,data){
+  if(!liveCurrent(live)||!validLiveSnapshot(data,live))return false;
+  const state=normalizeHistoryState(live.key),newEpoch=Boolean(state.liveEpoch&&state.liveEpoch!==data.epoch);
+  bindLiveEpoch(state,data);
+  if(data.revision<(state.settingsFloor||0)||data.revision<=(state.historyRevision||0)||data.observation<=(state.historyObservation||0))return true;
+  const projection=settingsProjection(data.history.session_settings);
+  if(state.liveProjection!==undefined&&state.liveProjection!==projection)state.sessionSettings=null;
+  state.liveProjection=projection;state.historyRevision=data.revision;state.historyObservation=data.observation;state.settingsFloor=Math.max(state.settingsFloor||0,data.revision);
+  const h=data.history;let decision=captureHistoryScroll(live.project,live.sid,live.selection,false);
+  const known=new Set(historyItems(state).map(entry=>entry.key));
+  const ids=(h.turns||[]).flatMap(turn=>(turn.items||[]).map(item=>JSON.stringify([turn.id,item.id])));
+  if(!newEpoch&&state.latestWindowIds?.length&&ids.length&&!ids.some(id=>state.latestWindowIds.includes(id)))state.liveGap=true;
+  state.latestWindowIds=ids;
+  if(h.truncated)state.liveGap=true;
+  const hold=state.windowIds!==null&&(state.windowOlder||focusedHistoryBubble()||decision&&decision.kind!=='bottom');
+  if(hold&&decision?.kind==='bottom')decision=captureHistoryScroll(live.project,live.sid,live.selection,true);
+  state.unavailable=h.history_state==='unavailable';state.confirmedOrigin=state.unavailable;
+  if(state.unavailable){state.initialized=true;state.attention=h.needs_native_attention===true;for(const receipt of h.recent_sends)applyReceipt(live.key,receipt);}
+  else mergeHistory(live.key,h,null);
+  decision=reconcileHistoryCorrelations(state,known,decision);
+  confirmProjectSelection(live.selection);state.latestHistoryError=state.unavailable?'История пока недоступна':'';state.historyError=state.latestHistoryError;state.historyErrorOrigin=state.historyError?'latest':null;
+  if(!hold){state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;}else if(historyItems(state).some(entry=>!known.has(entry.key)))state.pendingLatest=true;
+  renderHistory(live.key);$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();restoreHistoryScroll(decision,live.project,live.sid,live.selection);return true;
+}
+async function liveJSON(live){
+  const controller=new AbortController();live.controller=controller;const started={perf:performance.now(),wall:Date.now(),epoch:normalizeHistoryState(live.key).liveEpoch};let timer;
+  try{
+    const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new Error(messages.unavailable));},6000);});
+    const data=await Promise.race([api(queryPath('/api/session-live-snapshot',{project:live.project,sid:live.sid}),undefined,controller.signal,()=>liveCurrent(live)),deadline]);
+    if(!liveCurrent(live))return null;
+    if(!validLiveSnapshot(data,live))throw new Error(messages.unavailable);
+    return {data,started};
+  }finally{clearTimeout(timer);if(live.controller===controller)live.controller=null;}
+}
+function liveTerminal(live,error){
+  const terminal=error.status===401||error.status===403||error.status===422||error.status===503&&error.code==='unsupported';
+  if(terminal){if(live.es){live.es.close();live.es=null;}if(live.controller)live.controller.abort();for(const timer of live.timers)clearTimeout(timer);live.timers.clear();live.mode='terminal';}
+  if(error.status===401||error.status===403){const state=normalizeHistoryState(live.key);state.sessionSettings=null;syncCurrentSessionControls();}
+  if(error.status===403){ownerForbidden();return true;}
+  if(error.status===401||error.status===422)return true;
+  if(error.status===503&&error.code==='unsupported'){notice('Обновление переписки недоступно в этой версии. Обновите её вручную.');return true;}
+  return false;
+}
+function liveFallback(live){
+  if(!liveCurrent(live))return;live.mode='fallback';live.fallbackRetry=false;live.fallbackStarted=performance.now();let failures=0;
+  const poll=async()=>{let delay=5000;try{const result=await liveJSON(live);if(result){applyLiveHistory(live,result.data);acceptLiveLease(live,result.data,result.started,true);failures=0;}}catch(error){if(!liveCurrent(live)||liveTerminal(live,error))return;failures++;delay=[5000,10000,30000][Math.min(failures-1,2)];}if(liveCurrent(live)&&live.mode==='fallback')liveLater(live,delay,poll);};
+  liveLater(live,5000,poll);
+  liveLater(live,60000,()=>{if(live.controller)live.controller.abort();for(const timer of live.timers)clearTimeout(timer);live.timers.clear();live.generation=++liveGeneration;live.fallbackRetry=true;liveOpen(live);});
+}
+async function liveFailure(live){
+  if(!liveCurrent(live)||live.failureLatched)return;
+  live.failureLatched=true;if(live.es){live.es.close();live.es=null;}if(live.controller)live.controller.abort();for(const timer of live.timers)clearTimeout(timer);live.timers.clear();
+  const now=performance.now();live.failures=live.failures.filter(at=>at>now-30000);live.failures.push(now);
+  const state=normalizeHistoryState(live.key);
+  if(!state.unavailable&&!state.historyError)$('history-status').textContent='Обновление переписки приостановлено. История и черновик сохранены.';
+  try{const result=await liveJSON(live);if(result){applyLiveHistory(live,result.data);acceptLiveLease(live,result.data,result.started,true);}}catch(error){if(!liveCurrent(live)||liveTerminal(live,error))return;if(error.status===429&&!live.fallbackRetry){liveLater(live,[1000,2000,5000,10000,30000][Math.min(live.failures.length-1,4)],()=>liveOpen(live));return;}}
+  if(!liveCurrent(live))return;
+  if(live.fallbackRetry||live.failures.length>=3)liveFallback(live);else liveLater(live,[1000,2000,5000,10000,30000][Math.min(live.failures.length-1,4)],()=>liveOpen(live));
+}
+function liveOpen(live){
+  if(!liveCurrent(live))return;live.failureLatched=false;live.mode='connecting';
+  const es=new EventSource(queryPath('/api/session-events',{project:live.project,sid:live.sid}));live.es=es;
+  const current=()=>liveCurrent(live)&&live.es===es&&!live.failureLatched;
+  es.addEventListener('snapshot',event=>{
+    if(!current())return;let data;try{data=JSON.parse(event.data);}catch(_){liveFailure(live);return;}
+    if(!validLiveSnapshot(data,live)||event.lastEventId!==data.epoch+':'+data.revision){liveFailure(live);return;}
+    if(!applyLiveHistory(live,data)){liveFailure(live);return;}
+    if(live.mode!=='sse'){live.mode='sse';live.fallbackRetry=false;const renew=async()=>{if(!current())return;try{const result=await liveJSON(live);if(result)acceptLiveLease(live,result.data,result.started);}catch(error){if(current()&&liveTerminal(live,error))return;}if(current())liveLater(live,5000,renew);};liveLater(live,5000,renew);}
+  });
+  es.addEventListener('reset',event=>{if(!current())return;try{const data=JSON.parse(event.data);if(data.project===live.project&&data.sid===live.sid&&data.reason==='overflow'){const state=normalizeHistoryState(live.key);state.liveGap=true;renderHistory(live.key);}}catch(_){liveFailure(live);}});
+  es.addEventListener('unavailable',()=>{if(current())liveFailure(live);});es.onerror=()=>{if(current())liveFailure(live);};
+}
+function startLive(){
+  if(!liveVisible())return;const live={project:selectedProject,sid:selectedSession.sid,key:currentSessionKey(),auth:chatAuthGeneration,selection:selectionGeneration,generation:++liveGeneration,timers:new Set(),failures:[],es:null,controller:null,mode:'initial',failureLatched:false};liveTransport=live;
+  const state=normalizeHistoryState(live.key);if(state.liveProjection===undefined)state.liveProjection=settingsProjection(state.sessionSettings&&{schema:state.sessionSettings.schema,source:state.sessionSettings.source,scope:state.sessionSettings.scope,model:state.sessionSettings.model,effort:state.sessionSettings.effort,age_ms:state.sessionSettings.age_ms,expires_in_ms:state.sessionSettings.expires_in_ms});
+  const initial=historyFlights.get(live.key)?.promise;if(initial)initial.then(()=>{if(liveCurrent(live)){if(state.historyError&&!state.initialized)return;state.liveProjection=state.sessionSettings?JSON.stringify([state.sessionSettings.schema,state.sessionSettings.source,state.sessionSettings.scope,state.sessionSettings.model,state.sessionSettings.effort]):null;liveOpen(live);}});else liveOpen(live);
+}
+
 function currentSessionKey(){return selectedProject&&selectedSession?chatKey(selectedProject,selectedSession.sid):null;}
 function modelDraft(key){if(!modelDrafts.has(key))modelDrafts.set(key,{modelId:'',label:'',effort:'',catalog:null,expires:0,request:0,loading:false,stale:false,message:''});return modelDrafts.get(key);}
 function explicitModelReady(key){const state=modelDraft(key);if(!state.modelId)return true;const row=state.catalog?.rows.find(row=>row.id===state.modelId);return Boolean(!state.loading&&!state.stale&&state.expires>performance.now()&&row&&row.efforts.includes(state.effort));}
@@ -203,19 +361,20 @@ function validSessionSetting(value){
 }
 function sessionSettingsSnapshot(data,started){
   if(!exactFields(data,['schema','scope','source','model','effort','age_ms','expires_in_ms'])||data.schema!==1||data.scope!=='configured_or_persisted'||data.source!=='thread_read'||!validSessionSetting(data.model)||!validSessionSetting(data.effort)||!Number.isInteger(data.age_ms)||data.age_ms<0||data.age_ms>=15000||!Number.isInteger(data.expires_in_ms)||data.expires_in_ms!==15000-data.age_ms)return null;
-  const expires=started+data.expires_in_ms;
-  return expires>performance.now()?{...data,expires}:null;
+  const begin=typeof started==='number'?{perf:started,wall:Date.now()}:started;
+  const snapshot={...data,...begin,expires:begin.perf+data.expires_in_ms};
+  return settingsLeaseRemaining(snapshot)>0?snapshot:null;
 }
 function renderSessionSettings(){
   if(sessionSettingsTimer!==null){clearTimeout(sessionSettingsTimer);sessionSettingsTimer=null;}
   const key=currentSessionKey(),state=key&&historyData.get(key),snapshot=state?.sessionSettings;
-  const known=snapshot&&snapshot.expires>performance.now()&&snapshot.selection===selectionGeneration;
+  const known=snapshot&&settingsLeaseRemaining(snapshot)>0&&snapshot.selection===selectionGeneration;
   const model=known&&snapshot.model||'модель неизвестна',effort=known&&snapshot.effort||'уровень неизвестен';
   $('current-model-status').textContent='Сессия: '+model+' · Размышление: '+effort;
   $('current-model-status').title=state?.settingsFailure?'Настройки сессии неизвестны: последнее обновление не удалось.':snapshot&&!known?'Настройки сессии неизвестны: данные устарели.':'';
   if(known){
     const generation=selectionGeneration;
-    sessionSettingsTimer=setTimeout(()=>{sessionSettingsTimer=null;if(key===currentSessionKey()&&activeSelection()&&generation===selectionGeneration){syncCurrentSessionControls();}},Math.max(1,snapshot.expires-performance.now()));
+    sessionSettingsTimer=setTimeout(()=>{sessionSettingsTimer=null;if(key===currentSessionKey()&&activeSelection()&&generation===selectionGeneration){syncCurrentSessionControls();}},Math.max(1,settingsLeaseRemaining(snapshot)));
   }
 }
 function renderModelControls(){
@@ -274,7 +433,16 @@ async function loadModelCatalog(){
   finally{if(state.request===request)state.loading=false;if(current())syncCurrentSessionControls();}
 }
 function syncCurrentSessionControls(){const key=currentSessionKey();const historyBusy=Boolean(key&&historyFlights.has(key));const state=key&&historyData.get(key);const hasOlder=Boolean(state&&(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error)));renderModelControls();$('chat-send').disabled=!csrf||currentTab!=='sessions'||!key||Boolean(selectedSession?.created&&!state?.initialized&&!state?.confirmedOrigin)||sendsInFlight.has(key)||hasUnknown(key)||!explicitModelReady(key);$('chat-refresh').disabled=!key||historyBusy;$('history-older').disabled=!key||historyBusy||!hasOlder;$('history-retry').hidden=!(state&&state.historyError);$('history-retry').disabled=!key||historyBusy;renderCurrentSendStatus();syncRenameControls();syncCreateControls();}
-function showTab(tab,load=true){currentTab=tab;const tasks=tab==='tasks';if(tasks)clearHistoryScrollSlack();$('tab-tasks').setAttribute('aria-selected',String(tasks));$('tab-sessions').setAttribute('aria-selected',String(!tasks));$('tasks-panel').hidden=!tasks;$('sessions-panel').hidden=tasks;syncCurrentSessionControls();if(tasks){stopPolling();if(load&&!taskLoaded)refresh();}else{if(load&&!projectNames.length)loadProjects();else if(load&&!selectedProject)loadSessionList(0,false);startPolling();}}
+function showTab(tab,load=true){
+  if(!['tasks','sessions','devbus'].includes(tab))return;
+  if(currentTab!==tab){stopDevbusView();devbusTerminal=false;}
+  currentTab=tab;if(tab!=='sessions')clearHistoryScrollSlack();
+  for(const name of ['tasks','sessions','devbus']){$('tab-'+name).setAttribute('aria-selected',String(tab===name));$(name+'-panel').hidden=tab!==name;}
+  syncCurrentSessionControls();
+  if(tab==='tasks'){stopPolling();if(load&&!taskLoaded)refresh();}
+  else if(tab==='sessions'){if(load&&!projectNames.length)loadProjects();else if(load&&!selectedProject)loadSessionList(0,false);startPolling();}
+  else{stopPolling();if(devbusAdmitted)syncDevbusView();else admitDevbusView();}
+}
 function setSessionStatus(text){$('session-list-status').textContent=text;}
 // Disclosure is a local UI choice; only a fresh deliberate selection consumes proof.
 function setProjectsExpanded(expanded){
@@ -601,7 +769,7 @@ async function checkRename(){
 
 function normalizeHistoryState(key){if(!historyData.has(key))historyData.set(key,{turns:new Map(),outgoing:new Map(),sessionSettings:null,settingsFailure:false,order:[],olderAnchors:[],initialized:false,truncated:false,attention:false,paginationError:'',historyError:'',historyErrorOrigin:null,latestHistoryError:'',windowIds:null,windowOlder:false,pendingLatest:false});return historyData.get(key);}
 function validHistoryId(value){return typeof value==='string'&&value.length>0&&value.length<=500;}
-function mergeHistory(key,data,olderAnchor){const state=normalizeHistoryState(key);const incoming=Array.isArray(data.turns)?data.turns:[];const chronological=incoming.slice().reverse().filter(turn=>turn&&validHistoryId(turn.id));const incomingIds=new Set(chronological.map(turn=>turn.id));const existingIds=new Set(state.order);const hadOverlap=chronological.some(turn=>existingIds.has(turn.id));for(const turn of chronological){const previous=state.turns.get(turn.id);const itemMap=new Map();for(const item of (previous&&previous.items)||[])if(validHistoryId(item&&item.id))itemMap.set(item.id,item);for(const item of (Array.isArray(turn.items)?turn.items:[])){if(item&&validHistoryId(item.id))itemMap.set(item.id,item);}state.turns.set(turn.id,{...turn,items:[...itemMap.values()]});}
+function mergeHistory(key,data,olderAnchor){const state=normalizeHistoryState(key);const incoming=Array.isArray(data.turns)?data.turns:[];const chronological=incoming.slice().reverse().filter(turn=>turn&&validHistoryId(turn.id));const incomingIds=new Set(chronological.map(turn=>turn.id));const existingIds=new Set(state.order);const hadOverlap=chronological.some(turn=>existingIds.has(turn.id));for(const turn of chronological){const previous=state.turns.get(turn.id);const itemMap=new Map();for(const item of (previous&&previous.items)||[])if(validHistoryId(item&&item.id))itemMap.set(item.id,item);for(const item of (Array.isArray(turn.items)?turn.items:[])){if(item&&validHistoryId(item.id)&&(!olderAnchor||!itemMap.has(item.id)))itemMap.set(item.id,item);}state.turns.set(turn.id,{...(olderAnchor&&previous?previous:turn),items:[...itemMap.values()]});}
   const ids=chronological.map(turn=>turn.id).filter((id,i,a)=>a.indexOf(id)===i);if(olderAnchor){const anchorIndex=state.olderAnchors.indexOf(olderAnchor);const originalOrder=state.order;const overlapId=ids.find(id=>existingIds.has(id));const boundaryId=overlapId||olderAnchor.afterId;const boundaryIndex=boundaryId===null?-1:originalOrder.indexOf(boundaryId);const insertAt=boundaryIndex<0?0:originalOrder.slice(0,boundaryIndex).filter(id=>!incomingIds.has(id)).length;state.order=originalOrder.filter(id=>!incomingIds.has(id));state.order.splice(insertAt,0,...ids.filter(id=>!state.order.includes(id)));if(anchorIndex>=0){if(data.next_cursor){if(olderAnchor.seen.has(data.next_cursor)){olderAnchor.error=true;state.paginationError='Продолжение истории недоступно: сервер повторил cursor.';}else{state.olderAnchors[anchorIndex]={cursor:data.next_cursor,afterId:ids[0]||olderAnchor.afterId,seen:new Set([...olderAnchor.seen,data.next_cursor]),error:false};}}else state.olderAnchors.splice(anchorIndex,1);}}else{state.order=[...state.order.filter(id=>!incomingIds.has(id)),...ids];if(!state.initialized){state.olderAnchors=[];if(data.next_cursor)state.olderAnchors.push({cursor:data.next_cursor,afterId:ids[0]||state.order[0]||null,seen:new Set([data.next_cursor]),error:false});state.initialized=true;}else if(data.next_cursor&&!hadOverlap&&!state.olderAnchors.some(anchor=>anchor.cursor===data.next_cursor)){state.olderAnchors.push({cursor:data.next_cursor,afterId:ids[0]||state.order[0]||null,seen:new Set([data.next_cursor]),error:false});}}
   state.paginationError=state.olderAnchors.some(anchor=>anchor.error)?'Продолжение истории недоступно: сервер повторил cursor.':'';
   // Only authoritative user correlation replaces a local record. Remap a visible
@@ -613,6 +781,16 @@ function mergeHistory(key,data,olderAnchor){const state=normalizeHistoryState(ke
     state.outgoing.delete(item.client_id);
   }
   state.truncated=state.truncated||data.truncated===true;state.attention=data.needs_native_attention===true;for(const receipt of Array.isArray(data.recent_sends)?data.recent_sends:[])applyReceipt(key,receipt);return state;}
+function reconcileHistoryCorrelations(state,known,scrollDecision){
+for(const entry of historyItems(state)){
+        if(entry.local||entry.item.role!=='user'||typeof entry.item.client_id!=='string'||!UUID_RE.test(entry.item.client_id))continue;
+        const localKey=JSON.stringify(['local-outgoing',entry.item.client_id]);
+        if(known.has(localKey))known.add(entry.key);
+        if(scrollDecision?.kind==='anchor'&&scrollDecision.turnId==='local-outgoing'&&scrollDecision.itemId===entry.item.client_id)
+          scrollDecision={...scrollDecision,turnId:entry.turnId,itemId:entry.item.id};
+      }
+  return scrollDecision;
+}
 function scrollScopeMatches(project,sid,generation){return activeSelection(project,sid,generation)&&document.visibilityState==='visible';}
 function scrollToDocumentBottom(){showLatestHistory();pageReaderScope=null;clearHistoryScrollSlack();const root=document.documentElement;const body=document.body;const height=Math.max(root?root.scrollHeight:0,body?body.scrollHeight:0);window.scrollTo(0,Math.max(0,height-window.innerHeight));}
 function documentMaxScroll(){const root=document.documentElement;const body=document.body;return Math.max(0,Math.max(root?root.scrollHeight:0,body?body.scrollHeight:0)-window.innerHeight);}
@@ -668,6 +846,7 @@ function restoreHistoryScroll(decision,project,sid,generation){if(!decision||!sc
 function historyErrorText(state){return [...new Set([state.latestHistoryError,state.historyError,state.paginationError])].filter(Boolean).join(' ');}
 async function loadHistory(older=false,manual=false){
   if(!selectedSession||!selectedProject)return;
+  if(manual&&!older){stopLive(false);const fresh=normalizeHistoryState(currentSessionKey());fresh.liveGap=false;fresh.latestWindowIds=[];}
   const project=selectedProject,sid=selectedSession.sid,key=chatKey(project,sid),generation=selectionGeneration;
   const existing=historyFlights.get(key);
   if(existing){if(existing.generation===generation)return existing.promise;existing.controller.abort();}
@@ -681,7 +860,8 @@ async function loadHistory(older=false,manual=false){
   const anchor=older?[...state.olderAnchors].reverse().find(candidate=>!candidate.error):null;
   if(older&&!anchor)return;
   const cursor=anchor?anchor.cursor:null,path=queryPath('/api/session-history',{project,sid,cursor});
-  const controller=new AbortController(),settingsRequestStarted=performance.now();
+  const controller=new AbortController(),settingsRequestStarted={perf:performance.now(),wall:Date.now()};
+  const capturedEpoch=state.liveEpoch,capturedLiveRevision=state.historyRevision;
   let timeout;
   const deadline=new Promise((_,reject)=>{timeout=setTimeout(()=>{controller.abort();reject(new Error('Время загрузки переписки истекло. Повторите загрузку.'));},15000);});
   if(!state.initialized||manual)$('history-status').textContent='Загружаем переписку…';
@@ -691,17 +871,17 @@ async function loadHistory(older=false,manual=false){
     try{
       // The deadline includes JSON consumption, and only cancels this browser GET.
       const data=await Promise.race([api(path,undefined,controller.signal,()=>activeSelection(project,sid,generation)),deadline]);
-      if(!activeSelection(project,sid,generation)||historyFlights.get(key)!==flight)return;
+      if(!activeSelection(project,sid,generation)||historyFlights.get(key)!==flight||older&&capturedEpoch!==state.liveEpoch||!older&&capturedLiveRevision!==state.historyRevision)return;
       if(Object.hasOwn(data,'history_state')){
         const keys=['history_state','reason','recent_sends'];if(Object.hasOwn(data,'session_settings'))keys.push('session_settings');if(Object.hasOwn(data,'needs_native_attention'))keys.push('needs_native_attention');
         if(older||!exactFields(data,keys)||data.history_state!=='unavailable'||data.reason!=='unavailable'||Object.hasOwn(data,'needs_native_attention')&&data.needs_native_attention!==true||!Array.isArray(data.recent_sends)||data.recent_sends.length>8||!data.recent_sends.every(row=>exactFields(row,['status','message_id','turn_id'])&&UUID_RE.test(row.message_id)&&(['accepted','delivery_unknown','rejected'].includes(row.status))&&(row.status==='accepted'?typeof row.turn_id==='string'&&row.turn_id.length>0&&Array.from(row.turn_id).length<=500:row.turn_id===null)))throw new Error(messages.unavailable);
-        const snapshot=sessionSettingsSnapshot(data.session_settings,settingsRequestStarted);state.sessionSettings=snapshot?{...snapshot,selection:generation}:null;state.settingsFailure=false;
+        const snapshot=sessionSettingsSnapshot(data.session_settings,settingsRequestStarted);state.sessionSettings=snapshot?{...snapshot,selection:generation}:null;state.liveProjection=settingsProjection(data.session_settings);state.settingsFailure=false;
         confirmProjectSelection(generation);state.confirmedOrigin=true;state.unavailable=true;state.attention=data.needs_native_attention===true;
         state.latestHistoryError='История пока недоступна';state.historyError=state.latestHistoryError;state.historyErrorOrigin='latest';
         for(const receipt of data.recent_sends)applyReceipt(key,receipt);
         renderHistory(key);$('history-status').textContent=state.historyError;syncCurrentSessionControls();return;
       }
-      if(!older){const snapshot=sessionSettingsSnapshot(data.session_settings,settingsRequestStarted);state.sessionSettings=snapshot?{...snapshot,selection:generation}:null;state.settingsFailure=false;}
+      if(!older){const snapshot=sessionSettingsSnapshot(data.session_settings,settingsRequestStarted);state.sessionSettings=snapshot?{...snapshot,selection:generation}:null;state.liveProjection=settingsProjection(data.session_settings);state.settingsFailure=false;}
       state.confirmedOrigin=false;state.unavailable=false;
       let scrollDecision=captureHistoryScroll(project,sid,generation,older);
       const known=new Set(historyItems(state).map(entry=>entry.key));
@@ -709,13 +889,7 @@ async function loadHistory(older=false,manual=false){
       if(hold&&scrollDecision&&scrollDecision.kind==='bottom')scrollDecision=captureHistoryScroll(project,sid,generation,true);
       mergeHistory(key,data,anchor);
       confirmProjectSelection(generation);
-      for(const entry of historyItems(state)){
-        if(entry.local||entry.item.role!=='user'||typeof entry.item.client_id!=='string'||!UUID_RE.test(entry.item.client_id))continue;
-        const localKey=JSON.stringify(['local-outgoing',entry.item.client_id]);
-        if(known.has(localKey))known.add(entry.key);
-        if(scrollDecision?.kind==='anchor'&&scrollDecision.turnId==='local-outgoing'&&scrollDecision.itemId===entry.item.client_id)
-          scrollDecision={...scrollDecision,turnId:entry.turnId,itemId:entry.item.id};
-      }
+      scrollDecision=reconcileHistoryCorrelations(state,known,scrollDecision);
       if(!older)state.latestHistoryError='';
       state.historyError=state.latestHistoryError;
       state.historyErrorOrigin=state.historyError?'latest':null;
@@ -737,7 +911,7 @@ async function loadHistory(older=false,manual=false){
       if(historyFlights.get(key)===flight){historyFlights.delete(key);if(activeSelection(project,sid,generation))syncCurrentSessionControls();}
     }
   })();
-  flight.promise=promise;syncCurrentSessionControls();return promise;
+  flight.promise=promise;if(manual&&!older)promise.then(()=>{if(activeSelection(project,sid,generation)&&liveVisible())startLive();});syncCurrentSessionControls();return promise;
 }
 // INV-WSESS-20/21: producer item starts are preferred; turn fallbacks are explicit.
 function messageTimestamp(item){return ['item','turn'].includes(item.time_precision)&&Number.isInteger(item.timestamp)&&item.timestamp>=0&&item.timestamp<=253402300799?item.timestamp:null;}
@@ -934,7 +1108,8 @@ function renderHistory(key,force=false){
   }
   syncMessageAges();
   if(historyScrollSlack)setHistoryScrollSlack(historyScrollSlack);
-  $('history-truncated').hidden=!(state.truncated||all.some(entry=>entry.item.truncated===true));
+  $('history-truncated').textContent=state.liveGap?'Показано последнее окно. Возможен пропуск сообщений':'История показана не полностью. Некоторые сообщения могут отсутствовать или быть сокращены.';
+  $('history-truncated').hidden=!(state.liveGap||state.truncated||all.some(entry=>entry.item.truncated===true));
   $('history-older').hidden=state.unavailable||!state.initialized;
   $('history-older').disabled=!(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error));
   $('history-new').hidden=!state.pendingLatest;
@@ -952,18 +1127,19 @@ async function checkDelivery(key,id){if(statusChecks.has(key+'\u0000'+id))return
 function applyReceipt(key,data){if(!data||!['sending','accepted','delivery_unknown','rejected'].includes(data.status)||!UUID_RE.test(data.message_id||''))return;const id=data.message_id,map=ensureReceipts(key),existing=map.get(id),attempt=latestAttempts.get(key);const outgoing=historyData.get(key)?.outgoing.get(id);const terminal=existing&&['accepted','rejected'].includes(existing.status)?existing:attempt&&attempt.id===id&&['accepted','rejected'].includes(attempt.status)?{status:attempt.status,turn_id:existing&&existing.turn_id||null}:null;if(terminal){if(outgoing)outgoing.status=terminal.status;map.set(id,terminal);if(attempt&&attempt.id===id)attempt.status=terminal.status;syncLocalOutgoingStatuses(key);return;}if(data.status==='sending'&&existing&&existing.status==='delivery_unknown')return;const record={status:data.status,turn_id:data.turn_id||null};if(existing?.checkError&&data.status==='delivery_unknown')record.checkError=existing.checkError;map.set(id,record);if(outgoing&&outgoing!==attempt)outgoing.status=record.status;if(attempt&&attempt.id===id){if(data.status==='accepted'&&attempt.status!=='accepted'&&attempt.text!==null)attempt.acceptedUntil=Date.now()+5000;attempt.status=data.status;if(!record.checkError)delete attempt.localError;}syncLocalOutgoingStatuses(key);}
 async function submitMessage(event){event.preventDefault();if(!selectedSession||!selectedProject)return;const project=selectedProject,sid=selectedSession.sid,key=chatKey(project,sid),generation=selectionGeneration,auth=chatAuthGeneration,text=$('chat-draft').value;if(!text.trim()){$('send-status').textContent='Напишите сообщение перед отправкой.';return;}if(sendsInFlight.has(key))return;if(hasUnknown(key)){const attempt=latestAttempts.get(key);$('send-status').textContent=attempt&&attempt.text===text?'Для этой попытки уже сохранён ID. Проверьте доставку вручную.':'Сначала проверьте неизвестную доставку. Новый текст пока не отправлен.';renderReceipts(key);return;}const state=modelDraft(key);if(!explicitModelReady(key)){$('send-status').textContent='Выберите поддерживаемый уровень размышления или обновите каталог; черновик сохранён.';syncCurrentSessionControls();return;}const selection=state.modelId?Object.freeze({catalog_id:state.catalog.catalog_id,model_id:state.modelId,effort:state.effort}):null;let attempt=latestAttempts.get(key);if(!attempt||attempt.text!==text||['accepted','rejected'].includes(attempt.status)){attempt={id:crypto.randomUUID(),text,status:'sending',selection,selectionLabel:state.label,context:Object.freeze({project,sid,generation,auth})};latestAttempts.set(key,attempt);normalizeHistoryState(key).outgoing.set(attempt.id,attempt);ensureReceipts(key).set(attempt.id,{status:'sending',turn_id:null});}else if(attempt.status==='delivery_unknown'){$('send-status').textContent='Проверьте доставку вручную; повторная отправка отключена.';return;}else{attempt.status='sending';}
   sendsInFlight.add(key);renderHistory(key);syncCurrentSessionControls();$('send-status').textContent='Отправляем сообщение…';renderReceipts(key);if(scrollScopeMatches(project,sid,generation))scrollToDocumentBottom();try{let result;try{result=await api('/api/session-send',{project,sid,message_id:attempt.id,text:attempt.text,...(attempt.selection?{selection:attempt.selection}:{})});}catch(err){if(!csrf||chatAuthGeneration!==auth)return;if(err.data&&['accepted','rejected','delivery_unknown'].includes(err.data.status))result=err.data;else if(['invalid_request','forbidden','unauthorized','stale'].includes(err.code)){attempt.status='rejected';if(attempt.selection&&err.code==='stale'){state.stale=true;state.message='Каталог моделей устарел. Обновите список моделей; выбор и черновик сохранены.';}attempt.localError=err.message+' Черновик сохранён; отправка не повторялась.';ensureReceipts(key).delete(attempt.id);if(activeSelection(project,sid,generation)){renderHistory(key);$('send-status').textContent=attempt.localError;}return;}else{result={status:'delivery_unknown',message_id:attempt.id,turn_id:null};}}if(!csrf||chatAuthGeneration!==auth)return;if(!result.message_id)result.message_id=attempt.id;applyReceipt(key,result);if(!ensureReceipts(key).has(attempt.id))applyReceipt(key,{status:'delivery_unknown',message_id:attempt.id,turn_id:null});attempt.status=ensureReceipts(key).get(attempt.id).status;if(attempt.status==='accepted'&&drafts.get(key)===text){drafts.delete(key);if(activeSelection(project,sid,generation)&&$('chat-draft').value===text)$('chat-draft').value='';}if(activeSelection(project,sid,generation)){renderHistory(key);renderCurrentSendStatus();renderReceipts(key);}}finally{if(chatAuthGeneration===auth){sendsInFlight.delete(key);syncLocalOutgoingStatuses(key);}syncCurrentSessionControls();}}
-function historyChange(){if(document.visibilityState==='hidden')stopPolling();else{syncCurrentSessionControls();startPolling();}}
+function historyChange(){if(document.visibilityState==='hidden'){stopPolling();stopDevbusView();devbusAdmitted=false;}else if(currentTab==='devbus'){admitDevbusView();}else{syncCurrentSessionControls();startPolling();if(liveTransport)liveJSON(liveTransport).then(result=>{if(result)acceptLiveLease(liveTransport,result.data,result.started);}).catch(()=>{});}}
 function historyPinActive(){return Boolean(historyScrollSlack&&pinnedHistoryScope&&selectedSession&&pinnedHistoryScope.project===selectedProject&&pinnedHistoryScope.sid===selectedSession.sid&&pinnedHistoryScope.generation===selectionGeneration);}
 function noteHistoryScrollIntent(event){const reader=pageReaderScope&&scrollScopeMatches(pageReaderScope.project,pageReaderScope.sid,pageReaderScope.generation);if(!historyPinActive()&&!reader)return;if(!event.isTrusted)return;const target=event.target;if(target&&(['INPUT','TEXTAREA','SELECT'].includes(target.tagName)||target.isContentEditable)){historyTouchY=null;return;}if(event.type==='wheel'){if(event.deltaY>0){historyScrollIntent=true;notePageReaderReturn();}return;}if(event.type==='touchstart'){historyTouchY=event.touches&&event.touches.length?event.touches[0].clientY:null;return;}if(event.type==='touchmove'){const y=event.touches&&event.touches.length?event.touches[0].clientY:null;if(y!==null&&historyTouchY!==null&&y<historyTouchY){historyScrollIntent=true;notePageReaderReturn();}historyTouchY=y;return;}if(event.type==='keydown'){if(!['ArrowDown','PageDown','End'].includes(event.key)&&!(event.key===' '&&!event.shiftKey))return;historyScrollIntent=true;notePageReaderReturn();return;}if(event.type==='pointerdown'&&event.clientX>=document.documentElement.clientWidth)historyScrollbarStartY=window.scrollY;}
 function notePageReaderReturn(){if(pageReaderScope&&scrollScopeMatches(pageReaderScope.project,pageReaderScope.sid,pageReaderScope.generation)){if(window.scrollY>0&&documentMaxScroll()-window.scrollY<=80){pageReaderScope=null;return;}pageReaderScope.returnY=window.scrollY;pageReaderScope.returnUntil=Date.now()+1000;}}
 function noteHistoryScrollPosition(){const reader=pageReaderScope&&scrollScopeMatches(pageReaderScope.project,pageReaderScope.sid,pageReaderScope.generation);const scrollbar=historyScrollbarStartY!==null&&window.scrollY>historyScrollbarStartY;if(historyPinActive()&&scrollbar)historyScrollIntent=true;if(reader&&window.scrollY>0&&documentMaxScroll()-window.scrollY<=80&&(scrollbar||pageReaderScope.returnUntil>=Date.now()&&window.scrollY>pageReaderScope.returnY))pageReaderScope=null;}
 function endHistoryScrollbarDrag(){historyScrollbarStartY=null;}
 
-$('login-form').addEventListener('submit',async event=>{event.preventDefault();if(busy)return;busy=true;const b=event.target.querySelector('button');b.disabled=true;notice('Входим…');try{const data=await api('/api/login',{username:$('username').value,password:$('password').value,totp:$('login-totp').value});csrf=data.csrf;$('password').value='';$('login-totp').value='';$('login').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;const link=parseDeepLink();if(link){showTab('sessions',false);await loadProjects();}else{showTab('tasks',false);updateUrl();await refresh();}}catch(err){notice(err.message);}finally{busy=false;b.disabled=false;}});
+$('login-form').addEventListener('submit',async event=>{event.preventDefault();if(busy)return;busy=true;const b=event.target.querySelector('button');b.disabled=true;notice('Входим…');try{const data=await api('/api/login',{username:$('username').value,password:$('password').value,totp:$('login-totp').value});csrf=data.csrf;devbusAdmitted=true;devbusTerminal=false;liveAndroidAuthGeneration=-1;$('password').value='';$('login-totp').value='';$('login').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;const link=parseDeepLink();if(link){showTab('sessions',false);await loadProjects();}else{showTab('tasks',false);updateUrl();await refresh();}}catch(err){notice(err.message);}finally{busy=false;b.disabled=false;}});
 $('refresh').addEventListener('click',refresh);
-$('logout').addEventListener('click',async()=>{const native=androidAuth();if(native&&typeof native.requestLogout==='function'){stopPolling();native.requestLogout();return;}try{await api('/api/logout',{});signedOut();drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();sessionRows=[];$('cards').replaceChildren();$('session-list').replaceChildren();clearHistoryView();updateUrl();notice('Вы вышли из Control.');}catch(err){notice(err.message);}});
+$('logout').addEventListener('click',async()=>{const native=androidAuth();if(native&&typeof native.requestLogout==='function'){stopPolling();stopDevbusView();devbusAdmitted=false;androidResumeGeneration++;native.requestLogout();return;}stopPolling();stopDevbusView();devbusAdmitted=false;try{await api('/api/logout',{});signedOut();drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();sessionRows=[];$('cards').replaceChildren();$('session-list').replaceChildren();clearHistoryView();updateUrl();notice('Вы вышли из Control.');}catch(err){notice(err.message);}});
 $('tab-tasks').addEventListener('click',()=>showTab('tasks'));
 $('tab-sessions').addEventListener('click',()=>showTab('sessions'));
+$('tab-devbus').addEventListener('click',()=>showTab('devbus'));
 $('project-sort').addEventListener('change',()=>{projectSort=$('project-sort').value==='activity'?'activity':'count';try{localStorage.setItem('project-sort',projectSort);}catch(_){}renderProjects();});
 $('projects-refresh').addEventListener('click',loadProjects);
 $('sessions-more').addEventListener('click',()=>{if(sessionsHaveMore)loadSessionList(sessionPage+1,true);});
@@ -995,6 +1171,8 @@ $('chat-effort').addEventListener('change',()=>{const key=currentSessionKey();if
 $('models-refresh').addEventListener('click',()=>{const key=currentSessionKey();if(key&&!sendsInFlight.has(key)&&!hasUnknown(key))loadModelCatalog();});
 $('chat-draft').addEventListener('input',()=>{if(selectedSession){const key=chatKey(selectedProject,selectedSession.sid);drafts.set(key,$('chat-draft').value);syncCurrentSessionControls();if(hasUnknown(key))$('send-status').textContent='Есть отправка с неизвестным статусом. Сначала проверьте её вручную.';}});
 document.addEventListener('visibilitychange',historyChange);
+window.addEventListener('pagehide',()=>{stopPolling();stopDevbusView();devbusAdmitted=false;});
+window.addEventListener('pageshow',event=>{if(event.persisted)historyChange();});
 document.addEventListener('wheel',noteHistoryScrollIntent,{passive:true});
 document.addEventListener('touchstart',noteHistoryScrollIntent,{passive:true});
 document.addEventListener('touchmove',noteHistoryScrollIntent,{passive:true});
@@ -1004,8 +1182,20 @@ document.addEventListener('pointerup',endHistoryScrollbarDrag,{passive:true});
 document.addEventListener('pointercancel',endHistoryScrollbarDrag,{passive:true});
 window.addEventListener('scroll',noteHistoryScrollPosition,{passive:true});
 
-async function restoreSession(){if(busy)return;busy=true;const retry=$('session-retry');retry.hidden=true;retry.disabled=true;$('session-loading').hidden=false;$('login').hidden=true;$('workspace').hidden=true;$('logout').hidden=true;notice('Восстанавливаем сессию…');try{const data=await api('/api/session');if(typeof data.csrf!=='string'||!data.csrf)throw new Error(messages.unavailable);csrf=data.csrf;$('session-loading').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;notice('');const link=parseDeepLink();if(link){showTab('sessions',false);await loadProjects();}else{showTab('tasks',false);updateUrl();await refresh();}}catch(err){if(err.status===401){if(!androidAuth())signedOut();notice('');}else{notice(err.message+' Повторите восстановление сессии.');retry.hidden=false;}}finally{busy=false;retry.disabled=false;}}
-window.aiControlAndroidResume=async function(){const generation=++androidResumeGeneration;try{const data=await api('/api/session',undefined,undefined,()=>generation===androidResumeGeneration);if(generation!==androidResumeGeneration)return false;if(typeof data.csrf!=='string'||!data.csrf)return false;csrf=data.csrf;$('session-loading').hidden=true;$('login').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;notice('');startPolling();if(selectedSession)await loadHistory(false);else if(!projectNames.length){if(currentTab==='sessions')await loadProjects();else await refresh();}return true;}catch(_){return false;}};
+async function restoreSession(){if(busy)return;stopDevbusView();devbusAdmitted=false;busy=true;const retry=$('session-retry');retry.hidden=true;retry.disabled=true;$('session-loading').hidden=false;$('login').hidden=true;$('workspace').hidden=true;$('logout').hidden=true;notice('Восстанавливаем сессию…');try{const data=await api('/api/session');if(typeof data.csrf!=='string'||!data.csrf)throw new Error(messages.unavailable);csrf=data.csrf;devbusAdmitted=true;devbusTerminal=false;$('session-loading').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;notice('');const link=parseDeepLink();if(link){showTab('sessions',false);await loadProjects();}else{showTab('tasks',false);updateUrl();await refresh();}}catch(err){if(err.status===401){if(!androidAuth())signedOut();notice('');}else{notice(err.message+' Повторите восстановление сессии.');retry.hidden=false;}}finally{busy=false;retry.disabled=false;}}
+window.aiControlAndroidResume=async function(){
+  stopDevbusView();devbusAdmitted=false;
+  const generation=++androidResumeGeneration;
+  try{const data=await api('/api/session',undefined,undefined,()=>generation===androidResumeGeneration);
+    if(generation!==androidResumeGeneration||typeof data.csrf!=='string'||!data.csrf)return false;
+    csrf=data.csrf;devbusAdmitted=true;devbusTerminal=false;liveAndroidAuthGeneration=-1;
+    $('session-loading').hidden=true;$('login').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;notice('');
+    if(currentTab==='devbus')syncDevbusView();
+    else if(currentTab==='sessions'){startPolling();if(selectedSession)await loadHistory(false);else if(!projectNames.length)await loadProjects();}
+    else await refresh();
+    return true;
+  }catch(_){if(generation===androidResumeGeneration){stopDevbusView();devbusAdmitted=false;}return false;}
+};
 $('session-retry').addEventListener('click',restoreSession);
 // Native admission invokes the fixed resume entry once after cookie synchronization.
 if(!androidAuth())restoreSession();

@@ -1,0 +1,55 @@
+{
+  "downloads": [
+    {
+      "name": "nats-py",
+      "version": "2.9.0",
+      "filename": "nats_py-2.9.0.tar.gz",
+      "sha256": "01886eb9e0a87f0ec630652cf1fae65d2a8556378a609bc6cc07d2ea60c8d0dd",
+      "size": 110714,
+      "metadata_url": "https://pypi.org/pypi/nats-py/2.9.0/json",
+      "metadata_sha256": "02fd9f3eae54654144a6f42474608a9519b4dbf05e190aa4ee1b9616b0cf8c35",
+      "artifact_url": "https://files.pythonhosted.org/packages/ba/dc/9a01dd9561b736622c0aa3a19f6b40f3eeb22051eaea1475ceb81d5da48d/nats_py-2.9.0.tar.gz",
+      "requires_python": ">=3.7"
+    },
+    {
+      "name": "setuptools",
+      "version": "75.8.0",
+      "filename": "setuptools-75.8.0-py3-none-any.whl",
+      "sha256": "e3982f444617239225d675215d51f6ba05f845d4eec313da4418fdbb56fb27e3",
+      "size": 1228782,
+      "metadata_url": "https://pypi.org/pypi/setuptools/75.8.0/json",
+      "metadata_sha256": "9ccbe4a311f65cc2cf460e386b2f0db461d2730f92c8ba891c2d305dbaf8fa94",
+      "artifact_url": "https://files.pythonhosted.org/packages/69/8a/b9dc7678803429e4a3bc9ba462fa3dd9066824d3c607490235c6a796be5a/setuptools-75.8.0-py3-none-any.whl",
+      "requires_python": ">=3.9"
+    },
+    {
+      "name": "wheel",
+      "version": "0.45.1",
+      "filename": "wheel-0.45.1-py3-none-any.whl",
+      "sha256": "708e7481cc80179af0e556bbf0cc00b8444c7321e2700b8d8580231d13017248",
+      "size": 72494,
+      "metadata_url": "https://pypi.org/pypi/wheel/0.45.1/json",
+      "metadata_sha256": "617c2b62cc17caeef3fc1e10144bd3d5b8dc2fb93bb67a87f2802c2d0a856c32",
+      "artifact_url": "https://files.pythonhosted.org/packages/0b/2c/87f3254fd8ffd29e4c02732eee68a83a1d3c346ae39bc6822dcbcb697f2b/wheel-0.45.1-py3-none-any.whl",
+      "requires_python": ">=3.8"
+    },
+    {
+      "name": "pip",
+      "version": "25.0.1",
+      "filename": "pip-25.0.1-py3-none-any.whl",
+      "sha256": "c46efd13b6aa8279f33f2864459c8ce587ea6a1a59ee20de055868d8f7688f7f",
+      "size": 1841526,
+      "metadata_url": "https://pypi.org/pypi/pip/25.0.1/json",
+      "metadata_sha256": "90936431d61363de9a08d479705f028474b81ecbf9e443ba679718e21a57388a",
+      "artifact_url": "https://files.pythonhosted.org/packages/c9/bc/b7db44f5f39f9d0494071bddae6880eb645970366d0a200022a1a93d57f5/pip-25.0.1-py3-none-any.whl",
+      "requires_python": ">=3.8"
+    }
+  ],
+  "source_date_epoch": 1700000000,
+  "build_system": {
+    "requires": [
+      "setuptools>=68.0"
+    ],
+    "build-backend": "setuptools.build_meta"
+  }
+}

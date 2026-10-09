@@ -1,0 +1,15 @@
+{
+  "source_commit": "0f4cbe3d2b5f7c8983375d6c3ef9d262d19bbcde",
+  "source_path": "systemd/ai-control-web-broker.service.tmpl",
+  "source_sha256": "1bd0ad1c78d98b22245ace274c9b96a59159f0b14f6669b4e09076f87cd53434",
+  "substitutions": {
+    "@OWNER@": "dwl",
+    "@OWNER_HOME@": "/home/dwl",
+    "@BIN_DIR@": "/home/dwl/.local/bin",
+    "@OWNER_UID@": "1000",
+    "@REGISTRY@": "/home/dwl/.local/state/ai-control/registry",
+    "@WEB_UID@": "993"
+  },
+  "rendered_sha256": "bb6bd0a90f9e77594e966b49a48d72574b0b9535949501314fe2fa5bf9588b00",
+  "scope": "synthetic no-secret unit data only; no host unit read"
+}

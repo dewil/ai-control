@@ -1,0 +1,884 @@
+test_accepted4_plus_bootstrap_marker_never_restores_old_helper (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_accepted4_plus_bootstrap_marker_never_restores_old_helper) ... FAIL
+test_completed_accepted4_consistency_no_downgrade_then_leaf_drift_refuses (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_completed_accepted4_consistency_no_downgrade_then_leaf_drift_refuses) ... FAIL
+test_completed_repeat_only4_readonly_commands_no_smoke_or_mutation (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_completed_repeat_only4_readonly_commands_no_smoke_or_mutation) ... FAIL
+test_existing_lock_missing_or_inode_drift_refuses_without_replacement (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_existing_lock_missing_or_inode_drift_refuses_without_replacement) ... FAIL
+test_foreign_package_config_bootstrap_markers_preserve_all_bytes (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_foreign_package_config_bootstrap_markers_preserve_all_bytes) ... FAIL
+test_forward_dependency_modes_smoke_trace15_and_receipt (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_forward_dependency_modes_smoke_trace15_and_receipt) ... FAIL
+test_invalid_carrier_refuses_before_filesystem_lock_runner (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_invalid_carrier_refuses_before_filesystem_lock_runner) ... FAIL
+test_marker_checkpoint_durable_before_stop_and_no_owner_config_access (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_marker_checkpoint_durable_before_stop_and_no_owner_config_access) ... FAIL
+test_member_modes_and_fsync_before_final_promotions (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_member_modes_and_fsync_before_final_promotions) ... FAIL
+test_none_operation_pin_refuses_without_marker_or_mutation (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_none_operation_pin_refuses_without_marker_or_mutation) ... FAIL
+test_owner_import_code_pin_and_empty_env_pass_through_actual_runner (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_owner_import_code_pin_and_empty_env_pass_through_actual_runner) ... FAIL
+test_preserved_exact_never_installs_or_unlinks_dependency (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_preserved_exact_never_installs_or_unlinks_dependency) ... FAIL
+test_shadow_py_pth_and_unknown_partial_final_refuse_no_cleanup (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_shadow_py_pth_and_unknown_partial_final_refuse_no_cleanup) ... FAIL
+test_smoke_failure_rolls_back_helper_unit_dependency_without_receipt (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_smoke_failure_rolls_back_helper_unit_dependency_without_receipt) ... FAIL
+test_smoke_strict_json_oversize_wrong_source_schema_bool_refuses (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_smoke_strict_json_oversize_wrong_source_schema_bool_refuses) ... FAIL
+test_stat_pin_eight_key_types_and_exact_inode_refuse (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_stat_pin_eight_key_types_and_exact_inode_refuse) ... FAIL
+test_actual_schema4_state_accepts_exact22_rootrecord (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_actual_schema4_state_accepts_exact22_rootrecord) ... FAIL
+test_actual_signed4_full22_staged_from16 (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_actual_signed4_full22_staged_from16) ... FAIL
+test_actual_unit_fault_blocks_journal4_forward_clear_retains_journal (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_actual_unit_fault_blocks_journal4_forward_clear_retains_journal) ... FAIL
+test_actual_unit_fault_blocks_sameID_repeat_without_restart (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_actual_unit_fault_blocks_sameID_repeat_without_restart) ... FAIL
+test_actual_unit_hash_fault_refuses_fresh (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_actual_unit_hash_fault_refuses_fresh) ... FAIL
+test_all64_interrupted3to4_patterns_restore_raw16_and_six_absence (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_all64_interrupted3to4_patterns_restore_raw16_and_six_absence) ... FAIL
+test_exact22_modes_and_historical_schemas (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_exact22_modes_and_historical_schemas) ... FAIL
+test_forward_gate_dependency_mutations_refuse_even_matching_receipt (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_forward_gate_dependency_mutations_refuse_even_matching_receipt) ... FAIL
+test_fresh_matching_or_dangling_new_leaf_is_present_and_refused_prejournal (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_fresh_matching_or_dangling_new_leaf_is_present_and_refused_prejournal) ... FAIL
+test_interrupted4to4_restores23file_checkpoint_and_before22 (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_interrupted4to4_restores23file_checkpoint_and_before22) ... FAIL
+test_journal4_rollback_ignores_dependency_unit_gate_fault (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_journal4_rollback_ignores_dependency_unit_gate_fault) ... FAIL
+test_legacy_journal3_recovery_ignores_missing_dependency_receipt_and_unit_fault (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_legacy_journal3_recovery_ignores_missing_dependency_receipt_and_unit_fault) ... ok
+test_missing_receipt_refuses_fresh_without_install_or_repair (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_missing_receipt_refuses_fresh_without_install_or_repair) ... FAIL
+test_root_requirements_leaf_uses_target_parent_not_bin_collision (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_root_requirements_leaf_uses_target_parent_not_bin_collision) ... FAIL
+test_signed22_install_preserves_full_scope_and_sameID_no_restart (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_signed22_install_preserves_full_scope_and_sameID_no_restart) ... FAIL
+test_subsets_extra_schema_boolean_and_direct14_rejected_before_mutation (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_subsets_extra_schema_boolean_and_direct14_rejected_before_mutation) ... FAIL
+test_unknown_interrupted_bytes_retained_without_blind_rollback (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_unknown_interrupted_bytes_retained_without_blind_rollback) ... FAIL
+test_no_marker_control_reaches_first_later_tripwire (test_control_web_live_deploy22_controller_blind.ImmutableHelperBoundaryBlind.test_no_marker_control_reaches_first_later_tripwire) ... ok
+test_pinned_old16_refuses_real_signed22_not_a_shadow_validator (test_control_web_live_deploy22_controller_blind.ImmutableHelperBoundaryBlind.test_pinned_old16_refuses_real_signed22_not_a_shadow_validator) ... ok
+test_schema2_nonJSON_and_dangling_bootstrap_marker_block_before_all_later_seams (test_control_web_live_deploy22_controller_blind.ImmutableHelperBoundaryBlind.test_schema2_nonJSON_and_dangling_bootstrap_marker_block_before_all_later_seams) ... ok
+test_failed_smoke_unknown_dependency_bytes_retain_evidence_no_rmtree (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_failed_smoke_unknown_dependency_bytes_retain_evidence_no_rmtree) ... FAIL
+test_kill_after_INFO_promotion_A4_before_unit_then_resume (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_kill_after_INFO_promotion_A4_before_unit_then_resume) ... FAIL
+test_kill_after_NATS_promotion_A2_then_resume_full29_before_smoke (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_kill_after_NATS_promotion_A2_then_resume_full29_before_smoke) ... FAIL
+test_partial_final_without_own_marker_is_never_accepted_or_cleaned (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_partial_final_without_own_marker_is_never_accepted_or_cleaned) ... FAIL
+test_pre_and_post_smoke_death_each_resume_with_one_new_smoke_no_pass_bit (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_pre_and_post_smoke_death_each_resume_with_one_new_smoke_no_pass_bit) ... FAIL
+test_unknown_temp_after_crash_is_retained_and_never_blind_deleted (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_unknown_temp_after_crash_is_retained_and_never_blind_deleted) ... FAIL
+test_unowned_stages_both_stages_INFO_before_NATS_and_partial_final_refuse (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_unowned_stages_both_stages_INFO_before_NATS_and_partial_final_refuse) ... FAIL
+test_wheel_blob_corruption_and_outer_hash_rebinding_refuse_before_stop (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_wheel_blob_corruption_and_outer_hash_rebinding_refuse_before_stop) ... FAIL
+test_RECORD_hash_size_fullcoverage_and_archive0664_install0644 (test_control_web_live_deploy22_fixture_blind.PortableDependencyProofBlind.test_RECORD_hash_size_fullcoverage_and_archive0664_install0644) ... ok
+test_final_checkout_exact12tracked_index_and_all_blob_hashes (test_control_web_live_deploy22_fixture_blind.PortableDependencyProofBlind.test_final_checkout_exact12tracked_index_and_all_blob_hashes) ... ok
+test_frozen_wheel_and_independent_full_fivefield_canonical_digest (test_control_web_live_deploy22_fixture_blind.PortableDependencyProofBlind.test_frozen_wheel_and_independent_full_fivefield_canonical_digest) ... ok
+test_license_and_safe_member_names_no_hooks_native_or_extra (test_control_web_live_deploy22_fixture_blind.PortableDependencyProofBlind.test_license_and_safe_member_names_no_hooks_native_or_extra) ... ok
+test_actual_controller_serializer_matches_independent_full_rows (test_control_web_live_deploy22_inventory_blind.SourceFinalInventoryBlind.test_actual_controller_serializer_matches_independent_full_rows) ... FAIL
+test_actual_serializer_closed_shape_bool_duplicate_type_refusals (test_control_web_live_deploy22_inventory_blind.SourceFinalInventoryBlind.test_actual_serializer_closed_shape_bool_duplicate_type_refusals) ... FAIL
+test_actual_serializer_uses_observed_not_compiled_hash_size_mode (test_control_web_live_deploy22_inventory_blind.SourceFinalInventoryBlind.test_actual_serializer_uses_observed_not_compiled_hash_size_mode) ... FAIL
+test_controller_bootstrap_pins_and_full29map_identical (test_control_web_live_deploy22_inventory_blind.SourceFinalInventoryBlind.test_controller_bootstrap_pins_and_full29map_identical) ... FAIL
+test_None_invalid_external_pin_before_stage_open (test_control_web_live_deploy22_packet_blind.LauncherBoundaryBlind.test_None_invalid_external_pin_before_stage_open) ... FAIL
+test_actual_pinned_wrapper_snapshot_exec_success_no_mutation (test_control_web_live_deploy22_packet_blind.LauncherBoundaryBlind.test_actual_pinned_wrapper_snapshot_exec_success_no_mutation) ... FAIL
+test_changed_wrapper_same_metadata_size_fails_full_SHA (test_control_web_live_deploy22_packet_blind.LauncherBoundaryBlind.test_changed_wrapper_same_metadata_size_fails_full_SHA) ... FAIL
+test_symlink_extra_and_hardlink_refuse_without_exec_or_cleanup (test_control_web_live_deploy22_packet_blind.LauncherBoundaryBlind.test_symlink_extra_and_hardlink_refuse_without_exec_or_cleanup) ... FAIL
+test_wrapper_swap_during_descriptor_read_refuses_and_preserves_replacement (test_control_web_live_deploy22_packet_blind.LauncherBoundaryBlind.test_wrapper_swap_during_descriptor_read_refuses_and_preserves_replacement) ... FAIL
+test_closed_literal_spans_preserve_all_code_paths_and_carrier_None (test_control_web_live_deploy22_packet_blind.PacketBuilderBlind.test_closed_literal_spans_preserve_all_code_paths_and_carrier_None) ... FAIL
+test_deterministic_exact4_manifest_full_hash_size_crossbindings (test_control_web_live_deploy22_packet_blind.PacketBuilderBlind.test_deterministic_exact4_manifest_full_hash_size_crossbindings) ... FAIL
+test_duplicate_and_nonliteral_bootstrap_binding_refuse (test_control_web_live_deploy22_packet_blind.PacketBuilderBlind.test_duplicate_and_nonliteral_bootstrap_binding_refuse) ... FAIL
+test_exact_one_CONFIG_insertion_rejects_other_allowed_byte_diffs (test_control_web_live_deploy22_packet_blind.PacketBuilderBlind.test_exact_one_CONFIG_insertion_rejects_other_allowed_byte_diffs) ... FAIL
+test_fill_stage_exact9_literal_spans_and_wrapper_pin_equality (test_control_web_live_deploy22_packet_blind.PacketBuilderBlind.test_fill_stage_exact9_literal_spans_and_wrapper_pin_equality) ... FAIL
+test_input_keysets_unknown_binding_and_wrong_blob_hash_refuse (test_control_web_live_deploy22_packet_blind.PacketBuilderBlind.test_input_keysets_unknown_binding_and_wrong_blob_hash_refuse) ... FAIL
+test_complete_stage_wrong_bytes_or_mode_refuses_without_repair (test_control_web_live_deploy22_packet_blind.StageBoundaryBlind.test_complete_stage_wrong_bytes_or_mode_refuses_without_repair) ... FAIL
+test_create_exact3_private_files_no_bindingsproof (test_control_web_live_deploy22_packet_blind.StageBoundaryBlind.test_create_exact3_private_files_no_bindingsproof) ... FAIL
+test_creation_uses_exclusive_nofollow_and_fsync_before_success (test_control_web_live_deploy22_packet_blind.StageBoundaryBlind.test_creation_uses_exclusive_nofollow_and_fsync_before_success) ... FAIL
+test_exact_reuse_keeps_inodes_and_fsyncs_three_files_dir_parent (test_control_web_live_deploy22_packet_blind.StageBoundaryBlind.test_exact_reuse_keeps_inodes_and_fsyncs_three_files_dir_parent) ... FAIL
+test_hash_size_bool_noncanonical_base64_None_reject_before_creation (test_control_web_live_deploy22_packet_blind.StageBoundaryBlind.test_hash_size_bool_noncanonical_base64_None_reject_before_creation) ... FAIL
+test_nonroot_extraargv_refuse_without_creation (test_control_web_live_deploy22_packet_blind.StageBoundaryBlind.test_nonroot_extraargv_refuse_without_creation) ... FAIL
+test_partial_foreign_stage_refuse_without_repair (test_control_web_live_deploy22_packet_blind.StageBoundaryBlind.test_partial_foreign_stage_refuse_without_repair) ... FAIL
+test_pinned_manifest_with_wrong_bootstrap_snapshot_refuses (test_control_web_live_deploy22_packet_blind.WrapperInputBoundaryBlind.test_pinned_manifest_with_wrong_bootstrap_snapshot_refuses) ... FAIL
+test_unbound_manifest_pin_and_oversize_refuse_without_exec (test_control_web_live_deploy22_packet_blind.WrapperInputBoundaryBlind.test_unbound_manifest_pin_and_oversize_refuse_without_exec) ... FAIL
+
+======================================================================
+FAIL: test_accepted4_plus_bootstrap_marker_never_restores_old_helper (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_accepted4_plus_bootstrap_marker_never_restores_old_helper)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_completed_accepted4_consistency_no_downgrade_then_leaf_drift_refuses (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_completed_accepted4_consistency_no_downgrade_then_leaf_drift_refuses)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_completed_repeat_only4_readonly_commands_no_smoke_or_mutation (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_completed_repeat_only4_readonly_commands_no_smoke_or_mutation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_existing_lock_missing_or_inode_drift_refuses_without_replacement (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_existing_lock_missing_or_inode_drift_refuses_without_replacement)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_foreign_package_config_bootstrap_markers_preserve_all_bytes (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_foreign_package_config_bootstrap_markers_preserve_all_bytes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_forward_dependency_modes_smoke_trace15_and_receipt (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_forward_dependency_modes_smoke_trace15_and_receipt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_invalid_carrier_refuses_before_filesystem_lock_runner (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_invalid_carrier_refuses_before_filesystem_lock_runner)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_marker_checkpoint_durable_before_stop_and_no_owner_config_access (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_marker_checkpoint_durable_before_stop_and_no_owner_config_access)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_member_modes_and_fsync_before_final_promotions (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_member_modes_and_fsync_before_final_promotions)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_none_operation_pin_refuses_without_marker_or_mutation (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_none_operation_pin_refuses_without_marker_or_mutation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_owner_import_code_pin_and_empty_env_pass_through_actual_runner (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_owner_import_code_pin_and_empty_env_pass_through_actual_runner)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_preserved_exact_never_installs_or_unlinks_dependency (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_preserved_exact_never_installs_or_unlinks_dependency)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_shadow_py_pth_and_unknown_partial_final_refuse_no_cleanup (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_shadow_py_pth_and_unknown_partial_final_refuse_no_cleanup)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_smoke_failure_rolls_back_helper_unit_dependency_without_receipt (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_smoke_failure_rolls_back_helper_unit_dependency_without_receipt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_smoke_strict_json_oversize_wrong_source_schema_bool_refuses (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_smoke_strict_json_oversize_wrong_source_schema_bool_refuses)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_stat_pin_eight_key_types_and_exact_inode_refuse (test_control_web_live_deploy22_bootstrap_blind.Live22BootstrapBlind.test_stat_pin_eight_key_types_and_exact_inode_refuse)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_bootstrap_blind.py", line 12, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_actual_schema4_state_accepts_exact22_rootrecord (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_actual_schema4_state_accepts_exact22_rootrecord)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 28, in test_actual_schema4_state_accepts_exact22_rootrecord
+    try:value=self.deploy().read_state()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/deployment/ai-control-web-deploy.py", line 331, in read_state
+    value = state_value(decode(raw))
+            ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/deployment/ai-control-web-deploy.py", line 189, in state_value
+    raise Rejected('Invalid state schema')
+blind_signed_deploy.Rejected: Invalid state schema
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 29, in test_actual_schema4_state_accepts_exact22_rootrecord
+    except self.api.Rejected as error:self.fail('Actual controller refuses exact schema4 rootrecord: '+str(error))
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Actual controller refuses exact schema4 rootrecord: Invalid state schema
+
+======================================================================
+FAIL: test_actual_signed4_full22_staged_from16 (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_actual_signed4_full22_staged_from16)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 22, in test_actual_signed4_full22_staged_from16
+    try:result=self.deploy().staged()
+               ^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/deployment/ai-control-web-deploy.py", line 497, in staged
+    raise Rejected('Extra staging file')
+blind_signed_deploy.Rejected: Extra staging file
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 23, in test_actual_signed4_full22_staged_from16
+    except self.api.Rejected as error:self.fail('Actual controller refused valid signed4 exact22: '+str(error))
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Actual controller refused valid signed4 exact22: Extra staging file
+
+======================================================================
+FAIL: test_actual_unit_fault_blocks_journal4_forward_clear_retains_journal (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_actual_unit_fault_blocks_journal4_forward_clear_retains_journal)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 142, in test_actual_unit_fault_blocks_journal4_forward_clear_retains_journal
+    self.required22();self.dependency_after()
+    ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 13, in required22
+    self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+AssertionError: {'bin[542 chars]: 420} != {'bin[542 chars]: 420, 'bin/_control_web_devbus.py': 420, 'bin[167 chars] 420}
+Diff is 831 characters long. Set self.maxDiff to None to see it. : Actual controller still admits16, not exact signed22
+
+======================================================================
+FAIL: test_actual_unit_fault_blocks_sameID_repeat_without_restart (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_actual_unit_fault_blocks_sameID_repeat_without_restart)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 135, in test_actual_unit_fault_blocks_sameID_repeat_without_restart
+    self.required22();self.dependency_after();self.signed();self.accepted(dict(result='installed',release_id=8))
+    ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 13, in required22
+    self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+AssertionError: {'bin[542 chars]: 420} != {'bin[542 chars]: 420, 'bin/_control_web_devbus.py': 420, 'bin[167 chars] 420}
+Diff is 831 characters long. Set self.maxDiff to None to see it. : Actual controller still admits16, not exact signed22
+
+======================================================================
+FAIL: test_actual_unit_hash_fault_refuses_fresh (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_actual_unit_hash_fault_refuses_fresh)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 127, in test_actual_unit_hash_fault_refuses_fresh
+    self.required22();self.dependency_after();self.signed();self.unit.write_bytes(self.unit.read_bytes()+b'# unknown unit drift\n')
+    ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 13, in required22
+    self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+AssertionError: {'bin[542 chars]: 420} != {'bin[542 chars]: 420, 'bin/_control_web_devbus.py': 420, 'bin[167 chars] 420}
+Diff is 831 characters long. Set self.maxDiff to None to see it. : Actual controller still admits16, not exact signed22
+
+======================================================================
+FAIL: test_all64_interrupted3to4_patterns_restore_raw16_and_six_absence (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_all64_interrupted3to4_patterns_restore_raw16_and_six_absence)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 53, in test_all64_interrupted3to4_patterns_restore_raw16_and_six_absence
+    self.required22()
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 13, in required22
+    self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+AssertionError: {'bin[542 chars]: 420} != {'bin[542 chars]: 420, 'bin/_control_web_devbus.py': 420, 'bin[167 chars] 420}
+Diff is 831 characters long. Set self.maxDiff to None to see it. : Actual controller still admits16, not exact signed22
+
+======================================================================
+FAIL: test_exact22_modes_and_historical_schemas (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_exact22_modes_and_historical_schemas)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 16, in test_exact22_modes_and_historical_schemas
+    self.required22();self.assertEqual(self.api.APP_MODES,s.FULL16);self.assertEqual(self.api.LIVE_MODES,s.FULL22)
+    ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 13, in required22
+    self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+AssertionError: {'bin[542 chars]: 420} != {'bin[542 chars]: 420, 'bin/_control_web_devbus.py': 420, 'bin[167 chars] 420}
+Diff is 831 characters long. Set self.maxDiff to None to see it. : Actual controller still admits16, not exact signed22
+
+======================================================================
+FAIL: test_forward_gate_dependency_mutations_refuse_even_matching_receipt (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_forward_gate_dependency_mutations_refuse_even_matching_receipt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 108, in test_forward_gate_dependency_mutations_refuse_even_matching_receipt
+    self.required22();self.dependency_after();self.signed();original=(self.site/'nats/__init__.py').read_bytes()
+    ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 13, in required22
+    self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+AssertionError: {'bin[542 chars]: 420} != {'bin[542 chars]: 420, 'bin/_control_web_devbus.py': 420, 'bin[167 chars] 420}
+Diff is 831 characters long. Set self.maxDiff to None to see it. : Actual controller still admits16, not exact signed22
+
+======================================================================
+FAIL: test_fresh_matching_or_dangling_new_leaf_is_present_and_refused_prejournal (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_fresh_matching_or_dangling_new_leaf_is_present_and_refused_prejournal)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 77, in test_fresh_matching_or_dangling_new_leaf_is_present_and_refused_prejournal
+    self.required22();self.dependency_after();self.signed()
+    ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 13, in required22
+    self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+AssertionError: {'bin[542 chars]: 420} != {'bin[542 chars]: 420, 'bin/_control_web_devbus.py': 420, 'bin[167 chars] 420}
+Diff is 831 characters long. Set self.maxDiff to None to see it. : Actual controller still admits16, not exact signed22
+
+======================================================================
+FAIL: test_interrupted4to4_restores23file_checkpoint_and_before22 (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_interrupted4to4_restores23file_checkpoint_and_before22)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 68, in test_interrupted4to4_restores23file_checkpoint_and_before22
+    self.required22();raw,before,after,_,checkpoint=self.make_journal(before_schema=4)
+    ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 13, in required22
+    self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+AssertionError: {'bin[542 chars]: 420} != {'bin[542 chars]: 420, 'bin/_control_web_devbus.py': 420, 'bin[167 chars] 420}
+Diff is 831 characters long. Set self.maxDiff to None to see it. : Actual controller still admits16, not exact signed22
+
+======================================================================
+FAIL: test_journal4_rollback_ignores_dependency_unit_gate_fault (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_journal4_rollback_ignores_dependency_unit_gate_fault)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 152, in test_journal4_rollback_ignores_dependency_unit_gate_fault
+    self.required22();raw,before,after,_,_=self.make_journal(mask=63)
+    ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 13, in required22
+    self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+AssertionError: {'bin[542 chars]: 420} != {'bin[542 chars]: 420, 'bin/_control_web_devbus.py': 420, 'bin[167 chars] 420}
+Diff is 831 characters long. Set self.maxDiff to None to see it. : Actual controller still admits16, not exact signed22
+
+======================================================================
+FAIL: test_missing_receipt_refuses_fresh_without_install_or_repair (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_missing_receipt_refuses_fresh_without_install_or_repair)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 122, in test_missing_receipt_refuses_fresh_without_install_or_repair
+    self.required22();self.signed();before=self.tree();raw=self.state.read_bytes()
+    ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 13, in required22
+    self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+AssertionError: {'bin[542 chars]: 420} != {'bin[542 chars]: 420, 'bin/_control_web_devbus.py': 420, 'bin[167 chars] 420}
+Diff is 831 characters long. Set self.maxDiff to None to see it. : Actual controller still admits16, not exact signed22
+
+======================================================================
+FAIL: test_root_requirements_leaf_uses_target_parent_not_bin_collision (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_root_requirements_leaf_uses_target_parent_not_bin_collision)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 93, in test_root_requirements_leaf_uses_target_parent_not_bin_collision
+    self.required22()
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 13, in required22
+    self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+AssertionError: {'bin[542 chars]: 420} != {'bin[542 chars]: 420, 'bin/_control_web_devbus.py': 420, 'bin[167 chars] 420}
+Diff is 831 characters long. Set self.maxDiff to None to see it. : Actual controller still admits16, not exact signed22
+
+======================================================================
+FAIL: test_signed22_install_preserves_full_scope_and_sameID_no_restart (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_signed22_install_preserves_full_scope_and_sameID_no_restart)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 33, in test_signed22_install_preserves_full_scope_and_sameID_no_restart
+    self.required22();self.dependency_after();self.signed()
+    ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 13, in required22
+    self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+AssertionError: {'bin[542 chars]: 420} != {'bin[542 chars]: 420, 'bin/_control_web_devbus.py': 420, 'bin[167 chars] 420}
+Diff is 831 characters long. Set self.maxDiff to None to see it. : Actual controller still admits16, not exact signed22
+
+======================================================================
+FAIL: test_subsets_extra_schema_boolean_and_direct14_rejected_before_mutation (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_subsets_extra_schema_boolean_and_direct14_rejected_before_mutation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 42, in test_subsets_extra_schema_boolean_and_direct14_rejected_before_mutation
+    self.required22();self.dependency_after()
+    ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 13, in required22
+    self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+AssertionError: {'bin[542 chars]: 420} != {'bin[542 chars]: 420, 'bin/_control_web_devbus.py': 420, 'bin[167 chars] 420}
+Diff is 831 characters long. Set self.maxDiff to None to see it. : Actual controller still admits16, not exact signed22
+
+======================================================================
+FAIL: test_unknown_interrupted_bytes_retained_without_blind_rollback (test_control_web_live_deploy22_controller_blind.Deploy22ControllerBlind.test_unknown_interrupted_bytes_retained_without_blind_rollback)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 100, in test_unknown_interrupted_bytes_retained_without_blind_rollback
+    self.required22();raw,_,after,_,_=self.make_journal(mask=1)
+    ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_controller_blind.py", line 13, in required22
+    self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+AssertionError: {'bin[542 chars]: 420} != {'bin[542 chars]: 420, 'bin/_control_web_devbus.py': 420, 'bin[167 chars] 420}
+Diff is 831 characters long. Set self.maxDiff to None to see it. : Actual controller still admits16, not exact signed22
+
+======================================================================
+FAIL: test_failed_smoke_unknown_dependency_bytes_retain_evidence_no_rmtree (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_failed_smoke_unknown_dependency_bytes_retain_evidence_no_rmtree)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_dependency_blind.py", line 14, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_kill_after_INFO_promotion_A4_before_unit_then_resume (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_kill_after_INFO_promotion_A4_before_unit_then_resume)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_dependency_blind.py", line 14, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_kill_after_NATS_promotion_A2_then_resume_full29_before_smoke (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_kill_after_NATS_promotion_A2_then_resume_full29_before_smoke)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_dependency_blind.py", line 14, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_partial_final_without_own_marker_is_never_accepted_or_cleaned (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_partial_final_without_own_marker_is_never_accepted_or_cleaned)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_dependency_blind.py", line 14, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_pre_and_post_smoke_death_each_resume_with_one_new_smoke_no_pass_bit (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_pre_and_post_smoke_death_each_resume_with_one_new_smoke_no_pass_bit)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_dependency_blind.py", line 14, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_unknown_temp_after_crash_is_retained_and_never_blind_deleted (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_unknown_temp_after_crash_is_retained_and_never_blind_deleted)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_dependency_blind.py", line 14, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_unowned_stages_both_stages_INFO_before_NATS_and_partial_final_refuse (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_unowned_stages_both_stages_INFO_before_NATS_and_partial_final_refuse)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_dependency_blind.py", line 14, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_wheel_blob_corruption_and_outer_hash_rebinding_refuse_before_stop (test_control_web_live_deploy22_dependency_blind.DependencyRecoveryBlind.test_wheel_blob_corruption_and_outer_hash_rebinding_refuse_before_stop)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_dependency_blind.py", line 14, in setUp
+    def setUp(self):self.prepare()
+                    ^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 164, in prepare
+    self.op=source_module(self,'ai-control-live-bootstrap.py')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_actual_controller_serializer_matches_independent_full_rows (test_control_web_live_deploy22_inventory_blind.SourceFinalInventoryBlind.test_actual_controller_serializer_matches_independent_full_rows)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_inventory_blind.py", line 13, in test_actual_controller_serializer_matches_independent_full_rows
+    method=self.serializer();independent=s.rows()
+           ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_inventory_blind.py", line 9, in serializer
+    self.assertTrue(callable(method),'PUBLIC-SEAM PREREQUISITE: controller canonical_inventory missing')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: controller canonical_inventory missing
+
+======================================================================
+FAIL: test_actual_serializer_closed_shape_bool_duplicate_type_refusals (test_control_web_live_deploy22_inventory_blind.SourceFinalInventoryBlind.test_actual_serializer_closed_shape_bool_duplicate_type_refusals)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_inventory_blind.py", line 27, in test_actual_serializer_closed_shape_bool_duplicate_type_refusals
+    method=self.serializer();original=s.rows()
+           ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_inventory_blind.py", line 9, in serializer
+    self.assertTrue(callable(method),'PUBLIC-SEAM PREREQUISITE: controller canonical_inventory missing')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: controller canonical_inventory missing
+
+======================================================================
+FAIL: test_actual_serializer_uses_observed_not_compiled_hash_size_mode (test_control_web_live_deploy22_inventory_blind.SourceFinalInventoryBlind.test_actual_serializer_uses_observed_not_compiled_hash_size_mode)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_inventory_blind.py", line 21, in test_actual_serializer_uses_observed_not_compiled_hash_size_mode
+    method=self.serializer();original=s.rows()
+           ^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_inventory_blind.py", line 9, in serializer
+    self.assertTrue(callable(method),'PUBLIC-SEAM PREREQUISITE: controller canonical_inventory missing')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: controller canonical_inventory missing
+
+======================================================================
+FAIL: test_controller_bootstrap_pins_and_full29map_identical (test_control_web_live_deploy22_inventory_blind.SourceFinalInventoryBlind.test_controller_bootstrap_pins_and_full29map_identical)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_inventory_blind.py", line 34, in test_controller_bootstrap_pins_and_full29map_identical
+    bootstrap=s.source_module(self,'ai-control-live-bootstrap.py');self.serializer()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_None_invalid_external_pin_before_stage_open (test_control_web_live_deploy22_packet_blind.LauncherBoundaryBlind.test_None_invalid_external_pin_before_stage_open)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 111, in setUp
+    self.op=s.source_module(self,self.module_leaf)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-launcher.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_actual_pinned_wrapper_snapshot_exec_success_no_mutation (test_control_web_live_deploy22_packet_blind.LauncherBoundaryBlind.test_actual_pinned_wrapper_snapshot_exec_success_no_mutation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 111, in setUp
+    self.op=s.source_module(self,self.module_leaf)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-launcher.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_changed_wrapper_same_metadata_size_fails_full_SHA (test_control_web_live_deploy22_packet_blind.LauncherBoundaryBlind.test_changed_wrapper_same_metadata_size_fails_full_SHA)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 111, in setUp
+    self.op=s.source_module(self,self.module_leaf)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-launcher.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_symlink_extra_and_hardlink_refuse_without_exec_or_cleanup (test_control_web_live_deploy22_packet_blind.LauncherBoundaryBlind.test_symlink_extra_and_hardlink_refuse_without_exec_or_cleanup)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 111, in setUp
+    self.op=s.source_module(self,self.module_leaf)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-launcher.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_wrapper_swap_during_descriptor_read_refuses_and_preserves_replacement (test_control_web_live_deploy22_packet_blind.LauncherBoundaryBlind.test_wrapper_swap_during_descriptor_read_refuses_and_preserves_replacement)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 111, in setUp
+    self.op=s.source_module(self,self.module_leaf)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-launcher.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_closed_literal_spans_preserve_all_code_paths_and_carrier_None (test_control_web_live_deploy22_packet_blind.PacketBuilderBlind.test_closed_literal_spans_preserve_all_code_paths_and_carrier_None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 45, in setUp
+    self.builder=s.source_module(self,'ai-control-live-bootstrap-packet.py');self.prepare()
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-packet.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_deterministic_exact4_manifest_full_hash_size_crossbindings (test_control_web_live_deploy22_packet_blind.PacketBuilderBlind.test_deterministic_exact4_manifest_full_hash_size_crossbindings)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 45, in setUp
+    self.builder=s.source_module(self,'ai-control-live-bootstrap-packet.py');self.prepare()
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-packet.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_duplicate_and_nonliteral_bootstrap_binding_refuse (test_control_web_live_deploy22_packet_blind.PacketBuilderBlind.test_duplicate_and_nonliteral_bootstrap_binding_refuse)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 45, in setUp
+    self.builder=s.source_module(self,'ai-control-live-bootstrap-packet.py');self.prepare()
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-packet.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_exact_one_CONFIG_insertion_rejects_other_allowed_byte_diffs (test_control_web_live_deploy22_packet_blind.PacketBuilderBlind.test_exact_one_CONFIG_insertion_rejects_other_allowed_byte_diffs)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 45, in setUp
+    self.builder=s.source_module(self,'ai-control-live-bootstrap-packet.py');self.prepare()
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-packet.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_fill_stage_exact9_literal_spans_and_wrapper_pin_equality (test_control_web_live_deploy22_packet_blind.PacketBuilderBlind.test_fill_stage_exact9_literal_spans_and_wrapper_pin_equality)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 45, in setUp
+    self.builder=s.source_module(self,'ai-control-live-bootstrap-packet.py');self.prepare()
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-packet.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_input_keysets_unknown_binding_and_wrong_blob_hash_refuse (test_control_web_live_deploy22_packet_blind.PacketBuilderBlind.test_input_keysets_unknown_binding_and_wrong_blob_hash_refuse)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 45, in setUp
+    self.builder=s.source_module(self,'ai-control-live-bootstrap-packet.py');self.prepare()
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-packet.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_complete_stage_wrong_bytes_or_mode_refuses_without_repair (test_control_web_live_deploy22_packet_blind.StageBoundaryBlind.test_complete_stage_wrong_bytes_or_mode_refuses_without_repair)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 111, in setUp
+    self.op=s.source_module(self,self.module_leaf)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-stage.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_create_exact3_private_files_no_bindingsproof (test_control_web_live_deploy22_packet_blind.StageBoundaryBlind.test_create_exact3_private_files_no_bindingsproof)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 111, in setUp
+    self.op=s.source_module(self,self.module_leaf)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-stage.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_creation_uses_exclusive_nofollow_and_fsync_before_success (test_control_web_live_deploy22_packet_blind.StageBoundaryBlind.test_creation_uses_exclusive_nofollow_and_fsync_before_success)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 111, in setUp
+    self.op=s.source_module(self,self.module_leaf)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-stage.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_exact_reuse_keeps_inodes_and_fsyncs_three_files_dir_parent (test_control_web_live_deploy22_packet_blind.StageBoundaryBlind.test_exact_reuse_keeps_inodes_and_fsyncs_three_files_dir_parent)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 111, in setUp
+    self.op=s.source_module(self,self.module_leaf)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-stage.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_hash_size_bool_noncanonical_base64_None_reject_before_creation (test_control_web_live_deploy22_packet_blind.StageBoundaryBlind.test_hash_size_bool_noncanonical_base64_None_reject_before_creation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 111, in setUp
+    self.op=s.source_module(self,self.module_leaf)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-stage.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_nonroot_extraargv_refuse_without_creation (test_control_web_live_deploy22_packet_blind.StageBoundaryBlind.test_nonroot_extraargv_refuse_without_creation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 111, in setUp
+    self.op=s.source_module(self,self.module_leaf)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-stage.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_partial_foreign_stage_refuse_without_repair (test_control_web_live_deploy22_packet_blind.StageBoundaryBlind.test_partial_foreign_stage_refuse_without_repair)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 111, in setUp
+    self.op=s.source_module(self,self.module_leaf)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-stage.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_pinned_manifest_with_wrong_bootstrap_snapshot_refuses (test_control_web_live_deploy22_packet_blind.WrapperInputBoundaryBlind.test_pinned_manifest_with_wrong_bootstrap_snapshot_refuses)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 238, in setUp
+    def setUp(self):self.op=s.source_module(self,'ai-control-live-bootstrap-wrapper.py')
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-wrapper.py; absence is not semantic RED
+
+======================================================================
+FAIL: test_unbound_manifest_pin_and_oversize_refuse_without_exec (test_control_web_live_deploy22_packet_blind.WrapperInputBoundaryBlind.test_unbound_manifest_pin_and_oversize_refuse_without_exec)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/git/ai-control-live-deploy22-red/tests/test_control_web_live_deploy22_packet_blind.py", line 238, in setUp
+    def setUp(self):self.op=s.source_module(self,'ai-control-live-bootstrap-wrapper.py')
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/git/ai-control-live-deploy22-red/tests/deploy22_blind_support.py", line 51, in source_module
+    case.assertTrue(path.is_file(),'PUBLIC-SEAM PREREQUISITE: missing '+leaf+'; absence is not semantic RED')
+AssertionError: False is not true : PUBLIC-SEAM PREREQUISITE: missing ai-control-live-bootstrap-wrapper.py; absence is not semantic RED
+
+----------------------------------------------------------------------
+Ran 72 tests in 1.723s
+
+FAILED (failures=64)

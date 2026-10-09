@@ -244,6 +244,9 @@ class SessionRenameBrowser(unittest.TestCase):
         return values[0]
 
     def assert_title(self, title):
+        # Response headers may arrive before the browser applies its JSON result.
+        self.row(title).wait_for(state='visible', timeout=5000)
+        self.heading(title).wait_for(state='visible', timeout=5000)
         self.assertEqual(self.row(title).count(), 1, 'Only the matching session list row receives the title')
         self.assertEqual(self.heading(title).count(), 1, 'Selected chat heading shows the confirmed title')
 
@@ -380,6 +383,7 @@ class SessionRenameBrowser(unittest.TestCase):
                           ('rename', 'rename_status')], ['rename', 'rename_status'])
 
     def test_INV_WSESS_30_proven_stale_refusal_preserves_draft_and_corrected_attempt_gets_new_uuid(self):
+        from playwright.sync_api import expect
         private_json(self.evidence / 'control.json', {'rename_result': 'stale'})
         title = 'Unconfirmed synthetic title'
         dialog = self.dialog()
@@ -390,6 +394,8 @@ class SessionRenameBrowser(unittest.TestCase):
             dialog.get_by_role('button', name='Сохранить', exact=True).click()
         first_body = json.loads(first.value.request.post_data)
         self.assertEqual(first.value.status, 409, 'Stale is a proven pre-effect refusal')
+        # The actual refusal handler, rather than response headers alone, unlocks the draft.
+        expect(box).to_be_enabled(timeout=5000)
         self.assertEqual(box.input_value(), title, 'Safe error keeps the editable draft')
         self.assertTrue(box.is_enabled(), 'Pre-reserve error permits an explicit corrected attempt')
         self.assertEqual(self.row(OLD_TITLE).count(), 1)
@@ -398,6 +404,7 @@ class SessionRenameBrowser(unittest.TestCase):
         self.assertEqual(self.status_requests(), [])
         corrected = 'Corrected synthetic title'
         box.fill(corrected)
+        expect(dialog.get_by_role('button', name='Сохранить', exact=True)).to_be_enabled(timeout=5000)
         self.assertTrue(dialog.get_by_role('button', name='Сохранить', exact=True).is_enabled())
         with self.page.expect_response(lambda response: response.request.method == 'POST' and
                                        '/api/session-rename' in response.url) as second:
@@ -410,6 +417,7 @@ class SessionRenameBrowser(unittest.TestCase):
                               '/api/session-rename' in r.url]), 2)
 
     def test_INV_WSESS_30_http_503_unavailable_and_status_error_keep_same_unknown_operation(self):
+        from playwright.sync_api import expect
         title = 'Ambiguous synthetic title'
         private_json(self.evidence / 'control.json', {
             'rename_result': 'unavailable', 'status_result': 'error'})
@@ -439,6 +447,8 @@ class SessionRenameBrowser(unittest.TestCase):
 
         private_json(self.evidence / 'control.json', {'status_result': 'delivery_unknown'})
         check = self.page.get_by_role('button', name='Проверить название', exact=True)
+        # A completed HTTP error still needs its browser handler to release inFlight.
+        expect(check).to_be_enabled(timeout=5000)
         self.assertTrue(check.is_enabled(), 'A failed manual read may be retried as a read only')
         with self.page.expect_request(lambda request: request.method == 'GET' and
                                       '/api/session-rename-status' in request.url) as second_check:

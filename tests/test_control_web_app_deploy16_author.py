@@ -14,6 +14,9 @@ import test_control_web_app_deploy16_operations_blind_red as ops
 
 class RecoveryProbes(core.Deploy16):
     # Inherited independent tests also execute, but are not counted as new coverage.
+    historical_fresh16_tests = core.Deploy16.historical_fresh16_tests | {
+        'test_same_instance_new_invocation_recovers_retained_budget_exhaustion',
+    }
     def test_current_helper_legacy13_recovery_pairs_preserve_all_absences(self):
         # INV-DEPLOY-16: exercise actual new helper, including state-zero semantics.
         for schema in (1, 2):
@@ -134,7 +137,12 @@ class RecoveryProbes(core.Deploy16):
         self.assertFalse(controller.rollback_used)
 
     def test_rollback_validation_failure_consumes_budget_before_sideeffects(self):
-        # INV-DEPLOY-16: failed validation/timeout cannot buy an additional attempt.
+        # INV-DEPLOY-16/20: only a pending transaction can exercise rollback validation.
+        raw = self.journal(self.before14, 2, self.before16)
+        pending = self.checkpoints / 'pending.json'
+        pending_raw = pending.read_bytes()
+        journal = json.loads(pending_raw)
+        before_tree = self.tree()
         controller = self.deploy()
         calls = []
         def unknown_tree(*args):
@@ -143,8 +151,11 @@ class RecoveryProbes(core.Deploy16):
         controller.interrupted_tree = unknown_tree
         for _ in range(2):
             with self.assertRaises(self.api.RollbackFailed):
-                controller.rollback({}, {}, {}, b'')
+                controller.rollback(journal['before'], self.before14, journal['after'], raw)
             self.assertTrue(controller.rollback_used)
+            self.assertEqual(self.state.read_bytes(), raw)
+            self.assertEqual(self.tree(), before_tree)
+            self.assertEqual(pending.read_bytes(), pending_raw)
         self.assertEqual(calls, [True])
         self.assertFalse(self.calls)
 

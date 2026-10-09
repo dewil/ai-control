@@ -4,6 +4,7 @@ No asset-source reads or native/user history. Runtime DOM and computed styles
 are observations. Fixture controls and screenshots stay private in /var/tmp.
 """
 from control_browser_helpers import choose_project
+from control_live_legacy_fixture import LiveHistoryFixture, replay_path
 import importlib
 import json
 import os
@@ -25,7 +26,9 @@ def serve(root, evidence):
     import uvicorn
     sys.path.insert(0, str(root / 'bin'))
     web = importlib.import_module('_control_web')
-    class Backend:
+    # INV-WSESS-53: actual public LIVE backend replaces legacy automatic polling.
+    class Backend(LiveHistoryFixture):
+        _live_evidence = evidence
         def snapshot(self): return {'tasks': []}
         def answer(self, *args): return {'error': 'unavailable'}
         def verdict(self, *args): return {'error': 'unavailable'}
@@ -48,7 +51,7 @@ def serve(root, evidence):
     listener.bind(('127.0.0.1', 0)); listener.listen(128)
     origin = 'http://127.0.0.1:' + str(listener.getsockname()[1])
     app = web.create_app({'origin': origin, 'password_hash': web.hash_password(PASSWORD),
-                          'totp_secret': SECRET, 'session_ttl': 3600, 'secure_cookie': False}, Backend())
+                          'totp_secret': SECRET, 'session_ttl': 3600, 'secure_cookie': False, 'totp_state_path': replay_path(evidence)}, Backend())
     private_json(evidence / 'ready.json', {'url': origin})
     uvicorn.Server(uvicorn.Config(app, log_level='error', access_log=False)).run(sockets=[listener])
 
@@ -159,9 +162,15 @@ class CompactChatBrowserContract(unittest.TestCase):
         self.page.wait_for_timeout(200)
         anchor = self.page.evaluate('''() => {const box=document.querySelector('.chat-items'),r={top:0,bottom:innerHeight};const el=[...box.querySelectorAll('p')].find(el=>{const q=el.getBoundingClientRect();return q.top>=r.top&&q.bottom<=r.bottom});return el&&{text:el.textContent,top:el.getBoundingClientRect().top};}''')
         self.assertIsNotNone(anchor, 'Fixture must expose a visible reader anchor')
-        polling_before = len(self.history_requests())
-        self.page.wait_for_timeout(6500)
-        self.assertGreater(len(self.history_requests()), polling_before, 'Reader-anchor assertion must observe a real polling request')
+        # INV-WSESS-53: unchanged SSE observations produce no frame/legacy GET.
+        before_reads = len((self.evidence / 'requests.jsonl').read_text().splitlines())
+        before_requests = len(self.history_requests())
+        deadline = time.monotonic() + 6
+        while len((self.evidence / 'requests.jsonl').read_text().splitlines()) <= before_reads and time.monotonic() < deadline:
+            self.page.wait_for_timeout(50)
+        self.assertGreater(len((self.evidence / 'requests.jsonl').read_text().splitlines()), before_reads,
+                           'Reader anchor must span an actual owner source observation')
+        self.assertEqual(len(self.history_requests()),before_requests,'No automatic legacy history GET')
         actual = self.page.get_by_text(anchor['text'], exact=True).first.bounding_box()
         self.assertLessEqual(abs(actual['y'] - anchor['top']), 8, 'Polling must not drag reader')
         before = len(self.history_requests()); sends = len([x for x in self.network if '/api/session-send' in x[1]])

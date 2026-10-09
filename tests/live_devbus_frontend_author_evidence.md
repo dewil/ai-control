@@ -1,0 +1,47 @@
+# BUS frontend source evidence
+
+Base `52592b5b36e6dd61889654ddbcf0262e01df47e1`; isolated branch `feat/live-bus-frontend`, worktree `/data/git/ai-control-live-bus-frontend-implementation`. Authority: accepted BUS spec and frontend plan `/var/tmp/live-bus-frontend-plan-d57b024.md`, shared LIVEv3 auth/admission contract. This is source/synthetic fixture evidence, not installed acceptance. Usage tokens/money unknown; coverage partial.
+
+Changes: one lifespan-owned DevbusFrontend with one actual backend read, exact-filter single-entry TTL1s cache starting at actual worker entry, no error caching, shielded IO and bounded honest close; guarded BUS HTTP/static routes; shared8/2 request budget without the LIVE two-scope limit for BUS; one accepted mount on the third tab, shared owner403 bridge latch, visibility/native admission fences and private DOM cleanup. Accepted observer/transport/component/CSS/lock bytes, broker, CLI and authentication issuance are unchanged. Build-info uses reserved release9 and integrated candidate branch `feat/live-observability-package`.
+
+Independent navigation fixture amendment original `5cf70d3772717fd4fa0e54c31fdefec3b415fcfd` is cherry-picked as `639beb5`. Its three waits preserve the missing-tab RED oracle while waiting for existing asynchronous owner admission; no other frozen test change. Original first local27 run had19 HTTP/cache/manifest PASS plus Android browser PASS and seven immediate visible-tab-count failures. Root confirmed the auth-restore race and assigned this amendment to an independent writer.
+
+All Python commands use `/var/tmp/control-web-test-venv/bin/python` and `PYTHONPATH=tests:/var/tmp/control-web-browser-venv/lib/python3.12/site-packages`. Mandatory Chromium `153.0.8010.12`, Playwright1.63.0. Synthetic fixtures/private state only in `/var/tmp`.
+
+```bash
+PYTHONPATH=tests:/var/tmp/control-web-browser-venv/lib/python3.12/site-packages /var/tmp/control-web-test-venv/bin/python -m unittest -v test_control_web_devbus_frontend_author test_control_web_devbus_http_integration_red test_control_web_devbus_main_browser_red
+```
+
+Final affected run **37PASS /0FAIL /0ERROR /0SKIP**,60.872s, `/var/tmp/live-bus-frontend-final-focused.log`: author10 + actual HTTP/cache/manifest19 + independent main browser8. Author cases establish global8 shared budget, two active LIVE scopes plus another-cookie BUS admitted, cancelled-only waiter cannot cache, filter-change fence, actual worker-start TTL, bounded close reports still-alive thread and forbids new IO, visibility fresh admission/failed admission, stale admission cannot clear newer mount, shared LIVE/BUS no-arg Android403 latch with retained draft, and BUS AndroidResume/native logout without retained-chat requests.
+
+Two meaningful author RED counterexamples were recorded on the initial implementation and then fixed: `/var/tmp/live-bus-frontend-callstart-red.log` (thread-start delay shortened cache TTL;1FAIL), `/var/tmp/live-bus-frontend-stale-admission-red.log` (old failed admission cleared newer mounted BUS;1FAIL). An initial author fixture method-reuse TypeError was corrected in author tests before the accepted final run; it is not counted as semantic RED.
+
+```bash
+PYTHONPATH=tests:/var/tmp/control-web-browser-venv/lib/python3.12/site-packages /var/tmp/control-web-test-venv/bin/python -m unittest -v test_control_web_devbus_bridge_red test_control_web_devbus_loader_red test_control_web_devbus_dto_red test_control_web_devbus_http_integration_red test_control_web_devbus_shutdown_red test_control_web_live_bus_shared_gate_blind test_control_web_devbus_red test_control_web_devbus_review_red test_control_web_devbus_scrub_red test_control_web_devbus_browser_red test_control_web_devbus_safety test_control_web_devbus_owner_regressions test_control_web_build_info test_control_web_build_info_paths
+```
+
+**117PASS /0FAIL /0ERROR /0SKIP**,48.476s, `/var/tmp/live-bus-frontend-owner-accepted-focused.log`. Includes all38 accepted non-NATS checks, new BUS owner/HTTP/export/loader/shutdown/shared broker gate and author owner regressions/build-info. This run preceded the final two narrowly affected BUS frontend corrections; their HTTP/cache behavior was rerun in the final37. Accepted five runtime/dependency pins and frozen inventories remain unchanged.
+
+```bash
+CONTROL_LIVE_UX_SCOPE_REVISION=73eb36b4eba7b13b893014e400b30b7f918de986 CONTROL_LIVE_UX_QA_REPO=/data/git/ai-control-live-bus-frontend-implementation PYTHONPATH=tests:/var/tmp/control-web-browser-venv/lib/python3.12/site-packages /var/tmp/control-web-test-venv/bin/python -m unittest -v test_control_web_live_sse_http_blind test_control_web_live_sse_owner_blind test_control_web_live_sse_browser_blind test_control_web_live_sse_resource_blind test_control_web_live_ux_blind_red
+```
+
+**91PASS /0FAIL /0ERROR /0SKIP**,254.188s, `/var/tmp/live-bus-frontend-live-ux-focused.log`: immutable LIVE65 + UX26 against actual integrated runtime (UX source-scope snapshot separately pinned73eb). Precedes final two BUS-only corrections; no runtime changed during that run. `node --check`, Python compilation and `git diff --check` pass. Favicon source mode0644 matches baseline; no mode edit.
+
+Next: exact committed BUS68 classification/main8 repeat, independent SOURCE and parent's exact integrated full workflow. Three accepted disposable real JetStream tests are NOTRUN in this source-only author pass; parent owns their authorized fixture/full CI. Physical Android CookieManager/WebView, installed TLS/proxy/ACL/network/PONG/observer exclusivity and whole-service stop proofs remain prerequisite NOTRUN. No services, native auth, provider account, config or installed files were mutated, and no deploy/push occurred.
+
+## Browser SOURCE correction B1/B2
+
+Independent server SOURCE on `ca772dd` PASS. Browser SOURCE `/home/dwl/.ai-control-review/live-observability/bus-frontend-browser-ca772dd3.md` identified B1/B2; root accepted both. Runtime delta is limited to shared JS: 401 requests native authentication without the owner403 latch, only ownerForbidden owns that latch; AndroidResume stops BUS immediately but preserves existing LIVE until fresh admission succeeds; signed-out/hidden workspace does not begin BUS admission (related N2).
+
+Four separate public browser regressions first ran against unchanged ca772 runtime: **4FAIL /0ERROR /0SKIP**,17.249s, `/var/tmp/live-bus-frontend-source-b1-b2-baseline-red.log`. They observe actual BUS403 then actual revoked-cookie `/api/session`401 requiring a second no-arg bridge call; actual native SSE continues to render correlated backend changes after `/api/session`503 or browser network failure with no replacement stream and draft retained; signed-out visibility creates no BUS/session admission requests. Network failure cases intercept only the public `/api/session` response; history/manager/SSE/DOM are the actual application.
+
+```bash
+PYTHONPATH=tests:/var/tmp/control-web-browser-venv/lib/python3.12/site-packages /var/tmp/control-web-test-venv/bin/python -m unittest -v test_control_web_devbus_frontend_author.FrontendBrowserAuthor test_control_web_devbus_main_browser_red test_control_web_android_auth_browser test_control_web_live_sse_browser_blind.LiveBrowserBlind.test_Android403_bridge_once_preserves_draft_and_stops_renewals
+```
+
+**22PASS /0FAIL /0ERROR /0SKIP**,76.012s, `/var/tmp/live-bus-frontend-source-b1-b2-focused.log`: author browser8 (four prior plus four new), frozen BUS main8, existing Android auth5, frozen LIVE Android403. This verifies the unchanged shared403 latch, draft preservation, no mutation replay and native logout order as well as B1/B2/N2. `node --check` and `git diff --check` PASS. No Python/server/cache/owner/accepted-leaf or frozen test delta; no broad CI repeated here while parent's exact integrated full CI runs separately.
+
+Root explicitly accepted one author-only exact-copy migration: `test_control_web_live_sse_browser_author.LiveBrowserAuthor.test_fallback_single_retry_terminal_cleanup_and_failure_backoff` now expects accepted shared «Войдите снова для обновления данных.» rather than prior LIVE-only «…переписки.». Exact matching and every fallback/backoff/terminal timer/no-network assertion remain. Old expectation reproduced1FAIL/0ERROR15.882s (`/var/tmp/live-bus-frontend-shared-hint-old-author.log`); migrated case **1PASS**11.074s (`/var/tmp/live-bus-frontend-shared-hint-author-green.log`), using the same Python/PYTHONPATH and `-m unittest -v` with that exact case name.
+
+N1 failed desktop logout recovery is left outside this narrow correction: an uncertain logout outcome remains stopped until an existing explicit selection/auth/visibility event; no automatic authority is inferred from old csrf. N3 retained-session re-entry uses existing showTab→startPolling→startLive→native fresh snapshot, not legacy background history reads; frozen LIVE65/UX26 and exact BUS68 already passed on ca772. LIVE terminal callers check liveCurrent/current before calling liveTerminal, and BUS wrapper checks mount/auth current before status handling, so stale403 completions cannot act on a newer admitted generation. The cache call-count missing-context note is resolved by deliberate invalidation when an occupied different-filter request is rejected; the old waiter's result is served but not cached, verified by the separate server SOURCE PASS. All installed/physical Android/NATS prerequisites and usage coverage limits above remain unchanged.

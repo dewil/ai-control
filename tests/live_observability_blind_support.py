@@ -5,6 +5,7 @@ invented local test data. Importing the real create_app is allowed; its source i
 never read. LIVE/BUS/DEPLOY remain waiting; this fixture contains only existing UX seams.
 """
 import base64
+from copy import deepcopy
 import hashlib
 import hmac
 import importlib
@@ -121,6 +122,15 @@ class Backend:
         time.sleep(state.get("history_delay", 0))
         return state.get("history_by_sid", {}).get(sid, state["history"])
 
+    def session_live_snapshot(self, project, sid):
+        # INV-WSESS-53: actual manager/SSE supplies automatic history updates.
+        # Record only a completed synthetic observation, never a guessed frame.
+        state = self.state()
+        value = deepcopy(state.get("history_by_sid", {}).get(sid, state["history"]))
+        self.record("live_snapshot", project=project, sid=sid)
+        return {"schema": 1, "scope_id": ("1" if sid == SID else "2") * 64,
+                "history": value}
+
     def session_models(self, project, sid):
         self.record("models", project=project, sid=sid)
         state = self.state()
@@ -156,8 +166,13 @@ def serve(root, evidence):
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0)); listener.listen(128)
     origin = "http://127.0.0.1:" + str(listener.getsockname()[1])
+    # Trusted private fixture ingress for actual LIVE lifespan. No production
+    # state, EnvironmentFile or authentication bypass is used.
+    live_state = evidence / "live-state"; live_state.mkdir(mode=0o700)
+    replay = live_state / "totp.json"; private_json(replay, {"last_step": -1})
     app = web.create_app({"origin": origin, "password_hash": web.hash_password(PASSWORD),
         "totp_secret": SECRET, "session_ttl": 3600, "secure_cookie": False,
+        "totp_state_path": str(replay),
         "android_download_dir": str(evidence / "feed")}, Backend(evidence),
         clock=lambda: json.loads((evidence / "control.json").read_text()).get("clock", time.time()))
     server = uvicorn.Server(uvicorn.Config(app, log_level="error", access_log=False))

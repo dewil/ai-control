@@ -84,6 +84,7 @@ _control_web_android_download.py
 _control_web.svg
 _control_web_access.py
 _control_web_sessions.py
+_control_web_live.py
 _control_web_broker.py
 _control_web.html
 _control_web.css
@@ -93,3 +94,7 @@ ai-control-migrate-names
 _control_web_attention.py
 
 _control_web_limits.py
+_control_web_devbus.py
+_control_web_devbus_nats.py
+_control_web_devbus.js
+_control_web_devbus.css

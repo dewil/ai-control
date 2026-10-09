@@ -1,4 +1,7 @@
 """Single-worker task UI. Authentication secrets never cross the broker."""
+from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
+import asyncio
 import base64
 import fcntl
 import hashlib
@@ -18,6 +21,73 @@ import uuid
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
+
+
+class DevbusFrontend:
+    """One actual owner read and one short-lived, exact-filter cache."""
+
+    def __init__(self, backend, *, clock=time.monotonic):
+        self.backend, self.clock = backend, clock
+        self.executor = None
+        self.flight = None
+        self.key = None
+        self.started = 0
+        self.cache = None
+        self.generation = 0
+        self.closed = False
+
+    def invalidate(self):
+        self.generation += 1
+        self.cache = None
+
+    async def overview(self, task=None, agent=None):
+        from _control_web_broker import devbus_result
+        key = (task, agent)
+        if self.closed:
+            return {'error': 'unavailable'}
+        if self.cache is not None and self.cache[0] == key and self.clock() < self.cache[1]:
+            return devbus_result(self.cache[2])
+        if self.flight is not None and not self.flight.done():
+            if self.key != key:
+                self.invalidate()
+                return {'error': 'busy'}
+        else:
+            self.invalidate()
+            self.key, self.started = key, self.clock()
+            if self.executor is None:
+                self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='control-devbus-read')
+            def call():
+                self.started = self.clock()
+                return self.backend.devbus_overview(task=task, agent=agent)
+            async def read():
+                try:
+                    value = await asyncio.get_running_loop().run_in_executor(
+                        self.executor, call)
+                    return devbus_result(value)
+                except Exception:
+                    return {'error': 'unavailable'}
+            self.flight = asyncio.create_task(read())
+        flight, generation = self.flight, self.generation
+        try:
+            result = await asyncio.wait_for(asyncio.shield(flight), 6)
+        except asyncio.TimeoutError:
+            return {'error': 'unavailable'}
+        if not self.closed and generation == self.generation and self.clock() < self.started + 1 and 'error' not in result:
+            self.cache = (key, self.started + 1, result)
+        return devbus_result(result)
+
+    async def close(self):
+        self.closed = True
+        self.invalidate()
+        try:
+            if self.flight is not None:
+                await asyncio.wait_for(asyncio.shield(self.flight), 7)
+        except asyncio.TimeoutError:
+            if self.executor is not None:
+                self.executor.shutdown(wait=False, cancel_futures=True)
+            raise RuntimeError('devbus owner did not stop') from None
+        if self.executor is not None:
+            self.executor.shutdown(wait=True)
 
 
 class _APKResponse(StreamingResponse):
@@ -83,7 +153,7 @@ def _load_totp_step(path):
     finally:
         os.close(fd)
 
-def create_app(config, backend, clock=None, *, owner_only=True):
+def create_app(config, backend, clock=None, *, owner_only=True, session_store=None):
     clock = clock or time.time
     username = config.get('username', 'owner')
     if not valid_username(username):
@@ -105,7 +175,9 @@ def create_app(config, backend, clock=None, *, owner_only=True):
         totp_code(config['totp_secret'], clock())
     except Exception:
         raise ValueError('invalid authentication configuration') from None
-    sessions, attempts = {}, []
+    if session_store is not None and type(session_store) is not dict:
+        raise ValueError("invalid session store")
+    sessions, attempts = session_store if session_store is not None else {}, []
     used_step = -1
     replay_path = config.get('totp_state_path')
     if replay_path is not None:
@@ -131,7 +203,31 @@ def create_app(config, backend, clock=None, *, owner_only=True):
             device_store = helper.DeviceGrantStore(path, clock)
         return device_store
 
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    manager = None
+    devbus = None
+
+    @asynccontextmanager
+    async def lifespan(app):
+        nonlocal manager, devbus
+        from _control_web_live import Manager
+        devbus = DevbusFrontend(backend)
+        if replay_path is not None:
+            manager = Manager(backend, replay_path)
+            await manager.start()
+        try:
+            yield
+        finally:
+            try:
+                if manager is not None:
+                    await manager.stop()
+            finally:
+                manager = None
+                try:
+                    await devbus.close()
+                finally:
+                    devbus = None
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
     def error(code, status):
         return JSONResponse({'error': code}, status_code=status)
@@ -234,28 +330,36 @@ def create_app(config, backend, clock=None, *, owner_only=True):
         except Exception:
             return error('unavailable', 503)
 
-    @app.middleware('http')
-    async def security_headers(request, call_next):
-        path = request.url.path
-        app_namespace = path == '/api/app' or path.startswith('/api/app/')
-        download_namespace = path == '/download/android' or path.startswith('/download/android/')
-        canonical_app = path in ('/api/app/login', '/api/app/session', '/api/app/logout')
-        canonical_download = (path in ('/download/android/', '/download/android/version.json') or
-                              re.fullmatch(r'/download/android/ai-control-[1-9][0-9]{0,9}\.apk', path))
-        if (app_namespace and not canonical_app) or (download_namespace and not canonical_download):
-            # Scope slash rejection to the new namespaces; preserve R5 web redirects.
-            response = error('not_found', 404)
-        else:
-            response = await call_next(request)
-        immutable_apk = (response.status_code == 200 and
-                         re.fullmatch(r'/download/android/ai-control-[1-9][0-9]{0,9}\.apk', request.url.path) and
-                         response.headers.get('content-type') == 'application/vnd.android.package-archive')
-        if not immutable_apk:
-            response.headers['Cache-Control'] = 'no-store'
-        response.headers['X-Content-Type-Options'] = 'nosniff'
-        response.headers['Referrer-Policy'] = 'no-referrer'
-        response.headers['Content-Security-Policy'] = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
-        return response
+    class SecurityHeaders:
+        def __init__(self, application):
+            self.application = application
+
+        async def __call__(self, scope, receive, send):
+            if scope['type'] != 'http':
+                return await self.application(scope, receive, send)
+            path = scope['path']
+            app_namespace = path == '/api/app' or path.startswith('/api/app/')
+            download_namespace = path == '/download/android' or path.startswith('/download/android/')
+            canonical_app = path in ('/api/app/login', '/api/app/session', '/api/app/logout')
+            canonical_download = (path in ('/download/android/', '/download/android/version.json') or
+                                  re.fullmatch(r'/download/android/ai-control-[1-9][0-9]{0,9}\.apk', path))
+            async def secured(message):
+                if message['type'] == 'http.response.start':
+                    headers = list(message.get('headers', []))
+                    content_type = dict(headers).get(b'content-type', b'').decode('latin1')
+                    immutable = (message['status'] == 200 and re.fullmatch(r'/download/android/ai-control-[1-9][0-9]{0,9}\.apk', path)
+                                 and content_type == 'application/vnd.android.package-archive')
+                    values = {'x-content-type-options':'nosniff', 'referrer-policy':'no-referrer',
+                              'content-security-policy':"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"}
+                    if not immutable:
+                        values['cache-control'] = 'no-store'
+                    headers = [(key,value) for key,value in headers if key.decode('latin1').lower() not in values]
+                    headers.extend((key.encode(), value.encode()) for key,value in values.items())
+                    message = dict(message, headers=headers)
+                await send(message)
+            if (app_namespace and not canonical_app) or (download_namespace and not canonical_download):
+                return await error('not_found', 404)(scope, receive, secured)
+            await self.application(scope, receive, secured)
 
     @app.get('/')
     def index():
@@ -280,6 +384,16 @@ def create_app(config, backend, clock=None, *, owner_only=True):
     def stylesheet():
         from fastapi.responses import Response
         return Response(Path(__file__).with_name('_control_web.css').read_text(), media_type='text/css')
+
+    @app.get('/devbus.js')
+    def devbus_javascript():
+        from fastapi.responses import Response
+        return Response(Path(__file__).with_name('_control_web_devbus.js').read_bytes(), media_type='application/javascript')
+
+    @app.get('/devbus.css')
+    def devbus_stylesheet():
+        from fastapi.responses import Response
+        return Response(Path(__file__).with_name('_control_web_devbus.css').read_bytes(), media_type='text/css')
 
     def authenticate(data, now):
         attempts[:] = [at for at in attempts if at > now - 60]
@@ -315,7 +429,7 @@ def create_app(config, backend, clock=None, *, owner_only=True):
             # restart requires login. Use an external store before multi-worker.
             if len(sessions) >= 100:
                 sessions.clear()
-            sessions[token] = {'expires': now + ttl, 'csrf': csrf}
+            sessions[token] = {'expires': now + ttl, 'csrf': csrf, 'principal': 'owner'}
         response = JSONResponse({'csrf': csrf})
         response.set_cookie('control_session', token, max_age=ttl, httponly=True, secure=secure, samesite='strict', path='/')
         return response
@@ -448,7 +562,7 @@ def create_app(config, backend, clock=None, *, owner_only=True):
             if len(sessions) >= 100:
                 sessions.clear()
             sessions[cookie] = {'expires': now + 10800, 'csrf': secrets.token_urlsafe(32),
-                                'device_id': identity}
+                                'device_id': identity, 'principal': 'owner'}
         return android_cookie(JSONResponse({'device_token': token}), cookie)
 
     @app.post('/api/app/session')
@@ -466,7 +580,7 @@ def create_app(config, backend, clock=None, *, owner_only=True):
         old = request.cookies.get('control_session', '')
         with lock:
             current = sessions.get(old)
-            replaced = not (current and current.get('device_id') == identity and current['expires'] > now)
+            replaced = not (current and current.get('device_id') == identity and current['expires'] > now and current.get('principal') == 'owner')
             if replaced:
                 old = secrets.token_urlsafe(32)
                 current = {'expires': now + 10800, 'csrf': secrets.token_urlsafe(32),
@@ -603,6 +717,104 @@ def create_app(config, backend, clock=None, *, owner_only=True):
     async def session_history(request: Request):
         from _control_web_broker import history_result
         return await chat_read(request, ('project', 'sid'), ('cursor',), lambda data: history_result(backend.session_history(data['project'], data['sid'], data.get('cursor'))))
+
+    def live_auth(request):
+        current, failure = session(request)
+        if failure is not None:
+            return None, failure
+        if owner_only is not True or type(current.get('principal')) is not str or current['principal'] != 'owner':
+            return None, error('forbidden', 403)
+        return current, None
+
+    @app.get('/api/devbus/overview')
+    async def devbus_overview(request: Request):
+        from fastapi.responses import Response
+        pairs = list(request.query_params.multi_items())
+        if (len(pairs) > 2 or len({key for key, _ in pairs}) != len(pairs)
+                or any(key not in ('task', 'agent') or re.fullmatch(r'[A-Za-z0-9_-]{1,80}', value) is None
+                       for key, value in pairs)):
+            return error('invalid_request', 400)
+        origins, sites = request.headers.getlist('origin'), request.headers.getlist('sec-fetch-site')
+        if origins and origins != [origin] or sites and sites != ['same-origin']:
+            return error('forbidden', 403)
+        current, failure = live_auth(request)
+        if failure is not None:
+            return failure
+        if manager is None or devbus is None:
+            return error('unavailable', 503)
+        identity = ('device', current['device_id']) if current.get('device_id') else ('cookie', request.cookies.get('control_session', ''))
+        if not manager.reserve(identity):
+            return error('unavailable', 429)
+        try:
+            result = await devbus.overview(**dict(pairs))
+            _, failure = live_auth(request)
+            if failure is not None:
+                devbus.invalidate()
+                return failure
+            if 'error' in result:
+                return error('unavailable', 503)
+            return Response(json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8'),
+                            media_type='application/json')
+        finally:
+            manager.release(identity)
+
+    async def live_read(request, stream=False):
+        from _control_web_live import SSEResponse, encoded
+        from fastapi.responses import Response
+        data = chat_query(request, ('project', 'sid'))
+        identifiers = request.headers.getlist('last-event-id')
+        if (data is None or len(identifiers) > 1 or identifiers and
+                (len(identifiers[0]) > 128 or not re.fullmatch(r'[0-9a-f]{32}:[1-9][0-9]{0,15}', identifiers[0])
+                 or int(identifiers[0].split(':')[1]) > 2**53-1)
+                or stream and not any(part.split(';', 1)[0].strip().lower() == 'text/event-stream'
+                                     for part in request.headers.get('accept', '').split(','))):
+            return error('invalid_request', 422)
+        origins = request.headers.getlist('origin')
+        sites = request.headers.getlist('sec-fetch-site')
+        if origins and origins != [origin] or sites and sites != ['same-origin']:
+            return error('forbidden', 403)
+        current, failure = live_auth(request)
+        if failure is not None:
+            return failure
+        if manager is None:
+            return error('unavailable', 503)
+        key = (data['project'], data['sid'])
+        identity = ('device', current['device_id']) if current.get('device_id') else ('cookie', request.cookies.get('control_session', ''))
+        if not manager.reserve(identity, key):
+            return error('unavailable', 429)
+        handed_off = False
+        result = None
+        def check():
+            _, failure = live_auth(request)
+            return failure
+        try:
+            result = await manager.admit(key, check, stream=stream)
+            if isinstance(result, Response):
+                return result
+            _, failure = live_auth(request)
+            if failure is not None:
+                return failure
+            if isinstance(result, dict) and 'error' in result:
+                code = 'unsupported' if result['error'] == 'unsupported' else 'unavailable'
+                return error(code, 429 if result['error'] == 'capacity' else 503)
+            if stream:
+                response = SSEResponse(manager, result, identity, check, identifiers[0] if identifiers else None)
+                handed_off = True
+                return response
+            return Response(encoded(result), media_type='application/json', headers={'Cache-Control':'no-store'})
+        finally:
+            if not handed_off:
+                if stream and result is not None and not isinstance(result, (dict, Response)):
+                    manager.detach(result)
+                manager.release(identity)
+
+    @app.get('/api/session-events')
+    async def session_events(request: Request):
+        return await live_read(request, stream=True)
+
+    @app.get('/api/session-live-snapshot')
+    async def session_live_snapshot(request: Request):
+        return await live_read(request)
 
     @app.get('/api/session-models')
     async def session_models(request: Request):
@@ -785,4 +997,7 @@ def create_app(config, backend, clock=None, *, owner_only=True):
         response.delete_cookie('control_session', httponly=True, secure=secure, samesite='strict')
         return response
 
+    from _control_web_live import SSEWriteDeadline
+    app.add_middleware(SecurityHeaders)
+    app.add_middleware(SSEWriteDeadline)
     return app

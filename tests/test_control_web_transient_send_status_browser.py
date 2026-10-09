@@ -3,6 +3,7 @@
 # empty statuses collapse; nonempty accepted status remains visible in normal flow.
 
 from control_browser_helpers import choose_project
+from control_live_legacy_fixture import LiveHistoryFixture, replay_path, observe_snapshots
 import importlib
 import json
 import os
@@ -43,7 +44,9 @@ def serve(root, evidence):
     sys.path.insert(0, str(root / 'bin'))
     web = importlib.import_module('_control_web')
 
-    class Backend:
+    # INV-WSESS-53: actual public LIVE backend replaces legacy automatic polling.
+    class Backend(LiveHistoryFixture):
+        _live_evidence = evidence
         def snapshot(self): return {'tasks': []}
         def answer(self, *args): return {'error': 'unavailable'}
         def verdict(self, *args): return {'error': 'unavailable'}
@@ -57,9 +60,12 @@ def serve(root, evidence):
             seeds = data.get('seeds', []) if sid == SID else []
             receipts = [r for r in records if r['sid'] == sid]
             recent = [{k: r[k] for k in ('status', 'message_id', 'turn_id')} for r in receipts] + seeds
-            return {'turns': [{'id': 'status-turn', 'status': 'completed', 'items': [
+            result = {'turns': [{'id': 'status-turn', 'status': 'completed', 'items': [
                 {'id': 'status-' + str(i), 'role': 'assistant', 'text': 'LATEST message ' + str(i) + '\n\n' + ('Readable status detail ' + str(i) + ' ')*30, 'truncated': False}
                 for i in range(24)]}], 'next_cursor': None, 'truncated': False, 'recent_sends': recent[-8:]}
+            if data.get('marker'):
+                result['turns'][0]['items'][-1]['text'] += '\n\n' + data['marker']
+            return result
         def session_send(self, project, sid, message_id, text):
             data = json.loads((evidence / 'control.json').read_text())
             record = {'status': data.get('send_status', 'accepted'), 'message_id': message_id,
@@ -82,7 +88,7 @@ def serve(root, evidence):
     listener.bind(('127.0.0.1', 0)); listener.listen(128)
     origin = 'http://127.0.0.1:' + str(listener.getsockname()[1])
     app = web.create_app({'origin': origin, 'password_hash': web.hash_password(PASSWORD),
-                          'totp_secret': SECRET, 'session_ttl': 3600, 'secure_cookie': False}, Backend())
+                          'totp_secret': SECRET, 'session_ttl': 3600, 'secure_cookie': False, 'totp_state_path': replay_path(evidence)}, Backend())
     server = uvicorn.Server(uvicorn.Config(app, log_level='error', access_log=False))
     server_thread = threading.Thread(
         target=server.run, kwargs={'sockets': [listener]}, daemon=True,
@@ -163,6 +169,7 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         private_json(self.evidence / 'receipts.json', [])
         (self.evidence / 'calls.jsonl').unlink(missing_ok=True)
         compact.CompactChatBrowserContract.setUp(self)
+        self.live_frames=observe_snapshots(self.page)
 
     def control(self, **data):
         pending = self.evidence / 'control-next.json'
@@ -207,18 +214,29 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         self.slot().evaluate("el=>{window.statusAnnouncements=[];new MutationObserver(()=>{if(/принято/i.test(el.textContent))window.statusAnnouncements.push(el.textContent)}).observe(el,{childList:true,subtree:true,characterData:true});}")
         self.send()
         self.assertTrue(self.accepted(), 'Local transition must show accepted immediately')
+        accepted_at=time.monotonic()
         self.page.locator('textarea').fill('Draft survives status expiry')
         self.page.get_by_text('LATEST message 21', exact=True).scroll_into_view_if_needed()
         anchor = self.page.get_by_text('LATEST message 21', exact=True)
         before_form_height = self.page.locator('form').filter(has=self.page.locator('textarea')).bounding_box()['height']
         before_y = anchor.bounding_box()['y']; before_requests = len(self.history_requests())
         before_calls = self.calls()
-        before_history = self.page.locator('.chat-items').inner_html()
         before_ids = [r['message_id'] for r in self.calls() if r['method'] == 'send']
-        self.page.wait_for_timeout(4200)
+        # BR6a/INV53: prove the same UUID reconciliation frame reached the DOM,
+        # then measure expiry against the original accepted transition.
+        marker='Synthetic accepted receipt reconciliation reached the UI'
+        self.control(marker=marker)
+        self.page.get_by_text(marker,exact=True).wait_for(timeout=6000)
+        self.assertLessEqual(abs(anchor.bounding_box()['y']-before_y),8)
+        before_history = self.page.locator('.chat-items').inner_html()
+        self.page.wait_for_timeout(max(0,4.2-(time.monotonic()-accepted_at))*1000)
         self.assertTrue(self.accepted(), 'Accepted remains visible through its five-second lifetime')
-        self.page.wait_for_timeout(1600)
-        self.assertGreater(len(self.history_requests()), before_requests, 'Real polling must reconcile the same UUID')
+        self.page.wait_for_timeout(max(0,5.8-(time.monotonic()-accepted_at))*1000)
+        # INV-WSESS-53 automatic receipt projection arrives through actual SSE.
+        self.assertTrue(any('/api/session-events?' in url for _,url in self.network))
+        self.assertTrue(any(any(row['message_id']==before_ids[-1] for row in frame['history']['recent_sends']) for frame in self.live_frames),
+                        'Actual native SSE delivers this accepted UUID')
+        self.assertEqual(len(self.history_requests()),before_requests,'Automatic receipt update uses no legacy GET')
         self.assertEqual(self.slot().inner_text().strip(), '', 'Accepted clears after5s despite repeated history GET')
         self.assertEqual(self.slot().count(), 1, 'Empty polite live region remains attached after expiry')
         self.assertLess(self.page.locator('form').filter(has=self.page.locator('textarea')).bounding_box()['height'], before_form_height, 'INV47 removes the empty status reserve after expiry')
@@ -272,9 +290,20 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         unknowns = [self.seed(101, 'delivery_unknown'), self.seed(102, 'delivery_unknown')]
         self.control(seeds=unknowns + [self.seed(103, 'rejected'), self.seed(104, 'sending')])
         self.open_history()
-        self.control(seeds=[self.seed(i+200) for i in range(8)], status_delay=1.2)
-        before = len(self.history_requests()); self.page.wait_for_timeout(6500)
-        self.assertGreater(len(self.history_requests()), before, 'Known receipt map must see second bounded seed projection')
+        marker='Synthetic receipt projection 200 through 207 reached the UI'
+        before_requests=len(self.history_requests())
+        self.control(seeds=[self.seed(i+200) for i in range(8)], status_delay=1.2, marker=marker)
+        # INV-WSESS-53: new seed projection is automatic via real SSE.
+        expected={self.seed(i+200)['message_id'] for i in range(8)}
+        deadline=time.monotonic()+6
+        observed=self.live_frames
+        while time.monotonic()<deadline:
+            if any({row['message_id'] for row in frame['history']['recent_sends']}==expected for frame in observed):break
+            self.page.wait_for_timeout(50)
+        self.assertTrue(any({row['message_id'] for row in frame['history']['recent_sends']}==expected for frame in observed),
+                        'Actual native SSE delivers the second bounded seed projection')
+        self.page.get_by_text(marker,exact=True).wait_for(timeout=6000)
+        self.assertEqual(len(self.history_requests()),before_requests,'Marker and receipts arrive automatically without legacy GET')
         details = self.disclosure(4)
         checks = details.get_by_role('button', name='Проверить доставку', exact=True)
         self.assertEqual(checks.count(), 2, 'Every older unknown remains manually checkable')

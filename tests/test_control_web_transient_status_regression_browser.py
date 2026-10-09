@@ -91,7 +91,10 @@ class TransientStatusRegressionBrowserContract(unittest.TestCase):
         # The status request sleeps, then sees no server receipt and returns
         # stale. In the meantime, history confirms accepted for this same UUID.
         fixture.private_json(self.evidence / 'receipts.json', [])
-        self.control(seeds=[], status_delay=8)
+        # LIVE INV53: native SSE confirms sooner than the old five-second poll.
+        # Keep the delayed stale reply inside the original accepted display
+        # window, preserving the same late-error/no-resend assertions below.
+        self.control(seeds=[], status_delay=3.5)
         responses = []
         self.page.on('response', lambda response: responses.append(response)
                      if '/api/session-send-status' in response.url else None)
@@ -105,13 +108,13 @@ class TransientStatusRegressionBrowserContract(unittest.TestCase):
                          [(sent[0]['sid'], message_id)], 'Manual probe is bound to the current UUID')
 
         self.control(seeds=[{'status': 'accepted', 'message_id': message_id, 'turn_id': fixture.SID}],
-                     status_delay=8)
+                     status_delay=3.5)
         self.page.wait_for_function(
             "() => /принято/i.test(document.querySelector('#send-status').textContent)", timeout=6500)
         accepted_at = time.monotonic()
-        self.control(seeds=[], status_delay=8)
+        self.control(seeds=[], status_delay=3.5)
 
-        deadline = status_started + 8.7
+        deadline = status_started + 4.2
         while not responses and time.monotonic() < deadline:
             self.page.wait_for_timeout(50)
         self.assertEqual(len(responses), 1, 'Delayed manual status GET must finish in the fixture window')

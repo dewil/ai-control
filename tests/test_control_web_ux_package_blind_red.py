@@ -2,6 +2,7 @@
 
 No production asset reads, no provider/private history. INV44 is pending and absent.
 """
+from control_live_legacy_fixture import LiveHistoryFixture, replay_path
 import importlib
 import json
 import os
@@ -31,7 +32,9 @@ def serve(root, evidence):
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
     def record(data):
         with (evidence / 'calls.jsonl').open('a') as handle: handle.write(json.dumps(data)+'\n')
-    class Backend:
+    # INV-WSESS-53: actual public LIVE backend replaces legacy automatic polling.
+    class Backend(LiveHistoryFixture):
+        _live_evidence = evidence
         def snapshot(self): return {'tasks': []}
         def answer(self, *args): return {'error': 'unavailable'}
         def verdict(self, *args): return {'error': 'unavailable'}
@@ -65,7 +68,7 @@ def serve(root, evidence):
     listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(128)
     origin='http://127.0.0.1:'+str(listener.getsockname()[1])
     app=web.create_app({'origin':origin,'password_hash':web.hash_password(PASSWORD),'totp_secret':SECRET,
-                        'session_ttl':3600,'secure_cookie':False},Backend())
+                        'session_ttl':3600,'secure_cookie':False,'totp_state_path':replay_path(evidence)},Backend())
     server=uvicorn.Server(uvicorn.Config(app,log_level='error',access_log=False))
     thread=threading.Thread(target=server.run,kwargs={'sockets':[listener]},daemon=True);thread.start()
     deadline=time.monotonic()+8

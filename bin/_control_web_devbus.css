@@ -1,0 +1,20 @@
+/* Scoped to the independently mounted observer component. */
+.devbus { box-sizing: border-box; width: 100%; min-width: 0; padding: .5rem; color: inherit; font: inherit; }
+.devbus *, .devbus *::before, .devbus *::after { box-sizing: border-box; min-width: 0; }
+.devbus h2 { font-size: 1.1rem; margin: 0 0 .3rem; }
+.devbus h3 { font-size: 1rem; margin: .6rem 0 .25rem; }
+.devbus p { margin: .2rem 0; }
+.devbus-status { font-weight: 600; }
+.devbus-coverage, .devbus-meta { font-size: .85rem; opacity: .85; }
+.devbus-filters { display: flex; flex-wrap: wrap; gap: .4rem; margin: .4rem 0; }
+.devbus-filters label { display: flex; flex: 1 1 130px; flex-direction: column; gap: .2rem; font-size: .85rem; }
+.devbus-filters input { width: 100%; min-height: 2.75rem; border: 1px solid currentColor; border-radius: .3rem; background: transparent; color: inherit; padding: .3rem; font: inherit; }
+.devbus-filters input:focus-visible, .devbus summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.devbus [aria-invalid="true"], .devbus-error { color: #ba384b; }
+.devbus-task, .devbus-agent { border-top: 1px solid #8886; padding: .35rem 0; overflow-wrap: anywhere; }
+.devbus-meta { display: block; overflow-wrap: anywhere; }
+.devbus-result { margin: .3rem 0; padding: .4rem; max-height: 16rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: .9rem/1.45 monospace; background: #8881; }
+.devbus summary { cursor: pointer; min-height: 2.75rem; display: flex; align-items: center; }
+.devbus ol { padding-left: 1.3rem; margin: .2rem 0; }
+.devbus li { overflow-wrap: anywhere; padding: .15rem 0; }
+.devbus-events { max-height: 18rem; overflow-y: auto; }

@@ -14,6 +14,7 @@ import tempfile
 import copy
 from pathlib import Path
 import unittest
+import types
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,12 +28,40 @@ FULL16 = {**fixture.MODES, AUTH: 0o644, DOWNLOAD: 0o644}
 
 
 class Deploy16(unittest.TestCase):
+    # INV-DEPLOY-20 supersedes only fresh schema3/full16 transactions. Keep
+    # their captured assertions against accepted bytes, including the two-step
+    # recovery/fresh16 budget scenario. Every journal-only test stays current.
+    historical_fresh16_tests = frozenset({
+        'test_exact16_modes_and_signed_state3',
+        'test_first16_base14_healthy_repeat_and_two_forward16_releases',
+        'test_same_id_unhealthy_is_refusal_without_repair',
+        'test_absence_of_each_new_leaf_is_required_before_any_stop',
+        'test_pending_recovery_consumes_single_rollback_budget_before_new_install_failure',
+        'test_bootstrap_or_config_marker_blocks_even_valid_signed16',
+        'test_signed_payload_uses_verified_snapshot_despite_owner_stage_swap',
+        'test_install_renames_every_leaf_in_fixed16_order',
+        'test_higher_id_historical_base14_is_refused_after16',
+    })
     # Reuse only the narrow, accepted synthetic harness; do not inherit legacy tests.
     for _name in ('crypto', 'write', 'hashes', 'stops', 'runner', 'deploy', 'accepted', 'refused'):
         locals()[_name] = getattr(fixture.SignedDeploy, _name)
 
     def setUp(self):
         fixture.SignedDeploy.setUp(self)
+        if self._testMethodName in getattr(self, 'historical_fresh16_tests', frozenset()):
+            result = subprocess.run(['/usr/bin/git', '-C', str(ROOT), 'show',
+                '73eb36b4eba7b13b893014e400b30b7f918de986:deployment/ai-control-web-deploy.py'],
+                capture_output=True, timeout=10, check=True)
+            pinned = result.stdout
+            self.assertLessEqual(len(pinned), 1024 * 1024)
+            self.assertEqual(fixture.sha(pinned),
+                'bf142e2b6fee390dfe50a44533e18801ba93b66bcba11c0d14c587b65b270dc1')
+            label = 'blind_signed_deploy_accepted16'
+            self.api = types.ModuleType(label)
+            self.api.__file__ = str(fixture.SOURCE) + '@accepted73eb36b4'
+            sys.modules[label] = self.api
+            self.addCleanup(sys.modules.pop, label, None)
+            exec(compile(pinned, self.api.__file__, 'exec'), self.api.__dict__)
         self.before14 = dict(self.current)
         self.before16 = {**self.before14, AUTH: b'# synthetic auth before\n', DOWNLOAD: b'# synthetic download before\n'}
         self.install_accepted(self.before14, 2, 7)

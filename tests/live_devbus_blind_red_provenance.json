@@ -1,0 +1,496 @@
+{
+  "runtime_sha": "5085e22fd7655d146df53c1ce214deda12737b27",
+  "tests_run": 68,
+  "counts": {
+    "pass": 2,
+    "semantic_red": 26,
+    "interface_prerequisite": 40,
+    "harness_error": 0,
+    "skip": 0
+  },
+  "cases": [
+    {
+      "test": "test_control_web_devbus_bridge_red.BridgeBlind.test_RegistryBackend_validates_runtime_DTO_and_collapses_exception",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.DevbusRuntime absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_bridge_red.BridgeBlind.test_accepted_Observer_slow_connect_is_not_setup_timeout",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.DevbusRuntime absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_bridge_red.BridgeBlind.test_construct_has_no_factory_io_and_one_loop_for_all_operations",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.DevbusRuntime absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_bridge_red.BridgeBlind.test_dependency_probe_exact_bool_and_exception",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.DevbusRuntime absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_bridge_red.BridgeBlind.test_disabled_and_invalid_config_start_no_loop_or_dependency_probe",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.DevbusRuntime absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_bridge_red.BridgeBlind.test_failed_setup_terminal_no_late_observer_or_new_cleanup_thread",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.DevbusRuntime absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_bridge_red.BridgeBlind.test_timeout_keeps_export_token_until_actual_loop_work_finishes",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.DevbusRuntime absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_bridge_red.BusWireBlind.test_SocketBackend_canonical_oldwire_only_unsupported",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: SocketBackend.devbus_overview absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_bridge_red.BusWireBlind.test_actual_bus_op_exact_DTO",
+      "outcome": "semantic_red",
+      "messages": [
+        "{'error': 'unsupported'} != {'schema': 1, 'connection': {'state': 'live[496 chars]: []}\nDiff is 855 characters long. Set self.maxDiff to None to see it."
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_bridge_red.BusWireBlind.test_bus_reservation_busy_before_general_worker",
+      "outcome": "semantic_red",
+      "messages": [
+        "{'error': 'unsupported'} != {'schema': 1, 'connection': {'state': 'live[496 chars]: []}\nDiff is 855 characters long. Set self.maxDiff to None to see it. : Bus op prerequisite"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_bridge_red.BusWireBlind.test_denied_peer_receives_no_private_reply_or_dispatch",
+      "outcome": "pass",
+      "messages": []
+    },
+    {
+      "test": "test_control_web_devbus_bridge_red.BusWireBlind.test_malformed_known_op_never_dispatches",
+      "outcome": "semantic_red",
+      "messages": [
+        "{'error': 'unsupported'} != {'error': 'unavailable'}\n- {'error': 'unsupported'}\n+ {'error': 'unavailable'}"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_loader_red.DevbusLoaderBlind.test_absent_empty_mismatched_pointer_has_no_file_access",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.load_devbus_config absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_loader_red.DevbusLoaderBlind.test_changed_metadata_or_swapped_leaf_rejected",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.load_devbus_config absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_loader_red.DevbusLoaderBlind.test_disabled_empty_url_token_allowed",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.load_devbus_config absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_loader_red.DevbusLoaderBlind.test_missing_file_disabled_without_error",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.load_devbus_config absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_loader_red.DevbusLoaderBlind.test_strict_json_and_private_auth_keys_rejected",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.load_devbus_config absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_loader_red.DevbusLoaderBlind.test_symlink_fifo_and_overflow_rejected_without_block",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.load_devbus_config absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_loader_red.DevbusLoaderBlind.test_unsafe_mode_and_hardlink_rejected_without_repair",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.load_devbus_config absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_loader_red.DevbusLoaderBlind.test_valid_file_exact_four_keys_explicit_mapping_open_read_bounds",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.load_devbus_config absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_loader_red.DevbusLoaderBlind.test_wrong_effective_uid_before_file_access",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.load_devbus_config absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_loader_red.DevbusLoaderBlind.test_wrong_file_owner_and_nonregular_device_metadata",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.load_devbus_config absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_dto_red.DevbusDtoBlind.test_captured_task_rank_before_transition_trim",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.bounded_devbus_snapshot absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_dto_red.DevbusDtoBlind.test_exact_valid_DTO_and_strict_schema",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.devbus_result absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_dto_red.DevbusDtoBlind.test_filter_before_clipping_preserves_small_selected_window",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.bounded_devbus_snapshot absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_dto_red.DevbusDtoBlind.test_first_seq_none_requires_unknown_mode",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.devbus_result absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_dto_red.DevbusDtoBlind.test_invalid_enums_bool_numbers_caps_and_nonfinite",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.devbus_result absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_dto_red.DevbusDtoBlind.test_lone_result_surrogate_replaced_without_losing_unrelated_task",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.bounded_devbus_snapshot absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_dto_red.DevbusDtoBlind.test_minimal_agent_prefix_in_source_order",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.bounded_devbus_snapshot absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_dto_red.DevbusDtoBlind.test_minimal_oldest_event_prefix_with_equal_sequence_tie",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.bounded_devbus_snapshot absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_dto_red.DevbusDtoBlind.test_otherfield_surrogate_not_repaired",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.bounded_devbus_snapshot absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_dto_red.DevbusDtoBlind.test_transition_trim_retains_state_and_uses_minimal_global_prefix",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.bounded_devbus_snapshot absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_dto_red.DevbusDtoBlind.test_unknown_coverage_and_producer_flag_idempotent",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.bounded_devbus_snapshot absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_dto_red.DevbusDtoBlind.test_unknown_top_and_nested_fields_rejected_without_echo",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.devbus_result absent",
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.devbus_result absent",
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.devbus_result absent",
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.devbus_result absent",
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.devbus_result absent",
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.devbus_result absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_dto_red.DevbusDtoBlind.test_utf8_json_escapes_and_first_clipping_batch",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.bounded_devbus_snapshot absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.BusHttpBlind.test_GET_only_and_fixed_assets_accepted_pins",
+      "outcome": "semantic_red",
+      "messages": [
+        "404 != 200 : Accepted fixed local BUS assets must be exposed"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.BusHttpBlind.test_actual_device_revoke_before_cached_read",
+      "outcome": "semantic_red",
+      "messages": [
+        "404 != 200"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.BusHttpBlind.test_actual_owner_only_must_be_exact_True",
+      "outcome": "semantic_red",
+      "messages": [
+        "404 != 403"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.BusHttpBlind.test_actual_owner_route_exact_DTO_compact_bytes",
+      "outcome": "semantic_red",
+      "messages": [
+        "404 != 200 : Actual owner BUS route must be integrated"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.BusHttpBlind.test_backend_errors_and_malformed_collapse_without_leak",
+      "outcome": "semantic_red",
+      "messages": [
+        "404 != 503 : Actual BUS route outcome"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.BusHttpBlind.test_cache_hit_still_rechecks_current_principal",
+      "outcome": "semantic_red",
+      "messages": [
+        "404 != 200"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.BusHttpBlind.test_device_store_corruption_503_before_backend",
+      "outcome": "semantic_red",
+      "messages": [
+        "404 != 503 : Actual BUS route outcome"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.BusHttpBlind.test_factory_init_auth_perform_no_owner_config_or_NATS_io",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: loader absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.BusHttpBlind.test_missing_expired_cookie_and_client_claim_never_admitted",
+      "outcome": "semantic_red",
+      "messages": [
+        "404 != 401 : Actual BUS route outcome"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.BusHttpBlind.test_origin_Fetch_and_query_before_backend",
+      "outcome": "semantic_red",
+      "messages": [
+        "404 != 403 : Actual BUS route outcome"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.BusHttpBlind.test_private_legacy_nonowner_and_typed_principal_403",
+      "outcome": "semantic_red",
+      "messages": [
+        "404 != 403 : Actual BUS route outcome"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.BusHttpBlind.test_revocation_while_backend_pending_before_response",
+      "outcome": "semantic_red",
+      "messages": [
+        "404 != 200 : Actual BUS dispatch prerequisite"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.BusHttpBlind.test_shared_per_cookie_capacity_two_live_streams_then_BUS429",
+      "outcome": "semantic_red",
+      "messages": [
+        "404 != 200 : Actual BUS admission prerequisite"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.BusManifestBlind.test_all_four_passive_entries_once_and_accepted_file_bytes",
+      "outcome": "semantic_red",
+      "messages": [
+        "0 != 1 : Accepted passive manifest entry missing/duplicated: _control_web_devbus.py"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.DevbusFrontendBlind.test_TTL_is_actual_call_start_not_completion_or_cache_read",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web.DevbusFrontend absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.DevbusFrontendBlind.test_caller_cancel_does_not_release_actual_sync_operation",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web.DevbusFrontend absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.DevbusFrontendBlind.test_error_not_cached_slow_success_after_TTL_not_cached",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web.DevbusFrontend absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.DevbusFrontendBlind.test_one_cache_entry_exact_key",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web.DevbusFrontend absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_http_integration_red.DevbusFrontendBlind.test_samekey_coalesces_otherkey_busy_without_new_IO",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web.DevbusFrontend absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_main_browser_red.BusMainBrowserBlind.test_Android403_uses_shared_bridge_once_no_private_remount",
+      "outcome": "semantic_red",
+      "messages": [
+        "0 != 1 : Actual Android main BUS tab"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_main_browser_red.BusMainBrowserBlind.test_current_cookie_revocation_clears_private_BUS_and_stops_remount",
+      "outcome": "semantic_red",
+      "messages": [
+        "0 != 1 : Actual main navigation must include the third BUS tab"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_main_browser_red.BusMainBrowserBlind.test_logout_clears_BUS_without_spontaneous_remount",
+      "outcome": "semantic_red",
+      "messages": [
+        "0 != 1 : Actual main navigation must include the third BUS tab"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_main_browser_red.BusMainBrowserBlind.test_old_mount_late_response_cannot_repaint_after_tab_exit",
+      "outcome": "semantic_red",
+      "messages": [
+        "0 != 1 : Actual main navigation must include the third BUS tab"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_main_browser_red.BusMainBrowserBlind.test_one_mount_poll_and_tabexit_stops_bus_without_chat_SSE",
+      "outcome": "semantic_red",
+      "messages": [
+        "0 != 1 : Actual main navigation must include the third BUS tab"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_main_browser_red.BusMainBrowserBlind.test_pagehide_navigation_stops_old_poll",
+      "outcome": "semantic_red",
+      "messages": [
+        "0 != 1 : Actual main navigation must include the third BUS tab"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_main_browser_red.BusMainBrowserBlind.test_real_mount_textContent_mobile_geometry_and_keyboard_tab",
+      "outcome": "semantic_red",
+      "messages": [
+        "0 != 1 : Third BUS navigation prerequisite"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_main_browser_red.BusMainBrowserBlind.test_same_mount_keeps_filter_focus_selection_and_no_scroll_jump",
+      "outcome": "semantic_red",
+      "messages": [
+        "0 != 1 : Actual main navigation must include the third BUS tab"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_shutdown_red.DevbusShutdownBlind.test_actual_CLI_SIGTERM_starts_observer_stop_before_legacy_drain",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.DevbusRuntime absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_shutdown_red.DevbusShutdownBlind.test_actual_CLI_fixture_private_RPC_worker_and_signal_cleanup",
+      "outcome": "pass",
+      "messages": []
+    },
+    {
+      "test": "test_control_web_devbus_shutdown_red.DevbusShutdownBlind.test_disabled_runtime_stop_is_idempotent_without_transport_IO",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.DevbusRuntime absent"
+      ]
+    },
+    {
+      "test": "test_control_web_devbus_shutdown_red.DevbusShutdownBlind.test_stop_accepted_Observer_cancels_hung_transport_within_bridge_budget",
+      "outcome": "interface_prerequisite",
+      "messages": [
+        "False is not true : PUBLIC-SEAM PREREQUISITE: _control_web_broker.DevbusRuntime absent"
+      ]
+    },
+    {
+      "test": "test_control_web_live_bus_shared_gate_blind.SharedGateBlind.test_disconnect_keeps_both_reservations_until_worker_finishes",
+      "outcome": "semantic_red",
+      "messages": [
+        "{'error': 'unsupported'} != {'schema': 1, 'connection': {'state': 'live[496 chars]: []}\nDiff is 855 characters long. Set self.maxDiff to None to see it. : Actual BUS op integration prerequisite"
+      ]
+    },
+    {
+      "test": "test_control_web_live_bus_shared_gate_blind.SharedGateBlind.test_live_bus_plus_two_legacy_workers_leave_no_fifth_waitqueue",
+      "outcome": "semantic_red",
+      "messages": [
+        "{'error': 'unsupported'} != {'schema': 1, 'connection': {'state': 'live[496 chars]: []}\nDiff is 855 characters long. Set self.maxDiff to None to see it. : Actual BUS op integration prerequisite"
+      ]
+    }
+  ],
+  "observer_pin": "723048a6b9782632697fe81feb16a4c3d22acbd7",
+  "usage": {
+    "tokens": "unknown",
+    "money": "unknown",
+    "coverage": "partial"
+  }
+}
