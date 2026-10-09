@@ -1,0 +1,24 @@
+{
+  "base": "211bd75f53fe03318c1bb721581a078fb28617f1",
+  "runtime_source": "0f4cbe3d2b5f7c8983375d6c3ef9d262d19bbcde",
+  "design": "de98e6d3c773db658be229b70a1ce3e38363481b",
+  "test_sha256": {
+    "tests/live_sse_blind_support.py": "e257cdbe70c14dc83b234aa75aebd953f8da8e0f01ba87d802e1912712aa490d",
+    "tests/test_control_web_live_sse_browser_blind.py": "953b6c63f8b5e8014061418655376d55a802d42fdfb3fc8bc026115d73d3e989",
+    "tests/test_control_web_live_sse_http_blind.py": "317d4a550ba9ddcf30e9f7609eecb72c7b2cc0bb160fad3ea14360ec69d7de5d",
+    "tests/test_control_web_live_sse_owner_blind.py": "d1d3235b5d028b3c718523758aa00ea67cdbd5aeba0568820d19d28e2105d9bb",
+    "tests/test_control_web_live_sse_resource_blind.py": "410037bfa5d0672ca8de71ae0b068c5d365174d9e9db243870b117c2f71c466d"
+  },
+  "log_path": "/var/tmp/control-live-sse-red-frozen.log",
+  "log_sha256": "17daf9ef2dcddf666b8d3c1ff77b0d62d55c8d568da4e8f7645bf010c1106870",
+  "run": {
+    "tests": 65,
+    "seconds": 81.991,
+    "pass_methods": 3,
+    "semantic_red_methods": 56,
+    "prerequisite_methods": 6,
+    "failure_assertions": 87,
+    "errors": 0,
+    "skips": 0
+  }
+}
