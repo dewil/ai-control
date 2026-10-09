@@ -1,5 +1,7 @@
 """Single-worker task UI. Authentication secrets never cross the broker."""
 from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
+import asyncio
 import base64
 import fcntl
 import hashlib
@@ -19,6 +21,73 @@ import uuid
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
+
+
+class DevbusFrontend:
+    """One actual owner read and one short-lived, exact-filter cache."""
+
+    def __init__(self, backend, *, clock=time.monotonic):
+        self.backend, self.clock = backend, clock
+        self.executor = None
+        self.flight = None
+        self.key = None
+        self.started = 0
+        self.cache = None
+        self.generation = 0
+        self.closed = False
+
+    def invalidate(self):
+        self.generation += 1
+        self.cache = None
+
+    async def overview(self, task=None, agent=None):
+        from _control_web_broker import devbus_result
+        key = (task, agent)
+        if self.closed:
+            return {'error': 'unavailable'}
+        if self.cache is not None and self.cache[0] == key and self.clock() < self.cache[1]:
+            return devbus_result(self.cache[2])
+        if self.flight is not None and not self.flight.done():
+            if self.key != key:
+                self.invalidate()
+                return {'error': 'busy'}
+        else:
+            self.invalidate()
+            self.key, self.started = key, self.clock()
+            if self.executor is None:
+                self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='control-devbus-read')
+            def call():
+                self.started = self.clock()
+                return self.backend.devbus_overview(task=task, agent=agent)
+            async def read():
+                try:
+                    value = await asyncio.get_running_loop().run_in_executor(
+                        self.executor, call)
+                    return devbus_result(value)
+                except Exception:
+                    return {'error': 'unavailable'}
+            self.flight = asyncio.create_task(read())
+        flight, generation = self.flight, self.generation
+        try:
+            result = await asyncio.wait_for(asyncio.shield(flight), 6)
+        except asyncio.TimeoutError:
+            return {'error': 'unavailable'}
+        if not self.closed and generation == self.generation and self.clock() < self.started + 1 and 'error' not in result:
+            self.cache = (key, self.started + 1, result)
+        return devbus_result(result)
+
+    async def close(self):
+        self.closed = True
+        self.invalidate()
+        try:
+            if self.flight is not None:
+                await asyncio.wait_for(asyncio.shield(self.flight), 7)
+        except asyncio.TimeoutError:
+            if self.executor is not None:
+                self.executor.shutdown(wait=False, cancel_futures=True)
+            raise RuntimeError('devbus owner did not stop') from None
+        if self.executor is not None:
+            self.executor.shutdown(wait=True)
 
 
 class _APKResponse(StreamingResponse):
@@ -135,20 +204,28 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
         return device_store
 
     manager = None
+    devbus = None
 
     @asynccontextmanager
     async def lifespan(app):
-        nonlocal manager
+        nonlocal manager, devbus
         from _control_web_live import Manager
+        devbus = DevbusFrontend(backend)
         if replay_path is not None:
             manager = Manager(backend, replay_path)
             await manager.start()
         try:
             yield
         finally:
-            if manager is not None:
-                await manager.stop()
+            try:
+                if manager is not None:
+                    await manager.stop()
+            finally:
                 manager = None
+                try:
+                    await devbus.close()
+                finally:
+                    devbus = None
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
@@ -307,6 +384,16 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
     def stylesheet():
         from fastapi.responses import Response
         return Response(Path(__file__).with_name('_control_web.css').read_text(), media_type='text/css')
+
+    @app.get('/devbus.js')
+    def devbus_javascript():
+        from fastapi.responses import Response
+        return Response(Path(__file__).with_name('_control_web_devbus.js').read_bytes(), media_type='application/javascript')
+
+    @app.get('/devbus.css')
+    def devbus_stylesheet():
+        from fastapi.responses import Response
+        return Response(Path(__file__).with_name('_control_web_devbus.css').read_bytes(), media_type='text/css')
 
     def authenticate(data, now):
         attempts[:] = [at for at in attempts if at > now - 60]
@@ -638,6 +725,38 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
         if owner_only is not True or type(current.get('principal')) is not str or current['principal'] != 'owner':
             return None, error('forbidden', 403)
         return current, None
+
+    @app.get('/api/devbus/overview')
+    async def devbus_overview(request: Request):
+        from fastapi.responses import Response
+        pairs = list(request.query_params.multi_items())
+        if (len(pairs) > 2 or len({key for key, _ in pairs}) != len(pairs)
+                or any(key not in ('task', 'agent') or re.fullmatch(r'[A-Za-z0-9_-]{1,80}', value) is None
+                       for key, value in pairs)):
+            return error('invalid_request', 400)
+        origins, sites = request.headers.getlist('origin'), request.headers.getlist('sec-fetch-site')
+        if origins and origins != [origin] or sites and sites != ['same-origin']:
+            return error('forbidden', 403)
+        current, failure = live_auth(request)
+        if failure is not None:
+            return failure
+        if manager is None or devbus is None:
+            return error('unavailable', 503)
+        identity = ('device', current['device_id']) if current.get('device_id') else ('cookie', request.cookies.get('control_session', ''))
+        if not manager.reserve(identity):
+            return error('unavailable', 429)
+        try:
+            result = await devbus.overview(**dict(pairs))
+            _, failure = live_auth(request)
+            if failure is not None:
+                devbus.invalidate()
+                return failure
+            if 'error' in result:
+                return error('unavailable', 503)
+            return Response(json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8'),
+                            media_type='application/json')
+        finally:
+            manager.release(identity)
 
     async def live_read(request, stream=False):
         from _control_web_live import SSEResponse, encoded

@@ -237,9 +237,9 @@ class Manager:
             os.close(self.lock_fd)
             self.lock_fd = None
 
-    def reserve(self, identity, key):
+    def reserve(self, identity, key=None):
         active = [e for e in self.entries.values() if e.subscribers or self.read_task and getattr(self.read_task, 'live_key', None) == e.key]
-        if sum(self.budgets.values()) >= 8 or self.budgets.get(identity, 0) >= 2 or key not in self.entries and len(active) >= 2:
+        if sum(self.budgets.values()) >= 8 or self.budgets.get(identity, 0) >= 2 or key is not None and key not in self.entries and len(active) >= 2:
             return False
         self.budgets[identity] = self.budgets.get(identity, 0) + 1
         return True

@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>Control</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/web.css"><script src="/web.js" defer></script></head>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>Control</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/web.css"><link rel="stylesheet" href="/devbus.css"><script src="/devbus.js" defer></script><script src="/web.js" defer></script></head>
 <body><main><header><div><span class="eyebrow">CONTROL</span><h1>Control</h1></div><a href="/download/android/">Андроид</a><button id="logout" hidden>Выйти</button></header><p id="notice" role="status" aria-live="polite"></p>
 <section id="session-loading"><p>Восстанавливаем сессию…</p><button id="session-retry" hidden>Повторить</button></section>
 <section id="login" hidden><h2>Войти в Control</h2><p>Введите логин, пароль и код из приложения аутентификации.</p><form id="login-form"><label>Логин<input id="username" name="username" autocomplete="username" autocapitalize="none" required minlength="2" maxlength="32" pattern="[a-z][a-z0-9_\-]{1,31}" title="2–32 символа: строчные латинские буквы, цифры, _ и -; первый символ — буква"></label><label>Пароль<input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024"></label><label>Код подтверждения<input id="login-totp" name="totp" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required></label><button type="submit">Войти</button></form></section>
 <section id="workspace" hidden>
-  <nav class="tabs" role="tablist" aria-label="Раздел Control"><button id="tab-tasks" type="button" role="tab" aria-selected="true" aria-controls="tasks-panel">Задачи</button><button id="tab-sessions" type="button" role="tab" aria-selected="false" aria-controls="sessions-panel">Сессии</button></nav>
+  <nav class="tabs" role="tablist" aria-label="Раздел Control"><button id="tab-tasks" type="button" role="tab" aria-selected="true" aria-controls="tasks-panel">Задачи</button><button id="tab-sessions" type="button" role="tab" aria-selected="false" aria-controls="sessions-panel">Сессии</button><button id="tab-devbus" type="button" role="tab" aria-selected="false" aria-controls="devbus-panel">Шина</button></nav>
   <section id="tasks-panel" role="tabpanel" aria-labelledby="tab-tasks"><div class="toolbar"><p id="count"></p><button id="refresh">Обновить</button></div><div id="cards"></div></section>
   <section id="sessions-panel" role="tabpanel" aria-labelledby="tab-sessions" hidden>
     <div class="page-navigation"><button type="button" class="secondary" data-page-scroll="up">↑ В начало</button><button type="button" class="secondary" data-page-scroll="down">↓ В конец</button></div>
@@ -53,6 +53,7 @@
       </form>
     </section>
   </section>
+  <section id="devbus-panel" role="tabpanel" aria-labelledby="tab-devbus" hidden><div id="devbus-root"></div></section>
 </section>
 </main><dialog id="rename-dialog" role="dialog" aria-labelledby="rename-heading">
   <h2 id="rename-heading">Переименовать сессию</h2>
@@ -70,6 +71,6 @@
 <button id="create-check" type="button" class="secondary" hidden>Проверить статус</button>
 </dialog>
 <!-- BUILD-INFO:START -->
-<footer id="build-info" class="build-info" data-release-id="8">ai-control · r8 · Собрано: <time datetime="2026-10-09T05:32:39.328073Z">09.10.2026 08:32 МСК</time> · Ветка: feat/live-ux-implementation</footer>
+<footer id="build-info" class="build-info" data-release-id="9">ai-control · r9 · Собрано: <time datetime="2026-10-09T07:26:09.991794Z">09.10.2026 10:26 МСК</time> · Ветка: feat/live-observability-package</footer>
 <!-- BUILD-INFO:END -->
 </body></html>
