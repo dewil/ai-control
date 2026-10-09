@@ -216,6 +216,7 @@ function validLiveSnapshot(data,live){
   if(!exactFields(data,['schema','project','sid','epoch','revision','observation','source','observed_at','history'])||data.schema!==1||data.project!==live.project||data.sid!==live.sid||data.source!=='owner_history_poll'||!/^[a-f0-9]{32}$/.test(data.epoch)||!Number.isSafeInteger(data.revision)||data.revision<1||!Number.isSafeInteger(data.observation)||data.observation<1||!Number.isInteger(data.observed_at)||data.observed_at<0||data.observed_at>253402300799999)return false;
   const h=data.history;
   if(!h||typeof h!=='object'||Array.isArray(h)||new TextEncoder().encode(JSON.stringify(h)).length>96*1024)return false;
+  if(!Array.isArray(h.recent_sends)||h.recent_sends.length>8||!h.recent_sends.every(row=>exactFields(row,['status','message_id','turn_id'])&&UUID_RE.test(row.message_id)&&['accepted','delivery_unknown','rejected'].includes(row.status)&&(row.status==='accepted'?validHistoryId(row.turn_id):row.turn_id===null))||Object.hasOwn(h,'needs_native_attention')&&h.needs_native_attention!==true)return false;
   const common=['recent_sends'];if(Object.hasOwn(h,'session_settings'))common.push('session_settings');if(Object.hasOwn(h,'needs_native_attention'))common.push('needs_native_attention');
   if(Object.hasOwn(h,'history_state'))return exactFields(h,[...common,'history_state','reason'])&&h.history_state==='unavailable'&&h.reason==='unavailable'&&Array.isArray(h.recent_sends);
   return exactFields(h,[...common,'turns','next_cursor','truncated'])&&Array.isArray(h.turns)&&h.turns.length<=8&&typeof h.truncated==='boolean'&&(h.next_cursor===null||typeof h.next_cursor==='string'&&h.next_cursor.length>0&&h.next_cursor.length<=4096)&&Array.isArray(h.recent_sends)&&h.recent_sends.length<=8&&(!Object.hasOwn(h,'needs_native_attention')||h.needs_native_attention===true)&&h.turns.reduce((sum,turn)=>sum+(Array.isArray(turn?.items)?turn.items.length:25),0)<=24&&h.turns.every(turn=>exactFields(turn,['id','status','items'])&&validHistoryId(turn.id)&&typeof turn.status==='string'&&Array.isArray(turn.items)&&turn.items.every(item=>{const keys=['id','role','text','truncated','timestamp','time_precision'];if(Object.hasOwn(item,'client_id'))keys.push('client_id');return exactFields(item,keys)&&validHistoryId(item.id)&&['assistant','user'].includes(item.role)&&typeof item.text==='string'&&Array.from(item.text).length<=8000&&typeof item.truncated==='boolean'&&(item.timestamp===null||Number.isInteger(item.timestamp)&&item.timestamp>=0&&item.timestamp<=253402300799)&&['item','turn','unknown'].includes(item.time_precision)&&(!Object.hasOwn(item,'client_id')||item.role==='user'&&UUID_RE.test(item.client_id));}));
@@ -238,7 +239,8 @@ function acceptLiveLease(live,data,started,merge=false){
   const snapshot=sessionSettingsSnapshot(data.history.session_settings,started);
   if(projection!==state.liveProjection){if(data.revision>=(state.settingsFloor||0)){state.sessionSettings=null;state.settingsFloor=Math.max(state.settingsFloor||0,data.revision);syncCurrentSessionControls();}return;}
   state.settingsFloor=Math.max(state.settingsFloor||0,data.revision);
-  state.sessionSettings=snapshot?{...snapshot,selection:live.selection}:null;state.settingsFailure=false;
+  if(!snapshot)return;
+  state.sessionSettings={...snapshot,selection:live.selection};state.settingsFailure=false;
   syncCurrentSessionControls();
 }
 function applyLiveHistory(live,data){
@@ -276,6 +278,8 @@ async function liveJSON(live){
   }finally{clearTimeout(timer);if(live.controller===controller)live.controller=null;}
 }
 function liveTerminal(live,error){
+  const terminal=error.status===401||error.status===403||error.status===422||error.status===503&&error.code==='unsupported';
+  if(terminal){if(live.es){live.es.close();live.es=null;}if(live.controller)live.controller.abort();for(const timer of live.timers)clearTimeout(timer);live.timers.clear();live.mode='terminal';}
   if(error.status===401||error.status===403){const state=normalizeHistoryState(live.key);state.sessionSettings=null;syncCurrentSessionControls();}
   if(error.status===403){if(liveAndroidAuthGeneration!==chatAuthGeneration&&androidAuth()){liveAndroidAuthGeneration=chatAuthGeneration;androidAuth().requestAuth();}notice('Войдите снова для обновления переписки.');return true;}
   if(error.status===401||error.status===422)return true;
@@ -283,10 +287,10 @@ function liveTerminal(live,error){
   return false;
 }
 function liveFallback(live){
-  if(!liveCurrent(live))return;live.mode='fallback';live.fallbackStarted=performance.now();
-  const poll=async()=>{try{const result=await liveJSON(live);if(result){applyLiveHistory(live,result.data);acceptLiveLease(live,result.data,result.started,true);}}catch(error){if(!liveCurrent(live)||liveTerminal(live,error))return;}if(liveCurrent(live)&&live.mode==='fallback')liveLater(live,5000,poll);};
+  if(!liveCurrent(live))return;live.mode='fallback';live.fallbackRetry=false;live.fallbackStarted=performance.now();let failures=0;
+  const poll=async()=>{let delay=5000;try{const result=await liveJSON(live);if(result){applyLiveHistory(live,result.data);acceptLiveLease(live,result.data,result.started,true);failures=0;}}catch(error){if(!liveCurrent(live)||liveTerminal(live,error))return;failures++;delay=[5000,10000,30000][Math.min(failures-1,2)];}if(liveCurrent(live)&&live.mode==='fallback')liveLater(live,delay,poll);};
   liveLater(live,5000,poll);
-  liveLater(live,60000,()=>{if(live.controller)live.controller.abort();for(const timer of live.timers)clearTimeout(timer);live.timers.clear();live.generation=++liveGeneration;liveOpen(live);});
+  liveLater(live,60000,()=>{if(live.controller)live.controller.abort();for(const timer of live.timers)clearTimeout(timer);live.timers.clear();live.generation=++liveGeneration;live.fallbackRetry=true;liveOpen(live);});
 }
 async function liveFailure(live){
   if(!liveCurrent(live)||live.failureLatched)return;
@@ -294,9 +298,9 @@ async function liveFailure(live){
   const now=performance.now();live.failures=live.failures.filter(at=>at>now-30000);live.failures.push(now);
   const state=normalizeHistoryState(live.key);
   if(!state.unavailable&&!state.historyError)$('history-status').textContent='Обновление переписки приостановлено. История и черновик сохранены.';
-  try{const result=await liveJSON(live);if(result){applyLiveHistory(live,result.data);acceptLiveLease(live,result.data,result.started,true);}}catch(error){if(!liveCurrent(live)||liveTerminal(live,error))return;if(error.status===429){liveLater(live,[1000,2000,5000,10000,30000][Math.min(live.failures.length-1,4)],()=>liveOpen(live));return;}}
+  try{const result=await liveJSON(live);if(result){applyLiveHistory(live,result.data);acceptLiveLease(live,result.data,result.started,true);}}catch(error){if(!liveCurrent(live)||liveTerminal(live,error))return;if(error.status===429&&!live.fallbackRetry){liveLater(live,[1000,2000,5000,10000,30000][Math.min(live.failures.length-1,4)],()=>liveOpen(live));return;}}
   if(!liveCurrent(live))return;
-  if(live.failures.length>=3)liveFallback(live);else liveLater(live,[1000,2000,5000,10000,30000][Math.min(live.failures.length-1,4)],()=>liveOpen(live));
+  if(live.fallbackRetry||live.failures.length>=3)liveFallback(live);else liveLater(live,[1000,2000,5000,10000,30000][Math.min(live.failures.length-1,4)],()=>liveOpen(live));
 }
 function liveOpen(live){
   if(!liveCurrent(live))return;live.failureLatched=false;live.mode='connecting';
@@ -304,9 +308,9 @@ function liveOpen(live){
   const current=()=>liveCurrent(live)&&live.es===es&&!live.failureLatched;
   es.addEventListener('snapshot',event=>{
     if(!current())return;let data;try{data=JSON.parse(event.data);}catch(_){liveFailure(live);return;}
-    if(event.lastEventId!==data.epoch+':'+data.revision){liveFailure(live);return;}
+    if(!validLiveSnapshot(data,live)||event.lastEventId!==data.epoch+':'+data.revision){liveFailure(live);return;}
     if(!applyLiveHistory(live,data)){liveFailure(live);return;}
-    if(live.mode!=='sse'){live.mode='sse';const renew=async()=>{if(!current())return;try{const result=await liveJSON(live);if(result)acceptLiveLease(live,result.data,result.started);}catch(error){if(current()&&liveTerminal(live,error)){es.close();live.es=null;return;}}if(current())liveLater(live,5000,renew);};liveLater(live,5000,renew);}
+    if(live.mode!=='sse'){live.mode='sse';live.fallbackRetry=false;const renew=async()=>{if(!current())return;try{const result=await liveJSON(live);if(result)acceptLiveLease(live,result.data,result.started);}catch(error){if(current()&&liveTerminal(live,error))return;}if(current())liveLater(live,5000,renew);};liveLater(live,5000,renew);}
   });
   es.addEventListener('reset',event=>{if(!current())return;try{const data=JSON.parse(event.data);if(data.project===live.project&&data.sid===live.sid&&data.reason==='overflow'){const state=normalizeHistoryState(live.key);state.liveGap=true;renderHistory(live.key);}}catch(_){liveFailure(live);}});
   es.addEventListener('unavailable',()=>{if(current())liveFailure(live);});es.onerror=()=>{if(current())liveFailure(live);};

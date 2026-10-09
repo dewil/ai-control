@@ -119,27 +119,31 @@ class Entry:
     def observe(self, history):
         digest = canonical_hash(history)
         changed = digest != self.digest
+        epoch, revision, observation = self.epoch, self.revision, self.observation
         if self.observation == SAFE_INTEGER or changed and self.revision == SAFE_INTEGER:
-            self.epoch = secrets.token_hex(16)
-            self.revision = self.observation = 0
+            epoch = secrets.token_hex(16)
+            revision = observation = 0
             changed = True
-        self.observation += 1
+        observation += 1
         if changed:
-            self.revision += 1
-        self.digest = digest
-        self.last_success = self.last_used = time.monotonic()
-        self.value = dict(schema=1, project=self.key[0], sid=self.key[1], epoch=self.epoch,
-                          revision=self.revision, observation=self.observation,
+            revision += 1
+        value = dict(schema=1, project=self.key[0], sid=self.key[1], epoch=epoch,
+                          revision=revision, observation=observation,
                           source='owner_history_poll', observed_at=int(time.time()*1000), history=history)
-        wire = encoded(self.value)
+        wire = encoded(value)
         if len(wire) > WIRE_LIMIT or len(wire) - len(encoded(history)) > 4096:
             raise ValueError('invalid live envelope')
+        event_frame('snapshot', value, epoch + ':' + str(revision))
+        self.epoch, self.revision, self.observation = epoch, revision, observation
+        self.digest, self.value = digest, value
+        self.last_success = self.last_used = time.monotonic()
         return changed
 
 
 class Subscriber:
-    def __init__(self, entry):
+    def __init__(self, entry, check=lambda:None):
         self.entry = entry
+        self.check = check
         self.queue = deque()
         self.overflow = False
         self.recovering = False
@@ -174,6 +178,8 @@ class Subscriber:
         self.changed.set()
 
     def fail(self):
+        if self.closed:
+            return
         self.queue.clear()
         e = self.entry
         self.queue.append(event_frame('unavailable', dict(schema=1, project=e.key[0], sid=e.key[1], error='unavailable')))
@@ -251,11 +257,22 @@ class Manager:
         row = dict(key=key, start=now, deadline=now+6, future=future, check=check, stream=stream)
         self.pending.append(row)
         try:
-            return await future
+            result = await future
+            if isinstance(result, Subscriber):
+                result.entry.subscribers.add(result)
+                result.entry.due = time.monotonic()+1.05
+            return result
         finally:
             if row in self.pending:
                 self.pending.remove(row)
             future.cancel()
+
+    @staticmethod
+    def checked(check):
+        try:
+            return check()
+        except Exception:
+            return {'error': 'unavailable'}
 
     def fail(self, entry):
         for subscriber in list(entry.subscribers):
@@ -273,7 +290,7 @@ class Manager:
         while self.running:
             now = time.monotonic()
             for row in list(self.pending):
-                failure = row['check']()
+                failure = self.checked(row['check'])
                 if row['future'].done() or now >= row['deadline'] or failure is not None:
                     if not row['future'].done():
                         row['future'].set_result(failure or {'error': 'unavailable'})
@@ -314,6 +331,33 @@ class Manager:
             except Exception:
                 result = {'error': 'unavailable'}
             entry = self.entries.get(key)
+            candidate = None
+            changed = False
+            if 'error' not in result:
+                candidate = Entry(key, result['scope_id'])
+                if entry and entry.scope_id == result['scope_id']:
+                    for name in ('epoch', 'revision', 'observation', 'digest'):
+                        setattr(candidate, name, getattr(entry, name))
+                changed = candidate.observe(result['history'])
+            if entry:
+                for subscriber in list(entry.subscribers):
+                    if self.checked(subscriber.check) is not None:
+                        subscriber.fail()
+            # Candidate validation precedes the final authority/deadline cut;
+            # no await separates this cut from state commit and delivery.
+            eligible = []
+            for row in cut:
+                if row not in self.pending or row['future'].done():
+                    continue
+                failure = self.checked(row['check'])
+                if failure is not None or time.monotonic() >= row['deadline']:
+                    row['future'].set_result(failure if failure is not None else {'error': 'unavailable'})
+                    self.pending.remove(row)
+                else:
+                    eligible.append(row)
+            active = bool(entry and any(not s.closed for s in entry.subscribers))
+            if not eligible and not active:
+                return
             if 'error' in result:
                 if entry:
                     self.fail(entry)
@@ -324,8 +368,6 @@ class Manager:
             elif self.running:
                 self.backoff.pop(key, None)
                 if entry is None or entry.scope_id != result['scope_id']:
-                    if entry:
-                        self.fail(entry)
                     if entry is None and len(self.entries) == 2:
                         idle = [e for e in self.entries.values() if not e.subscribers]
                         if not idle:
@@ -336,27 +378,27 @@ class Manager:
                             self.last_start.pop(victim.key, None)
                             self.backoff.pop(victim.key, None)
                     if 'error' not in result:
-                        entry = Entry(key, result['scope_id'])
+                        if entry:
+                            self.fail(entry)
+                        entry = candidate
                         self.entries[key] = entry
+                        changed = True
+                else:
+                    for name in ('epoch', 'revision', 'observation', 'digest', 'value', 'last_success', 'last_used'):
+                        setattr(entry, name, getattr(candidate, name))
                 if 'error' not in result:
-                    changed = entry.observe(result['history'])
                     for subscriber in list(entry.subscribers):
                         if not subscriber.closed and (changed or subscriber.overflow):
                             subscriber.publish()
                     entry.due = time.monotonic()+1.05 if entry.subscribers else float('inf')
-            for row in cut:
+            for row in eligible:
                 if row not in self.pending or row['future'].done():
                     continue
-                failure = row['check']()
-                if failure or time.monotonic() >= row['deadline']:
-                    row['future'].set_result(failure or {'error': 'unavailable'})
-                elif 'error' in result:
+                if 'error' in result:
                     row['future'].set_result(result)
                 elif row['stream']:
-                    subscriber = Subscriber(entry)
+                    subscriber = Subscriber(entry, row['check'])
                     subscriber.queue.append(subscriber.snapshot())
-                    entry.subscribers.add(subscriber)
-                    entry.due = time.monotonic()+1.05
                     row['future'].set_result(subscriber)
                 else:
                     row['future'].set_result(entry.value)

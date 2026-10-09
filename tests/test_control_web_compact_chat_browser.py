@@ -164,11 +164,13 @@ class CompactChatBrowserContract(unittest.TestCase):
         self.assertIsNotNone(anchor, 'Fixture must expose a visible reader anchor')
         # INV-WSESS-53: unchanged SSE observations produce no frame/legacy GET.
         before_reads = len((self.evidence / 'requests.jsonl').read_text().splitlines())
-        deadline = time.monotonic() + 3
+        before_requests = len(self.history_requests())
+        deadline = time.monotonic() + 6
         while len((self.evidence / 'requests.jsonl').read_text().splitlines()) <= before_reads and time.monotonic() < deadline:
             self.page.wait_for_timeout(50)
         self.assertGreater(len((self.evidence / 'requests.jsonl').read_text().splitlines()), before_reads,
                            'Reader anchor must span an actual owner source observation')
+        self.assertEqual(len(self.history_requests()),before_requests,'No automatic legacy history GET')
         actual = self.page.get_by_text(anchor['text'], exact=True).first.bounding_box()
         self.assertLessEqual(abs(actual['y'] - anchor['top']), 8, 'Polling must not drag reader')
         before = len(self.history_requests()); sends = len([x for x in self.network if '/api/session-send' in x[1]])

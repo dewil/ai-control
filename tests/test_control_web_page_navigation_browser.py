@@ -3,7 +3,7 @@
 # canonical captions/chips and native disclosures replace the previous labels/layout.
 
 from control_browser_helpers import project_is_selected
-from control_live_legacy_fixture import LiveHistoryFixture, replay_path
+from control_live_legacy_fixture import LiveHistoryFixture, replay_path, observe_snapshots
 import importlib
 import json
 import os
@@ -60,7 +60,9 @@ def serve(root, evidence):
 class PageNavigationBrowserContract(unittest.TestCase):
     # Share synthetic login, teardown and public-DOM helpers, not existing tests.
     stop_server = classmethod(compact.CompactChatBrowserContract.stop_server.__func__)
-    setUp = compact.CompactChatBrowserContract.setUp
+    def setUp(self):
+        compact.CompactChatBrowserContract.setUp(self)
+        self.live_frames=observe_snapshots(self.page)
     tearDown = compact.CompactChatBrowserContract.tearDown
     open_history = compact.CompactChatBrowserContract.open_history
     history_requests = compact.CompactChatBrowserContract.history_requests
@@ -199,8 +201,15 @@ class PageNavigationBrowserContract(unittest.TestCase):
         # action instead of requiring those items to enter the frozen DOM.
         # INV-WSESS-53: this is an automatic-update test; real SSE replaces
         # the old legacy GET response oracle. Pending action is public DOM.
+        target='LATEST message '+str(count-1)+'\n'
+        def received():
+            return any(any(item['text'].startswith(target) for turn in frame['history'].get('turns',[]) for item in turn['items']) for frame in self.live_frames)
+        deadline=time.monotonic()+6
+        while not received() and time.monotonic()<deadline:
+            self.page.wait_for_timeout(50)
+        self.assertTrue(received(),'Native SSE delivers the correlated count')
         self.page.get_by_role('button', name=re.compile(
-            'Есть новые сообщения|Перейти к последним', re.I)).first.wait_for(timeout=4000)
+            'Есть новые сообщения|Перейти к последним', re.I)).first.wait_for(timeout=6000)
 
     def test_INV_WSESS_15_up_preserves_reader_anchor_on_real_new_data(self):
         self.page.set_viewport_size({'width': 360, 'height': 900})
@@ -217,9 +226,11 @@ class PageNavigationBrowserContract(unittest.TestCase):
         before_requests = len(self.history_requests())
         private_json(self.evidence / 'control.json', {'delay': 0, 'count': 32})
         self.wait_for_buffered_history(32)
-        self.assertTrue(any('/api/session-events?' in url for _,url in self.network),
-                        'Must observe the actual SSE transport')
+        self.assertEqual(len(self.history_requests()),before_requests,'SSE update issues no legacy history GET')
         self.assertLessEqual(abs(anchor.bounding_box()['y']-before_y), 8, 'INV-WSESS-15: update retains reader anchor')
+        self.page.get_by_role('button',name=re.compile('Есть новые сообщения|Перейти к последним',re.I)).first.evaluate('button=>button.click()')
+        self.page.get_by_text('LATEST message 31',exact=True).wait_for(timeout=6000)
+        self.assertEqual(len(self.history_requests()),before_requests,'Cached new data is local')
 
     def test_INV_WSESS_15_down_resumes_follow_on_real_new_data(self):
         self.open_history()
@@ -228,8 +239,7 @@ class PageNavigationBrowserContract(unittest.TestCase):
         private_json(self.evidence / 'control.json', {'delay': 0, 'count': 28})
         self.page.get_by_text('LATEST message 27', exact=True).wait_for(state='attached', timeout=8500)
         self.page.wait_for_timeout(250)
-        self.assertTrue(any('/api/session-events?' in url for _,url in self.network),
-                        'Must observe the actual SSE transport')
+        self.assertEqual(len(self.history_requests()),before_requests,'SSE update issues no legacy history GET')
         result = self.metrics()
         self.assertLessEqual(result['max']-result['y'], 80, 'INV-WSESS-15: down restores newest-message follow')
 
@@ -276,8 +286,7 @@ class PageNavigationBrowserContract(unittest.TestCase):
         private_json(self.evidence / 'control.json', {'delay': 0, 'count': 28})
         self.page.get_by_text('LATEST message 27', exact=True).wait_for(state='attached', timeout=8500)
         self.page.wait_for_timeout(250)
-        self.assertTrue(any('/api/session-events?' in url for _,url in self.network),
-                        'Must observe the actual SSE transport')
+        self.assertEqual(len(self.history_requests()),before_requests,'SSE update issues no legacy history GET')
         result = self.metrics()
         private_json(self.evidence / ('manual-return-' + input_kind + '.json'), {'input': input_kind, 'events': events, 'wheel_targets': wheel_targets, **result})
         self.assertLessEqual(result['max']-result['y'], 80,
@@ -324,10 +333,12 @@ class PageNavigationBrowserContract(unittest.TestCase):
         before_requests = len(self.history_requests())
         private_json(self.evidence / 'control.json', {'delay': 0, 'count': 28})
         self.wait_for_buffered_history(28)
-        self.assertTrue(any('/api/session-events?' in url for _,url in self.network),
-                        'Must observe the actual SSE transport')
+        self.assertEqual(len(self.history_requests()),before_requests,'SSE update issues no legacy history GET')
         self.assertLessEqual(abs(anchor.bounding_box()['y'] - anchor_y), 8,
                              'INV-WSESS-15: draft-only wheel must retain page reader anchor')
+        self.page.get_by_role('button',name=re.compile('Есть новые сообщения|Перейти к последним',re.I)).first.evaluate('button=>button.click()')
+        self.page.get_by_text('LATEST message 27',exact=True).wait_for(timeout=6000)
+        self.assertEqual(len(self.history_requests()),before_requests,'New items were cached automatically')
 
 
 if __name__ == '__main__':

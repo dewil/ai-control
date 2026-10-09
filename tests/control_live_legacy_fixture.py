@@ -5,6 +5,18 @@ import json
 import uuid
 
 
+def observe_snapshots(page):
+    """Observe actual browser SSE bytes, without replacing app callbacks."""
+    frames = []
+    session = page.context.new_cdp_session(page)
+    session.send('Network.enable')
+    def received(event):
+        if event.get('eventName') == 'snapshot':
+            frames.append(json.loads(event['data']))
+    session.on('Network.eventSourceMessageReceived', received)
+    return frames
+
+
 def replay_path(evidence):
     # Synthetic private state only. No runtime/user authentication files.
     evidence.chmod(0o700)
@@ -42,6 +54,8 @@ class LiveHistoryFixture:
                     # The existing native producer exports only valid user UUIDs.
                     if item['role'] != 'user' or not valid:
                         item.pop('client_id')
+        # ReceiptStore.recent exports accepted/delivery_unknown/rejected only.
+        # Local pending "sending" remains covered by the initial legacy fixture.
         value['recent_sends'] = [row for row in value['recent_sends']
                                 if row['status'] in ('accepted', 'delivery_unknown', 'rejected')]
         evidence = self._live_evidence

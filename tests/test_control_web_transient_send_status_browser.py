@@ -3,7 +3,7 @@
 # empty statuses collapse; nonempty accepted status remains visible in normal flow.
 
 from control_browser_helpers import choose_project
-from control_live_legacy_fixture import LiveHistoryFixture, replay_path
+from control_live_legacy_fixture import LiveHistoryFixture, replay_path, observe_snapshots
 import importlib
 import json
 import os
@@ -60,9 +60,12 @@ def serve(root, evidence):
             seeds = data.get('seeds', []) if sid == SID else []
             receipts = [r for r in records if r['sid'] == sid]
             recent = [{k: r[k] for k in ('status', 'message_id', 'turn_id')} for r in receipts] + seeds
-            return {'turns': [{'id': 'status-turn', 'status': 'completed', 'items': [
+            result = {'turns': [{'id': 'status-turn', 'status': 'completed', 'items': [
                 {'id': 'status-' + str(i), 'role': 'assistant', 'text': 'LATEST message ' + str(i) + '\n\n' + ('Readable status detail ' + str(i) + ' ')*30, 'truncated': False}
                 for i in range(24)]}], 'next_cursor': None, 'truncated': False, 'recent_sends': recent[-8:]}
+            if data.get('marker'):
+                result['turns'][0]['items'][-1]['text'] += '\n\n' + data['marker']
+            return result
         def session_send(self, project, sid, message_id, text):
             data = json.loads((evidence / 'control.json').read_text())
             record = {'status': data.get('send_status', 'accepted'), 'message_id': message_id,
@@ -166,6 +169,7 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         private_json(self.evidence / 'receipts.json', [])
         (self.evidence / 'calls.jsonl').unlink(missing_ok=True)
         compact.CompactChatBrowserContract.setUp(self)
+        self.live_frames=observe_snapshots(self.page)
 
     def control(self, **data):
         pending = self.evidence / 'control-next.json'
@@ -223,9 +227,9 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         self.page.wait_for_timeout(1600)
         # INV-WSESS-53 automatic receipt projection arrives through actual SSE.
         self.assertTrue(any('/api/session-events?' in url for _,url in self.network))
-        observed=[json.loads(line) for line in (self.evidence/'live-observations.jsonl').read_text().splitlines()]
-        self.assertTrue(any(before_ids[-1] in row['recent_ids'] for row in observed),
-                        'Actual SSE source must reconcile this accepted UUID')
+        self.assertTrue(any(any(row['message_id']==before_ids[-1] for row in frame['history']['recent_sends']) for frame in self.live_frames),
+                        'Actual native SSE delivers this accepted UUID')
+        self.assertEqual(len(self.history_requests()),before_requests,'Automatic receipt update uses no legacy GET')
         self.assertEqual(self.slot().inner_text().strip(), '', 'Accepted clears after5s despite repeated history GET')
         self.assertEqual(self.slot().count(), 1, 'Empty polite live region remains attached after expiry')
         self.assertLess(self.page.locator('form').filter(has=self.page.locator('textarea')).bounding_box()['height'], before_form_height, 'INV47 removes the empty status reserve after expiry')
@@ -279,19 +283,20 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         unknowns = [self.seed(101, 'delivery_unknown'), self.seed(102, 'delivery_unknown')]
         self.control(seeds=unknowns + [self.seed(103, 'rejected'), self.seed(104, 'sending')])
         self.open_history()
-        self.control(seeds=[self.seed(i+200) for i in range(8)], status_delay=1.2)
+        marker='Synthetic receipt projection 200 through 207 reached the UI'
+        before_requests=len(self.history_requests())
+        self.control(seeds=[self.seed(i+200) for i in range(8)], status_delay=1.2, marker=marker)
         # INV-WSESS-53: new seed projection is automatic via real SSE.
         expected={self.seed(i+200)['message_id'] for i in range(8)}
-        deadline=time.monotonic()+4
-        observed=[]
+        deadline=time.monotonic()+6
+        observed=self.live_frames
         while time.monotonic()<deadline:
-            path=self.evidence/'live-observations.jsonl'
-            observed=[json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
-            if any(set(row['recent_ids'])==expected for row in observed):break
+            if any({row['message_id'] for row in frame['history']['recent_sends']}==expected for frame in observed):break
             self.page.wait_for_timeout(50)
-        self.assertTrue(any(set(row['recent_ids'])==expected for row in observed),
-                        'Actual owner source must observe the second bounded seed projection')
-        self.page.wait_for_timeout(150)
+        self.assertTrue(any({row['message_id'] for row in frame['history']['recent_sends']}==expected for frame in observed),
+                        'Actual native SSE delivers the second bounded seed projection')
+        self.page.get_by_text(marker,exact=True).wait_for(timeout=6000)
+        self.assertEqual(len(self.history_requests()),before_requests,'Marker and receipts arrive automatically without legacy GET')
         details = self.disclosure(4)
         checks = details.get_by_role('button', name='Проверить доставку', exact=True)
         self.assertEqual(checks.count(), 2, 'Every older unknown remains manually checkable')

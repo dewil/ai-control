@@ -3,7 +3,7 @@
 # bottom navigation remains reachable through the explicit compact disclosure.
 
 import datetime
-from control_live_legacy_fixture import LiveHistoryFixture, replay_path
+from control_live_legacy_fixture import LiveHistoryFixture, replay_path, observe_snapshots
 import importlib
 import json
 import os
@@ -126,6 +126,7 @@ class HistoryWindowBrowser(unittest.TestCase):
     def setUp(self):
         private_json(self.evidence/'control.json', fixture())
         self.page=self.context.new_page(); self.addCleanup(self.page.close)
+        self.live_frames=observe_snapshots(self.page)
         self.network=[]; self.errors=[]
         self.page.on('request',lambda r:self.network.append((r.method,r.url)))
         self.page.on('pageerror',lambda e:self.errors.append(str(e)))
@@ -199,20 +200,24 @@ class HistoryWindowBrowser(unittest.TestCase):
 
     def refresh_latest(self):
         # INV-WSESS-53 removes automatic legacy /session-history polling.
-        # This unconfigured legacy fixture retains all DOM/window/anchor
-        # assertions through explicit refresh; frozen LIVE tests cover SSE.
-        self.page.get_by_role('button',name='Обновить переписку',exact=True).evaluate('button=>button.click()')
-        self.page.wait_for_timeout(200)
+        # Only failed-latest result cases exercise explicit refresh.
+        with self.page.expect_response(lambda response:'/api/session-history?' in response.url):
+            self.page.get_by_role('button',name='Обновить переписку',exact=True).evaluate('button=>button.click()')
+        self.page.wait_for_function("()=>!document.querySelector('#chat-refresh').disabled",timeout=6000)
 
     def poll(self, count):
         # INV-WSESS-53: observe real owner→SSE updates, no legacy GET timer.
-        before=len((self.evidence/'calls.jsonl').read_text().splitlines())
+        before=list(self.requests())
         self.configure(count=count)
-        deadline=time.monotonic()+3
-        while len((self.evidence/'calls.jsonl').read_text().splitlines())<=before and time.monotonic()<deadline:
+        target='MAIN item '+str(count-1).zfill(4)+' '
+        def received():
+            return any(any(item['text'].startswith(target) for turn in frame['history'].get('turns',[]) for item in turn['items']) for frame in self.live_frames)
+        deadline=time.monotonic()+6
+        while not received() and time.monotonic()<deadline:
             self.page.wait_for_timeout(50)
-        self.assertGreater(len((self.evidence/'calls.jsonl').read_text().splitlines()),before)
-        self.page.wait_for_timeout(250)
+        self.assertTrue(received(),'Actual native SSE delivers the correlated new count')
+        self.page.wait_for_function("target=>[...document.querySelectorAll('.chat-items p')].some(p=>p.textContent.startsWith(target))||[...document.querySelectorAll('button')].some(b=>/Есть новые сообщения|Перейти к последним/.test(b.textContent))",arg=target,timeout=6000)
+        self.assertEqual(self.requests(),before,'Automatic update cannot issue legacy history GET')
 
     def test_initial_101_keeps_newest100_and_unchanged_draft_receipt_and_times(self):
         self.open()
@@ -303,6 +308,9 @@ class HistoryWindowBrowser(unittest.TestCase):
         self.poll(104)
         self.assertEqual(self.cap(),prior)
         self.assertTrue(self.page.evaluate('windowTestFocus.isConnected&&document.activeElement===windowTestFocus&&getSelection().toString()===windowTestSelection'))
+        before=list(self.requests()); self.latest()
+        self.assertEqual(self.cap(),list(range(4,104)))
+        self.assertEqual(self.requests(),before,'Correlated new items were cached by SSE')
 
     def test_incoming_older_window_stays_frozen_until_explicit_latest(self):
         self.configure(count=1000); self.open(); self.cap(); self.reader(); self.activate_older()

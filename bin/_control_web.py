@@ -664,6 +664,7 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
         if not manager.reserve(identity, key):
             return error('unavailable', 429)
         handed_off = False
+        result = None
         def check():
             _, failure = live_auth(request)
             return failure
@@ -673,8 +674,6 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
                 return result
             _, failure = live_auth(request)
             if failure is not None:
-                if stream and not isinstance(result, dict):
-                    manager.detach(result)
                 return failure
             if isinstance(result, dict) and 'error' in result:
                 code = 'unsupported' if result['error'] == 'unsupported' else 'unavailable'
@@ -686,6 +685,8 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
             return Response(encoded(result), media_type='application/json', headers={'Cache-Control':'no-store'})
         finally:
             if not handed_off:
+                if stream and result is not None and not isinstance(result, (dict, Response)):
+                    manager.detach(result)
                 manager.release(identity)
 
     @app.get('/api/session-events')
