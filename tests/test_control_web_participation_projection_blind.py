@@ -99,6 +99,12 @@ class ParticipationProjectionBlind(WireCase):
         # INV-PART-07
         self.native.loaded=[f'{index:08x}-1111-4111-8111-111111111111' for index in range(80)]
         before=len(self.native.frames);value=self.overview()
+        # Cached GET may precede the shared worker's first loaded-set discovery.
+        # Await an actual published row, retaining the original RPC baseline and
+        # every coverage/budget assertion below; no synchronous GET IO is needed.
+        if not value.get('rows'):
+            value=self.wait_for(lambda:(d if (d:=self.overview()).get('rows') else None),
+                'Background loaded-set projection was not published within its 5s budget', timeout=5)
         self.assertTrue(value['coverage']['partial'])
         self.assertIn('limit',value['coverage']['reasons'])
         self.assertLessEqual(len(self.native.frames)-before,32)
