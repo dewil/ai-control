@@ -215,13 +215,17 @@ class ReceiptContextContract(unittest.TestCase):
         self.assertEqual(second('thread/read', {'threadId': SID, 'includeTurns': False})['thread']['id'], SID)
         self.assertEqual(second.model_context()['native_version'], '0.161.0',
                          'Reviewed native 0.161 must expose its real compatibility version')
+        captured = second.model_context()
+        self.assertEqual(second.call_in_generation('thread/read', {'threadId': SID, 'includeTurns': False},
+                         transport_generation=captured['transport_generation'],
+                         context_generation=captured['context_generation'])['thread']['id'], SID)
         other = rpc_class(str(other_alias), timeout=1)
         self.addCleanup(other.close)
         other_snapshot = other.receipt_context()
         self.assertNotEqual(other_snapshot['context_id'], offline['context_id'],
                             'A different fixed socket alias has a separate receipt namespace')
         self.assertEqual([frame['method'] for frame in frames if frame.get('method')],
-                         ['initialize', 'initialized', 'thread/read', 'initialize', 'initialized', 'thread/read'])
+                         ['initialize', 'initialized', 'thread/read', 'initialize', 'initialized', 'thread/read', 'thread/read'])
         self.assertEqual(server_errors, [])
 
 
@@ -230,7 +234,7 @@ class ReceiptContextContract(unittest.TestCase):
                        context_id='a' * 64, transport_generation=1,
                        context_generation=0, native_version='0.161.0')
         self.assertIsNone(self.module.SessionChat._catalog_reason(context))
-        for version in ('0.159.0', '0.160.1', '0.162.0', None):
+        for version in ('0.159.0', '0.160.1', '0.162.0', None, [], True):
             with self.subTest(version=version):
                 self.assertEqual(self.module.SessionChat._catalog_reason(
                     dict(context, native_version=version)), 'unsupported_capability')
