@@ -503,6 +503,7 @@ FIELD_LIMIT = 16000
 NAME = re.compile(r'[a-z][a-z0-9-]{0,30}[a-z0-9]\Z')
 GEN = re.compile(r'[0-9a-f]{8}\Z')
 PROJECT = re.compile(r'[a-zA-Z0-9_-]{1,32}\Z')
+PART_OPS = {'participation_overview', 'session_questions', 'session_question_answer'}
 NAV_OPS = {'session_pins', 'session_pin', 'session_unpin', 'session_queue_start_support', 'session_queue_start'}
 QUEUE_OPS = {'session_queue', 'session_enqueue', 'session_queue_cancel', 'session_queue_send_now'}
 
@@ -626,6 +627,89 @@ def pin_result(value, pinned, pin_id=None):
         and (pin_id is None or value['pin_id'] == pin_id)) else {'error': 'unavailable'}
 
 
+def participation_result(value, operation, request=None):
+    """Closed public DTOs; private callback/socket/answer material cannot cross."""
+    failure = navigation_error(value)
+    if failure:return failure if failure['error'] != 'unsupported_queue' else {'error':'unavailable'}
+    def shape(item, keys):return type(item) is dict and set(item) == set(keys.split())
+    def member(item, choices):return type(item) is str and item in choices
+    def string(item, size):return type(item) is str and len(item.encode('utf-8')) <= size
+    def timestamp(item):return item is None or type(item) in (int,float) and math.isfinite(item) and 0 <= item <= 253402300799
+    def identifier(item):return type(item) is str and 0 < len(item) <= 500
+    def coverage(item):
+        return (shape(item,'partial reasons') and type(item['partial']) is bool
+            and type(item['reasons']) is list and len(item['reasons']) == len(set(item['reasons']))
+            and all(member(v, {'limit','deadline','native_callbacks_partial','source_unavailable','unsupported','binding_incomplete'}) for v in item['reasons']))
+    def summary(item):
+        return (shape(item,'interaction_id state blocking') and valid_qid(item['interaction_id'])
+            and member(item['state'], {'actionable','native_only','responding','sent','delivery_unknown','closed','stale'})
+            and (item['blocking'] is None or type(item['blocking']) is bool))
+    def question(item):
+        if (not shape(item,'interaction_id turn_id item_id state is_blocking reason questions')
+                or not valid_qid(item['interaction_id']) or not identifier(item['turn_id']) or not identifier(item['item_id'])
+                or not member(item['state'], {'actionable','native_only','responding','sent','delivery_unknown','closed','stale'})
+                or item['is_blocking'] is not None and type(item['is_blocking']) is not bool
+                or item['reason'] is not None and not member(item['reason'], {'native_required','secret','unsupported','stale','limit','delivery_unknown'})
+                or type(item['questions']) is not list or len(item['questions']) > 3):return False
+        if item['state'] == 'actionable' and (type(item['is_blocking']) is not bool or not item['questions']):return False
+        if item['state'] == 'native_only' and item['questions']:return False
+        from _control_web_sessions import _Participation
+        native = []
+        for row in item['questions']:
+            if not shape(row,'id header question is_other options'):return False
+            native.append(dict(id=row['id'],header=row['header'],question=row['question'],
+                               isOther=row['is_other'],isSecret=False,options=row['options']))
+        if native:_Participation.form(dict(isBlocking=True,questions=native))
+        return True
+    def row(item):
+        if (not shape(item,'session_key project sid label vendor activity running waits questions result freshness')
+                or type(item['session_key']) is not str or not re.fullmatch('[0-9a-f]{64}',item['session_key'])
+                or type(item['project']) is not str or not PROJECT.fullmatch(item['project']) or not valid_qid(item['sid'])
+                or type(item['label']) is not str or len(item['label']) > 120 or item['vendor'] != 'codex'
+                or not member(item['activity'], {'active','idle','not_loaded','system_error','unknown'})
+                or not member(item['running'], {'confirmed','unconfirmed'})
+                or type(item['waits']) is not list or item['waits'] not in ([],['approval'],['question'],['approval','question'])
+                or type(item['questions']) is not list or len(item['questions']) > 1024 or not all(summary(q) for q in item['questions'])
+                or not shape(item['freshness'],'state observed_at')
+                or not member(item['freshness']['state'], {'fresh','stale','unavailable'}) or not timestamp(item['freshness']['observed_at'])):return False
+        result = item['result']
+        return result is None or (shape(result,'turn_id item_id status ready completed_at') and identifier(result['turn_id'])
+            and (result['item_id'] is None or identifier(result['item_id']))
+            and member(result['status'], {'completed','failed','interrupted'}) and type(result['ready']) is bool
+            and (not result['ready'] or result['status']=='completed' and result['item_id'] is not None)
+            and timestamp(result['completed_at']))
+    try:
+        if type(value) is not dict or len(json.dumps(value,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode('utf-8')) > 96*1024:
+            raise ValueError()
+        if (type(value.get('schema')) is not int or value['schema'] != 1
+                or type(value.get('epoch')) is not str or not re.fullmatch('[0-9a-f]{32}',value['epoch'])):raise ValueError()
+        if operation == 'session_question_answer':
+            valid = (shape(value,'schema epoch interaction_id action_id state reason')
+                and valid_qid(value['interaction_id']) and valid_qid(value['action_id'])
+                and member(value['state'], {'sent','delivery_unknown','closed','stale'})
+                and (value['reason'] is None or member(value['reason'], {'delivery_unknown','stale','native_required'})))
+            if request is not None:
+                valid = valid and all(value[key] == request[key] for key in ('epoch','interaction_id','action_id'))
+        else:
+            valid = type(value.get('revision')) is int and 0 < value['revision'] <= 2**53-1 and coverage(value.get('coverage'))
+            if operation == 'session_questions':
+                valid = (valid and shape(value,'schema epoch revision session_key coverage questions')
+                    and type(value['session_key']) is str and re.fullmatch('[0-9a-f]{64}',value['session_key'])
+                    and type(value['questions']) is list and len(value['questions']) <= 16 and all(question(q) for q in value['questions']))
+            elif operation == 'participation_overview':
+                valid = (valid and shape(value,'schema epoch revision generated_at health coverage rows tasks')
+                    and value['generated_at'] is not None and timestamp(value['generated_at'])
+                    and member(value['health'], {'fresh','stale','unavailable'})
+                    and type(value['rows']) is list and len(value['rows']) <= 256 and all(row(v) for v in value['rows'])
+                    and type(value['tasks']) is list and len(value['tasks']) <= 128)
+                for task in value['tasks']:
+                    valid = valid and shape(task,'agent kind ref state') and type(task['agent']) is str and NAME.fullmatch(task['agent']) and string(task['ref'],500) and member(task['kind'],{'question','result'}) and member(task['state'],{'actionable','native_only'})
+            else:valid = False
+        return copy.deepcopy(value) if valid else {'error':'unavailable'}
+    except Exception:
+        return {'error':'unavailable'}
+
+
 def queue_start_support_result(value):
     failure = navigation_error(value)
     if failure:return failure
@@ -722,6 +806,7 @@ def queue_transfer_result(value, action_id, queued_submission_id):
     return dict(value)
 
 def _queue_boundary(request, value):
+    if request['op'] in PART_OPS:return participation_result(value, request['op'], request)
     if request['op'] == 'session_pins':return pins_result(value)
     if request['op'] == 'session_pin':return pin_result(value, True)
     if request['op'] == 'session_unpin':return pin_result(value, False, request['pin_id'])
@@ -745,6 +830,9 @@ def _queue_boundary(request, value):
 
 
 SESSION_FIELDS = {
+    'participation_overview': {'op'},
+    'session_questions': {'op', 'project', 'sid'},
+    'session_question_answer': {'op', 'project', 'sid', 'epoch', 'interaction_id', 'action_id', 'answers'},
     'session_pins': {'op', 'principal'},
     'session_pin': {'op', 'principal', 'project', 'sid'},
     'session_unpin': {'op', 'principal', 'pin_id'},
@@ -781,13 +869,19 @@ def _valid_session(request):
         return False
     if 'principal' in request and (type(request['principal']) is not str or not re.fullmatch('[A-Za-z0-9_-]{1,64}', request['principal'])):
         return False
+    if request['op'] == 'session_question_answer':
+        if type(request['epoch']) is not str or not re.fullmatch('[0-9a-f]{32}',request['epoch']):return False
+        try:
+            from _control_web_sessions import _Participation
+            _Participation.answers(request['answers'])
+        except Exception:return False
     if 'selection' in request:
         from _control_web_sessions import _valid_selection
         if not _valid_selection(request['selection']):
             return False
     if 'project' in request and (type(request['project']) is not str or not PROJECT.fullmatch(request['project'])):
         return False
-    if any(not valid_qid(request[key]) for key in ('sid', 'message_id', 'operation_id', 'action_id', 'pin_id') if key in request):
+    if any(not valid_qid(request[key]) for key in ('sid', 'message_id', 'operation_id', 'action_id', 'pin_id', 'interaction_id') if key in request):
         return False
     if 'snapshot_text' in request and (type(request['snapshot_text']) is not str or not 0 < len(request['snapshot_text']) <= FIELD_LIMIT or not request['snapshot_text'].strip()):
         return False
@@ -1055,13 +1149,14 @@ def _field(doc, key, default=''):
 
 
 class RegistryBackend:
-    def __init__(self, registry, bin_dir, runner=None, sessions=None, configured_creator=None, *, devbus=None):
+    def __init__(self, registry, bin_dir, runner=None, sessions=None, configured_creator=None, *, devbus=None, task_attention_source=None):
         self.registry = os.path.abspath(registry)
         self.bin_dir = os.path.abspath(bin_dir)
         self.runner = runner or subprocess.run
         self.sessions = sessions
         self.configured_creator = configured_creator
         self.devbus = devbus
+        self.task_attention_source = task_attention_source
 
     def devbus_overview(self, task=None, agent=None):
         if not all(value is None or valid_id(value) for value in (task, agent)):
@@ -1094,7 +1189,17 @@ class RegistryBackend:
             return {'error': 'unavailable'}
         try:
             op = request['op']
-            if op == 'session_pins':result = self.sessions.pins(request['principal'])
+            if op == 'participation_overview':
+                result = self.sessions.participation_overview()
+                result = participation_result(result, op)
+                if 'error' not in result:
+                    result['tasks'] = []
+                    result['coverage']['partial'] = True
+                    if 'binding_incomplete' not in result['coverage']['reasons']:
+                        result['coverage']['reasons'].append('binding_incomplete')
+            elif op == 'session_questions':result = self.sessions.questions(request['project'], request['sid'])
+            elif op == 'session_question_answer':result = self.sessions.answer_question(request['project'],request['sid'],request['epoch'],request['interaction_id'],request['action_id'],request['answers'])
+            elif op == 'session_pins':result = self.sessions.pins(request['principal'])
             elif op == 'session_pin':result = self.sessions.pin(request['principal'], request['project'], request['sid'])
             elif op == 'session_unpin':result = self.sessions.unpin(request['principal'], request['pin_id'])
             elif op == 'session_queue_start_support':result = self.sessions.queue_start_support(request['project'], request['sid'])
@@ -1136,6 +1241,16 @@ class RegistryBackend:
             return _queue_boundary(request, result) if type(result) is dict else {'error': 'unavailable'}
         except Exception:
             return {'error': 'unavailable'}
+
+    def participation_overview(self):
+        return self._session(dict(op='participation_overview'))
+
+    def session_questions(self, project, sid):
+        return self._session(dict(op='session_questions', project=project, sid=sid))
+
+    def session_question_answer(self, project, sid, epoch, interaction_id, action_id, answers):
+        return self._session(dict(op='session_question_answer',project=project,sid=sid,epoch=epoch,
+                                  interaction_id=interaction_id,action_id=action_id,answers=answers))
 
     def session_pins(self, principal):
         return self._session(dict(op='session_pins', principal=principal))
@@ -1442,7 +1557,7 @@ def _receive(conn, deadline=None):
         return result
     result = json.loads(line, object_pairs_hook=pairs)
     if duplicates:
-        error = ValueError('duplicate field');error.invalid_queue = type(result) is dict and result.get('op') in QUEUE_OPS | NAV_OPS
+        error = ValueError('duplicate field');error.invalid_queue = type(result) is dict and result.get('op') in QUEUE_OPS | NAV_OPS | PART_OPS
         raise error
     return result
 
@@ -1496,6 +1611,9 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = backend.answer(request['agent'], request['qid'], request['decision'], request['text'])
                     elif op == 'verdict':
                         result = backend.verdict(request['agent'], request['generation'], request['decision'], request['comment'])
+                    elif op == 'participation_overview':result = backend.participation_overview()
+                    elif op == 'session_questions':result = backend.session_questions(request['project'], request['sid'])
+                    elif op == 'session_question_answer':result = backend.session_question_answer(request['project'],request['sid'],request['epoch'],request['interaction_id'],request['action_id'],request['answers'])
                     elif op == 'session_pins':result = backend.session_pins(request['principal'])
                     elif op == 'session_pin':result = backend.session_pin(request['principal'], request['project'], request['sid'])
                     elif op == 'session_unpin':result = backend.session_unpin(request['principal'], request['pin_id'])
@@ -1584,7 +1702,7 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = {'error': 'unsupported'}
                     elif (set(request) != fields[request['op']] and not (
                             request['op'] in ('session_send', 'session_enqueue') and set(request) == fields[request['op']] | {'selection'})):
-                        result = {'error': 'unavailable' if live or bus else 'invalid_request' if request['op'] in QUEUE_OPS | NAV_OPS | {'session_project_summary'} else 'invalid_or_stale'}
+                        result = {'error': 'unavailable' if live or bus else 'invalid_request' if request['op'] in QUEUE_OPS | NAV_OPS | PART_OPS | {'session_project_summary'} else 'invalid_or_stale'}
                     elif request['op'] in NAV_OPS and request.get('principal', 'owner') != 'owner':
                         result = {'error': 'forbidden'}
                     elif request['op'] in SESSION_FIELDS and not _valid_session(request):
@@ -1683,6 +1801,16 @@ class SocketBackend:
         if request['op'] == 'session_history':
             return history_result(result)
         return _queue_boundary(request, result)
+
+    def participation_overview(self):
+        return self._session(dict(op='participation_overview'))
+
+    def session_questions(self, project, sid):
+        return self._session(dict(op='session_questions', project=project, sid=sid))
+
+    def session_question_answer(self, project, sid, epoch, interaction_id, action_id, answers):
+        return self._session(dict(op='session_question_answer',project=project,sid=sid,epoch=epoch,
+                                  interaction_id=interaction_id,action_id=action_id,answers=answers))
 
     def session_pins(self, principal):
         return self._session(dict(op='session_pins', principal=principal))

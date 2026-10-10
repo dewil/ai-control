@@ -941,6 +941,37 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
             lambda: backend.session_rename(data['project'], data['sid'], data['operation_id'], data['title']),
             data['operation_id'], True)
 
+    @app.get('/api/participation-overview')
+    async def participation_overview(request: Request):
+        from _control_web_broker import participation_result
+        return await chat_read(request, (), (), lambda _: participation_result(
+            backend.participation_overview(), 'participation_overview'), preserve_forbidden=True, owner=True)
+
+    @app.get('/api/session-questions')
+    async def session_questions(request: Request):
+        from _control_web_broker import participation_result
+        return await chat_read(request, ('project', 'sid'), (), lambda data: participation_result(
+            backend.session_questions(data['project'],data['sid']), 'session_questions'), preserve_forbidden=True, owner=True)
+
+    @app.post('/api/session-question-answer')
+    async def session_question_answer(request: Request):
+        current, failure = session(request, True)
+        if failure:return failure
+        if current.get('principal') != 'owner':return error('forbidden',403)
+        data = await body(request, limit=64*1024, strict=True)
+        from _control_web_broker import _valid_session, participation_result
+        if data is None or not _valid_session(dict(data,op='session_question_answer')) or 'op' in data:
+            return error('invalid_request',422)
+        try:
+            result = await run_in_threadpool(backend.session_question_answer,data['project'],data['sid'],
+                data['epoch'],data['interaction_id'],data['action_id'],data['answers'])
+            result = participation_result(result,'session_question_answer',data)
+        except Exception:return error('unavailable',503)
+        if 'error' in result:
+            code = result['error']
+            return error(code, {'invalid_request':422,'stale':409,'forbidden':403,'capacity':429}.get(code,503))
+        return JSONResponse(result)
+
     @app.get('/api/session-pins')
     async def session_pins(request: Request):
         from _control_web_broker import pins_result
