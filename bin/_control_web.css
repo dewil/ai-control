@@ -67,3 +67,11 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 #project-details{margin-top:8px;max-width:100%}
 #project-details-content p{margin:4px 0;overflow-wrap:anywhere}
 .android-download{max-width:48rem}.android-download section{margin-top:16px}.android-download code{overflow-wrap:anywhere}
+
+.queue-actions{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.5rem}
+.queue-transfer-overlay{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:1rem;background:rgba(0,0,0,.65)}
+.queue-transfer-dialog{box-sizing:border-box;width:100%;max-width:34rem;max-height:calc(100vh - 2rem);max-height:calc(100dvh - 2rem);overflow:auto;padding:1rem;border:1px solid var(--border,#555);border-radius:.75rem;background:var(--bg,#181818);color:var(--text,#eee)}
+.queue-transfer-dialog h2{margin-top:0}
+.queue-transfer-preview{white-space:pre-wrap;overflow-wrap:anywhere;max-height:45vh;overflow-y:auto;min-height:2rem;padding:.5rem;border:1px solid var(--border,#555)}
+.queue-recovery-item{margin:.75rem 0;padding:.75rem;border:1px solid var(--border,#555);border-radius:.5rem}
+.queue-recovery-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:18rem;overflow-y:auto}

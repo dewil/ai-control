@@ -83,9 +83,13 @@ class LiveOwnerBlind(unittest.TestCase):
         class RecordingRPC(self.module.InteractiveRPC):
             def call(inner,method,params,timeout=None):
                 timeouts.append(timeout);return super().call(method,params,timeout=timeout)
+            def call_in_generation(inner,method,params,*,transport_generation,context_generation,timeout=None):
+                timeouts.append(timeout)
+                return super().call_in_generation(method,params,transport_generation=transport_generation,
+                    context_generation=context_generation,timeout=timeout)
         rpc=RecordingRPC(socket_path,timeout=10);self.addCleanup(rpc.close)
         chat=self.module.SessionChat(rpc,lambda _:str(self.project),lambda:['demo'],str(self.root/'wire-receipts'),
-            model_context=lambda:dict(self.context))
+            model_context=rpc.model_context)
         start=time.monotonic();value=chat.live_snapshot('demo',s.SID);elapsed=time.monotonic()-start
         self.assertEqual(value,{'error':'unavailable'});self.assertGreaterEqual(elapsed,4.7);self.assertLess(elapsed,6.2)
         self.assertGreaterEqual(len(timeouts),2);self.assertTrue(all(t is not None and 0<t<=5 for t in timeouts))

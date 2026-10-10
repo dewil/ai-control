@@ -13,7 +13,7 @@ class ContextRPC(RPC):
         self.context = {
             'schema': 1, 'vendor': 'codex', 'context_kind': 'legacy_unbound',
             'context_id': 'a' * 64, 'transport_generation': 3,
-            'context_generation': 7, 'native_version': 'codex/0.160.0',
+            'context_generation': 7, 'native_version': '0.160.0',
         }
 
     def model_context(self):

@@ -133,7 +133,7 @@ class ConfiguredCacheIdentity:
         context = _plain(self.context)
         _need(set(context) == {'schema', 'vendor', 'context_kind', 'context_id',
                               'transport_generation', 'context_generation', 'native_version'}
-              and SessionChat._catalog_reason(context) is None)
+              and SessionChat._read_context_reason(context) is None)
         object.__setattr__(self, 'context', _freeze(context))
         if self.namespace is not None:
             namespace = _plain(self.namespace)
@@ -505,15 +505,20 @@ class ConfiguredSessionCreate:
         _need(os.path.isdir(root))
         return root
 
-    def _prepare(self, deadline):
+    def _prepare_read(self, deadline):
         _need(all(callable(getattr(self.rpc, name, None)) for name in
                   ('prepare_context', 'model_context', 'receipt_context', 'call_in_generation')))
         context = copy.deepcopy(self.rpc.prepare_context(timeout=deadline - time.monotonic()))
         _budget(deadline)
-        _need(SessionChat._catalog_reason(context) is None)
+        _need(SessionChat._read_context_reason(context) is None)
         _need(self.rpc.receipt_context() == {key: context[key] for key in
               ('schema', 'vendor', 'context_kind', 'context_id')}, 'stale')
         self._unchanged(context, deadline)
+        return context
+
+    def _prepare(self, deadline):
+        context = self._prepare_read(deadline)
+        _need(SessionChat._catalog_reason(context) is None)
         return context
 
     def _unchanged(self, context, deadline):
@@ -718,7 +723,7 @@ class ConfiguredSessionCreate:
     @_safe
     def cache_identity(self, *, deadline=None):
         deadline = self._deadline(deadline)
-        context = self._prepare(deadline)
+        context = self._prepare_read(deadline)
         with self.store.locked(deadline, create=False) as base:
             namespace = None
             if base is not None:
@@ -738,7 +743,7 @@ class ConfiguredSessionCreate:
     def overlay(self, project, *, deadline=None):
         deadline = self._deadline(deadline)
         root = self._root(project, deadline)
-        context = self._prepare(deadline)
+        context = self._prepare_read(deadline)
         with self.store.locked(deadline) as base:
             origins = self.store.origins(base, project, context['context_id'], root, deadline)
             if not origins['records']:
@@ -773,7 +778,7 @@ class ConfiguredSessionCreate:
     def _loaded_origin(self, project, sid, deadline, require_loaded=False):
         _need(valid_uuid(sid), 'invalid_request')
         root = self._root(project, deadline)
-        context = self._prepare(deadline)
+        context = self._prepare_read(deadline)
         with self.store.locked(deadline) as base:
             origin = self.store.origin_lookup(base, context['context_id'], root, sid, deadline)
             if origin is None:

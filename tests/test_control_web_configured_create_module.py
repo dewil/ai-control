@@ -485,7 +485,8 @@ class ConfiguredTransportContract(unittest.TestCase):
         existing_methods = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list',
                             'thread/resume', 'turn/start', 'model/list', 'thread/name/set'}
         self.assertEqual(set(InteractiveRPC.METHODS), existing_methods | {
-            'thread/start', 'thread/loaded/list', 'thread/items/list'})
+            'thread/start', 'thread/loaded/list', 'thread/items/list',
+            'thread/queue/list', 'thread/queue/add', 'thread/queue/delete', 'turn/steer'})
         for unsupported in ('account/read', 'config/read'):
             with self.assertRaises(ValueError):
                 rpc.call(unsupported, {}, timeout=1)

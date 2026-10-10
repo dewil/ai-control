@@ -23,10 +23,15 @@ HISTORY_LIMIT = 96 * 1024
 RECEIPT_LIMIT = 10000
 NAMESPACE_ENTRY_LIMIT = 10002
 SUPPORTED_NATIVE_VERSIONS = ('0.160.0', '0.161.0')
+READ_METHODS = frozenset({'thread/list', 'thread/read', 'thread/turns/list', 'thread/items/list', 'thread/loaded/list'})
+VERSION_TOKEN = r'[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(?:-[A-Za-z0-9][A-Za-z0-9.-]{0,31})?'
 
 
 class RPCRejected(RuntimeError):
     """Validated server error; does not prove a message was never accepted."""
+    def __init__(self, message, rpc_code=None):
+        super().__init__(message)
+        self.rpc_code = rpc_code
 
 
 class _DomainError(Exception):
@@ -88,8 +93,13 @@ def _operation(method):
     @functools.wraps(method)
     def bounded(self, *args, **kwargs):
         self._local.deadline = time.monotonic() + 55
+        self._local.read_context = None
         try:
-            return method(self, *args, **kwargs)
+            result = method(self, *args, **kwargs)
+            capture = self._local.read_context
+            if capture is not None and method.__name__ not in ('send', 'enqueue', 'cancel_queued', 'send_queued_now', 'rename'):
+                _need(self._catalog_context() == capture, 'stale')
+            return result
         except _DomainError as error:
             return {'error': error.code}
         except Exception:
@@ -98,7 +108,7 @@ def _operation(method):
 
 
 class _Receipts:
-    """Digest-only records, sealed by canonical root/thread namespace."""
+    """Private immutable receipts and explicit snapshot recovery per root/thread."""
     def __init__(self, path):
         self.path = os.path.abspath(path)
 
@@ -230,17 +240,52 @@ class _Receipts:
             return None
         try:
             self._check(fd, deadline)
-            _need(os.fstat(fd).st_size <= 4096)
+            _need(os.fstat(fd).st_size <= 128 * 1024)
             _budget(deadline)
             with os.fdopen(fd, 'rb', closefd=False) as stream:
-                data = stream.read(4097)
+                data = stream.read(128 * 1024 + 1)
                 _budget(deadline)
-                _need(len(data) <= 4096)
+                _need(len(data) <= 128 * 1024)
                 record = json.loads(data, object_pairs_hook=_pairs)
             _budget(deadline)
             _need(type(record) is dict)
+            _need(record.get('schema') == 4 or len(data) <= 4096)
             fields = {'root', 'sid', 'message_id', 'digest', 'status', 'turn_id', 'created'}
-            if 'schema' in record:
+            if record.get('schema') == 4:
+                _need(set(record) == fields | {'schema', 'context_id', 'kind', 'queued_submission_id',
+                      'reason', 'expected_turn_id', 'client_id', 'snapshot_text', 'phase'}
+                      and type(record['schema']) is int and record['kind'] == 'queue_transfer'
+                      and type(record['context_id']) is str and re.fullmatch('[0-9a-f]{64}', record['context_id'])
+                      and record['status'] in ('held', 'accepted', 'changed', 'delivery_unknown')
+                      and record['reason'] in (None, 'target_changed', 'unavailable', 'conflict')
+                      and record['phase'] in ('intent', 'held', 'steer_reserved', 'terminal')
+                      and all(_identity(record[key]) for key in ('queued_submission_id', 'expected_turn_id', 'client_id')))
+                if context_id is not None:
+                    _need(record['context_id'] == context_id, 'invalid_request')
+                payload = record['snapshot_text']
+                terminal = record['status'] in ('accepted', 'changed')
+                _need((payload is None and record['phase'] == 'terminal') if terminal else
+                      (type(payload) is str and 0 < len(payload) <= 16000 and bool(payload.strip())
+                       and record['phase'] != 'terminal'))
+                if payload is not None:
+                    payload.encode('utf-8')
+                    _need(record['digest'] == SessionChat._queue_digest(record['context_id'], root, sid,
+                        'queue_transfer', [record['queued_submission_id'], payload, record['expected_turn_id']]))
+            elif record.get('schema') == 3:
+                _need(set(record) == fields | {'schema', 'context_id', 'kind',
+                      'queued_submission_id', 'reason'} and type(record['schema']) is int
+                      and record['kind'] in ('queue_enqueue', 'queue_cancel')
+                      and type(record['context_id']) is str
+                      and re.fullmatch('[0-9a-f]{64}', record['context_id'])
+                      and (record['queued_submission_id'] is None or _identity(record['queued_submission_id']))
+                      and record['reason'] in (None, 'conflict', 'unavailable', 'stale', 'unsupported_queue'))
+                if context_id is not None:
+                    _need(record['context_id'] == context_id, 'invalid_request')
+                _need(record['status'] in (('queued', 'accepted', 'delivery_unknown')
+                      if record['kind'] == 'queue_enqueue' else ('cancelled', 'changed', 'delivery_unknown')))
+                _need(record['kind'] != 'queue_cancel' or _identity(record['queued_submission_id']))
+                _need(record['status'] != 'queued' or _identity(record['queued_submission_id']))
+            elif 'schema' in record:
                 _need(set(record) == fields | {'schema', 'context_id', 'selection'}
                       and type(record['schema']) is int and record['schema'] == 2)
                 _need(type(record['context_id']) is str
@@ -253,7 +298,7 @@ class _Receipts:
                 _need(set(record) == fields)
             _need(record['root'] == root and record['sid'] == sid and record['message_id'] == mid)
             _need(type(record['digest']) is str and re.fullmatch('[0-9a-f]{64}', record['digest']))
-            _need(record['status'] in ('accepted', 'delivery_unknown', 'rejected'))
+            _need(record.get('schema') in (3, 4) or record['status'] in ('accepted', 'delivery_unknown', 'rejected'))
             _need(record['turn_id'] is None or _identity(record['turn_id']))
             _need(record['status'] != 'accepted' or _identity(record['turn_id']))
             _need(type(record['created']) is int and record['created'] > 0)
@@ -264,7 +309,7 @@ class _Receipts:
     def write(self, ns, record, deadline):
         _budget(deadline)
         data = _json(record)
-        _need(len(data) <= 4096)
+        _need(len(data) <= (128 * 1024 if record.get('schema') == 4 else 4096))
         temp = '.tmp-' + uuid.uuid4().hex
         fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=ns)
         try:
@@ -288,6 +333,13 @@ class _Receipts:
 
     @staticmethod
     def result(record):
+        if record.get('schema') == 4:
+            return {key: record[key] for key in ('status', 'message_id', 'queued_submission_id', 'turn_id', 'reason')}
+        if record.get('schema') == 3 and record['status'] != 'accepted':
+            result = {key: record[key] for key in ('status', 'message_id', 'queued_submission_id')}
+            if record['reason'] is not None:
+                result['reason'] = record['reason']
+            return result
         return {key: record[key] for key in ('status', 'message_id', 'turn_id')}
 
     def names(self, ns, deadline, reserve=False):
@@ -323,9 +375,14 @@ class _Receipts:
         records = [self.read(ns, root, sid, mid, deadline, context_id) for mid in self.names(ns, deadline)]
         _budget(deadline)
         _need(all(record is not None for record in records))
+        # Queue rows have their own native projection; cancellation actions are
+        # not outgoing chat messages. Keep the existing history receipt schema.
+        records = [record for record in records if record.get('kind') not in ('queue_cancel', 'queue_transfer')
+                   and record['status'] != 'queued']
         records.sort(key=lambda record: (record['created'], record['message_id']), reverse=True)
         _budget(deadline)
-        return [self.result(record) for record in records[:8]]
+        return [{key: record[key] for key in ('status', 'message_id', 'turn_id')}
+                for record in records[:8]]
 
 
 class RenameStore(_Receipts):
@@ -523,6 +580,7 @@ class SessionChat:
         self._model_clock = model_clock or time.monotonic
         self._model_lock = threading.Lock()
         self._model_cache = OrderedDict()
+        self._history_observation = None
 
     def _configured_call(self, method, *args):
         self._remaining()
@@ -542,7 +600,8 @@ class SessionChat:
         context, namespace = dict(identity.context), identity.namespace
         _need(set(context) == {'schema', 'vendor', 'context_kind', 'context_id',
                               'transport_generation', 'context_generation', 'native_version'}
-              and self._catalog_reason(context) is None)
+              and self._read_context_reason(context) is None)
+        self._capture_read_context(context)
         if namespace is not None:
             namespace = dict(namespace)
             _need(set(namespace) == {'dev', 'ino', 'mtime_ns', 'ctime_ns'}
@@ -561,7 +620,7 @@ class SessionChat:
         _need(record.get('status') == 'accepted' and record.get('project') == project
               and record.get('root') == root and record.get('sid') == sid
               and valid_uuid(record.get('operation_id'))
-              and self._catalog_reason(context) is None
+              and self._read_context_reason(context) is None
               and record.get('context_id') == context.get('context_id')
               and context == self._catalog_context(), 'stale')
         _need(set(session) == {'sid', 'project', 'vendor', 'context_mode', 'title'}
@@ -600,8 +659,24 @@ class SessionChat:
         _need(value > 0)
         return value
 
+    def _capture_read_context(self, context=None):
+        prepare = getattr(self.rpc, 'prepare_context', None)
+        if not callable(prepare):
+            return None
+        capture = getattr(self._local, 'read_context', None)
+        if capture is None:
+            capture = copy.deepcopy(context if context is not None else prepare(timeout=self._remaining()))
+            _need(self._read_context_reason(capture) is None)
+            self._local.read_context = capture
+        _need(context is None or context == capture, 'stale')
+        _need(self._catalog_context() == capture, 'stale')
+        return capture
+
     def _rpc(self, method, params):
         remaining = self._remaining()
+        capture = self._capture_read_context() if method in READ_METHODS else None
+        if capture is not None:
+            return self._send_fenced(method, params, capture)
         result = (self.rpc.call(method, params, timeout=remaining)
                   if isinstance(self.rpc, InteractiveRPC) else self.rpc(method, params))
         self._remaining()
@@ -652,7 +727,7 @@ class SessionChat:
     def _receipt_context(self):
         fields = ('schema', 'vendor', 'context_kind', 'context_id')
         def model_snapshot(context):
-            _need(self._catalog_reason(context) != 'unverified_context'
+            _need(self._read_context_reason(context) is None
                   and context['vendor'] == 'codex'
                   and (context['native_version'] is None or type(context['native_version']) is str))
             return {key: context[key] for key in fields}
@@ -710,7 +785,7 @@ class SessionChat:
         return result
 
     @staticmethod
-    def _catalog_reason(context):
+    def _read_context_reason(context):
         if (type(context) is not dict or set(context) != {
                 'schema', 'vendor', 'context_kind', 'context_id',
                 'transport_generation', 'context_generation', 'native_version'}
@@ -727,9 +802,19 @@ class SessionChat:
         # A metadata binding does not authorize shared legacy transport discovery.
         if context['context_kind'] != 'legacy_unbound':
             return 'unverified_context'
-        if context['native_version'] not in SUPPORTED_NATIVE_VERSIONS:
-            return 'unsupported_capability'
+        version = context['native_version']
+        if version is not None and (type(version) is not str or len(version) > 64 or re.fullmatch(VERSION_TOKEN, version) is None):
+            return 'unverified_context'
         return None
+
+    @staticmethod
+    def _catalog_reason(context):
+        reason = SessionChat._read_context_reason(context)
+        if reason is not None:
+            return reason
+        return None if context['native_version'] in SUPPORTED_NATIVE_VERSIONS else 'unsupported_capability'
+
+
 
     @staticmethod
     def _catalog_unavailable(context, reason):
@@ -1197,7 +1282,7 @@ class SessionChat:
     def _settings_capture(self):
         try:
             context = self._catalog_context()
-            if self._catalog_reason(context) is not None:
+            if self._read_context_reason(context) is not None:
                 return None
             started = self._model_clock()
             if type(started) not in (int, float) or not math.isfinite(started):
@@ -1237,7 +1322,9 @@ class SessionChat:
     def live_snapshot(self, project, sid):
         # Reuse the complete latest projection with one aggregate native budget.
         self._local.deadline = time.monotonic() + 5
+        self._local.read_context = None
         try:
+            self._capture_read_context()
             context = self._receipt_context()
             native = self._catalog_context() if self._has_model_context or self._explicit_model_context else None
             root = self._root(project)
@@ -1255,7 +1342,9 @@ class SessionChat:
 
     def _history(self, project, sid, cursor=None):
         _need(valid_uuid(sid) and valid_cursor(cursor), 'invalid_request')
+        self._capture_read_context()
         context = self._receipt_context()
+        native = self._catalog_context()
         root = self._root(project)
         capture = self._settings_capture() if cursor is None else None
         thread = self._proof(root, sid)
@@ -1411,6 +1500,8 @@ class SessionChat:
         encoded_result = _json(result)
         self._remaining()
         _need(len(encoded_result) <= HISTORY_LIMIT)
+        _need(self._root(project) == root and self._catalog_context() == native, 'stale')
+        self._history_observation = (root, sid, copy.deepcopy(native))
         return result
 
     @staticmethod
@@ -1534,6 +1625,430 @@ class SessionChat:
             return self._rename_result(record, name)
 
     @_operation
+    def capabilities(self, project, sid):
+        _need(valid_uuid(sid), 'invalid_request')
+        root = self._root(project)
+        self._proof(root, sid)
+        context = self._catalog_context()
+        _need(self._read_context_reason(context) is None)
+        self._capture_read_context(context)
+        version = context['native_version']
+        reviewed = version in SUPPORTED_NATIVE_VERSIONS
+        operations = {'sessions_read': dict(supported=True, reason=None),
+                      'history_read': dict(supported=True, reason=None) if self._history_observation == (root, sid, context) else dict(supported=None, reason='not_observed')}
+        for name in ('model_selection', 'send', 'create', 'rename', 'queue'):
+            operations[name] = (dict(supported=False, reason='unsupported_native_version') if not reviewed else
+                dict(supported=False, reason='unsupported_operation') if name == 'queue' and version == '0.160.0' else
+                dict(supported=None, reason='not_observed') if name == 'queue' else dict(supported=True, reason=None))
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        return dict(schema=1, native_version=version, version_source='initialize_reported',
+                    version_review='unknown' if version is None else 'reviewed' if reviewed else 'unreviewed',
+                    read_status='compatible', operations=operations)
+
+    @staticmethod
+    def _queue_unavailable():
+        return dict(schema=1, vendor='codex', supported=False, reason='unsupported_queue',
+                    rows=[], partial=False, send_now_supported=False, active_turn_id=None,
+                    send_now_reason='unsupported_queue', recovery=[])
+
+    def _queue_scope(self, project, sid):
+        _need(valid_uuid(sid), 'invalid_request')
+        root = self._root(project)
+        thread = self._proof(root, sid)
+        context = self._catalog_context()
+        reason = self._catalog_reason(context)
+        if reason == 'unverified_context':
+            _need(False)
+        if reason or context['native_version'] != '0.161.0' or not callable(getattr(self.rpc, 'call_in_generation', None)):
+            return root, thread, None
+        thread = self._queue_proof(project, root, sid, context)
+        return root, thread, context
+
+    def _queue_proof(self, project, root, sid, context, method='thread/read'):
+        params = dict(threadId=sid)
+        params['excludeTurns' if method == 'thread/resume' else 'includeTurns'] = method == 'thread/resume'
+        thread = self._send_fenced(method, params, context).get('thread')
+        _need(type(thread) is dict and thread.get('id') == sid and type(thread.get('cwd')) is str
+              and os.path.isabs(thread['cwd']) and canonical(thread['cwd']) == root, 'stale')
+        status = thread.get('status')
+        _need(type(status) is dict and status.get('type') in ('idle', 'active', 'notLoaded', 'systemError'))
+        if status['type'] == 'active':
+            _need(type(status.get('activeFlags')) is list and all(type(flag) is str for flag in status['activeFlags']))
+        _need(method != 'thread/resume' or status['type'] != 'notLoaded', 'stale')
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        return thread
+
+    @staticmethod
+    def _queue_text(row):
+        from _control_web_broker import valid_queue_id
+        _need(type(row) is dict and set(row) == {'id', 'clientUserMessageId', 'input'}
+              and valid_queue_id(row['id']) and valid_queue_id(row['clientUserMessageId'])
+              and type(row['input']) is list and 0 < len(row['input']) <= 256)
+        texts = []
+        for part in row['input']:
+            _need(type(part) is dict and set(part) in ({'type', 'text'}, {'type', 'text', 'text_elements'})
+                  and part['type'] == 'text' and type(part['text']) is str
+                  and part.get('text_elements', []) == [])
+            texts.append(part['text'])
+        text = '\n'.join(texts)
+        _need(0 < len(text) <= 16000)
+        text.encode('utf-8')
+        return text
+
+    @staticmethod
+    def _queue_digest(context_id, root, sid, kind, value):
+        return hashlib.sha256(_json(dict(context_id=context_id, root=root, sid=sid,
+                                         kind=kind, value=value))).hexdigest()
+
+    def _queue_listing(self, project, root, sid, context):
+        from _control_web_broker import redact, queue_result
+        rows, texts, ids, clients, cursors = [], {}, set(), set(), set()
+        cursor, partial, total = None, False, 0
+        for index in range(4):
+            params = dict(threadId=sid, limit=64)
+            if cursor is not None:
+                params['cursor'] = cursor
+            try:
+                page = self._send_fenced('thread/queue/list', params, context)
+            except RPCRejected as error:
+                if error.rpc_code == -32601:
+                    raise _DomainError('unsupported_queue') from None
+                raise
+            _need(set(page) in ({'data'}, {'data', 'nextCursor'})
+                  and type(page['data']) is list and len(page['data']) <= 64
+                  and valid_cursor(page.get('nextCursor')))
+            for row in page['data']:
+                text = self._queue_text(row)
+                _need(row['id'] not in ids and row['clientUserMessageId'] not in clients, 'conflict')
+                ids.add(row['id']); clients.add(row['clientUserMessageId'])
+                total += len(text.encode('utf-8'))
+                _need(total <= 4 * 1024 * 1024)
+                texts[row['id']] = text
+                rows.append(dict(queued_submission_id=row['id'], message_id=row['clientUserMessageId'],
+                                 text=redact(text), state='queued'))
+            cursor = page.get('nextCursor')
+            if cursor is None:
+                break
+            _need(cursor not in cursors, 'conflict'); cursors.add(cursor)
+            partial = index == 3
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        result = queue_result(dict(schema=1, vendor='codex', supported=True, reason=None,
+                     rows=rows, partial=partial, send_now_supported=False))
+        _need('error' not in result)
+        return result, texts
+
+    @_operation
+    def queue(self, project, sid):
+        root, _, context = self._queue_scope(project, sid)
+        if context is None:
+            return self._queue_unavailable()
+        try:
+            result = self._queue_listing(project, root, sid, context)[0]
+            with self.receipts.namespace(root, sid, self._local.deadline) as ns:
+                records = self._transfer_records(ns, root, sid)
+                recovery = []
+                for record in records:
+                    if record.get('context_id') != context['context_id']:
+                        continue
+                    try:
+                        self._transfer_reconcile(ns, record, project, root, sid, context)
+                    except Exception:
+                        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+                    if record['status'] in ('held', 'delivery_unknown'):
+                        recovery.append(dict(action_id=record['message_id'], queued_submission_id=record['queued_submission_id'],
+                            text=record['snapshot_text'], status=record['status'], reason=record['reason']))
+            target_reason = 'inactive_turn'
+            try:
+                target = self._queue_active_turn(project, root, sid, context)
+            except Exception:
+                _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+                target, target_reason = None, 'unavailable'
+            result.update(active_turn_id=target, send_now_supported=target is not None,
+                send_now_reason=None if target else target_reason, recovery=recovery)
+            from _control_web_broker import queue_result
+            _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+            return queue_result(result)
+        except RPCRejected as error:
+            if error.rpc_code == -32601:
+                return self._queue_unavailable()
+            raise
+        except _DomainError as error:
+            if error.code == 'unsupported_queue':
+                return self._queue_unavailable()
+            if error.code == 'conflict':
+                raise _DomainError('unavailable') from None
+            raise
+
+    def _queue_active_turn(self, project, root, sid, context):
+        thread = self._queue_proof(project, root, sid, context)
+        if thread['status']['type'] != 'active':
+            return None
+        page = self._page(sid, None)
+        active = [turn['id'] for turn in page['data'] if turn['status'] == 'inProgress']
+        _need(len(active) <= 1 and len({turn['id'] for turn in page['data']}) == len(page['data']))
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        return active[0] if active else None
+
+    def _transfer_records(self, ns, root, sid):
+        records = [self.receipts.read(ns, root, sid, mid, self._local.deadline)
+                   for mid in self.receipts.names(ns, self._local.deadline)]
+        _need(all(record is not None for record in records))
+        return [record for record in records if record.get('kind') == 'queue_transfer']
+
+    def _transfer_finish(self, ns, record, status, turn_id=None, reason=None):
+        committed = dict(record, status=status, turn_id=turn_id, reason=reason)
+        if status in ('accepted', 'changed'):
+            committed.update(snapshot_text=None, phase='terminal')
+        self.receipts.write(ns, committed, self._local.deadline)
+        record.update(committed)
+        # Preserve the original Control enqueue UUID's non-replayable receipt.
+        if status == 'accepted' and valid_uuid(record['client_id']):
+            original = self.receipts.read(ns, record['root'], record['sid'], record['client_id'],
+                                         self._local.deadline, record['context_id'])
+            if (original is not None and original.get('kind') == 'queue_enqueue'
+                    and original['queued_submission_id'] == record['queued_submission_id']):
+                original.update(status='accepted', turn_id=turn_id, reason=None)
+                self.receipts.write(ns, original, self._local.deadline)
+        return self.receipts.result(record)
+
+    def _transfer_reconcile(self, ns, record, project, root, sid, context):
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        if record['status'] in ('accepted', 'changed') or record['phase'] != 'steer_reserved':
+            return self.receipts.result(record)
+        cursor, seen, matches, conflict = None, set(), [], False
+        for _ in range(8):
+            page = self._page(sid, cursor)
+            for turn in page['data']:
+                for item in turn['items']:
+                    if item['type'] == 'userMessage' and item.get('clientId') == record['message_id']:
+                        parts = item['content']
+                        text = '\n'.join(part['text'] for part in parts if part['type'] == 'text')
+                        if (turn['id'] != record['expected_turn_id'] or any(part['type'] != 'text' for part in parts)
+                                or text != record['snapshot_text']):
+                            conflict = True
+                        else:
+                            matches.append(turn['id'])
+            cursor = page['nextCursor']
+            if cursor is None:
+                break
+            _need(cursor not in seen);seen.add(cursor)
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        if len(matches) == 1 and not conflict:
+            return self._transfer_finish(ns, record, 'accepted', matches[0])
+        if conflict or len(matches) > 1:
+            return self._transfer_finish(ns, record, 'delivery_unknown', reason='conflict')
+        # Neither absence nor a native rejection authorizes another mutation.
+        return self.receipts.result(record)
+
+    @_operation
+    def send_queued_now(self, project, sid, queued_submission_id, action_id, snapshot_text, expected_turn_id):
+        from _control_web_broker import valid_queue_id
+        _need(valid_uuid(action_id) and valid_queue_id(queued_submission_id) and valid_queue_id(expected_turn_id)
+              and type(snapshot_text) is str and 0 < len(snapshot_text) <= 16000 and bool(snapshot_text.strip()), 'invalid_request')
+        snapshot_text.encode('utf-8')
+        root, _, context = self._queue_scope(project, sid)
+        _need(context is not None, 'unsupported_queue')
+        digest = self._queue_digest(context['context_id'], root, sid, 'queue_transfer',
+                                    [queued_submission_id, snapshot_text, expected_turn_id])
+        with self.receipts.namespace(root, sid, self._local.deadline, create=True) as ns:
+            records = self._transfer_records(ns, root, sid)
+            record = self.receipts.read(ns, root, sid, action_id, self._local.deadline, context['context_id'])
+            if record is not None:
+                _need(record.get('kind') == 'queue_transfer' and record['digest'] == digest, 'invalid_request')
+                return self._transfer_reconcile(ns, record, project, root, sid, context)
+            retained = [row for row in records if row['snapshot_text'] is not None]
+            _need(len(retained) < 64 and sum(len(row['snapshot_text'].encode('utf-8')) for row in retained)
+                  + len(snapshot_text.encode('utf-8')) <= 4 * 1024 * 1024)
+            _need(len(self.receipts.names(ns, self._local.deadline, reserve=True)) < RECEIPT_LIMIT)
+            listing, native_texts = self._queue_listing(project, root, sid, context)
+            row = next((row for row in listing['rows'] if row['queued_submission_id'] == queued_submission_id), None)
+            _need(row is not None, 'stale')
+            if valid_uuid(row['message_id']):
+                original = self.receipts.read(ns, root, sid, row['message_id'], self._local.deadline, context['context_id'])
+                if (original is not None and original.get('kind') == 'queue_enqueue'
+                        and original['queued_submission_id'] is None and not listing['partial']
+                        and original['digest'] == self._queue_digest(context['context_id'], root, sid,
+                            'queue_enqueue', native_texts[queued_submission_id])):
+                    original['queued_submission_id'] = queued_submission_id
+                    self.receipts.write(ns, original, self._local.deadline)
+            record = dict(schema=4, kind='queue_transfer', context_id=context['context_id'], root=root, sid=sid,
+                message_id=action_id, digest=digest, status='delivery_unknown', turn_id=None, created=time.time_ns(),
+                queued_submission_id=queued_submission_id, expected_turn_id=expected_turn_id, client_id=row['message_id'],
+                snapshot_text=snapshot_text, phase='intent', reason=None)
+            _need(sum(len(_json(item)) for item in retained) + len(_json(record)) <= 4 * 1024 * 1024)
+            # A known changed target is terminal, with no native deletion or payload retention.
+            if self._queue_active_turn(project, root, sid, context) != expected_turn_id:
+                return self._transfer_finish(ns, record, 'changed', reason='target_changed')
+            self.receipts.write(ns, record, self._local.deadline)
+            try:
+                response = self._send_fenced('thread/queue/delete',
+                    dict(threadId=sid, queuedSubmissionId=queued_submission_id), context)
+                _need(set(response) == {'deleted'} and type(response['deleted']) is bool)
+                if not response['deleted']:
+                    return self._transfer_finish(ns, record, 'changed')
+                record.update(status='held', phase='held')
+                self.receipts.write(ns, record, self._local.deadline)
+            except Exception:
+                return self.receipts.result(record if record['phase'] == 'intent' else
+                    dict(record, status='delivery_unknown'))
+            try:
+                if self._queue_active_turn(project, root, sid, context) != expected_turn_id:
+                    return self._transfer_finish(ns, record, 'held', reason='target_changed')
+            except Exception:
+                return self._transfer_finish(ns, record, 'held', reason='unavailable')
+            # This reservation permanently forbids replay after a crash/ACK loss.
+            record.update(status='delivery_unknown', phase='steer_reserved')
+            self.receipts.write(ns, record, self._local.deadline)
+            try:
+                response = self._send_fenced('turn/steer', dict(threadId=sid, expectedTurnId=expected_turn_id,
+                    input=[dict(type='text', text=snapshot_text)], clientUserMessageId=action_id), context)
+                _need(set(response) == {'turnId'} and response['turnId'] == expected_turn_id)
+                return self._transfer_finish(ns, record, 'accepted', expected_turn_id)
+            except Exception:
+                return self.receipts.result(record)
+
+    def _queue_record(self, context, root, sid, mid, kind, value):
+        return dict(schema=3, kind=kind, context_id=context['context_id'], root=root, sid=sid,
+                    message_id=mid, digest=self._queue_digest(context['context_id'], root, sid, kind, value),
+                    status='delivery_unknown', turn_id=None, created=time.time_ns(), reason=None,
+                    queued_submission_id=value if kind == 'queue_cancel' else None)
+
+    def _queue_reconcile(self, ns, record, project, root, sid, context):
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        if record['status'] == 'accepted':
+            return self.receipts.result(record)
+        for mid in self.receipts.names(ns, self._local.deadline):
+            cancel = self.receipts.read(ns, root, sid, mid, self._local.deadline)
+            if (cancel.get('kind') == 'queue_cancel' and cancel['context_id'] == context['context_id']
+                    and cancel['status'] == 'cancelled' and record['queued_submission_id'] is not None
+                    and cancel['queued_submission_id'] == record['queued_submission_id']):
+                _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+                return dict(status='cancelled', message_id=record['message_id'], queued_submission_id=record['queued_submission_id'])
+        for transfer in self._transfer_records(ns, root, sid):
+            if transfer['context_id'] == context['context_id'] and transfer['client_id'] == record['message_id'] and transfer['queued_submission_id'] == record['queued_submission_id'] and transfer['status'] != 'changed':
+                self._transfer_reconcile(ns, transfer, project, root, sid, context)
+                if transfer['status'] == 'accepted':
+                    record.update(status='accepted', turn_id=transfer['turn_id'], reason=None)
+                    self.receipts.write(ns, record, self._local.deadline)
+                    return self.receipts.result(record)
+                if transfer['status'] == 'held' and transfer['phase'] == 'held':
+                    return dict(status='held', message_id=record['message_id'], queued_submission_id=record['queued_submission_id'], turn_id=None, reason=transfer['reason'])
+                return dict(status='delivery_unknown', message_id=record['message_id'], queued_submission_id=record['queued_submission_id'])
+        matches, conflict, cursor, seen = [], False, None, set()
+        for _ in range(8):
+            _need(self._catalog_context() == context, 'stale')
+            page = self._page(sid, cursor)
+            _need(self._catalog_context() == context, 'stale')
+            for turn in page['data']:
+                for item in turn['items']:
+                    if item['type'] == 'userMessage' and item.get('clientId') == record['message_id']:
+                        parts = item['content']
+                        text = '\n'.join(part['text'] for part in parts if part['type'] == 'text')
+                        digest = self._queue_digest(record['context_id'], root, sid, 'queue_enqueue', text)
+                        if any(part['type'] != 'text' for part in parts) or digest != record['digest']:
+                            conflict = True
+                        else:
+                            matches.append(turn['id'])
+            cursor = page['nextCursor']
+            if cursor is None:
+                break
+            _need(cursor not in seen);seen.add(cursor)
+        if len(matches) == 1 and not conflict:
+            record.update(status='accepted', turn_id=matches[0], reason=None)
+        elif matches or conflict:
+            record.update(status='delivery_unknown', reason='conflict')
+        else:
+            record.update(status='delivery_unknown', reason=None)
+            try:
+                _need(context['native_version'] == '0.161.0', 'unsupported_queue')
+                listing, texts = self._queue_listing(project, root, sid, context)
+                rows = [row for row in listing['rows'] if row['message_id'] == record['message_id']]
+                if rows:
+                    row = rows[0]
+                    digest = self._queue_digest(record['context_id'], root, sid, 'queue_enqueue', texts[row['queued_submission_id']])
+                    if digest != record['digest']:
+                        record.update(status='delivery_unknown', reason='conflict')
+                    else:
+                        record.update(status='queued', queued_submission_id=row['queued_submission_id'], reason=None)
+            except _DomainError as error:
+                if error.code == 'stale':
+                    raise
+                if error.code == 'conflict':
+                    record.update(status='delivery_unknown', reason='conflict')
+                else:
+                    record['reason'] = error.code if error.code == 'unsupported_queue' else 'unavailable'
+            except Exception:
+                record['reason'] = 'unavailable'
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        self.receipts.write(ns, record, self._local.deadline)
+        return self.receipts.result(record)
+
+    @_operation
+    def enqueue(self, project, sid, message_id, text, selection=None):
+        _need(valid_uuid(message_id) and type(text) is str and 0 < len(text) <= 16000 and bool(text.strip()), 'invalid_request')
+        text.encode('utf-8')
+        _need(selection is None, 'queue_unsupported_selection')
+        root, thread, context = self._queue_scope(project, sid)
+        _need(context is not None, 'unsupported_queue')
+        with self.receipts.namespace(root, sid, self._local.deadline, create=True) as ns:
+            record = self.receipts.read(ns, root, sid, message_id, self._local.deadline, context['context_id'])
+            digest = self._queue_digest(context['context_id'], root, sid, 'queue_enqueue', text)
+            if record is not None:
+                _need(record.get('kind') == 'queue_enqueue' and record['digest'] == digest, 'invalid_request')
+                return self._queue_reconcile(ns, record, project, root, sid, context)
+            _need(len(self.receipts.names(ns, self._local.deadline, reserve=True)) < RECEIPT_LIMIT)
+            unloaded = type(thread.get('status')) is dict and thread['status'].get('type') == 'notLoaded'
+            if not unloaded:
+                try:self._queue_listing(project, root, sid, context)
+                except _DomainError as error:raise _DomainError('unavailable' if error.code == 'conflict' else error.code) from None
+            record = self._queue_record(context, root, sid, message_id, 'queue_enqueue', text)
+            self.receipts.write(ns, record, self._local.deadline)
+            try:
+                if unloaded:
+                    self._queue_proof(project, root, sid, context, 'thread/resume')
+                    self._configured_origin('loaded_origin', project, root, sid)
+                    self._queue_listing(project, root, sid, context)
+                self._queue_proof(project, root, sid, context)
+                response = self._send_fenced('thread/queue/add', dict(threadId=sid,
+                    input=[dict(type='text', text=text)], clientUserMessageId=message_id), context)
+                _need(set(response) == {'queuedSubmission'})
+                row = response['queuedSubmission'];queued_text = self._queue_text(row)
+                _need(row['clientUserMessageId'] == message_id and queued_text == text)
+                record.update(status='queued', queued_submission_id=row['id'], reason=None)
+                self.receipts.write(ns, record, self._local.deadline)
+                self._summary_revision += 1
+                return self.receipts.result(record)
+            except Exception:
+                return dict(status='delivery_unknown', message_id=message_id, queued_submission_id=None)
+
+    @_operation
+    def cancel_queued(self, project, sid, queued_submission_id, action_id):
+        _need(_identity(queued_submission_id) and valid_uuid(action_id), 'invalid_request')
+        root, _, context = self._queue_scope(project, sid)
+        _need(context is not None, 'unsupported_queue')
+        with self.receipts.namespace(root, sid, self._local.deadline, create=True) as ns:
+            record = self.receipts.read(ns, root, sid, action_id, self._local.deadline, context['context_id'])
+            digest = self._queue_digest(context['context_id'], root, sid, 'queue_cancel', queued_submission_id)
+            if record is not None:
+                _need(record.get('kind') == 'queue_cancel' and record['digest'] == digest, 'invalid_request')
+                return self.receipts.result(record)
+            try:listing, _ = self._queue_listing(project, root, sid, context)
+            except _DomainError as error:raise _DomainError('unavailable' if error.code == 'conflict' else error.code) from None
+            _need(any(row['queued_submission_id'] == queued_submission_id for row in listing['rows']), 'stale')
+            _need(len(self.receipts.names(ns, self._local.deadline, reserve=True)) < RECEIPT_LIMIT)
+            record = self._queue_record(context, root, sid, action_id, 'queue_cancel', queued_submission_id)
+            self.receipts.write(ns, record, self._local.deadline)
+            try:
+                self._queue_proof(project, root, sid, context)
+                response = self._send_fenced('thread/queue/delete', dict(threadId=sid, queuedSubmissionId=queued_submission_id), context)
+                _need(set(response) == {'deleted'} and type(response['deleted']) is bool)
+                record['status'] = 'cancelled' if response['deleted'] else 'changed'
+                self.receipts.write(ns, record, self._local.deadline)
+                return self.receipts.result(record)
+            except Exception:
+                return dict(status='delivery_unknown', message_id=action_id, queued_submission_id=queued_submission_id)
+
+    @_operation
     def send(self, project, sid, message_id, text, selection=None):
         _need(valid_uuid(sid) and valid_uuid(message_id) and type(text) is str
               and 0 < len(text) <= 16000 and bool(text.strip()), 'invalid_request')
@@ -1545,6 +2060,8 @@ class SessionChat:
             _need(model_context.get('context_id') == context['context_id'], 'stale')
         root = self._root(project)
         self._proof(root, sid)
+        if self._has_model_context or self._explicit_model_context:
+            _need(self._catalog_reason(self._catalog_context()) is None)
         _need(self._receipt_context() == context, 'stale')
         # Existing UUID lookup precedes live catalog validation: stored wire
         # mapping is the only authority for an exact replay.
@@ -1608,6 +2125,7 @@ class SessionChat:
             return self.receipts.result(record)
 
     def _send_replay(self, record, context, root, sid, text, selection):
+        _need(record.get('schema') != 3, 'invalid_request')
         if 'schema' not in record:
             _need(selection is None, 'invalid_request')
             digest = hashlib.sha256(text.encode('utf-8')).hexdigest()
@@ -1630,7 +2148,11 @@ class SessionChat:
         with self.receipts.namespace(root, sid, self._local.deadline) as ns:
             record = self.receipts.read(ns, root, sid, message_id, self._local.deadline, context['context_id'])
             _need(record is not None, 'stale')
-            if record['status'] != 'delivery_unknown':
+            if record.get('kind') == 'queue_transfer':
+                return self._transfer_reconcile(ns, record, project, root, sid, self._catalog_context())
+            if record.get('kind') == 'queue_enqueue':
+                return self._queue_reconcile(ns, record, project, root, sid, self._catalog_context())
+            if record['status'] != 'delivery_unknown' or record.get('kind') == 'queue_cancel':
                 return self.receipts.result(record)
             cursor, seen = None, set()
             for _ in range(8):
@@ -1655,7 +2177,7 @@ class SessionChat:
 
 class InteractiveRPC:
     """One receiver per connection; never responds to native server requests."""
-    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/items/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set', 'thread/start', 'thread/loaded/list'}
+    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/items/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set', 'thread/start', 'thread/loaded/list', 'thread/queue/list', 'thread/queue/add', 'thread/queue/delete', 'turn/steer'}
 
     def __init__(self, socket_path, timeout=25):
         if type(socket_path) is not str or type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 55:
@@ -1729,7 +2251,7 @@ class InteractiveRPC:
                     if ('error' in value and 'result' not in value and type(error) is dict
                             and set(error) in ({'code', 'message'}, {'code', 'message', 'data'})
                             and type(error['code']) is int and type(error['message']) is str):
-                        waiter['error'] = RPCRejected('RPC server rejected request (code ' + str(error['code']) + ')')
+                        waiter['error'] = RPCRejected('RPC server rejected request (code ' + str(error['code']) + ')', error['code'])
                     elif 'error' not in value and type(value.get('result')) is dict:
                         waiter['result'] = value['result']
                     else:
@@ -1738,12 +2260,20 @@ class InteractiveRPC:
         except Exception:
             self._fail(ws, generation)
 
+    def _method_allowed(self, method):
+        if method == 'initialize' or method in READ_METHODS:
+            return True
+        if method.startswith('thread/queue/') or method == 'turn/steer':
+            return self._native_version == '0.161.0'
+        return self._native_version in SUPPORTED_NATIVE_VERSIONS
+
     def _request(self, ws, generation, method, params, deadline, *, context_generation=None):
         waiter = {'event': threading.Event()}
         request_id = str(uuid.uuid4())
         with self._lock:
             if (self._ws is not ws or self._generation != generation or len(self._pending) >= 64
-                    or (context_generation is not None and self._context_generation != context_generation)):
+                    or (context_generation is not None and self._context_generation != context_generation)
+                    or not self._method_allowed(method)):
                 raise RuntimeError('RPC unavailable')
             self._pending[request_id] = waiter
         timer = threading.Timer(max(0, deadline - time.monotonic()), self._expire, args=(ws, generation))
@@ -1757,17 +2287,12 @@ class InteractiveRPC:
                 if time.monotonic() >= deadline:
                     raise TimeoutError('RPC deadline exceeded')
                 payload = _json({'id': request_id, 'method': method, 'params': params}).decode('utf-8')
-                if context_generation is None:
+                with self._lock:
+                    if (self._closed or self._ws is not ws or self._generation != generation
+                            or context_generation is not None and self._context_generation != context_generation
+                            or not self._method_allowed(method)):
+                        raise RuntimeError('RPC generation unavailable')
                     ws.send(payload)
-                else:
-                    # Serialize dispatch with observed context invalidation. The
-                    # deadline timer shuts down this captured socket independently.
-                    with self._lock:
-                        if (self._closed or self._ws is not ws or self._generation != generation
-                                or self._context_generation != context_generation
-                                or self._native_version not in SUPPORTED_NATIVE_VERSIONS):
-                            raise RuntimeError('RPC generation unavailable')
-                        ws.send(payload)
             finally:
                 self._send_lock.release()
             if not waiter['event'].wait(max(0, deadline - time.monotonic())):
@@ -1857,7 +2382,7 @@ class InteractiveRPC:
                         raise RuntimeError('RPC deadline exceeded')
                     ws.send('{"method":"initialized"}')
                     hint = initialized.get('userAgent')
-                    match = (re.match(r'^[\x20-\x2e\x30-\x7e]{1,128}/(0\.160\.0|0\.161\.0) \(', hint)
+                    match = (re.match(r'^[\x20-\x2e\x30-\x7e]{1,128}/(' + VERSION_TOKEN + r') \(', hint)
                              if type(hint) is str and len(hint) <= 4096 else None)
                     version = match.group(1) if match else None
                     with self._lock:
@@ -1919,7 +2444,7 @@ class InteractiveRPC:
             raise ValueError('RPC deadline refused')
         with self._lock:
             if (type(transport_generation) is not int or type(context_generation) is not int
-                    or self._closed or self._ws is None or self._native_version not in SUPPORTED_NATIVE_VERSIONS
+                    or self._closed or self._ws is None or not self._method_allowed(method)
                     or self._generation != transport_generation or self._context_generation != context_generation):
                 raise RuntimeError('RPC generation unavailable')
             ws = self._ws

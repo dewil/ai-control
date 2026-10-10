@@ -236,8 +236,10 @@ class ReceiptContextContract(unittest.TestCase):
         self.assertIsNone(self.module.SessionChat._catalog_reason(context))
         for version in ('0.159.0', '0.160.1', '0.162.0', None, [], True):
             with self.subTest(version=version):
+                # INV-CAP-01/05: malformed context differs from a valid unreviewed catalog capability.
+                reason = 'unverified_context' if version is not None and not isinstance(version, str) else 'unsupported_capability'
                 self.assertEqual(self.module.SessionChat._catalog_reason(
-                    dict(context, native_version=version)), 'unsupported_capability')
+                    dict(context, native_version=version)), reason)
 
     def test_INV_WSESS_26_plain_callable_fallback_is_store_scoped_and_exact_restart_replay_has_no_effects(self):
         cls = self.module.SessionChat
@@ -313,8 +315,9 @@ class ReceiptContextContract(unittest.TestCase):
                       'Trusted model_context injection is required for fail-closed context verification')
         claude_context = {'schema': 1, 'vendor': 'claude', 'context_kind': 'legacy_unbound',
                           'context_id': 'c' * 64, 'transport_generation': 3,
-                          'context_generation': 7, 'native_version': 'codex/0.160.0'}
+                          'context_generation': 7, 'native_version': '0.160.0'}
 
+        # Keep the version token valid so this isolates the vendor contradiction.
         # Exercise both the explicit trusted dependency and the production-default
         # rpc.model_context getter. The vendor/version contradiction must not turn
         # this into a legacy receipt namespace or fall back to a Codex send.
@@ -345,18 +348,22 @@ class ReceiptContextContract(unittest.TestCase):
                 self.assertEqual(violations, [],
                                  'Non-Codex/contradictory context must fail before any send effects')
 
-    def test_INV_WSESS_26_supported_Codex_inherit_does_not_depend_on_known_native_version(self):
-        context = {'schema': 1, 'vendor': 'codex', 'context_kind': 'legacy_unbound',
-                   'context_id': 'd' * 64, 'transport_generation': 3,
-                   'context_generation': 7, 'native_version': 'codex/future-synthetic'}
-        rpc = ContextGetterRPC(self.project, context)
-        chat = self.chat(rpc)
-        result = chat.send('demo', SID, MID, TEXT)
-        self.assertEqual(result, {'status': 'accepted', 'message_id': MID, 'turn_id': TURN},
-                         'Ordinary Codex inherit remains available when compatibility version is unknown')
-        self.assertNotIn('model/list', rpc.methods(), 'Inherit must not probe model catalog')
-        self.assertEqual(rpc.methods().count('thread/resume'), 1)
-        self.assertEqual(rpc.methods().count('turn/start'), 1)
+    def test_INV_CAP_03_unknown_or_malformed_Codex_version_refuses_inherit_without_effects(self):
+        # INV-CAP-03 supersedes the old unknown-version inherit mutation exemption.
+        # Valid unknown/null versions permit compatible reads, never an unreviewed send.
+        for version in ('0.999.0', None, 'codex/future-synthetic'):
+            with self.subTest(native_version=version):
+                context = {'schema': 1, 'vendor': 'codex', 'context_kind': 'legacy_unbound',
+                           'context_id': 'd' * 64, 'transport_generation': 3,
+                           'context_generation': 7, 'native_version': version}
+                rpc = ContextGetterRPC(self.project, context)
+                chat = self.chat(rpc)
+                result = chat.send('demo', SID, MID, TEXT)
+                self.assertEqual(result, {'error': 'unavailable'},
+                                 'Unknown/null or malformed version cannot authorize inherit mutation')
+                self.assert_no_receipt()
+                for method in ('model/list', 'thread/resume', 'turn/start'):
+                    self.assertNotIn(method, rpc.methods(), 'Refusal must precede catalog/native mutation effects')
 
 
 if __name__ == '__main__':

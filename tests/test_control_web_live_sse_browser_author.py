@@ -80,10 +80,10 @@ class LiveBrowserAuthor(unittest.TestCase):
         streams=len(self.requests('/api/session-events'))
         with self.transport.lock:
             self.transport.frames.clear()  # The failed attempt receives no snapshot.
+        probes=len(self.requests('/api/session-live-snapshot'))
         # Advance external browser time; callbacks/state are the actual app's.
         self.page.clock.fast_forward(60000)
         self.until(lambda:len(self.requests('/api/session-events'))==streams+1)
-        probes=len(self.requests('/api/session-live-snapshot'))
         self.until(lambda:len(self.requests('/api/session-live-snapshot'))>probes)
         self.page.wait_for_timeout(100)
         self.page.clock.fast_forward(4000); self.page.wait_for_timeout(100)

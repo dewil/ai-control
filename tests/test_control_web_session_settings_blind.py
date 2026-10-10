@@ -68,12 +68,17 @@ class SessionSettingsBlind(unittest.TestCase):
                     if phase=='before':self.context[key]={'transport_generation':True,'context_generation':-1,'context_id':'not-a-digest'}.get(key,value)
                     self.rpc.hook=lambda method:self.context.update({key:value}) if method==phase else None
                     result=self.chat().history('demo',SID)
-                    # Explicit model_context also owns receipts (existing INV26): never weaken its refusal.
-                    if key in ('vendor','schema') or (phase=='before' and key!='native_version'):
+                    # INV-CAP-01: a stable, shape-valid unreviewed version is readable.
+                    if phase=='before' and key=='native_version':
+                        self.snapshot(result)
+                        self.assertFalse({'model/list','thread/resume','turn/start'}&{m for m,p in self.rpc.calls})
+                        continue
+                    # INV-CAP-02: every mid-read full-context drift rejects the whole projection.
+                    # Invalid/vendor contexts retain their original unavailable/no-fallback contract.
+                    if key in ('vendor','schema') or phase=='before':
                         self.assertEqual(result,{'error':'unavailable'})
                         if phase=='before':self.assertEqual(self.rpc.calls,[])
-                    elif key=='context_id':self.assertEqual(result,{'error':'stale'})
-                    else:self.assertIn('turns',result)
+                    else:self.assertEqual(result,{'error':'stale'})
                     self.assertNotIn('session_settings',result)
         for key,value in [('schema',1.0),('context_generation',.5),('transport_generation',None),('context_id',None),('context_kind','unverified_bound')]:
             self.context={**CONTEXT,key:value};self.rpc.hook=None;self.rpc.calls.clear()

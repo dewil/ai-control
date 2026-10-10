@@ -32,10 +32,14 @@
       <div id="receipt-list" class="receipt-list"></div>
       <p id="model-status" class="meta" role="status" aria-live="polite"></p>
       <p id="current-model-status" class="meta" aria-describedby="session-settings-note">Сессия: модель неизвестна · Размышление: уровень неизвестен</p>
+      <p id="queue-status" class="meta" role="status"></p>
+      <div id="queue-recovery"></div>
+      <p id="capability-status" class="meta" role="status"></p>
       <form id="chat-form">
         <div class="next-selection">
           <p id="next-model-status" class="meta">Следующая отправка: настройки сессии</p>
           <p id="next-model-hint" class="meta" hidden></p>
+          <label for="chat-mode">Режим отправки<select id="chat-mode"><option value="queue">В очередь</option><option value="direct">Сразу</option></select></label>
           <label for="chat-draft">Сообщение</label><textarea id="chat-draft" maxlength="16000" autocomplete="off" aria-describedby="session-settings-note"></textarea>
           <div class="chat-actions">
             <button id="chat-send" type="submit">Отправить</button>
@@ -71,6 +75,6 @@
 <button id="create-check" type="button" class="secondary" hidden>Проверить статус</button>
 </dialog>
 <!-- BUILD-INFO:START -->
-<footer id="build-info" class="build-info" data-release-id="11">ai-control · r11 · Собрано: <time datetime="2026-10-10T08:24:04.787631+00:00">10.10.2026 11:24 МСК</time> · Ветка: fix/codex-0161-session-discovery</footer>
+<footer id="build-info" class="build-info" data-release-id="12">ai-control · r12 · Собрано: <time datetime="2026-10-10T13:37:27.331398Z">10.10.2026 16:37 МСК</time> · Ветка: feat/native-message-queue</footer>
 <!-- BUILD-INFO:END -->
 </body></html>

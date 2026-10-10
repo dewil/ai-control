@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from urllib.parse import parse_qsl, urlsplit
 from control_browser_helpers import choose_project
 from test_control_web_chat_width_browser import private_json, totp, PASSWORD, SECRET, SID
 
@@ -210,11 +211,24 @@ class MessageTimesBrowser(unittest.TestCase):
         visible=self.page.locator('.chat-items').inner_text()
         self.page.evaluate('testAdvance(120000)')
         self.assertEqual(self.page.locator('.chat-items').inner_text(),visible,'Hidden tab cannot run age updates')
-        self.page.evaluate('testVisibility(false)')
+        self.assertEqual(self.network,before,'Hidden tab cannot issue network requests while age timers are paused')
+        def exact_queue_read(method, url):
+            parsed=urlsplit(url)
+            query=parse_qsl(parsed.query,keep_blank_values=True)
+            return (method=='GET' and parsed.path=='/api/session-queue' and len(query)==2
+                    and dict(query)=={'project':'demo','sid':SID})
+        with self.page.expect_request(lambda request: exact_queue_read(request.method,request.url)):
+            self.page.evaluate('testVisibility(false)')
         self.assertIn('2 мин. назад',self.bubble('Time assistant 0').inner_text())
-        # INV-WSESS-53 visible resume requires fresh LIVE admission/lease.
-        self.assertEqual([(method,url) for method,url in self.network[len(before):]
-                          if '/api/session-events?' not in url and '/api/session-live-snapshot?' not in url],[])
+        # Visible resume needs fresh LIVE admission/lease and one queue read to
+        # restore native rows. No other foreground request is permitted here.
+        resumed=self.network[len(before):]
+        queue_reads=[(method,url) for method,url in resumed if exact_queue_read(method,url)]
+        self.assertEqual(len(queue_reads),1)
+        self.assertEqual([(method,url) for method,url in resumed
+                          if not exact_queue_read(method,url)
+                          and '/api/session-events?' not in url
+                          and '/api/session-live-snapshot?' not in url],[])
 
     def test_valid_future_keeps_exact_date_but_relative_age_unknown(self):
         future=NOW+3600

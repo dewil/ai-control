@@ -61,7 +61,8 @@ GEOMETRY = r"""() => {
  saved.forEach(([e,s])=>s===null?e.removeAttribute('style'):e.setAttribute('style',s));
  const mandatory=[document.querySelector('#current-model-status'),document.querySelector('#next-model-status'),form.querySelector('textarea'),form.querySelector('button[type=submit]')];
  const antiCheat=mandatory.map(e=>{const styles=[];let n=e;while(n&&n!==document.body){const s=getComputedStyle(n);styles.push({position:s.position,transform:s.transform,margin:[s.marginTop,s.marginBottom,s.marginLeft,s.marginRight].map(parseFloat),clip:s.clipPath,overflowX:s.overflowX,overflowY:s.overflowY});n=n.parentElement;}return {present:!!e,visible:visible(e),range:inRange(e),top:e.getBoundingClientRect().top+scrollY,bottom:bottom(e),styles};});
- return {B:bottom(form)-bottom(h),C:Math.max(actual,normal)-bottom(h),historyBottom:bottom(h),footerTop:f.getBoundingClientRect().top+scrollY,overflow:Math.max(document.body.scrollWidth,document.documentElement.scrollWidth)-innerWidth,textarea:form.querySelector('textarea').getBoundingClientRect().height,antiCheat,stableStickyScroll:originalScroll===normalScroll&&originalScroll===scrollY,
+ const rect=e=>{const r=e.getBoundingClientRect();return {top:r.top+scrollY,bottom:r.bottom+scrollY};};
+ return {B:bottom(form)-bottom(h),C:Math.max(actual,normal)-bottom(h),historyBottom:bottom(h),footerTop:f.getBoundingClientRect().top+scrollY,sendStatus:rect(document.querySelector('#send-status')),sendCheck:rect(document.querySelector('#send-check')),overflow:Math.max(document.body.scrollWidth,document.documentElement.scrollWidth)-innerWidth,textarea:form.querySelector('textarea').getBoundingClientRect().height,antiCheat,stableStickyScroll:originalScroll===normalScroll&&originalScroll===scrollY,
  fonts:{message:parseFloat(getComputedStyle(h.querySelector('article p')).fontSize),current:parseFloat(getComputedStyle(mandatory[0]).fontSize),next:parseFloat(getComputedStyle(mandatory[1]).fontSize)},fontFamily:getComputedStyle(h.querySelector('article p')).fontFamily,
  emptySlots:['send-status','model-status','receipt-list'].map(id=>{const e=document.getElementById(id);return !e||e.textContent.trim()?null:{id,height:e.getBoundingClientRect().height};}).filter(Boolean),
  atEnd:Math.abs(scrollY-(Math.max(document.body.scrollHeight,document.documentElement.scrollHeight)-innerHeight))<=1};
@@ -496,8 +497,7 @@ class LiveUXBlindBrowser(unittest.TestCase):
         for width in (320, 390, 412):
             self.page.set_viewport_size({"width": width, "height": 844}); self.follow()
             band = self.page.evaluate(GEOMETRY)
-            for target in (status, check):
-                bounds = target.evaluate("e=>({top:e.getBoundingClientRect().top+scrollY,bottom:e.getBoundingClientRect().bottom+scrollY})")
+            for bounds in (band["sendStatus"], band["sendCheck"]):
                 self.assertGreaterEqual(bounds["top"], band["historyBottom"] - .5)
                 self.assertLessEqual(bounds["bottom"], band["footerTop"] + .5)
             self.assertLessEqual(band["overflow"], 1)
