@@ -36,3 +36,25 @@ class ParticipationOwnerAuthor(WireCase):
         self.assertFalse(any(row['state']=='actionable' for row in value['questions']))
         self.assertEqual(self.native.connections,1)
         self.assert_read_only()
+
+    def test_resolved_before_reserve_still_binds_consumed_action_digest(self):
+        dto,row=self.capture()
+        self.native.resolved();self.synchronize()
+        self.assertEqual(self.answer(dto,row)['state'],'closed')
+        self.assertEqual(self.answer(dto,row,answers={'choice':{'answers':['Exact option B']}}),
+                         {'error':'invalid_request'})
+        self.assert_read_only()
+
+    def test_reply_deadline_cannot_be_late_local_sent_or_replayed(self):
+        from websockets.sync.client import ClientConnection
+        from unittest.mock import patch
+        dto,row=self.capture();original=ClientConnection.send
+        self.rpc.timeout=.1
+        def late(connection,payload,*args,**kwargs):
+            if 'method' not in json.loads(payload):time.sleep(.2)
+            return original(connection,payload,*args,**kwargs)
+        with patch.object(ClientConnection,'send',late):result=self.answer(dto,row)
+        self.assertEqual(result['state'],'delivery_unknown')
+        self.assertEqual(result['reason'],'delivery_unknown')
+        self.answer(dto,row);self.answer(dto,row,action=ACTION2)
+        self.assertEqual(len(self.native.replies()),0)

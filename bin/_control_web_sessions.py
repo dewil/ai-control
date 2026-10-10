@@ -1037,17 +1037,24 @@ class SessionChat:
                           for other in registry.entries.values()), 'invalid_request')
             if entry.get('action') == action_id:
                 _need(entry['answer_digest'] == digest, 'invalid_request')
-            elif entry.get('action') is None and not entry.get('closed'):
+            elif entry.get('action') is None and entry.get('questions'):
                 try:
                     _Participation.answers(answers, entry['questions'])
                 except Exception:
                     raise _DomainError('invalid_request') from None
             def outcome():
                 state, reason = registry.state(entry)
-                if state in ('actionable','native_only'):
+                if entry.get('action') is not None and entry['action'] != action_id and state != 'closed':
+                    state, reason = 'delivery_unknown', 'delivery_unknown'
+                elif state in ('actionable','native_only'):
                     state, reason = 'stale', 'native_required'
                 return dict(schema=1,epoch=registry.epoch,interaction_id=interaction_id,action_id=action_id,state=state,reason=reason)
+            def consume_closed():
+                if entry.get('closed') and entry.get('action') is None:
+                    entry.update(action=action_id, answer_digest=digest)
+                    registry.revision += 1
             if entry.get('attempted') or entry.get('closed') or entry.get('reason') is not None:
+                consume_closed()
                 return outcome()
         try:
             _need(context is not None and context['native_version'] == '0.161.0')
@@ -1067,28 +1074,41 @@ class SessionChat:
             with registry.lock:
                 if not entry.get('closed'):
                     entry['reason'] = 'stale'
+                consume_closed()
                 return outcome()
         # Fixed captured-response path; no generic callback response API.
-        with self.rpc._send_lock:
+        _need(self.rpc._send_lock.acquire(timeout=self._remaining()))
+        try:
             _need(self._root(project) == root and self._catalog_context() == context, 'stale')
             with self.rpc._lock, registry.lock:
                 _need(self.rpc._participation is registry and registry.context == context, 'stale')
                 ws = self.rpc._ws
                 if entry.get('attempted') or entry.get('closed') or entry.get('reason') is not None:
+                    consume_closed()
                     return outcome()
                 entry.update(action=action_id, answer_digest=digest, attempted=True, outcome='unknown')
                 registry.revision += 1
                 payload = _json(dict(id=entry['native_id'], result=dict(answers=answers))).decode('utf-8')
             # Receiver must be free to apply native resolved while send waits.
+            deadline = time.monotonic() + min(self.rpc.timeout, self._remaining())
+            timer = threading.Timer(max(0, deadline-time.monotonic()), self.rpc._expire,
+                                    args=(ws, context['transport_generation']))
+            timer.daemon = True
+            timer.start()
             try:
                 ws.send(payload)
                 with registry.lock:
-                    entry['outcome'] = 'sent'
+                    if time.monotonic() < deadline:
+                        entry['outcome'] = 'sent'
             except Exception:
                 pass
+            finally:
+                timer.cancel()
             with registry.lock:
                 registry.revision += 1
                 return outcome()
+        finally:
+            self.rpc._send_lock.release()
 
     def _configured_call(self, method, *args):
         self._remaining()
