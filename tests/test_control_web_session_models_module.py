@@ -157,7 +157,7 @@ class SessionModelsModule(unittest.TestCase):
             with self.subTest(version=version):
                 self.context["native_version"] = version
                 self.rpc.calls.clear()
-                self.unavailable("unsupported_capability")
+                self.unavailable("unverified_context" if version == "unknown" else "unsupported_capability")
                 self.assertNotIn("model/list", self.rpc.methods())
 
     def test_malformed_context_schema_generation_or_identity_is_unavailable(self):
