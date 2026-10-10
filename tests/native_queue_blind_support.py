@@ -39,6 +39,7 @@ def queue_dto(rows=None,partial=False):
 class QueueRPC(RPC):
     def __init__(self,root):
         super().__init__(root)
+        self.metadata_status={'type':'idle'}
         self.context=dict(CONTEXT);self.fenced_calls=[]
         self.queue_pages={None:dict(data=[],nextCursor=None)}
         self.add_error=None;self.delete_error=None;self.deleted=True
