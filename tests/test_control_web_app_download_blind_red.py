@@ -48,10 +48,11 @@ class AppDownloadContract(unittest.TestCase):
         return r
 
     def test_permanent_panel_download_link_present_before_login(self):
+        # Требование изменено явно 11.10: постоянная ссылка в шапке подписана APP.
         r = self.client.get('/')
         self.assertEqual(r.status_code, 200)
         self.assertIn('/download/android/', r.text)
-        self.assertIn('Андроид', r.text)
+        self.assertIn('APP', r.text)
 
     def test_configured_empty_and_absent_download_contract(self):
         r = self.get('/download/android/')

@@ -145,7 +145,8 @@ class AndroidDownloadBrowserContract(unittest.TestCase):
         return self.page.locator('a[href$=".apk"]')
 
     def assert_panel_link(self, page):
-        link = page.get_by_role('link', name='Андроид', exact=True)
+        # Требование изменено явно 11.10: постоянная ссылка в шапке подписана APP.
+        link = page.get_by_role('link', name='APP', exact=True)
         self.assertEqual(link.count(), 1, 'permanent common download link required')
         self.assertTrue(link.is_visible())
         self.assertEqual(link.get_attribute('href'), PREFIX)
