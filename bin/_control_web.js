@@ -624,6 +624,17 @@ async function submitQueueTransfer(intent){
       const original=state.outgoing.get(intent.id);
       if(data.status==='accepted'&&original?.mode==='queue')applyReceipt(intent.key,{status:'accepted',message_id:intent.id,turn_id:data.turn_id});
       state.outgoing.delete(intent.id);
+      if(data.status==='accepted'){
+        const canonical=historyItems(state).find(entry=>!entry.local&&entry.turnId===data.turn_id&&entry.item.role==='user'&&entry.item.client_id===intent.action_id);
+        const actionKey=JSON.stringify(['local-outgoing',intent.action_id]),sourceKey=JSON.stringify(['local-outgoing',intent.id]);
+        if(!canonical)state.outgoing.set(intent.action_id,{id:intent.action_id,text:intent.snapshot_text,status:'accepted',mode:'transfer'});
+        ensureReceipts(intent.key).set(intent.action_id,{status:'accepted',turn_id:data.turn_id});
+        if(state.windowIds)state.windowIds=state.windowIds.map(id=>id===sourceKey?(canonical?.key||actionKey):id);
+        if(intent.lifecycle===pageGeneration&&activeSelection(intent.project,intent.sid,intent.generation)){
+          const source=[...$('chat-items').querySelectorAll('[data-local-outgoing="true"]')].find(article=>article.dataset.sendId===intent.id);
+          if(source){source.dataset.sendId=intent.action_id;source.dataset.itemId=intent.action_id;}
+        }
+      }
       view.recovery=view.recovery.filter(row=>row.action_id!==intent.action_id);
       if(data.status!=='accepted')view.recovery.push({action_id:intent.action_id,queued_submission_id:intent.queued_submission_id,text:intent.snapshot_text,status:data.status,reason:data.reason});
       view.message=data.status==='accepted'?'Сообщение принято активным ходом.':data.status==='held'?'Снимок сохранён для ручного восстановления.':'Доставка неизвестна. Автоматического повтора нет.';
