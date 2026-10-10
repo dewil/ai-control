@@ -110,7 +110,7 @@ def _operation(method):
 
 
 class _Receipts:
-    """Digest-only records, sealed by canonical root/thread namespace."""
+    """Private immutable receipts and explicit snapshot recovery per root/thread."""
     def __init__(self, path):
         self.path = os.path.abspath(path)
 
@@ -1806,12 +1806,14 @@ class SessionChat:
         if status == 'accepted' and valid_uuid(record['client_id']):
             original = self.receipts.read(ns, record['root'], record['sid'], record['client_id'],
                                          self._local.deadline, record['context_id'])
-            if original is not None and original.get('kind') == 'queue_enqueue':
+            if (original is not None and original.get('kind') == 'queue_enqueue'
+                    and original['queued_submission_id'] == record['queued_submission_id']):
                 original.update(status='accepted', turn_id=turn_id, reason=None)
                 self.receipts.write(ns, original, self._local.deadline)
         return self.receipts.result(record)
 
     def _transfer_reconcile(self, ns, record, project, root, sid, context):
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
         if record['status'] in ('accepted', 'changed'):
             return self.receipts.result(record)
         cursor, seen, matches, conflict = None, set(), [], False
@@ -1856,9 +1858,17 @@ class SessionChat:
             _need(len(retained) < 64 and sum(len(row['snapshot_text'].encode('utf-8')) for row in retained)
                   + len(snapshot_text.encode('utf-8')) <= 4 * 1024 * 1024)
             _need(len(self.receipts.names(ns, self._local.deadline, reserve=True)) < RECEIPT_LIMIT)
-            listing, _ = self._queue_listing(project, root, sid, context)
+            listing, native_texts = self._queue_listing(project, root, sid, context)
             row = next((row for row in listing['rows'] if row['queued_submission_id'] == queued_submission_id), None)
             _need(row is not None, 'stale')
+            if valid_uuid(row['message_id']):
+                original = self.receipts.read(ns, root, sid, row['message_id'], self._local.deadline, context['context_id'])
+                if (original is not None and original.get('kind') == 'queue_enqueue'
+                        and original['queued_submission_id'] is None and not listing['partial']
+                        and original['digest'] in {self._queue_digest(context['context_id'], root, sid, 'queue_enqueue', value)
+                            for value in (snapshot_text, native_texts[queued_submission_id])}):
+                    original['queued_submission_id'] = queued_submission_id
+                    self.receipts.write(ns, original, self._local.deadline)
             record = dict(schema=4, kind='queue_transfer', context_id=context['context_id'], root=root, sid=sid,
                 message_id=action_id, digest=digest, status='delivery_unknown', turn_id=None, created=time.time_ns(),
                 queued_submission_id=queued_submission_id, expected_turn_id=expected_turn_id, client_id=row['message_id'],
@@ -1902,15 +1912,25 @@ class SessionChat:
                     queued_submission_id=value if kind == 'queue_cancel' else None)
 
     def _queue_reconcile(self, ns, record, project, root, sid, context):
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
         if record['status'] == 'accepted':
             return self.receipts.result(record)
+        for mid in self.receipts.names(ns, self._local.deadline):
+            cancel = self.receipts.read(ns, root, sid, mid, self._local.deadline)
+            if (cancel.get('kind') == 'queue_cancel' and cancel['context_id'] == context['context_id']
+                    and cancel['status'] == 'cancelled' and record['queued_submission_id'] is not None
+                    and cancel['queued_submission_id'] == record['queued_submission_id']):
+                _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+                return dict(status='cancelled', message_id=record['message_id'], queued_submission_id=record['queued_submission_id'])
         for transfer in self._transfer_records(ns, root, sid):
-            if transfer['context_id'] == context['context_id'] and transfer['client_id'] == record['message_id'] and transfer['status'] != 'changed':
+            if transfer['context_id'] == context['context_id'] and transfer['client_id'] == record['message_id'] and transfer['queued_submission_id'] == record['queued_submission_id'] and transfer['status'] != 'changed':
                 self._transfer_reconcile(ns, transfer, project, root, sid, context)
                 if transfer['status'] == 'accepted':
                     record.update(status='accepted', turn_id=transfer['turn_id'], reason=None)
                     self.receipts.write(ns, record, self._local.deadline)
                     return self.receipts.result(record)
+                if transfer['status'] == 'held' and transfer['phase'] == 'held':
+                    return dict(status='held', message_id=record['message_id'], queued_submission_id=record['queued_submission_id'], turn_id=None, reason=transfer['reason'])
                 return dict(status='delivery_unknown', message_id=record['message_id'], queued_submission_id=record['queued_submission_id'])
         matches, conflict, cursor, seen = [], False, None, set()
         for _ in range(8):

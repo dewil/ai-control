@@ -11,7 +11,7 @@ function pageInterval(callback,delay){if(!pageActive())return null;const generat
 function pageClearTimer(timer){window.clearTimeout(timer);window.clearInterval(timer);pageTimers.delete(timer);}
 function closePageGate(){
   pageState='suspended';pageGeneration++;androidResumeGeneration++;taskLoaded=false;
-  stopPolling();stopDevbusView();devbusAdmitted=false;
+  closeQueueTransferDialog();stopPolling();stopDevbusView();devbusAdmitted=false;
   for(const flight of historyFlights.values())if(!observationControllers.has(flight.controller))observationControllers.set(flight.controller,0);historyFlights.clear();
   for(const controller of observationControllers.keys())controller.abort();observationControllers.clear();
   for(const timer of pageTimers)pageClearTimer(timer);
@@ -62,6 +62,7 @@ let taskLoaded = false;
 const drafts = new Map();
 const modelDrafts = new Map();
 const queueViews = new Map();
+let queueTransferDialog=null;
 let modelExpiryTimer=null;
 let sessionSettingsTimer=null;
 let chatAuthGeneration=0;
@@ -212,7 +213,7 @@ async function api(path,body,signal,isCurrent=()=>true,admission=false){
     return data;
   }finally{if(controller){const remaining=(observationControllers.get(controller)||0)-1;if(remaining>0)observationControllers.set(controller,remaining);else observationControllers.delete(controller);if(bridge)signal.removeEventListener('abort',abort);}}
 }
-function signedOut(){stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();queueViews.clear();if(acceptedStatusTimer!==null){pageClearTimer(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
+function signedOut(){closeQueueTransferDialog();stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();queueViews.clear();if(acceptedStatusTimer!==null){pageClearTimer(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
 function field(parent,key,label,kind='textarea'){const wrap=node('label',label);const input=node(kind);input.maxLength=16000;input.value=drafts.get(key)||'';input.addEventListener('input',()=>drafts.set(key,input.value));wrap.append(input);parent.append(wrap);return input;}
 function button(parent,label,action,cls){const b=node('button',label,cls);b.type='button';b.addEventListener('click',action);parent.append(b);return b;}
 async function mutate(card,path,body){if(!pageActive())return;const lifecycle=pageGeneration,auth=chatAuthGeneration;if(busy)return;busy=true;const controls=[...document.querySelectorAll('#tasks-panel button')];controls.forEach(b=>b.disabled=true);const status=card.querySelector('.message');status.textContent='Сохраняем…';try{const data=await api(path,body);if(lifecycle!==pageGeneration||!pageActive())return;status.textContent=data.status==='already'?'Решение уже было принято.':'Решение принято.';await refresh();}catch(err){if(err.stale||lifecycle!==pageGeneration||!pageActive())return;status.textContent=err.message;if(err.code==='saved_pending'){await refresh();notice(err.message);}}finally{busy=false;if(pageActive()&&auth===chatAuthGeneration){if(lifecycle===pageGeneration)controls.forEach(b=>b.disabled=false);else{taskLoaded=false;if(currentTab==='tasks')refresh();}}}}
@@ -493,22 +494,35 @@ function renderModelControls(){
   }
 }
 
-function queueView(key){if(!queueViews.has(key))queueViews.set(key,{supported:null,mode:null,flight:null,last:0,rows:[],message:'Проверяем доступность очереди…',capabilities:null});return queueViews.get(key);}
+function queueView(key){if(!queueViews.has(key))queueViews.set(key,{supported:null,mode:null,flight:null,last:0,rows:[],recovery:[],transfers:new Map(),target:null,sendNow:false,message:'Проверяем доступность очереди…',capabilities:null});return queueViews.get(key);}
 function queueMode(key){return queueView(key).supported===true&&queueView(key).mode!=='direct';}
 function queueCanonicalIds(state){return new Set([...state.turns.values()].flatMap(turn=>(turn.items||[]).filter(item=>item?.role==='user').map(item=>item.client_id)));}
 function renderQueueControls(key){
   const view=key&&queueView(key),select=$('chat-mode');
   select.hidden=!view?.supported;select.value=view?.mode||'queue';
   select.disabled=!pageActive()||Boolean(key&&(sendsInFlight.has(key)||hasUnknown(key)));
-  $('queue-status').textContent=view?.message||'';
+  $('queue-status').textContent=view?.message||'';renderQueueRecovery(key);
   const cap=view?.capabilities,blocked=cap&&cap.operations.send.supported===false;
   $('capability-status').textContent=blocked?(cap.native_version===null?'Версия Codex не определена; чтение проверяется по ответам, команды недоступны.':'Codex '+cap.native_version+': чтение работает; отправка для этой версии пока не проверена.') : '';
+}
+function validQueueId(value){return typeof value==='string'&&Array.from(value).length>0&&Array.from(value).length<=500&&!Array.from(value).some(char=>{const code=char.codePointAt(0);return code<32||code>=127&&code<=159||code>=0xd800&&code<=0xdfff;});}
+function validQueueText(value){return typeof value==='string'&&Array.from(value).length>0&&Array.from(value).length<=16000&&!Array.from(value).some(char=>{const code=char.codePointAt(0);return code>=0xd800&&code<=0xdfff;});}
+function validQueueProjection(data){
+  if(!exactFields(data,['schema','vendor','supported','reason','rows','partial','send_now_supported','active_turn_id','send_now_reason','recovery'])||data.schema!==1||data.vendor!=='codex'||typeof data.supported!=='boolean'||typeof data.partial!=='boolean'||typeof data.send_now_supported!=='boolean'||data.reason!==(data.supported?null:'unsupported_queue')||!(data.active_turn_id===null||validQueueId(data.active_turn_id))||data.send_now_supported!==(data.supported&&data.active_turn_id!==null)||data.send_now_supported&&data.send_now_reason!==null||data.supported&&!data.send_now_supported&&!['inactive_turn','unavailable'].includes(data.send_now_reason)||!data.supported&&(data.send_now_reason!=='unsupported_queue'||data.rows?.length||data.partial)||!Array.isArray(data.rows)||data.rows.length>256||!Array.isArray(data.recovery)||data.recovery.length>64)return false;
+  return data.rows.every(row=>exactFields(row,['queued_submission_id','message_id','text','state'])&&validQueueId(row.queued_submission_id)&&validQueueId(row.message_id)&&validQueueText(row.text)&&row.state==='queued')&&new Set(data.rows.map(row=>row.message_id)).size===data.rows.length&&new Set(data.rows.map(row=>row.queued_submission_id)).size===data.rows.length&&data.recovery.every(row=>exactFields(row,['action_id','queued_submission_id','text','status','reason'])&&UUID_RE.test(row.action_id)&&validQueueId(row.queued_submission_id)&&validQueueText(row.text)&&['held','delivery_unknown'].includes(row.status)&&[null,'target_changed','unavailable','conflict'].includes(row.reason))&&new Set(data.recovery.map(row=>row.action_id)).size===data.recovery.length;
+}
+function validCapabilities(data){
+  const names=['send','create','rename','model_selection','queue','history_read','sessions_read'];
+  if(!exactFields(data,['schema','native_version','version_source','version_review','read_status','operations'])||data.schema!==1||data.version_source!=='initialize_reported'||!['compatible','unverified'].includes(data.read_status)||!exactFields(data.operations,names))return false;
+  const version=data.native_version,review=version===null?'unknown':['0.160.0','0.161.0'].includes(version)?'reviewed':'unreviewed';
+  if(version!==null&&(typeof version!=='string'||version.length>64||!/^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[A-Za-z0-9][A-Za-z0-9.-]{0,31})?$/.test(version))||data.version_review!==review)return false;
+  return names.every(name=>{const row=data.operations[name];return exactFields(row,['supported','reason'])&&[true,false,null].includes(row.supported)&&(row.supported===true?row.reason===null:['not_observed','unsupported_native_version','unsupported_operation','incompatible_response','unverified_context','stale','unavailable'].includes(row.reason))&&(!(review!=='reviewed'&&['send','create','rename','model_selection','queue'].includes(name))||row.supported===false&&row.reason==='unsupported_native_version');});
 }
 async function loadCapabilities(){
   const key=currentSessionKey();if(!key||!activeSelection())return;
   const project=selectedProject,sid=selectedSession.sid,generation=selectionGeneration;
   try{const data=await api(queryPath('/api/session-capabilities',{project,sid}),undefined,undefined,()=>activeSelection(project,sid,generation));
-    if(activeSelection(project,sid,generation)&&data?.schema===1&&data.operations&&Object.keys(data.operations).length===7&&['send','create','rename','model_selection','queue','history_read','sessions_read'].every(name=>data.operations[name]&&[true,false,null].includes(data.operations[name].supported))){queueView(key).capabilities=data;syncCurrentSessionControls();}
+    if(activeSelection(project,sid,generation)&&validCapabilities(data)){queueView(key).capabilities=data;syncCurrentSessionControls();}
   }catch(_){}
 }
 async function loadQueue(force=false){
@@ -518,8 +532,8 @@ async function loadQueue(force=false){
   const flight={};view.flight=flight;view.last=now;
   try{const data=await api(queryPath('/api/session-queue',{project,sid}),undefined,undefined,()=>activeSelection(project,sid,generation));
     if(!activeSelection(project,sid,generation)||document.visibilityState!=='visible'||auth!==chatAuthGeneration||lifecycle!==pageGeneration)return;
-    if(!data||data.schema!==1||data.vendor!=='codex'||typeof data.supported!=='boolean'||typeof data.partial!=='boolean'||!Array.isArray(data.rows)||data.rows.length>256||!data.rows.every(row=>row&&validHistoryId(row.queued_submission_id)&&validHistoryId(row.message_id)&&typeof row.text==='string'&&row.text.length>0&&row.text.length<=16000&&row.state==='queued')||new Set(data.rows.map(row=>row.message_id)).size!==data.rows.length||new Set(data.rows.map(row=>row.queued_submission_id)).size!==data.rows.length)throw new Error(messages.unavailable);
-    view.supported=data.supported;if(view.mode===null)view.mode=data.supported?'queue':'direct';view.rows=data.rows;
+    if(!validQueueProjection(data))throw new Error(messages.unavailable);
+    view.supported=data.supported;if(view.mode===null)view.mode=data.supported?'queue':'direct';view.rows=data.rows;view.target=validHistoryId(data.active_turn_id)?data.active_turn_id:null;view.sendNow=data.send_now_supported===true&&Boolean(view.target);view.recovery=Array.isArray(data.recovery)?data.recovery:[];
     view.message=data.supported?'Очередь: настройки сессии при запуске'+(data.partial?' · показана часть очереди':''):'Очередь недоступна для этой сессии. Доступна прямая отправка.';
     const state=normalizeHistoryState(key),canonical=queueCanonicalIds(state),present=new Set(data.rows.map(row=>row.message_id)),decision=captureHistoryScroll(project,sid,generation,false);
     if(!data.partial)for(const [id,attempt]of state.outgoing)if((attempt.nativeQueue||attempt.mode==='queue'&&attempt.status==='queued')&&!present.has(id)){
@@ -527,7 +541,9 @@ async function loadQueue(force=false){
       else{attempt.status='delivery_unknown';attempt.queued_submission_id=null;attempt.queueAbsent=true;applyReceipt(key,{status:'delivery_unknown',message_id:id,turn_id:null});}
     }
     for(const row of data.rows){
-      if(canonical.has(row.message_id)||ensureReceipts(key).get(row.message_id)?.status==='accepted')continue;
+      if(view.transfers.has(row.queued_submission_id)&&view.transfers.get(row.queued_submission_id).status!=='changed')continue;
+      const receipt=ensureReceipts(key).get(row.message_id);
+      if(canonical.has(row.message_id)||receipt?.status==='accepted'||['held','cancelled'].includes(receipt?.status)&&receipt.queued_submission_id===row.queued_submission_id)continue;
       let attempt=state.outgoing.get(row.message_id);
       if(!attempt){attempt={id:row.message_id,text:row.text,status:'queued',nativeQueue:true};state.outgoing.set(row.message_id,attempt);}
       if(attempt.status!=='accepted'){attempt.nativeQueue=true;attempt.queueAbsent=false;attempt.status='queued';attempt.queued_submission_id=row.queued_submission_id;if(UUID_RE.test(attempt.id))applyReceipt(key,{status:'queued',message_id:attempt.id,queued_submission_id:row.queued_submission_id});}
@@ -545,7 +561,7 @@ async function cancelQueued(key,id){
   try{let data;try{data=await api('/api/session-queue-cancel',{project,sid,queued_submission_id:attempt.queued_submission_id,action_id:action});}catch(error){if(error.data?.status==='delivery_unknown')data=error.data;else throw error;}
     if(auth!==chatAuthGeneration||!activeSelection(project,sid,generation))return;
     if(data?.message_id!==action||data.queued_submission_id!==attempt.queued_submission_id)throw new Error(messages.unavailable);
-    if(data.status==='cancelled'){state.outgoing.delete(id);viewQueueMessage(key,'Отменено');}
+    if(data.status==='cancelled'){if(UUID_RE.test(id))applyReceipt(key,{status:'cancelled',message_id:id,queued_submission_id:attempt.queued_submission_id});state.outgoing.delete(id);viewQueueMessage(key,'Отменено');}
     else if(data.status==='changed')viewQueueMessage(key,'Сообщение уже изменилось; отмена не подтверждена.');
     else{attempt.cancelUnknown=true;viewQueueMessage(key,'Результат отмены неизвестен. Автоматический повтор отключён.');}
   }catch(error){if(auth===chatAuthGeneration&&activeSelection(project,sid,generation)){attempt.cancelUnknown=true;viewQueueMessage(key,'Результат отмены неизвестен. Автоматический повтор отключён.');}}
@@ -558,6 +574,101 @@ function queueArticleActions(article,entry,key){
   const controls=existing||node('div',undefined,'queue-actions'),button=controls.querySelector('button')||node('button','Отменить','secondary');button.type='button';
   button.disabled=!pageActive()||attempt.cancelPending||attempt.cancelUnknown;
   if(!existing){button.addEventListener('click',()=>cancelQueued(key,entry.item.id));controls.append(button);article.append(controls);}
+  let now=controls.querySelector('[data-send-now]');
+  if(!now){now=node('button','Отправить сейчас','secondary');now.type='button';now.dataset.sendNow='true';now.addEventListener('click',()=>openQueueTransferDialog(key,entry.item.id));controls.append(now);}
+  now.disabled=!pageActive()||!queueView(key).sendNow||attempt.cancelPending||attempt.cancelUnknown||queueView(key).transfers.has(attempt.queued_submission_id);
+  now.title=queueView(key).sendNow?'Будет отправлен показанный текст':'Активный ход не подтверждён';
+}
+
+function closeQueueTransferDialog(){
+  const dialog=queueTransferDialog;if(!dialog)return;queueTransferDialog=null;
+  document.removeEventListener('keydown',dialog.keydown);dialog.overlay.remove();
+  if(activeSelection(dialog.project,dialog.sid,dialog.generation)&&dialog.focus?.isConnected)dialog.focus.focus({preventScroll:true});
+}
+function openQueueTransferDialog(key,id){
+  if(!pageActive()||!activeSelection()||key!==currentSessionKey())return;
+  const view=queueView(key),attempt=normalizeHistoryState(key).outgoing.get(id);
+  if(!view.sendNow||!view.target||attempt?.status!=='queued'||!attempt.queued_submission_id||view.transfers.has(attempt.queued_submission_id))return;
+  closeQueueTransferDialog();
+  const context=Object.freeze({key,id,project:selectedProject,sid:selectedSession.sid,generation:selectionGeneration,auth:chatAuthGeneration,lifecycle:pageGeneration,
+    queued_submission_id:attempt.queued_submission_id,snapshot_text:attempt.text,expected_turn_id:view.target});
+  const overlay=node('div',undefined,'queue-transfer-overlay'),box=node('div',undefined,'queue-transfer-dialog');
+  box.setAttribute('role','dialog');box.setAttribute('aria-modal','true');box.setAttribute('aria-labelledby','queue-transfer-title');
+  const heading=node('h2','Отправить сейчас');heading.id='queue-transfer-title';
+  const warning=node('p','Будет отправлен показанный текст. Изменения этого сообщения на Mac могут не попасть в отправку.');
+  const preview=node('pre',context.snapshot_text,'queue-transfer-preview'),actions=node('div',undefined,'queue-actions');
+  const confirm=node('button','Подтвердить'),cancel=node('button','Отмена','secondary');confirm.type=cancel.type='button';
+  cancel.addEventListener('click',closeQueueTransferDialog);
+  confirm.addEventListener('click',()=>{
+    if(queueTransferDialog?.context!==context||!activeSelection(context.project,context.sid,context.generation)||context.auth!==chatAuthGeneration||context.lifecycle!==pageGeneration)return;
+    const intent={...context,action_id:crypto.randomUUID(),status:'sending'};
+    view.transfers.set(context.queued_submission_id,intent);closeQueueTransferDialog();submitQueueTransfer(intent);
+  });
+  actions.append(confirm,cancel);box.append(heading,warning,preview,actions);overlay.append(box);document.body.append(overlay);
+  const dialog={...context,context,overlay,focus:document.activeElement,keydown:null};
+  dialog.keydown=event=>{if(event.key==='Escape'){event.preventDefault();closeQueueTransferDialog();return;}
+    if(event.key==='Tab'){const buttons=[confirm,cancel],index=buttons.indexOf(document.activeElement);event.preventDefault();buttons[(index+(event.shiftKey?-1:1)+buttons.length)%buttons.length].focus();}};
+  queueTransferDialog=dialog;document.addEventListener('keydown',dialog.keydown);cancel.focus({preventScroll:true});
+}
+async function submitQueueTransfer(intent){
+  const view=queueView(intent.key),state=normalizeHistoryState(intent.key);
+  if(activeSelection(intent.project,intent.sid,intent.generation))renderHistory(intent.key);
+  try{let data;try{data=await api('/api/session-queue-send-now',{project:intent.project,sid:intent.sid,queued_submission_id:intent.queued_submission_id,
+      action_id:intent.action_id,snapshot_text:intent.snapshot_text,expected_turn_id:intent.expected_turn_id});}
+    catch(error){if(error.data?.status==='delivery_unknown')data=error.data;else throw error;}
+    if(intent.auth!==chatAuthGeneration)return;
+    if(!exactFields(data,['status','message_id','queued_submission_id','turn_id','reason'])||data.message_id!==intent.action_id||data.queued_submission_id!==intent.queued_submission_id||!['accepted','held','changed','delivery_unknown'].includes(data.status))throw new Error(messages.unavailable);
+    intent.status=data.status;
+    if(data.status==='changed'){view.transfers.delete(intent.queued_submission_id);view.message='Сообщение или активный ход изменились; отправка не подтверждена.';}
+    else{
+      const original=state.outgoing.get(intent.id);
+      if(data.status==='accepted'&&original?.mode==='queue')applyReceipt(intent.key,{status:'accepted',message_id:intent.id,turn_id:data.turn_id});
+      state.outgoing.delete(intent.id);
+      view.recovery=view.recovery.filter(row=>row.action_id!==intent.action_id);
+      if(data.status!=='accepted')view.recovery.push({action_id:intent.action_id,queued_submission_id:intent.queued_submission_id,text:intent.snapshot_text,status:data.status,reason:data.reason});
+      view.message=data.status==='accepted'?'Сообщение принято активным ходом.':data.status==='held'?'Снимок сохранён для ручного восстановления.':'Доставка неизвестна. Автоматического повтора нет.';
+    }
+  }catch(error){
+    if(intent.auth!==chatAuthGeneration)return;
+    intent.status='delivery_unknown';state.outgoing.delete(intent.id);
+    view.recovery=view.recovery.filter(row=>row.action_id!==intent.action_id);
+    view.recovery.push({action_id:intent.action_id,queued_submission_id:intent.queued_submission_id,text:intent.snapshot_text,status:'delivery_unknown',reason:null});
+    view.message='Доставка неизвестна. Автоматического повтора нет.';
+  }finally{
+    if(intent.auth===chatAuthGeneration&&intent.lifecycle===pageGeneration&&activeSelection(intent.project,intent.sid,intent.generation)){
+      renderHistory(intent.key);syncCurrentSessionControls();
+    }
+  }
+}
+async function reconcileHeldRecovery(key,row,project,sid,generation){
+  const ids=[...ensureReceipts(key)].filter(([id,value])=>UUID_RE.test(id)&&value.status==='delivery_unknown').slice(0,8).map(([id])=>id);
+  if(!ids.length)return;
+  const auth=chatAuthGeneration,lifecycle=pageGeneration,controller=newObservationController(),timer=pageTimeout(()=>controller.abort(),6000);
+  const current=()=>auth===chatAuthGeneration&&lifecycle===pageGeneration&&activeSelection(project,sid,generation);
+  try{await Promise.allSettled(ids.map(async id=>{
+    const data=await api(queryPath('/api/session-send-status',{project,sid,message_id:id}),undefined,controller.signal,current);
+    if(current()&&exactFields(data,['status','message_id','queued_submission_id','turn_id','reason'])&&data.status==='held'&&data.message_id===id&&data.queued_submission_id===row.queued_submission_id&&data.turn_id===null)applyReceipt(key,data);
+  }));}finally{pageClearTimer(timer);if(current())syncCurrentSessionControls();}
+}
+function renderQueueRecovery(key){
+  const container=$('queue-recovery');container.replaceChildren();if(!key||!activeSelection())return;
+  const view=queueView(key),rows=new Map(view.recovery.map(row=>[row.action_id,row]));
+  for(const intent of view.transfers.values())if(['held','delivery_unknown'].includes(intent.status))rows.set(intent.action_id,
+    {action_id:intent.action_id,queued_submission_id:intent.queued_submission_id,text:intent.snapshot_text,status:intent.status,reason:null});
+  for(const row of rows.values()){
+    if(!UUID_RE.test(row?.action_id||'')||!validHistoryId(row.queued_submission_id)||typeof row.text!=='string'||Array.from(row.text).length>16000||!['held','delivery_unknown'].includes(row.status))continue;
+    const article=node('article',undefined,'queue-recovery-item'),text=node('div',row.text,'queue-recovery-text');
+    const label=node('p',row.status==='held'?'Снимок сохранён. Автоматической отправки нет.':'Доставка неизвестна. Автоматического повтора нет.','meta');
+    const copy=node('button','В черновик','secondary');copy.type='button';copy.disabled=!pageActive();
+    const project=selectedProject,sid=selectedSession.sid,generation=selectionGeneration;
+    copy.addEventListener('click',async()=>{
+      if(!activeSelection(project,sid,generation)||key!==currentSessionKey())return;
+      if($('chat-draft').value.trim()) {view.message='Черновик уже содержит текст. Сохраните или очистите его перед копированием.';renderQueueControls(key);return;}
+      drafts.set(key,row.text);$('chat-draft').value=row.text;$('chat-draft').focus();syncCurrentSessionControls();
+      if(row.status==='held')await reconcileHeldRecovery(key,row,project,sid,generation);
+    });
+    article.append(text,label,copy);container.append(article);
+  }
 }
 function validModelCatalog(data){return Boolean(data&&data.schema===1&&data.vendor==='codex'&&data.context_kind==='legacy_unbound'&&data.selection_support==='available'&&typeof data.catalog_id==='string'&&/^[0-9a-f]{64}$/.test(data.catalog_id)&&Number.isFinite(data.expires_in_ms)&&data.expires_in_ms>0&&data.expires_in_ms<=60000&&Array.isArray(data.rows)&&data.rows.length>0&&data.rows.length<=256&&new Set(data.rows.map(row=>row?.id)).size===data.rows.length&&data.rows.every(row=>row&&typeof row.id==='string'&&row.id&&typeof row.label==='string'&&Array.isArray(row.efforts)&&row.efforts.length>0&&row.efforts.length<=32&&row.efforts.every(value=>typeof value==='string'&&value)&&new Set(row.efforts).size===row.efforts.length));}
 async function loadModelCatalog(){if(!pageActive())return;
@@ -762,7 +873,7 @@ function chatError(err){if(err&&err.code==='stale')return 'Сессия уста
 function clearHistoryScrollSlack(){historyScrollSlack=0;pinnedHistoryScope=null;historyScrollIntent=false;historyTouchY=null;historyScrollbarStartY=null;if(historyScrollSpacer){historyScrollSpacer.remove();historyScrollSpacer=null;}}
 function setHistoryScrollSlack(height){const bounded=Math.max(0,Math.min(window.innerHeight,Math.ceil(height)));historyScrollSlack=bounded;if(!bounded){clearHistoryScrollSlack();return;}if(!historyScrollSpacer){historyScrollSpacer=node('li',undefined,'history-scroll-slack');historyScrollSpacer.setAttribute('aria-hidden','true');historyScrollSpacer.append(document.createElementNS('http://www.w3.org/2000/svg','svg'));}const svg=historyScrollSpacer.firstElementChild;svg.setAttribute('width','0');svg.setAttribute('height',String(bounded));svg.setAttribute('focusable','false');const list=$('chat-items');if(historyScrollSpacer.parentNode!==list)list.append(historyScrollSpacer);}
 function clearHistoryView(){stopMessageAges();clearHistoryScrollSlack();historyData.delete(chatKey(selectedProject,selectedSession&&selectedSession.sid||''));$('chat-panel').hidden=true;$('history-new').hidden=true;$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-status').textContent='';$('history-retry').hidden=true;$('send-status').textContent='';$('history-truncated').hidden=true;$('native-attention').hidden=true;$('chat-draft').value='';}
-function openChat(row){if(!pageActive())return;if(!row||!UUID_RE.test(row.sid))return;const proven=selectedSession?.sid===row.sid&&selectedSession.proven===true;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;projectsSelectionProof=proven?null:selectionGeneration;selectedSession={proven,created:row.configuredCreated===true,sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;$('history-new').hidden=true;if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();loadHistory(false);loadModelCatalog();loadQueue(true);loadCapabilities();startPolling();}
+function openChat(row){if(!pageActive())return;closeQueueTransferDialog();if(!row||!UUID_RE.test(row.sid))return;const proven=selectedSession?.sid===row.sid&&selectedSession.proven===true;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;projectsSelectionProof=proven?null:selectionGeneration;selectedSession={proven,created:row.configuredCreated===true,sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;$('history-new').hidden=true;if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();loadHistory(false);loadModelCatalog();loadQueue(true);loadCapabilities();startPolling();}
 // INV-WSESS-37: immutable in-memory operations survive dialog closure, never retry POST.
 function exactFields(value,keys){return Boolean(value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key)));}
 function createState(project){if(!creates.has(project))creates.set(project,{operation:null,status:'draft',inFlight:false,loading:false,available:false,message:'',generation:0,auth:chatAuthGeneration});return creates.get(project);}
@@ -1257,7 +1368,7 @@ function renderHistory(key,force=false){
   $('native-attention').hidden=!(state.attention||(selectedSession&&selectedSession.needs));renderReceipts(key);
 }
 
-function statusText(status){return status==='queued'?'В очереди. Настройки сессии применятся при запуске.':status==='accepted'?'Сообщение принято Codex; работа может продолжаться.':status==='rejected'?'Codex отклонил сообщение; черновик сохранён.':status==='delivery_unknown'?'Доставка неизвестна. Проверьте статус вручную; отправка не повторяется автоматически.':status==='sending'?'Отправляем сообщение…':'Статус сообщения недоступен.';}
+function statusText(status){return status==='cancelled'?'Отменено.':status==='held'?'Снимок сохранён для ручного восстановления.':status==='queued'?'В очереди. Настройки сессии применятся при запуске.':status==='accepted'?'Сообщение принято Codex; работа может продолжаться.':status==='rejected'?'Codex отклонил сообщение; черновик сохранён.':status==='delivery_unknown'?'Доставка неизвестна. Проверьте статус вручную; отправка не повторяется автоматически.':status==='sending'?'Отправляем сообщение…':'Статус сообщения недоступен.';}
 function renderCurrentSendStatus(){if(acceptedStatusTimer!==null){pageClearTimer(acceptedStatusTimer);acceptedStatusTimer=null;}const key=currentSessionKey(),attempt=key&&latestAttempts.get(key);let slot=$('send-status');if(attempt&&attempt.statusNode&&attempt.statusNode!==slot){attempt.statusNode.setAttribute('aria-live',attempt.status==='accepted'?'off':'polite');slot.replaceWith(attempt.statusNode);slot=attempt.statusNode;}else if(attempt&&!attempt.statusNode){attempt.statusNode=slot;slot.setAttribute('aria-live','polite');}else if(!attempt&&slot.textContent){const empty=slot.cloneNode(false);empty.setAttribute('aria-live','polite');slot.replaceWith(empty);slot=empty;}$('send-check').hidden=!(attempt&&attempt.status==='delivery_unknown');$('send-check').disabled=Boolean(attempt&&statusChecks.has(key+'\u0000'+attempt.id));let text=attempt?(attempt.localError||statusText(attempt.status)):'';if(attempt&&attempt.status==='accepted'){const remaining=(attempt.acceptedUntil||0)-Date.now();if(remaining<=0)text='';else{const project=selectedProject,sid=selectedSession.sid,generation=selectionGeneration,id=attempt.id;acceptedStatusTimer=pageTimeout(()=>{acceptedStatusTimer=null;if(currentSessionKey()===key&&selectionGeneration===generation&&selectedSession&&selectedSession.sid===sid&&selectedProject===project&&latestAttempts.get(key)?.id===id)renderCurrentSendStatus();},remaining);}}if($('send-status').textContent!==text)$('send-status').textContent=text;}
 function renderReceipts(key=currentSessionKey()){const list=$('receipt-list');if(!list||!selectedSession||key!==currentSessionKey())return;const open=list.querySelector('details')?.open||false;const records=[...ensureReceipts(key).entries()].filter(([,record])=>['sending','delivery_unknown','rejected'].includes(record.status));list.replaceChildren();if(!records.length)return;const details=node('details');details.open=open;details.append(node('summary','Проблемы доставки ('+records.length+')'));for(const [id,record] of records.reverse()){const row=node('div',undefined,'receipt-row');row.append(node('span',record.checkError||statusText(record.status),'receipt-label'));if(record.status==='delivery_unknown'){const check=node('button','Проверить доставку','secondary');check.type='button';check.disabled=statusChecks.has(key+'\u0000'+id);check.addEventListener('click',()=>checkDelivery(key,id));row.append(check);}details.append(row);}list.append(details);}
 
@@ -1265,8 +1376,8 @@ function hasUnknown(key){return [...ensureReceipts(key).values()].some(entry=>en
 // applyReceipt updates passive outgoing labels. A delivery check must not
 // flush deferred history changes or disturb the current reader anchor.
 async function checkDelivery(key,id){if(!pageActive())return;if(statusChecks.has(key+'\u0000'+id))return;const [project,sid]=key.split('\u0000');if(project!==selectedProject||!selectedSession||sid!==selectedSession.sid)return;const generation=selectionGeneration,mark=key+'\u0000'+id;statusChecks.add(mark);renderCurrentSendStatus();renderReceipts(key);try{const data=await api(queryPath('/api/session-send-status',{project,sid,message_id:id}));if(!activeSelection(project,sid,generation))return;applyReceipt(key,data);const record=ensureReceipts(key).get(id);if(record)delete record.checkError;const attempt=latestAttempts.get(key);if(attempt&&attempt.id===id)delete attempt.localError;renderCurrentSendStatus();renderReceipts(key);}catch(err){if(err.stale)return;if(activeSelection(project,sid,generation)){const message=err.code==='stale'?'Эта отправка больше недоступна для проверки. Черновик сохранён.':chatError(err)+' Повторите ручную проверку.';const record=ensureReceipts(key).get(id);if(record&&!['accepted','rejected'].includes(record.status))record.checkError=message;const attempt=latestAttempts.get(key);if(attempt&&attempt.id===id&&!['accepted','rejected'].includes(attempt.status))attempt.localError=message;}}finally{statusChecks.delete(mark);if(activeSelection(project,sid,generation)){syncCurrentSessionControls();renderReceipts(key);}}}
-function applyReceipt(key,data){if(!data||!['sending','queued','accepted','delivery_unknown','rejected'].includes(data.status)||!UUID_RE.test(data.message_id||''))return;const id=data.message_id,map=ensureReceipts(key),existing=map.get(id),attempt=latestAttempts.get(key);const outgoing=historyData.get(key)?.outgoing.get(id);if(data.status==='queued'&&outgoing?.queueAbsent)return;const terminal=existing&&['accepted','rejected'].includes(existing.status)?existing:attempt&&attempt.id===id&&['accepted','rejected'].includes(attempt.status)?{status:attempt.status,turn_id:existing&&existing.turn_id||null}:null;if(terminal){if(outgoing)outgoing.status=terminal.status;map.set(id,terminal);if(attempt&&attempt.id===id)attempt.status=terminal.status;syncLocalOutgoingStatuses(key);return;}if(data.status==='sending'&&existing&&existing.status==='delivery_unknown')return;const record={status:data.status,turn_id:data.turn_id||null,...(data.queued_submission_id?{queued_submission_id:data.queued_submission_id}:{})};if(outgoing&&data.queued_submission_id)outgoing.queued_submission_id=data.queued_submission_id;if(existing?.checkError&&data.status==='delivery_unknown')record.checkError=existing.checkError;map.set(id,record);if(outgoing&&outgoing!==attempt)outgoing.status=record.status;if(attempt&&attempt.id===id){if(data.status==='accepted'&&attempt.status!=='accepted'&&attempt.text!==null)attempt.acceptedUntil=Date.now()+5000;attempt.status=data.status;if(!record.checkError)delete attempt.localError;}syncLocalOutgoingStatuses(key);}
-async function submitMessage(event){if(!pageActive()){event.preventDefault();notice('Панель восстанавливается');return;}event.preventDefault();if(!selectedSession||!selectedProject)return;const project=selectedProject,sid=selectedSession.sid,key=chatKey(project,sid),generation=selectionGeneration,auth=chatAuthGeneration,text=$('chat-draft').value;if(!text.trim()){$('send-status').textContent='Напишите сообщение перед отправкой.';return;}if(sendsInFlight.has(key))return;if(hasUnknown(key)){const attempt=latestAttempts.get(key);$('send-status').textContent=attempt&&attempt.text===text?'Для этой попытки уже сохранён ID. Проверьте доставку вручную.':'Сначала проверьте неизвестную доставку. Новый текст пока не отправлен.';renderReceipts(key);return;}const state=modelDraft(key);if(queueMode(key)&&state.modelId){$('send-status').textContent='Очередь использует настройки сессии при запуске. Для выбранной модели выберите режим «Сразу»; черновик сохранён.';return;}if(!explicitModelReady(key)){$('send-status').textContent='Выберите поддерживаемый уровень размышления или обновите каталог; черновик сохранён.';syncCurrentSessionControls();return;}const selection=state.modelId?Object.freeze({catalog_id:state.catalog.catalog_id,model_id:state.modelId,effort:state.effort}):null;let attempt=latestAttempts.get(key);if(!attempt||attempt.text!==text||['queued','accepted','rejected'].includes(attempt.status)){attempt={mode:queueMode(key)?'queue':'direct',id:crypto.randomUUID(),text,status:'sending',selection,selectionLabel:state.label,context:Object.freeze({project,sid,generation,auth})};latestAttempts.set(key,attempt);normalizeHistoryState(key).outgoing.set(attempt.id,attempt);ensureReceipts(key).set(attempt.id,{status:'sending',turn_id:null});}else if(attempt.status==='delivery_unknown'){$('send-status').textContent='Проверьте доставку вручную; повторная отправка отключена.';return;}else{attempt.status='sending';}
+function applyReceipt(key,data){if(!data||!['sending','held','cancelled','queued','accepted','delivery_unknown','rejected'].includes(data.status)||!UUID_RE.test(data.message_id||''))return;const id=data.message_id,map=ensureReceipts(key),existing=map.get(id),attempt=latestAttempts.get(key);const outgoing=historyData.get(key)?.outgoing.get(id);if(data.status==='queued'&&outgoing?.queueAbsent)return;if(['held','cancelled'].includes(existing?.status)&&data.status!=='accepted')return;const terminal=existing&&['accepted','rejected'].includes(existing.status)?existing:attempt&&attempt.id===id&&['accepted','rejected'].includes(attempt.status)?{status:attempt.status,turn_id:existing&&existing.turn_id||null}:null;if(terminal){if(outgoing)outgoing.status=terminal.status;map.set(id,terminal);if(attempt&&attempt.id===id)attempt.status=terminal.status;syncLocalOutgoingStatuses(key);return;}if(data.status==='sending'&&existing&&existing.status==='delivery_unknown')return;const record={status:data.status,turn_id:data.turn_id||null,...(data.queued_submission_id?{queued_submission_id:data.queued_submission_id}:{})};if(outgoing&&data.queued_submission_id)outgoing.queued_submission_id=data.queued_submission_id;if(existing?.checkError&&data.status==='delivery_unknown')record.checkError=existing.checkError;map.set(id,record);if(outgoing&&outgoing!==attempt)outgoing.status=record.status;if(attempt&&attempt.id===id){if(data.status==='accepted'&&attempt.status!=='accepted'&&attempt.text!==null)attempt.acceptedUntil=Date.now()+5000;attempt.status=data.status;if(!record.checkError)delete attempt.localError;}syncLocalOutgoingStatuses(key);}
+async function submitMessage(event){if(!pageActive()){event.preventDefault();notice('Панель восстанавливается');return;}event.preventDefault();if(!selectedSession||!selectedProject)return;const project=selectedProject,sid=selectedSession.sid,key=chatKey(project,sid),generation=selectionGeneration,auth=chatAuthGeneration,text=$('chat-draft').value;if(!text.trim()){$('send-status').textContent='Напишите сообщение перед отправкой.';return;}if(sendsInFlight.has(key))return;if(hasUnknown(key)){const attempt=latestAttempts.get(key);$('send-status').textContent=attempt&&attempt.text===text?'Для этой попытки уже сохранён ID. Проверьте доставку вручную.':'Сначала проверьте неизвестную доставку. Новый текст пока не отправлен.';renderReceipts(key);return;}const state=modelDraft(key);if(queueMode(key)&&state.modelId){$('send-status').textContent='Очередь использует настройки сессии при запуске. Для выбранной модели выберите режим «Сразу»; черновик сохранён.';return;}if(!explicitModelReady(key)){$('send-status').textContent='Выберите поддерживаемый уровень размышления или обновите каталог; черновик сохранён.';syncCurrentSessionControls();return;}const selection=state.modelId?Object.freeze({catalog_id:state.catalog.catalog_id,model_id:state.modelId,effort:state.effort}):null;let attempt=latestAttempts.get(key);if(!attempt||attempt.text!==text||['queued','held','cancelled','accepted','rejected'].includes(attempt.status)){attempt={mode:queueMode(key)?'queue':'direct',id:crypto.randomUUID(),text,status:'sending',selection,selectionLabel:state.label,context:Object.freeze({project,sid,generation,auth})};latestAttempts.set(key,attempt);normalizeHistoryState(key).outgoing.set(attempt.id,attempt);ensureReceipts(key).set(attempt.id,{status:'sending',turn_id:null});}else if(attempt.status==='delivery_unknown'){$('send-status').textContent='Проверьте доставку вручную; повторная отправка отключена.';return;}else{attempt.status='sending';}
   sendsInFlight.add(key);renderHistory(key);syncCurrentSessionControls();$('send-status').textContent='Отправляем сообщение…';renderReceipts(key);if(scrollScopeMatches(project,sid,generation))scrollToDocumentBottom();try{let result;try{result=await api(attempt.mode==='queue'?'/api/session-queue':'/api/session-send',{project,sid,message_id:attempt.id,text:attempt.text,...(attempt.selection?{selection:attempt.selection}:{})});}catch(err){if(err.stale)return;if(!csrf||chatAuthGeneration!==auth)return;if(err.data&&['queued','accepted','rejected','delivery_unknown'].includes(err.data.status))result=err.data;else if(['invalid_request','forbidden','unauthorized','stale'].includes(err.code)){attempt.status='rejected';if(attempt.selection&&err.code==='stale'){state.stale=true;state.message='Каталог моделей устарел. Обновите список моделей; выбор и черновик сохранены.';}attempt.localError=err.message+' Черновик сохранён; отправка не повторялась.';ensureReceipts(key).delete(attempt.id);if(activeSelection(project,sid,generation)){renderHistory(key);$('send-status').textContent=attempt.localError;}return;}else{result={status:'delivery_unknown',message_id:attempt.id,turn_id:null};}}if(!csrf||chatAuthGeneration!==auth)return;if(!result.message_id)result.message_id=attempt.id;applyReceipt(key,result);if(!ensureReceipts(key).has(attempt.id))applyReceipt(key,{status:'delivery_unknown',message_id:attempt.id,turn_id:null});attempt.status=ensureReceipts(key).get(attempt.id).status;if(['queued','accepted'].includes(attempt.status)&&drafts.get(key)===text){drafts.delete(key);if(activeSelection(project,sid,generation)&&$('chat-draft').value===text)$('chat-draft').value='';}if(activeSelection(project,sid,generation)){renderHistory(key);renderCurrentSendStatus();renderReceipts(key);}}finally{if(chatAuthGeneration===auth){sendsInFlight.delete(key);syncLocalOutgoingStatuses(key);}syncCurrentSessionControls();}}
 function historyChange(){if(lifecycleV2){if(document.visibilityState==='hidden')closePageGate();return;}if(document.visibilityState==='hidden'){stopPolling();stopDevbusView();devbusAdmitted=false;}else if(currentTab==='devbus'){admitDevbusView();}else{syncCurrentSessionControls();startPolling();loadQueue(true);if(liveTransport)liveJSON(liveTransport).then(result=>{if(result)acceptLiveLease(liveTransport,result.data,result.started);}).catch(()=>{});}}
 function historyPinActive(){return Boolean(historyScrollSlack&&pinnedHistoryScope&&selectedSession&&pinnedHistoryScope.project===selectedProject&&pinnedHistoryScope.sid===selectedSession.sid&&pinnedHistoryScope.generation===selectionGeneration);}

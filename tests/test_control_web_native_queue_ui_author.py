@@ -55,3 +55,70 @@ class QueueUIAuthor(unittest.TestCase):
         expect(self.page.locator('textarea')).to_have_value('')
         expect(self.page.locator('#send-status')).to_contain_text('принято')
         self.assertTrue(self.page.locator('#chat-send').is_enabled())
+
+
+class QueueRecoveryShadowUIAuthor(unittest.TestCase):
+    for name in ('setUpClass','setUp','tearDown','select','until','send_button','send','user_history'):
+        locals()[name]=fixture.NativeQueueBrowserBlind.__dict__[name]
+
+    def seed_held(self,unrelated=False):
+        self.backend.queue_rows[fixture.live.SID]=[]
+        value=fixture.live.history()
+        value['recent_sends']=[dict(status='delivery_unknown',message_id=fixture.q.MID,turn_id=None)]
+        if unrelated:value['recent_sends'].append(dict(status='delivery_unknown',message_id=fixture.q.ACTION,turn_id=None))
+        self.backend.value=value
+        original=self.backend.session_queue
+        def queue(project,sid):
+            result=original(project,sid);result['recovery']=[dict(action_id='99999999-9999-4999-8999-999999999999',
+                queued_submission_id='own-held-qid',text=fixture.q.TEXT,status='held',reason='target_changed')]
+            return result
+        self.backend.session_queue=queue
+        self.status_calls=[]
+        def status(project,sid,mid):
+            self.status_calls.append(mid)
+            if mid==fixture.q.MID:return dict(status='held',message_id=mid,queued_submission_id='own-held-qid',turn_id=None,reason='target_changed')
+            return dict(status='delivery_unknown',message_id=mid,turn_id=None)
+        self.backend.session_send_status=status
+
+    def test_reload_own_unknown_held_copy_then_explicit_new_UUID_send(self):
+        self.seed_held();self.select()
+        self.page.evaluate('window.copyUUIDs=0;const original=crypto.randomUUID.bind(crypto);crypto.randomUUID=()=>{copyUUIDs++;return original()};undefined')
+        self.page.get_by_role('button',name='В черновик',exact=True).click()
+        self.until(lambda:self.page.locator('#chat-send').is_enabled())
+        self.assertEqual(self.status_calls,[fixture.q.MID]);self.assertEqual(self.page.evaluate('copyUUIDs'),0)
+        self.assertEqual([r for r in self.requests if r[0]=='POST'],[])
+        late=fixture.live.history('Late old unknown history')
+        late['recent_sends']=[dict(status='delivery_unknown',message_id=fixture.q.MID,turn_id=None)]
+        self.fixture.transport.emit(fixture.live.snapshot(2,value=late))
+        expect(self.page.get_by_text('Late old unknown history',exact=True)).to_have_count(1)
+        self.assertTrue(self.page.locator('#chat-send').is_enabled())
+        self.send_button().click();self.until(lambda:len(self.backend.enqueue_calls)==1)
+        self.assertNotEqual(self.backend.enqueue_calls[0][2],fixture.q.MID)
+        self.assertEqual(self.backend.enqueue_calls[0][3],fixture.q.TEXT)
+
+    def test_copy_held_does_not_clear_an_unrelated_unknown_blocker(self):
+        self.seed_held(unrelated=True);self.select();self.page.get_by_role('button',name='В черновик',exact=True).click()
+        self.until(lambda:len(self.status_calls)==2)
+        expect(self.page.locator('textarea')).to_have_value(fixture.q.TEXT)
+        self.assertFalse(self.page.locator('#chat-send').is_enabled())
+        self.assertEqual([r for r in self.requests if r[0]=='POST'],[])
+
+    def test_confirmed_cancel_retires_only_matching_original_status_despite_late_unknown(self):
+        self.page.clock.install();self.select();self.send();expect(self.page.locator('textarea')).to_have_value('')
+        mid=self.backend.enqueue_calls[0][2]
+        row=self.page.get_by_text(fixture.q.TEXT,exact=True).locator('xpath=ancestor::*[.//button][1]')
+        row.get_by_role('button',name='Отменить',exact=True).click()
+        expect(self.page.locator('#send-status')).to_contain_text('Отменено')
+        late=fixture.live.history('Late cancelled original unknown history')
+        late['recent_sends']=[dict(status='delivery_unknown',message_id=mid,turn_id=None)]
+        self.fixture.transport.emit(fixture.live.snapshot(2,value=late))
+        expect(self.page.get_by_text('Late cancelled original unknown history',exact=True)).to_have_count(1)
+        expect(self.page.locator('#send-status')).to_contain_text('Отменено')
+        self.backend.queue_rows[fixture.live.SID]=[fixture.q.public_row('queue-'+mid,mid,fixture.q.TEXT)]
+        self.page.clock.fast_forward(11000)
+        expect(self.page.get_by_text(fixture.q.TEXT,exact=True)).to_have_count(0)
+        expect(self.page.locator('#send-status')).to_contain_text('Отменено')
+        self.send('Explicit fresh message after confirmed cancel')
+        self.until(lambda:len(self.backend.enqueue_calls)==2)
+        self.assertNotEqual(self.backend.enqueue_calls[1][2],mid)
+        self.assertEqual(len(self.backend.cancel_calls),1)

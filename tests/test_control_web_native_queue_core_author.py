@@ -34,6 +34,12 @@ class QueueProjectionAuthor(s.QueueModuleCase):
         self.assertEqual(self.enqueue(chat=self.new_chat())['status'],'delivery_unknown')
         self.assertEqual(self.mutation_methods(),['thread/queue/add'])
 
+    def test_confirmed_cancel_derives_original_status_without_replaying_enqueue(self):
+        self.enqueue();self.assertEqual(self.cancel()['status'],'cancelled')
+        self.assertEqual(self.invoke('send_status','demo',s.SID,s.MID)['status'],'cancelled')
+        self.assertEqual(self.enqueue(chat=self.new_chat())['status'],'cancelled')
+        self.assertEqual(self.mutation_methods(),['thread/queue/add','thread/queue/delete'])
+
     def test_enqueue_UUID_cannot_be_reused_as_direct_send(self):
         self.enqueue()
         self.assertEqual(self.invoke('send','demo',s.SID,s.MID,s.TEXT),{'error':'invalid_request'})

@@ -622,6 +622,8 @@ def capabilities_result(value):
         return {'error': 'unavailable'}
 
 def queue_mutation_result(value, message_id, queued_submission_id=None):
+    if type(value) is dict and value.get('status') == 'held':
+        return queue_transfer_result(value, message_id, queued_submission_id or value.get('queued_submission_id'))
     if type(value) is not dict:
         return {'error': 'unavailable'}
     if 'error' in value:

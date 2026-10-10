@@ -28,6 +28,32 @@ class TransferPersistenceAuthor(s.QueueModuleCase):
         self.assertEqual(self.transfer(chat=self.new_chat())['status'],'delivery_unknown')
         self.assertEqual(self.mutation_methods(),['thread/queue/delete','turn/steer'])
 
+    def test_original_enqueue_held_shadow_and_lost_ACK_association_are_payload_fenced(self):
+        for mismatch in (False,True):
+            with self.subTest(mismatch=mismatch):
+                self.rpc=transfer.TransferRPC(self.project);self.chat=self.new_chat()
+                mid='77777777-7777-4777-8777-777777777777' if mismatch else s.MID
+                self.rpc.queue_pages[None]['data']=[];self.rpc.add_error=TimeoutError('Synthetic lost add ACK')
+                self.assertEqual(self.enqueue(mid=mid)['status'],'delivery_unknown')
+                if mismatch:self.rpc.queue_pages[None]['data'][0]['input'][0]['text']='Reused clientID different payload'
+                self.rpc.after_delete=lambda:setattr(self.rpc,'active_turn',transfer.SUCCESSOR)
+                action='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' if mismatch else s.ACTION
+                snapshot='Reused clientID different payload' if mismatch else s.TEXT
+                result=self.invoke('send_queued_now','demo',s.SID,s.QID,action,snapshot,transfer.TARGET)
+                self.assertEqual(result['status'],'held')
+                original=self.invoke('send_status','demo',s.SID,mid)
+                self.assertEqual(original['status'],'delivery_unknown' if mismatch else 'held')
+                self.assertEqual(len(self.rpc.calls_for('thread/queue/add')),1)
+                self.assertEqual(self.rpc.calls_for('turn/steer'),[])
+
+    def test_known_qid_mismatch_transfer_never_confirms_original_enqueue(self):
+        self.rpc.queue_pages[None]['data']=[];self.enqueue()
+        self.rpc.queue_pages[None]['data']=[s.native_row('different-qid',s.MID,s.TEXT)]
+        result=self.invoke('send_queued_now','demo',s.SID,'different-qid',s.ACTION,s.TEXT,transfer.TARGET)
+        self.assertEqual(result['status'],'accepted')
+        original=self.invoke('send_status','demo',s.SID,s.MID)
+        self.assertEqual(original['status'],'delivery_unknown')
+
     def test_active_proof_failure_does_not_disable_native_queue_or_private_recovery(self):
         module=self.module
         class Fault(transfer.TransferRPC):
