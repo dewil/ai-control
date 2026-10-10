@@ -20,7 +20,7 @@ UNPIN=re.compile(r'Открепить|Удалить закрепление',re.
 class NavigationBackend(core.BrowserQueueBackend):
     def __init__(self):
         super().__init__();self.pin_rows=[s.pin_item(),s.pin_item(q.OTHER,'other',q.OTHER,'Pinned synthetic B')]
-        self.nav_calls=[];self.start_state='started';self.start_support=True;self.start_receipts={}
+        self.nav_calls=[];self.start_state='started';self.start_support=True;self.start_receipts={};self.start_receipt_scopes={};self.blocked_queue_ids={}
     def session_projects(self):return dict(projects=[dict(name='demo'),dict(name='other')])
     def session_project_summary(self):
         value=super().session_project_summary();value['projects'].append({**value['projects'][0],'name':'other'});return value
@@ -35,12 +35,16 @@ class NavigationBackend(core.BrowserQueueBackend):
         self.nav_calls.append(('unpin',principal,pin_id));self.pin_rows=[row for row in self.pin_rows if row['pin_id']!=pin_id]
         return dict(schema=1,pin_id=pin_id,pinned=False)
     def session_queue_start_support(self,project,sid):
-        self.nav_calls.append(('support',project,sid));return dict(schema=1,supported=self.start_support,reason=None if self.start_support else 'not_idle')
+        self.nav_calls.append(('support',project,sid))
+        blocked=set(self.blocked_queue_ids.get((project,sid),[]))
+        blocked.update(result['queued_submission_id'] for action,result in self.start_receipts.items()
+            if result['status']=='delivery_unknown' and self.start_receipt_scopes.get(action)==(project,sid))
+        return dict(schema=1,supported=self.start_support,reason=None if self.start_support else 'not_idle',blocked_queue_ids=sorted(blocked))
     def session_queue_start(self,project,sid,qid,action):
         self.nav_calls.append(('start',project,sid,qid,action))
         result=dict(status=self.start_state,message_id=action,queued_submission_id=qid,turn_id=live.TURN if self.start_state=='started' else None,
                     reason=None if self.start_state=='started' else 'unavailable')
-        self.start_receipts[action]=deepcopy(result);return result
+        self.start_receipts[action]=deepcopy(result);self.start_receipt_scopes[action]=(project,sid);return result
     def session_send_status(self,project,sid,mid):
         return deepcopy(self.start_receipts[mid]) if mid in self.start_receipts else super().session_send_status(project,sid,mid)
 

@@ -56,7 +56,7 @@ def pin_item(pin_id=q.MID,project='demo',sid=q.SID,title='Pinned synthetic A',av
 
 class Backend(q.QueueBackend):
     def __init__(self):
-        super().__init__();self.pin_value=dict(schema=1,items=[pin_item()]);self.support_value=dict(schema=1,supported=True,reason=None)
+        super().__init__();self.pin_value=dict(schema=1,items=[pin_item()]);self.support_value=dict(schema=1,supported=True,reason=None,blocked_queue_ids=[])
         self.start_value=None
     def session_pins(self,principal):self.calls.append(('pins',principal));return deepcopy(self.pin_value)
     def session_pin(self,principal,project,sid):

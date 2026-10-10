@@ -100,7 +100,7 @@ class PinnedSessionsBlind(s.ModuleCase):
 class NativeQueueStartBlind(s.ModuleCase):
     def test_exact_fenced_selected_row_typed_ACK_and_replay(self):
         # INV-QSTART-01 INV-QSTART-03 INV-QSTART-05 INV-QSTART-06
-        self.assertEqual(self.support(),dict(schema=1,supported=True,reason=None))
+        self.assertEqual(self.support(),dict(schema=1,supported=True,reason=None,blocked_queue_ids=[]))
         self.rpc.before_wire=lambda:self.assert_reservation(q.ACTION)
         result=self.start_action();self.assertEqual(result,self.start_result())
         self.assertEqual(self.wire_starts(),[dict(threadId=q.SID,queuedSubmissionId=q.QID)])

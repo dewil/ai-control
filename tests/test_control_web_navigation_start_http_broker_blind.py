@@ -68,7 +68,7 @@ class NavigationStartHTTPBlind(unittest.TestCase):
         for value in cases:
             self.backend.pin_value=value;response=self.client.get('/api/session-pins')
             self.assertGreaterEqual(response.status_code,400);self.assertNotIn('/private',response.text)
-        self.backend.support_value=dict(schema=1,supported=True,reason='not_idle')
+        self.backend.support_value=dict(schema=1,supported=True,reason='not_idle',blocked_queue_ids=[])
         self.assertGreaterEqual(self.client.get(self.support).status_code,400)
         self.backend.start_value=dict(status='started',message_id=q.ACTION,queued_submission_id=q.QID,turn_id=None,reason=None)
         self.assertGreaterEqual(self.client.post('/api/session-queue-start',json=self.start,headers=self.headers()).status_code,400)
