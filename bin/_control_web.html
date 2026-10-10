@@ -32,10 +32,13 @@
       <div id="receipt-list" class="receipt-list"></div>
       <p id="model-status" class="meta" role="status" aria-live="polite"></p>
       <p id="current-model-status" class="meta" aria-describedby="session-settings-note">Сессия: модель неизвестна · Размышление: уровень неизвестен</p>
+      <p id="queue-status" class="meta" role="status"></p>
+      <p id="capability-status" class="meta" role="status"></p>
       <form id="chat-form">
         <div class="next-selection">
           <p id="next-model-status" class="meta">Следующая отправка: настройки сессии</p>
           <p id="next-model-hint" class="meta" hidden></p>
+          <label for="chat-mode">Режим отправки<select id="chat-mode"><option value="queue">В очередь</option><option value="direct">Сразу</option></select></label>
           <label for="chat-draft">Сообщение</label><textarea id="chat-draft" maxlength="16000" autocomplete="off" aria-describedby="session-settings-note"></textarea>
           <div class="chat-actions">
             <button id="chat-send" type="submit">Отправить</button>

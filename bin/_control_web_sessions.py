@@ -1766,6 +1766,7 @@ class SessionChat:
         elif matches or conflict:
             record.update(status='delivery_unknown', reason='conflict')
         else:
+            record.update(status='delivery_unknown', reason=None)
             try:
                 _need(context['native_version'] == '0.161.0', 'unsupported_queue')
                 listing, texts = self._queue_listing(project, root, sid, context)

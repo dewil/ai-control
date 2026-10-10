@@ -26,6 +26,14 @@ class QueueProjectionAuthor(s.QueueModuleCase):
         self.assertEqual(history['recent_sends'],[])
         self.assertNotIn('turn/start',self.rpc.methods())
 
+    def test_manual_status_after_queue_disappearance_cannot_resurrect_stale_ACK(self):
+        self.assertEqual(self.enqueue()['status'],'queued')
+        self.rpc.queue_pages[None]['data']=[]
+        result=self.invoke('send_status','demo',s.SID,s.MID)
+        self.assertEqual(result['status'],'delivery_unknown')
+        self.assertEqual(self.enqueue(chat=self.new_chat())['status'],'delivery_unknown')
+        self.assertEqual(self.mutation_methods(),['thread/queue/add'])
+
     def test_enqueue_UUID_cannot_be_reused_as_direct_send(self):
         self.enqueue()
         self.assertEqual(self.invoke('send','demo',s.SID,s.MID,s.TEXT),{'error':'invalid_request'})
