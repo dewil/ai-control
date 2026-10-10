@@ -1,0 +1,21 @@
+# Native queue core implementation checkpoint
+
+Author worktree `/data/git/ai-control-native-message-queue`, branch `feat/native-message-queue`. Assigned base da2bfa4; root docs-only a087be0 and independent contract migration6e9dd76→f207c48 / loaded fixture82290af→04e37ca integrated. Existing independent module14/HTTP-broker13 tests are unchanged by this author; transfer HTTP RED lives separately and is not claimed GREEN.
+
+Runtime changes are `_control_web_sessions.py`, `_control_web_broker.py`, `_control_web.py` only. Native list/add/delete are fixed allowlisted operations with per-operation0.161/full generation/root/thread proof. Passive queue reads never resume. Explicit unloaded enqueue can fenced-resume only after durable UUID intent. Existing private per-thread receipt namespace/lock/fsync/symlink/owner/Git-sync exclusions are reused; schema3 queue/action records remain digest-only and share UUID protection with direct send. Cancel actions replay their own original result; add/delete ambiguity never authorizes another native mutation. Native queue owns pending text/order/dispatch; no Control completion pump or turn/start fallback. Queue status uses exact queue payload digest or authoritative user-message history, with accepted history strongest and explicit conflict. Existing history recent_sends remains its original schema, excluding queued rows/cancel actions.
+
+All broker/HTTP layers validate public DTOs, reject extra/private scope fields, retain strict CSRF/Origin/session/peer handling and collapse raw errors. Queue POST delivery_unknown is503; read/status reconciliation200. Projection keeps complete text/ordered prefix inside existing96KiB/128KiB broker bounds and marks partial; omitted rows cannot authorize cancel. Known absent native list method is explicit unsupported_queue. Existing0.160 direct send/history/version behavior is unchanged; capability negotiation is a separate upcoming slice.
+
+Synthetic-only commands from this worktree:
+
+```sh
+PYTHONPATH=tests /var/tmp/control-devbus-test-venv/bin/python -m unittest -v test_control_web_native_queue_module_blind test_control_web_native_queue_http_broker_blind
+PYTHONPATH=tests /var/tmp/control-devbus-test-venv/bin/python -m unittest -v test_control_web_native_queue_module_blind test_control_web_native_queue_http_broker_blind test_control_web_session_chat_contract test_control_web_session_models_http_broker
+PYTHONPATH=tests /var/tmp/control-devbus-test-venv/bin/python -m unittest -v test_control_web_native_queue_core_author
+```
+
+Baseline27 had61 failing assertion outcomes/0ERROR4.251s; module failures were interim missing seams, not executed semantic acceptance (`/var/tmp/control-native-queue-core-baseline-red.log`). After implementation all27 passed2.489s, including actual durable reservation/restart/concurrency/ACK-loss/history-conflict/cancel/capacity/fence assertions (`/var/tmp/control-native-queue-core-first-green.log`). Focused existing compatibility **83PASS/0FAIL/ERROR/SKIP**,7.018s (`/var/tmp/control-native-queue-core-focused-existing.log`). Separate author five **5PASS/0FAIL/ERROR/SKIP**,0.729s (`/var/tmp/control-native-queue-core-author.log`): actual Unix wire bounded prefix, large module projection/partial visible cancel boundary, queue/cancel receipts preserving history envelope, cross-mode UUID refusal, and native known-method absence. Author gap checks are supplemental, not blind RED. Python compilation and git diff check PASS.
+
+No UI implementation yet. UI RED861d572 and CAP REDb24ab9c are ready for sequential integration after this core commit. Transfer core mutation/recovery remains blocked until its independent module RED; only its HTTP packet has landed. Geometry fixture26c505 is a separately root-reviewed test-only migration for final integration. Full CI and independent SOURCE run only after the whole integrated implementation/source-fix batch is stable, per root instruction.
+
+No production/native RPC/auth/config/service/restart/deploy/push/paid API call. Actual native queue/server restart/desktop interoperability/crash tests are NOTRUN, and no vendor exactly-once or account-principal binding is claimed. Test payloads are synthetic; private receipt IO only `/var/tmp`. Tokens/money unknown, coverage partial; root owns umbrella owners/ledger.

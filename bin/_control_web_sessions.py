@@ -27,6 +27,9 @@ SUPPORTED_NATIVE_VERSIONS = ('0.160.0', '0.161.0')
 
 class RPCRejected(RuntimeError):
     """Validated server error; does not prove a message was never accepted."""
+    def __init__(self, message, rpc_code=None):
+        super().__init__(message)
+        self.rpc_code = rpc_code
 
 
 class _DomainError(Exception):
@@ -240,7 +243,21 @@ class _Receipts:
             _budget(deadline)
             _need(type(record) is dict)
             fields = {'root', 'sid', 'message_id', 'digest', 'status', 'turn_id', 'created'}
-            if 'schema' in record:
+            if record.get('schema') == 3:
+                _need(set(record) == fields | {'schema', 'context_id', 'kind',
+                      'queued_submission_id', 'reason'} and type(record['schema']) is int
+                      and record['kind'] in ('queue_enqueue', 'queue_cancel')
+                      and type(record['context_id']) is str
+                      and re.fullmatch('[0-9a-f]{64}', record['context_id'])
+                      and (record['queued_submission_id'] is None or _identity(record['queued_submission_id']))
+                      and record['reason'] in (None, 'conflict', 'unavailable', 'stale', 'unsupported_queue'))
+                if context_id is not None:
+                    _need(record['context_id'] == context_id, 'invalid_request')
+                _need(record['status'] in (('queued', 'accepted', 'delivery_unknown')
+                      if record['kind'] == 'queue_enqueue' else ('cancelled', 'changed', 'delivery_unknown')))
+                _need(record['kind'] != 'queue_cancel' or _identity(record['queued_submission_id']))
+                _need(record['status'] != 'queued' or _identity(record['queued_submission_id']))
+            elif 'schema' in record:
                 _need(set(record) == fields | {'schema', 'context_id', 'selection'}
                       and type(record['schema']) is int and record['schema'] == 2)
                 _need(type(record['context_id']) is str
@@ -253,7 +270,7 @@ class _Receipts:
                 _need(set(record) == fields)
             _need(record['root'] == root and record['sid'] == sid and record['message_id'] == mid)
             _need(type(record['digest']) is str and re.fullmatch('[0-9a-f]{64}', record['digest']))
-            _need(record['status'] in ('accepted', 'delivery_unknown', 'rejected'))
+            _need(record.get('schema') == 3 or record['status'] in ('accepted', 'delivery_unknown', 'rejected'))
             _need(record['turn_id'] is None or _identity(record['turn_id']))
             _need(record['status'] != 'accepted' or _identity(record['turn_id']))
             _need(type(record['created']) is int and record['created'] > 0)
@@ -288,6 +305,11 @@ class _Receipts:
 
     @staticmethod
     def result(record):
+        if record.get('schema') == 3 and record['status'] != 'accepted':
+            result = {key: record[key] for key in ('status', 'message_id', 'queued_submission_id')}
+            if record['reason'] is not None:
+                result['reason'] = record['reason']
+            return result
         return {key: record[key] for key in ('status', 'message_id', 'turn_id')}
 
     def names(self, ns, deadline, reserve=False):
@@ -323,9 +345,14 @@ class _Receipts:
         records = [self.read(ns, root, sid, mid, deadline, context_id) for mid in self.names(ns, deadline)]
         _budget(deadline)
         _need(all(record is not None for record in records))
+        # Queue rows have their own native projection; cancellation actions are
+        # not outgoing chat messages. Keep the existing history receipt schema.
+        records = [record for record in records if record.get('kind') != 'queue_cancel'
+                   and record['status'] != 'queued']
         records.sort(key=lambda record: (record['created'], record['message_id']), reverse=True)
         _budget(deadline)
-        return [self.result(record) for record in records[:8]]
+        return [{key: record[key] for key in ('status', 'message_id', 'turn_id')}
+                for record in records[:8]]
 
 
 class RenameStore(_Receipts):
@@ -1533,6 +1560,238 @@ class SessionChat:
                 self._summary_revision += 1
             return self._rename_result(record, name)
 
+    @staticmethod
+    def _queue_unavailable():
+        return dict(schema=1, vendor='codex', supported=False, reason='unsupported_queue',
+                    rows=[], partial=False, send_now_supported=False, active_turn_id=None,
+                    send_now_reason='unsupported_queue', recovery=[])
+
+    def _queue_scope(self, project, sid):
+        _need(valid_uuid(sid), 'invalid_request')
+        root = self._root(project)
+        thread = self._proof(root, sid)
+        context = self._catalog_context()
+        reason = self._catalog_reason(context)
+        if reason == 'unverified_context':
+            _need(False)
+        if reason or context['native_version'] != '0.161.0' or not callable(getattr(self.rpc, 'call_in_generation', None)):
+            return root, thread, None
+        thread = self._queue_proof(project, root, sid, context)
+        return root, thread, context
+
+    def _queue_proof(self, project, root, sid, context, method='thread/read'):
+        params = dict(threadId=sid)
+        params['excludeTurns' if method == 'thread/resume' else 'includeTurns'] = method == 'thread/resume'
+        thread = self._send_fenced(method, params, context).get('thread')
+        _need(type(thread) is dict and thread.get('id') == sid and type(thread.get('cwd')) is str
+              and os.path.isabs(thread['cwd']) and canonical(thread['cwd']) == root, 'stale')
+        status = thread.get('status')
+        _need(type(status) is dict and status.get('type') in ('idle', 'active', 'notLoaded', 'systemError'))
+        if status['type'] == 'active':
+            _need(type(status.get('activeFlags')) is list and all(type(flag) is str for flag in status['activeFlags']))
+        _need(method != 'thread/resume' or status['type'] != 'notLoaded', 'stale')
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        return thread
+
+    @staticmethod
+    def _queue_text(row):
+        from _control_web_broker import valid_queue_id
+        _need(type(row) is dict and set(row) == {'id', 'clientUserMessageId', 'input'}
+              and valid_queue_id(row['id']) and valid_queue_id(row['clientUserMessageId'])
+              and type(row['input']) is list and 0 < len(row['input']) <= 256)
+        texts = []
+        for part in row['input']:
+            _need(type(part) is dict and set(part) in ({'type', 'text'}, {'type', 'text', 'text_elements'})
+                  and part['type'] == 'text' and type(part['text']) is str
+                  and part.get('text_elements', []) == [])
+            texts.append(part['text'])
+        text = '\n'.join(texts)
+        _need(0 < len(text) <= 16000)
+        text.encode('utf-8')
+        return text
+
+    @staticmethod
+    def _queue_digest(context_id, root, sid, kind, value):
+        return hashlib.sha256(_json(dict(context_id=context_id, root=root, sid=sid,
+                                         kind=kind, value=value))).hexdigest()
+
+    def _queue_listing(self, project, root, sid, context):
+        from _control_web_broker import redact, queue_result
+        rows, texts, ids, clients, cursors = [], {}, set(), set(), set()
+        cursor, partial, total = None, False, 0
+        for index in range(4):
+            params = dict(threadId=sid, limit=64)
+            if cursor is not None:
+                params['cursor'] = cursor
+            try:
+                page = self._send_fenced('thread/queue/list', params, context)
+            except RPCRejected as error:
+                if error.rpc_code == -32601:
+                    raise _DomainError('unsupported_queue') from None
+                raise
+            _need(set(page) in ({'data'}, {'data', 'nextCursor'})
+                  and type(page['data']) is list and len(page['data']) <= 64
+                  and valid_cursor(page.get('nextCursor')))
+            for row in page['data']:
+                text = self._queue_text(row)
+                _need(row['id'] not in ids and row['clientUserMessageId'] not in clients, 'conflict')
+                ids.add(row['id']); clients.add(row['clientUserMessageId'])
+                total += len(text.encode('utf-8'))
+                _need(total <= 4 * 1024 * 1024)
+                texts[row['id']] = text
+                rows.append(dict(queued_submission_id=row['id'], message_id=row['clientUserMessageId'],
+                                 text=redact(text), state='queued'))
+            cursor = page.get('nextCursor')
+            if cursor is None:
+                break
+            _need(cursor not in cursors, 'conflict'); cursors.add(cursor)
+            partial = index == 3
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        result = queue_result(dict(schema=1, vendor='codex', supported=True, reason=None,
+                     rows=rows, partial=partial, send_now_supported=False))
+        _need('error' not in result)
+        return result, texts
+
+    @_operation
+    def queue(self, project, sid):
+        root, _, context = self._queue_scope(project, sid)
+        if context is None:
+            return self._queue_unavailable()
+        try:
+            return self._queue_listing(project, root, sid, context)[0]
+        except RPCRejected as error:
+            if error.rpc_code == -32601:
+                return self._queue_unavailable()
+            raise
+        except _DomainError as error:
+            if error.code == 'unsupported_queue':
+                return self._queue_unavailable()
+            if error.code == 'conflict':
+                raise _DomainError('unavailable') from None
+            raise
+
+    def _queue_record(self, context, root, sid, mid, kind, value):
+        return dict(schema=3, kind=kind, context_id=context['context_id'], root=root, sid=sid,
+                    message_id=mid, digest=self._queue_digest(context['context_id'], root, sid, kind, value),
+                    status='delivery_unknown', turn_id=None, created=time.time_ns(), reason=None,
+                    queued_submission_id=value if kind == 'queue_cancel' else None)
+
+    def _queue_reconcile(self, ns, record, project, root, sid, context):
+        if record['status'] == 'accepted':
+            return self.receipts.result(record)
+        matches, conflict, cursor, seen = [], False, None, set()
+        for _ in range(8):
+            _need(self._catalog_context() == context, 'stale')
+            page = self._page(sid, cursor)
+            _need(self._catalog_context() == context, 'stale')
+            for turn in page['data']:
+                for item in turn['items']:
+                    if item['type'] == 'userMessage' and item.get('clientId') == record['message_id']:
+                        parts = item['content']
+                        text = '\n'.join(part['text'] for part in parts if part['type'] == 'text')
+                        digest = self._queue_digest(record['context_id'], root, sid, 'queue_enqueue', text)
+                        if any(part['type'] != 'text' for part in parts) or digest != record['digest']:
+                            conflict = True
+                        else:
+                            matches.append(turn['id'])
+            cursor = page['nextCursor']
+            if cursor is None:
+                break
+            _need(cursor not in seen);seen.add(cursor)
+        if len(matches) == 1 and not conflict:
+            record.update(status='accepted', turn_id=matches[0], reason=None)
+        elif matches or conflict:
+            record.update(status='delivery_unknown', reason='conflict')
+        else:
+            try:
+                _need(context['native_version'] == '0.161.0', 'unsupported_queue')
+                listing, texts = self._queue_listing(project, root, sid, context)
+                rows = [row for row in listing['rows'] if row['message_id'] == record['message_id']]
+                if rows:
+                    row = rows[0]
+                    digest = self._queue_digest(record['context_id'], root, sid, 'queue_enqueue', texts[row['queued_submission_id']])
+                    if digest != record['digest']:
+                        record.update(status='delivery_unknown', reason='conflict')
+                    else:
+                        record.update(status='queued', queued_submission_id=row['queued_submission_id'], reason=None)
+            except _DomainError as error:
+                if error.code == 'stale':
+                    raise
+                if error.code == 'conflict':
+                    record.update(status='delivery_unknown', reason='conflict')
+                else:
+                    record['reason'] = error.code if error.code == 'unsupported_queue' else 'unavailable'
+            except Exception:
+                record['reason'] = 'unavailable'
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        self.receipts.write(ns, record, self._local.deadline)
+        return self.receipts.result(record)
+
+    @_operation
+    def enqueue(self, project, sid, message_id, text, selection=None):
+        _need(valid_uuid(message_id) and type(text) is str and 0 < len(text) <= 16000 and bool(text.strip()), 'invalid_request')
+        text.encode('utf-8')
+        _need(selection is None, 'queue_unsupported_selection')
+        root, thread, context = self._queue_scope(project, sid)
+        _need(context is not None, 'unsupported_queue')
+        with self.receipts.namespace(root, sid, self._local.deadline, create=True) as ns:
+            record = self.receipts.read(ns, root, sid, message_id, self._local.deadline, context['context_id'])
+            digest = self._queue_digest(context['context_id'], root, sid, 'queue_enqueue', text)
+            if record is not None:
+                _need(record.get('kind') == 'queue_enqueue' and record['digest'] == digest, 'invalid_request')
+                return self._queue_reconcile(ns, record, project, root, sid, context)
+            _need(len(self.receipts.names(ns, self._local.deadline, reserve=True)) < RECEIPT_LIMIT)
+            unloaded = type(thread.get('status')) is dict and thread['status'].get('type') == 'notLoaded'
+            if not unloaded:
+                try:self._queue_listing(project, root, sid, context)
+                except _DomainError as error:raise _DomainError('unavailable' if error.code == 'conflict' else error.code) from None
+            record = self._queue_record(context, root, sid, message_id, 'queue_enqueue', text)
+            self.receipts.write(ns, record, self._local.deadline)
+            try:
+                if unloaded:
+                    self._queue_proof(project, root, sid, context, 'thread/resume')
+                    self._configured_origin('loaded_origin', project, root, sid)
+                    self._queue_listing(project, root, sid, context)
+                self._queue_proof(project, root, sid, context)
+                response = self._send_fenced('thread/queue/add', dict(threadId=sid,
+                    input=[dict(type='text', text=text)], clientUserMessageId=message_id), context)
+                _need(set(response) == {'queuedSubmission'})
+                row = response['queuedSubmission'];queued_text = self._queue_text(row)
+                _need(row['clientUserMessageId'] == message_id and queued_text == text)
+                record.update(status='queued', queued_submission_id=row['id'], reason=None)
+                self.receipts.write(ns, record, self._local.deadline)
+                self._summary_revision += 1
+                return self.receipts.result(record)
+            except Exception:
+                return dict(status='delivery_unknown', message_id=message_id, queued_submission_id=None)
+
+    @_operation
+    def cancel_queued(self, project, sid, queued_submission_id, action_id):
+        _need(_identity(queued_submission_id) and valid_uuid(action_id), 'invalid_request')
+        root, _, context = self._queue_scope(project, sid)
+        _need(context is not None, 'unsupported_queue')
+        with self.receipts.namespace(root, sid, self._local.deadline, create=True) as ns:
+            record = self.receipts.read(ns, root, sid, action_id, self._local.deadline, context['context_id'])
+            digest = self._queue_digest(context['context_id'], root, sid, 'queue_cancel', queued_submission_id)
+            if record is not None:
+                _need(record.get('kind') == 'queue_cancel' and record['digest'] == digest, 'invalid_request')
+                return self.receipts.result(record)
+            try:listing, _ = self._queue_listing(project, root, sid, context)
+            except _DomainError as error:raise _DomainError('unavailable' if error.code == 'conflict' else error.code) from None
+            _need(any(row['queued_submission_id'] == queued_submission_id for row in listing['rows']), 'stale')
+            _need(len(self.receipts.names(ns, self._local.deadline, reserve=True)) < RECEIPT_LIMIT)
+            record = self._queue_record(context, root, sid, action_id, 'queue_cancel', queued_submission_id)
+            self.receipts.write(ns, record, self._local.deadline)
+            try:
+                self._queue_proof(project, root, sid, context)
+                response = self._send_fenced('thread/queue/delete', dict(threadId=sid, queuedSubmissionId=queued_submission_id), context)
+                _need(set(response) == {'deleted'} and type(response['deleted']) is bool)
+                record['status'] = 'cancelled' if response['deleted'] else 'changed'
+                self.receipts.write(ns, record, self._local.deadline)
+                return self.receipts.result(record)
+            except Exception:
+                return dict(status='delivery_unknown', message_id=action_id, queued_submission_id=queued_submission_id)
+
     @_operation
     def send(self, project, sid, message_id, text, selection=None):
         _need(valid_uuid(sid) and valid_uuid(message_id) and type(text) is str
@@ -1608,6 +1867,7 @@ class SessionChat:
             return self.receipts.result(record)
 
     def _send_replay(self, record, context, root, sid, text, selection):
+        _need(record.get('schema') != 3, 'invalid_request')
         if 'schema' not in record:
             _need(selection is None, 'invalid_request')
             digest = hashlib.sha256(text.encode('utf-8')).hexdigest()
@@ -1630,7 +1890,9 @@ class SessionChat:
         with self.receipts.namespace(root, sid, self._local.deadline) as ns:
             record = self.receipts.read(ns, root, sid, message_id, self._local.deadline, context['context_id'])
             _need(record is not None, 'stale')
-            if record['status'] != 'delivery_unknown':
+            if record.get('kind') == 'queue_enqueue':
+                return self._queue_reconcile(ns, record, project, root, sid, self._catalog_context())
+            if record['status'] != 'delivery_unknown' or record.get('kind') == 'queue_cancel':
                 return self.receipts.result(record)
             cursor, seen = None, set()
             for _ in range(8):
@@ -1655,7 +1917,7 @@ class SessionChat:
 
 class InteractiveRPC:
     """One receiver per connection; never responds to native server requests."""
-    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/items/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set', 'thread/start', 'thread/loaded/list'}
+    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/items/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set', 'thread/start', 'thread/loaded/list', 'thread/queue/list', 'thread/queue/add', 'thread/queue/delete'}
 
     def __init__(self, socket_path, timeout=25):
         if type(socket_path) is not str or type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 55:
@@ -1729,7 +1991,7 @@ class InteractiveRPC:
                     if ('error' in value and 'result' not in value and type(error) is dict
                             and set(error) in ({'code', 'message'}, {'code', 'message', 'data'})
                             and type(error['code']) is int and type(error['message']) is str):
-                        waiter['error'] = RPCRejected('RPC server rejected request (code ' + str(error['code']) + ')')
+                        waiter['error'] = RPCRejected('RPC server rejected request (code ' + str(error['code']) + ')', error['code'])
                     elif 'error' not in value and type(value.get('result')) is dict:
                         waiter['result'] = value['result']
                     else:

@@ -503,6 +503,100 @@ FIELD_LIMIT = 16000
 NAME = re.compile(r'[a-z][a-z0-9-]{0,30}[a-z0-9]\Z')
 GEN = re.compile(r'[0-9a-f]{8}\Z')
 PROJECT = re.compile(r'[a-zA-Z0-9_-]{1,32}\Z')
+QUEUE_OPS = {'session_queue', 'session_enqueue', 'session_queue_cancel'}
+
+
+def valid_queue_id(value):
+    try:
+        return (type(value) is str and 0 < len(value) <= 500
+                and not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value)
+                and bool(value.encode('utf-8')))
+    except UnicodeError:
+        return False
+
+
+def queue_result(value):
+    if type(value) is dict and set(value) == {'error'}:
+        return {'error': value['error'] if value['error'] in ('invalid_request', 'stale', 'unavailable') else 'unavailable'}
+    fields = {'schema', 'vendor', 'supported', 'reason', 'rows', 'partial', 'send_now_supported'}
+    extra = {'active_turn_id', 'send_now_reason', 'recovery'}
+    try:
+        if (type(value) is not dict or set(value) not in (fields, fields | extra)
+                or type(value['schema']) is not int or value['schema'] != 1 or value['vendor'] != 'codex'
+                or type(value['supported']) is not bool or type(value['partial']) is not bool
+                or type(value['send_now_supported']) is not bool
+                or value['send_now_supported'] is not False
+                or value['reason'] != (None if value['supported'] else 'unsupported_queue')
+                or type(value['rows']) is not list or len(value['rows']) > 256
+                or not value['supported'] and (value['rows'] or value['partial'])):
+            raise ValueError()
+        result = dict(value)
+        result.setdefault('active_turn_id', None)
+        result.setdefault('send_now_reason', 'inactive_turn' if value['supported'] else 'unsupported_queue')
+        result.setdefault('recovery', [])
+        if result['active_turn_id'] is not None or result['recovery'] != [] or result['send_now_reason'] not in ('inactive_turn', 'unsupported_queue'):
+            raise ValueError()
+        ids, clients, rows = set(), set(), []
+        for row in value['rows']:
+            if (type(row) is not dict or set(row) != {'queued_submission_id', 'message_id', 'text', 'state'}
+                    or not valid_queue_id(row['queued_submission_id']) or not valid_queue_id(row['message_id'])
+                    or row['queued_submission_id'] in ids or row['message_id'] in clients
+                    or type(row['text']) is not str or not 0 < len(row['text']) <= 16000 or row['state'] != 'queued'):
+                raise ValueError()
+            row['text'].encode('utf-8')
+            ids.add(row['queued_submission_id']);clients.add(row['message_id'])
+            rows.append(dict(row, text=redact(row['text'])))
+        result['rows'] = rows
+        # Stay within the existing private broker wire ceiling; no text is cut.
+        def fits(count):
+            return len(json.dumps(dict(result, rows=rows[:count]), ensure_ascii=False,
+                                  separators=(',', ':'), allow_nan=False).encode('utf-8')) <= 96 * 1024
+        if not fits(len(rows)):
+            result['partial'] = True
+            low, high = 0, len(rows)
+            while low < high:
+                middle = (low + high + 1) // 2
+                if fits(middle):low = middle
+                else:high = middle - 1
+            result['rows'] = rows[:low]
+        return result
+    except Exception:
+        return {'error': 'unavailable'}
+
+
+def queue_mutation_result(value, message_id, queued_submission_id=None):
+    if type(value) is not dict:
+        return {'error': 'unavailable'}
+    if 'error' in value:
+        return {'error': value['error'] if value['error'] in ('invalid_request', 'stale', 'unavailable',
+                        'unsupported_queue', 'queue_unsupported_selection') else 'unavailable'}
+    fields = {'status', 'message_id', 'queued_submission_id'}
+    status = value.get('status')
+    if status == 'accepted':
+        return dict(value) if (set(value) == {'status', 'message_id', 'turn_id'} and valid_qid(message_id)
+            and value['message_id'] == message_id and valid_queue_id(value['turn_id'])) else {'error': 'unavailable'}
+    if (set(value) not in (fields, fields | {'reason'}) or not valid_qid(message_id)
+            or value.get('message_id') != message_id or status not in ('queued', 'cancelled', 'changed', 'delivery_unknown')
+            or value.get('queued_submission_id') is None and status != 'delivery_unknown'
+            or value.get('queued_submission_id') is not None and not valid_queue_id(value['queued_submission_id'])
+            or queued_submission_id is not None and value.get('queued_submission_id') != queued_submission_id
+            or 'reason' in value and value['reason'] not in ('conflict', 'unavailable', 'stale', 'unsupported_queue')):
+        return {'error': 'unavailable'}
+    return dict(value)
+
+
+def _queue_boundary(request, value):
+    if request['op'] == 'session_queue':
+        return queue_result(value)
+    if request['op'] in ('session_enqueue', 'session_queue_cancel'):
+        return queue_mutation_result(value, request.get('message_id', request.get('action_id')),
+                                     request.get('queued_submission_id'))
+    if request['op'] == 'session_send_status' and type(value) is dict and (
+            value.get('status') in ('queued', 'changed', 'cancelled') or 'queued_submission_id' in value):
+        return queue_mutation_result(value, request['message_id'])
+    return value
+
+
 SESSION_FIELDS = {
     'session_projects': {'op'},
     'session_project_summary': {'op'},
@@ -512,6 +606,9 @@ SESSION_FIELDS = {
     'session_models': {'op', 'project', 'sid'},
     'session_send': {'op', 'project', 'sid', 'message_id', 'text'},
     'session_send_status': {'op', 'project', 'sid', 'message_id'},
+    'session_queue': {'op', 'project', 'sid'},
+    'session_enqueue': {'op', 'project', 'sid', 'message_id', 'text'},
+    'session_queue_cancel': {'op', 'project', 'sid', 'queued_submission_id', 'action_id'},
     'session_rename': {'op', 'project', 'sid', 'operation_id', 'title'},
     'session_rename_status': {'op', 'project', 'sid', 'operation_id'},
     'session_create_options': {'op', 'project'},
@@ -526,7 +623,7 @@ def _valid_session(request):
         return False
     fields = SESSION_FIELDS[request['op']]
     if set(request) != fields and not (
-            request['op'] == 'session_send' and set(request) == fields | {'selection'}):
+            request['op'] in ('session_send', 'session_enqueue') and set(request) == fields | {'selection'}):
         return False
     if 'selection' in request:
         from _control_web_sessions import _valid_selection
@@ -534,7 +631,9 @@ def _valid_session(request):
             return False
     if 'project' in request and (type(request['project']) is not str or not PROJECT.fullmatch(request['project'])):
         return False
-    if any(not valid_qid(request[key]) for key in ('sid', 'message_id', 'operation_id') if key in request):
+    if any(not valid_qid(request[key]) for key in ('sid', 'message_id', 'operation_id', 'action_id') if key in request):
+        return False
+    if 'queued_submission_id' in request and not valid_queue_id(request['queued_submission_id']):
         return False
     if 'page' in request and (type(request['page']) is not int or request['page'] < 0):
         return False
@@ -847,6 +946,12 @@ class RegistryBackend:
                 result = self.sessions.models(request['project'], request['sid'])
             elif op == 'session_send':
                 result = _forward_send(self.sessions.send, request)
+            elif op == 'session_queue':
+                result = self.sessions.queue(request['project'], request['sid'])
+            elif op == 'session_enqueue':
+                result = _forward_send(self.sessions.enqueue, request)
+            elif op == 'session_queue_cancel':
+                result = self.sessions.cancel_queued(request['project'], request['sid'], request['queued_submission_id'], request['action_id'])
             elif op == 'session_rename':
                 result = self.sessions.rename(request['project'], request['sid'], request['operation_id'], request['title'])
             elif op == 'session_rename_status':
@@ -857,7 +962,7 @@ class RegistryBackend:
                 return history_result(result)
             if op in ('session_rename', 'session_rename_status'):
                 return rename_result(result, request['operation_id'])
-            return result if type(result) is dict else {'error': 'unavailable'}
+            return _queue_boundary(request, result) if type(result) is dict else {'error': 'unavailable'}
         except Exception:
             return {'error': 'unavailable'}
 
@@ -882,6 +987,18 @@ class RegistryBackend:
 
     def session_send(self, project, sid, message_id, text, selection=None):
         return self._session(_send_request(project, sid, message_id, text, selection))
+
+    def session_queue(self, project, sid):
+        return self._session(dict(op='session_queue', project=project, sid=sid))
+
+    def session_enqueue(self, project, sid, message_id, text, selection=None):
+        request = _send_request(project, sid, message_id, text, selection)
+        request['op'] = 'session_enqueue'
+        return self._session(request)
+
+    def session_queue_cancel(self, project, sid, queued_submission_id, action_id):
+        return self._session(dict(op='session_queue_cancel', project=project, sid=sid,
+                                  queued_submission_id=queued_submission_id, action_id=action_id))
 
     def session_send_status(self, project, sid, message_id):
         return self._session(dict(op='session_send_status', project=project, sid=sid, message_id=message_id))
@@ -1123,14 +1240,19 @@ def _receive(conn, deadline=None):
     line, rest = bytes(data).split(b'\n', 1)
     if rest:
         raise ValueError('multiple requests')
+    duplicates = []
     def pairs(items):
         result = {}
         for key, value in items:
             if key in result:
-                raise ValueError('duplicate field')
+                duplicates.append(key)
             result[key] = value
         return result
-    return json.loads(line, object_pairs_hook=pairs)
+    result = json.loads(line, object_pairs_hook=pairs)
+    if duplicates:
+        error = ValueError('duplicate field');error.invalid_queue = type(result) is dict and result.get('op') in QUEUE_OPS
+        raise error
+    return result
 
 
 def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
@@ -1197,6 +1319,12 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = backend.session_models(request['project'], request['sid'])
                     elif op == 'session_send':
                         result = _forward_send(backend.session_send, request)
+                    elif op == 'session_queue':
+                        result = backend.session_queue(request['project'], request['sid'])
+                    elif op == 'session_enqueue':
+                        result = _forward_send(backend.session_enqueue, request)
+                    elif op == 'session_queue_cancel':
+                        result = backend.session_queue_cancel(request['project'], request['sid'], request['queued_submission_id'], request['action_id'])
                     elif op == 'session_create_options':
                         result = backend.session_create_options(request['project'])
                     elif op == 'session_create':
@@ -1215,7 +1343,7 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = history_result(result)
                     if op in ('session_rename', 'session_rename_status'):
                         result = rename_result(result, request['operation_id'])
-                    reply(conn, result)
+                    reply(conn, _queue_boundary(request, result))
                 except Exception:
                     try:
                         reply(conn, {'error': 'unavailable'})
@@ -1254,8 +1382,8 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                             or request['op'] not in fields):
                         result = {'error': 'unsupported'}
                     elif (set(request) != fields[request['op']] and not (
-                            request['op'] == 'session_send' and set(request) == fields[request['op']] | {'selection'})):
-                        result = {'error': 'unavailable' if live or bus else 'invalid_request' if request['op'] == 'session_project_summary' else 'invalid_or_stale'}
+                            request['op'] in ('session_send', 'session_enqueue') and set(request) == fields[request['op']] | {'selection'})):
+                        result = {'error': 'unavailable' if live or bus else 'invalid_request' if request['op'] in QUEUE_OPS | {'session_project_summary'} else 'invalid_or_stale'}
                     elif request['op'] in SESSION_FIELDS and not _valid_session(request):
                         result = {'error': 'unavailable' if live else 'invalid_request'}
                     elif bus and not all(request[key] is None or valid_id(request[key]) for key in ('task', 'agent')):
@@ -1285,9 +1413,9 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         # operations' unavailable wire outcome for compatibility.
                         result = {'error': 'busy' if live or bus or request['op'] == 'snapshot' else 'unavailable'}
                 reply(conn, result)
-            except Exception:
+            except Exception as error:
                 try:
-                    conn.sendall(b'{"error":"unavailable"}\n')
+                    conn.sendall(b'{"error":"invalid_request"}\n' if getattr(error, 'invalid_queue', False) else b'{"error":"unavailable"}\n')
                 except OSError:
                     pass
             conn.close()
@@ -1350,7 +1478,7 @@ class SocketBackend:
             return configured_create_result(result, request['project'], request.get('operation_id'))
         if request['op'] == 'session_history':
             return history_result(result)
-        return result
+        return _queue_boundary(request, result)
 
     def session_projects(self):
         return self._session({'op': 'session_projects'})
@@ -1379,6 +1507,18 @@ class SocketBackend:
 
     def session_send(self, project, sid, message_id, text, selection=None):
         return self._session(_send_request(project, sid, message_id, text, selection))
+
+    def session_queue(self, project, sid):
+        return self._session(dict(op='session_queue', project=project, sid=sid))
+
+    def session_enqueue(self, project, sid, message_id, text, selection=None):
+        request = _send_request(project, sid, message_id, text, selection)
+        request['op'] = 'session_enqueue'
+        return self._session(request)
+
+    def session_queue_cancel(self, project, sid, queued_submission_id, action_id):
+        return self._session(dict(op='session_queue_cancel', project=project, sid=sid,
+                                  queued_submission_id=queued_submission_id, action_id=action_id))
 
     def session_send_status(self, project, sid, message_id):
         return self._session(dict(op='session_send_status', project=project, sid=sid, message_id=message_id))

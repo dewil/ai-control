@@ -658,6 +658,12 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
                     return error('forbidden', 403)
                 return error(code if code in ('invalid_request', 'stale') else 'unavailable',
                              {'invalid_request': 422, 'stale': 409}.get(code, 503))
+            if result.get('status') in ('queued', 'cancelled', 'changed') or 'queued_submission_id' in result:
+                from _control_web_broker import queue_mutation_result
+                result = queue_mutation_result(result, result.get('message_id'))
+                if 'error' in result:
+                    return error('unavailable', 503)
+                return JSONResponse(result, status_code=503 if sending and result['status'] == 'delivery_unknown' else 200)
             if 'status' in result:
                 if result['status'] not in ('accepted', 'delivery_unknown', 'rejected'):
                     return error('unavailable', 503)
@@ -917,6 +923,54 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
         return await run_in_threadpool(rename_response,
             lambda: backend.session_rename(data['project'], data['sid'], data['operation_id'], data['title']),
             data['operation_id'], True)
+
+    @app.get('/api/session-queue')
+    async def session_queue(request: Request):
+        from _control_web_broker import queue_result
+        return await chat_read(request, ('project', 'sid'), (),
+            lambda data: queue_result(backend.session_queue(data['project'], data['sid'])))
+
+    async def queue_write(request, cancel=False):
+        _, failure = session(request, True)
+        if failure:
+            return failure
+        data = await body(request)
+        fields = {'project', 'sid', 'queued_submission_id', 'action_id'} if cancel else {'project', 'sid', 'message_id', 'text'}
+        from _control_web_broker import queue_mutation_result, valid_queue_id
+        if (data is None or set(data) not in ((fields,) if cancel else (fields, fields | {'selection'}))
+                or not chat_project(data['project']) or not valid_uuid(data['sid'])
+                or not valid_uuid(data['action_id'] if cancel else data['message_id'])
+                or cancel and not valid_queue_id(data['queued_submission_id'])
+                or not cancel and not text(data['text'], True)):
+            return error('invalid_request', 422)
+        if not cancel:
+            from _control_web_sessions import _valid_selection
+            if 'selection' in data and not _valid_selection(data['selection']):
+                return error('invalid_request', 422)
+            try:data['text'].encode('utf-8')
+            except UnicodeError:return error('invalid_request', 422)
+        def call():
+            if cancel:
+                result = backend.session_queue_cancel(data['project'], data['sid'], data['queued_submission_id'], data['action_id'])
+            else:
+                result = backend.session_enqueue(data['project'], data['sid'], data['message_id'], data['text'], **({'selection':data['selection']} if 'selection' in data else {}))
+            return queue_mutation_result(result, data['action_id'] if cancel else data['message_id'], data.get('queued_submission_id'))
+        try:
+            result = await run_in_threadpool(call)
+        except Exception:
+            return error('unavailable', 503)
+        if 'error' in result:
+            code = result['error']
+            return error(code, {'invalid_request':422, 'queue_unsupported_selection':422, 'stale':409}.get(code,503))
+        return JSONResponse(result, status_code=503 if result['status'] == 'delivery_unknown' else 200)
+
+    @app.post('/api/session-queue')
+    async def session_enqueue(request: Request):
+        return await queue_write(request)
+
+    @app.post('/api/session-queue-cancel')
+    async def session_queue_cancel(request: Request):
+        return await queue_write(request, True)
 
     @app.post('/api/session-send')
     async def session_send(request: Request):
