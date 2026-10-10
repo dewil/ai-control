@@ -19,3 +19,9 @@
 Approval responses/attach/read-resume отложены пользователем. Native question forms доступны только для реально полученного текущим соединением callback; passive coverage partial. Sent не означает applied, native resolved не раскрывает winner. TASK linked refs не выдумываются: текущий adapter gap остаётся открытым с tasks=[]/binding_incomplete и сохранённым Tasks view. NATS observer отдельный blocked DESIGN; multiaccount/auth/native service не меняются. APK0.1.7/code8 не пересобирается.
 
 Feature specifications перенесены в docs/dev/done после SOURCE acceptance; delivery/installed acceptance учитываются отдельно у umbrella package owner. Нет заявления о завершении всего родительского backlog.
+
+## CI regression followup11.10
+
+Первый fullCI38086534124 наdb5ef5a не прошёл:1489tests/3FAIL/2ERROR/1existingSKIP, последующиеstagesSKIPPED. Тот checkpoint не поставлялся. Исправлены три общих browser причины: пустое initial window до первой history, истекающее trusted End намерение и offscreen focused anchor. Независимая поправка superseded test contracts добавила только reviewedqueue/start и4точных visible-resume GET; hiddenzeroIO/noPOST/security/count assertions сохранены.
+
+Exactruntime aab357bd9381389f194e575b3188872e188b0079:74adjacent browser/legacy cases PASS/0errors/skips118.476s, включая6sharedwindowconsumer groups и controlled delayedEnd; SOURCE delta/focused closure Haiku5.5/Anthropic finalPASS. Evidence-only handback4fff2c4. Окончательный footer timestamp обновлён после этой проверки, observable behavior unchanged. Следующий gate — новый полный CI, старый failedrun не переиспользуется. Production до него остаётсяr12.
