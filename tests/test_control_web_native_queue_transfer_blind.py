@@ -101,7 +101,9 @@ class NativeQueueTransferBlind(s.QueueModuleCase):
         self.assertNotIn('thread/resume',self.rpc.methods(),'Send-now read proofs must never load/start another native context')
         params=self.rpc.calls_for('turn/steer')[0]
         self.assertEqual(set(params),{'threadId','input','expectedTurnId','clientUserMessageId'})
-        self.assertEqual((params['threadId'],params['expectedTurnId'],params['clientUserMessageId']),(s.SID,TARGET,MAC))
+        # SOURCE correction: wire correlation belongs to this transfer action;
+        # original opaque Mac clientID remains association metadata only.
+        self.assertEqual((params['threadId'],params['expectedTurnId'],params['clientUserMessageId']),(s.SID,TARGET,s.ACTION))
         self.assertEqual(len(params['input']),1);self.assertEqual((params['input'][0]['type'],params['input'][0]['text']),('text',SNAPSHOT))
         self.assertEqual(self.payload_files(),[],'Accepted terminal tombstone must remove plaintext')
         self.assertEqual(self.recovery(),[])
@@ -252,7 +254,7 @@ class NativeQueueTransferBlind(s.QueueModuleCase):
     def test_Mac_history_proof_promotes_unknown_action_and_removes_recovery_text(self):
         # INV-SQUEUE-06D/E: native opaque clientID, exact immutable snapshot.
         self.rpc.steer_error=TimeoutError('Synthetic steer ACK loss');self.assertEqual(self.transfer()['status'],'delivery_unknown')
-        self.rpc.history_items=[dict(id='native-steer-user',type='userMessage',clientId=MAC,content=[dict(type='text',text=SNAPSHOT)])]
+        self.rpc.history_items=[dict(id='native-steer-user',type='userMessage',clientId=s.ACTION,content=[dict(type='text',text=SNAPSHOT)])]
         before=deepcopy(self.mutation_methods());self.queue()
         result=self.transfer(chat=self.new_chat());self.assertEqual((result['status'],result['turn_id']),('accepted',TARGET))
         self.assertEqual(self.mutation_methods(),before);self.assertEqual(self.payload_files(),[]);self.assertEqual(self.recovery(),[])
