@@ -217,16 +217,32 @@ class MessageTimesBrowser(unittest.TestCase):
             query=parse_qsl(parsed.query,keep_blank_values=True)
             return (method=='GET' and parsed.path=='/api/session-queue' and len(query)==2
                     and dict(query)=={'project':'demo','sid':SID})
+        # R13: one common visible resume refreshes these exact owner read scopes.
+        owner_reads={'/api/session-pins':{},'/api/participation-overview':{},
+                     '/api/session-questions':{'project':'demo','sid':SID},
+                     '/api/session-queue-start':{'project':'demo','sid':SID}}
+        def exact_owner_read(method,url):
+            parsed=urlsplit(url);query=parse_qsl(parsed.query,keep_blank_values=True)
+            expected=owner_reads.get(parsed.path)
+            return method=='GET' and expected is not None and len(query)==len(expected) and dict(query)==expected
         with self.page.expect_request(lambda request: exact_queue_read(request.method,request.url)):
             self.page.evaluate('testVisibility(false)')
         self.assertIn('2 мин. назад',self.bubble('Time assistant 0').inner_text())
-        # Visible resume needs fresh LIVE admission/lease and one queue read to
-        # restore native rows. No other foreground request is permitted here.
+        # Observe all four requests before counting; their HTTP bodies need not finish.
+        deadline=time.monotonic()+5
+        while time.monotonic()<deadline:
+            resumed=self.network[len(before):]
+            observed={urlsplit(url).path for method,url in resumed if exact_owner_read(method,url)}
+            if observed==set(owner_reads):break
+            self.page.wait_for_timeout(20)
+        # Age recomputation stays local; the coordinator performs one read per scope.
         resumed=self.network[len(before):]
+        self.assertCountEqual([urlsplit(url).path for method,url in resumed if exact_owner_read(method,url)],list(owner_reads))
+        self.assertTrue(all(method=='GET' for method,url in resumed),'Visible resume must not dispatch POST/mutation')
         queue_reads=[(method,url) for method,url in resumed if exact_queue_read(method,url)]
         self.assertEqual(len(queue_reads),1)
         self.assertEqual([(method,url) for method,url in resumed
-                          if not exact_queue_read(method,url)
+                          if not exact_queue_read(method,url) and not exact_owner_read(method,url)
                           and '/api/session-events?' not in url
                           and '/api/session-live-snapshot?' not in url],[])
 
