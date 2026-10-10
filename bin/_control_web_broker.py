@@ -503,6 +503,7 @@ FIELD_LIMIT = 16000
 NAME = re.compile(r'[a-z][a-z0-9-]{0,30}[a-z0-9]\Z')
 GEN = re.compile(r'[0-9a-f]{8}\Z')
 PROJECT = re.compile(r'[a-zA-Z0-9_-]{1,32}\Z')
+NAV_OPS = {'session_pins', 'session_pin', 'session_unpin', 'session_queue_start_support', 'session_queue_start'}
 QUEUE_OPS = {'session_queue', 'session_enqueue', 'session_queue_cancel', 'session_queue_send_now'}
 
 
@@ -586,6 +587,67 @@ def queue_result(value):
 
 
 
+
+def navigation_error(value):
+    if type(value) is dict and set(value) == {'error'}:
+        code = value['error']
+        return {'error': code if code in ('invalid_request', 'forbidden', 'stale', 'unavailable', 'capacity', 'unsupported_queue') else 'unavailable'}
+    return None
+
+
+def pins_result(value):
+    failure = navigation_error(value)
+    if failure:return failure
+    try:
+        if (type(value) is not dict or set(value) != {'schema', 'items'} or type(value['schema']) is not int
+                or value['schema'] != 1 or type(value['items']) is not list or len(value['items']) > 24):raise ValueError()
+        rows, ids = [], set()
+        for row in value['items']:
+            if (type(row) is not dict or set(row) != {'pin_id', 'project', 'sid', 'title', 'vendor', 'available', 'metadata_state'}
+                    or not valid_qid(row['pin_id']) or row['pin_id'] in ids or type(row['available']) is not bool):raise ValueError()
+            if row['available']:
+                if (type(row['project']) is not str or not PROJECT.fullmatch(row['project']) or not valid_qid(row['sid'])
+                        or row['vendor'] != 'codex' or type(row['title']) is not str or len(row['title']) > 500
+                        or row['metadata_state'] != 'saved'):raise ValueError()
+                row['title'].encode('utf-8')
+            elif (row['project'] is not None or row['sid'] is not None or row['vendor'] is not None
+                    or row['title'] != 'Недоступная сессия' or row['metadata_state'] != 'unavailable'):raise ValueError()
+            ids.add(row['pin_id']);rows.append(dict(row, title=redact(row['title'])))
+        return dict(schema=1, items=rows)
+    except Exception:return {'error': 'unavailable'}
+
+
+def pin_result(value, pinned, pin_id=None):
+    failure = navigation_error(value)
+    if failure:return failure
+    return dict(value) if (type(value) is dict and set(value) == {'schema', 'pin_id', 'pinned'}
+        and type(value['schema']) is int and value['schema'] == 1 and valid_qid(value['pin_id'])
+        and type(value['pinned']) is bool and value['pinned'] is pinned
+        and (pin_id is None or value['pin_id'] == pin_id)) else {'error': 'unavailable'}
+
+
+def queue_start_support_result(value):
+    failure = navigation_error(value)
+    if failure:return failure
+    return dict(value) if (type(value) is dict and set(value) == {'schema', 'supported', 'reason'}
+        and type(value['schema']) is int and value['schema'] == 1 and type(value['supported']) is bool
+        and (value['reason'] is None if value['supported'] else value['reason'] in ('unsupported_queue', 'not_loaded', 'not_idle', 'unavailable'))) else {'error': 'unavailable'}
+
+
+def queue_start_result(value, action_id, queued_submission_id):
+    failure = navigation_error(value)
+    if failure:return failure
+    if (type(value) is not dict or set(value) != {'status', 'message_id', 'queued_submission_id', 'turn_id', 'reason'}
+            or not valid_qid(action_id) or value['message_id'] != action_id
+            or not valid_queue_id(queued_submission_id) or value['queued_submission_id'] != queued_submission_id):return {'error': 'unavailable'}
+    status = value['status']
+    if status == 'started':valid = valid_queue_id(value['turn_id']) and value['reason'] is None
+    elif status == 'busy':valid = value['turn_id'] is None and value['reason'] == 'not_idle'
+    elif status == 'changed':valid = value['turn_id'] is None and value['reason'] == 'row_missing'
+    elif status == 'delivery_unknown':valid = value['turn_id'] is None and value['reason'] in (None, 'unavailable')
+    else:valid = False
+    return dict(value) if valid else {'error': 'unavailable'}
+
 def capabilities_result(value):
     if type(value) is dict and set(value) == {'error'}:
         return {'error': value['error'] if value['error'] in ('invalid_request', 'forbidden', 'stale', 'unavailable') else 'unavailable'}
@@ -660,6 +722,11 @@ def queue_transfer_result(value, action_id, queued_submission_id):
     return dict(value)
 
 def _queue_boundary(request, value):
+    if request['op'] == 'session_pins':return pins_result(value)
+    if request['op'] == 'session_pin':return pin_result(value, True)
+    if request['op'] == 'session_unpin':return pin_result(value, False, request['pin_id'])
+    if request['op'] == 'session_queue_start_support':return queue_start_support_result(value)
+    if request['op'] == 'session_queue_start':return queue_start_result(value, request['action_id'], request['queued_submission_id'])
     if request['op'] == 'session_queue_send_now':
         return queue_transfer_result(value, request['action_id'], request['queued_submission_id'])
     if request['op'] == 'session_capabilities':
@@ -670,7 +737,7 @@ def _queue_boundary(request, value):
         return queue_mutation_result(value, request.get('message_id', request.get('action_id')),
                                      request.get('queued_submission_id'))
     if request['op'] == 'session_send_status' and type(value) is dict and set(value) == {'status', 'message_id', 'queued_submission_id', 'turn_id', 'reason'}:
-        return queue_transfer_result(value, request['message_id'], value['queued_submission_id'])
+        return (queue_start_result if value['status'] in ('started', 'busy') or value['reason'] == 'row_missing' else queue_transfer_result)(value, request['message_id'], value['queued_submission_id'])
     if request['op'] == 'session_send_status' and type(value) is dict and (
             value.get('status') in ('queued', 'changed', 'cancelled') or 'queued_submission_id' in value):
         return queue_mutation_result(value, request['message_id'])
@@ -678,6 +745,11 @@ def _queue_boundary(request, value):
 
 
 SESSION_FIELDS = {
+    'session_pins': {'op', 'principal'},
+    'session_pin': {'op', 'principal', 'project', 'sid'},
+    'session_unpin': {'op', 'principal', 'pin_id'},
+    'session_queue_start_support': {'op', 'project', 'sid'},
+    'session_queue_start': {'op', 'project', 'sid', 'queued_submission_id', 'action_id'},
     'session_projects': {'op'},
     'session_project_summary': {'op'},
     'session_list': {'op', 'project', 'page'},
@@ -707,13 +779,15 @@ def _valid_session(request):
     if set(request) != fields and not (
             request['op'] in ('session_send', 'session_enqueue') and set(request) == fields | {'selection'}):
         return False
+    if 'principal' in request and (type(request['principal']) is not str or not re.fullmatch('[A-Za-z0-9_-]{1,64}', request['principal'])):
+        return False
     if 'selection' in request:
         from _control_web_sessions import _valid_selection
         if not _valid_selection(request['selection']):
             return False
     if 'project' in request and (type(request['project']) is not str or not PROJECT.fullmatch(request['project'])):
         return False
-    if any(not valid_qid(request[key]) for key in ('sid', 'message_id', 'operation_id', 'action_id') if key in request):
+    if any(not valid_qid(request[key]) for key in ('sid', 'message_id', 'operation_id', 'action_id', 'pin_id') if key in request):
         return False
     if 'snapshot_text' in request and (type(request['snapshot_text']) is not str or not 0 < len(request['snapshot_text']) <= FIELD_LIMIT or not request['snapshot_text'].strip()):
         return False
@@ -1002,6 +1076,8 @@ class RegistryBackend:
     def _session(self, request):
         if not _valid_session(request):
             return {'error': 'invalid_request'}
+        if 'principal' in request and request['principal'] != 'owner':
+            return {'error': 'forbidden'}
         if request['op'] in ('session_create_options', 'session_create', 'session_create_status'):
             if self.configured_creator is None:
                 return {'error': 'unavailable'}
@@ -1018,7 +1094,12 @@ class RegistryBackend:
             return {'error': 'unavailable'}
         try:
             op = request['op']
-            if op == 'session_projects':
+            if op == 'session_pins':result = self.sessions.pins(request['principal'])
+            elif op == 'session_pin':result = self.sessions.pin(request['principal'], request['project'], request['sid'])
+            elif op == 'session_unpin':result = self.sessions.unpin(request['principal'], request['pin_id'])
+            elif op == 'session_queue_start_support':result = self.sessions.queue_start_support(request['project'], request['sid'])
+            elif op == 'session_queue_start':result = self.sessions.start_queued(request['project'], request['sid'], request['queued_submission_id'], request['action_id'])
+            elif op == 'session_projects':
                 result = self.sessions.projects()
             elif op == 'session_project_summary':
                 result = self.sessions.project_summary()
@@ -1055,6 +1136,21 @@ class RegistryBackend:
             return _queue_boundary(request, result) if type(result) is dict else {'error': 'unavailable'}
         except Exception:
             return {'error': 'unavailable'}
+
+    def session_pins(self, principal):
+        return self._session(dict(op='session_pins', principal=principal))
+
+    def session_pin(self, principal, project, sid):
+        return self._session(dict(op='session_pin', principal=principal, project=project, sid=sid))
+
+    def session_unpin(self, principal, pin_id):
+        return self._session(dict(op='session_unpin', principal=principal, pin_id=pin_id))
+
+    def session_queue_start_support(self, project, sid):
+        return self._session(dict(op='session_queue_start_support', project=project, sid=sid))
+
+    def session_queue_start(self, project, sid, queued_submission_id, action_id):
+        return self._session(dict(op='session_queue_start', project=project, sid=sid, queued_submission_id=queued_submission_id, action_id=action_id))
 
     def session_projects(self):
         return self._session({'op': 'session_projects'})
@@ -1346,7 +1442,7 @@ def _receive(conn, deadline=None):
         return result
     result = json.loads(line, object_pairs_hook=pairs)
     if duplicates:
-        error = ValueError('duplicate field');error.invalid_queue = type(result) is dict and result.get('op') in QUEUE_OPS
+        error = ValueError('duplicate field');error.invalid_queue = type(result) is dict and result.get('op') in QUEUE_OPS | NAV_OPS
         raise error
     return result
 
@@ -1400,6 +1496,11 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = backend.answer(request['agent'], request['qid'], request['decision'], request['text'])
                     elif op == 'verdict':
                         result = backend.verdict(request['agent'], request['generation'], request['decision'], request['comment'])
+                    elif op == 'session_pins':result = backend.session_pins(request['principal'])
+                    elif op == 'session_pin':result = backend.session_pin(request['principal'], request['project'], request['sid'])
+                    elif op == 'session_unpin':result = backend.session_unpin(request['principal'], request['pin_id'])
+                    elif op == 'session_queue_start_support':result = backend.session_queue_start_support(request['project'], request['sid'])
+                    elif op == 'session_queue_start':result = backend.session_queue_start(request['project'], request['sid'], request['queued_submission_id'], request['action_id'])
                     elif op == 'session_projects':
                         result = backend.session_projects()
                     elif op == 'session_project_summary':
@@ -1483,7 +1584,9 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = {'error': 'unsupported'}
                     elif (set(request) != fields[request['op']] and not (
                             request['op'] in ('session_send', 'session_enqueue') and set(request) == fields[request['op']] | {'selection'})):
-                        result = {'error': 'unavailable' if live or bus else 'invalid_request' if request['op'] in QUEUE_OPS | {'session_project_summary'} else 'invalid_or_stale'}
+                        result = {'error': 'unavailable' if live or bus else 'invalid_request' if request['op'] in QUEUE_OPS | NAV_OPS | {'session_project_summary'} else 'invalid_or_stale'}
+                    elif request['op'] in NAV_OPS and request.get('principal', 'owner') != 'owner':
+                        result = {'error': 'forbidden'}
                     elif request['op'] in SESSION_FIELDS and not _valid_session(request):
                         result = {'error': 'unavailable' if live else 'invalid_request'}
                     elif bus and not all(request[key] is None or valid_id(request[key]) for key in ('task', 'agent')):
@@ -1573,12 +1676,28 @@ class SocketBackend:
     def _session(self, request):
         if not _valid_session(request):
             return {'error': 'invalid_request'}
+        if 'principal' in request and request['principal'] != 'owner':return {'error': 'forbidden'}
         result = self._call(request)
         if request['op'] in ('session_create_options', 'session_create', 'session_create_status'):
             return configured_create_result(result, request['project'], request.get('operation_id'))
         if request['op'] == 'session_history':
             return history_result(result)
         return _queue_boundary(request, result)
+
+    def session_pins(self, principal):
+        return self._session(dict(op='session_pins', principal=principal))
+
+    def session_pin(self, principal, project, sid):
+        return self._session(dict(op='session_pin', principal=principal, project=project, sid=sid))
+
+    def session_unpin(self, principal, pin_id):
+        return self._session(dict(op='session_unpin', principal=principal, pin_id=pin_id))
+
+    def session_queue_start_support(self, project, sid):
+        return self._session(dict(op='session_queue_start_support', project=project, sid=sid))
+
+    def session_queue_start(self, project, sid, queued_submission_id, action_id):
+        return self._session(dict(op='session_queue_start', project=project, sid=sid, queued_submission_id=queued_submission_id, action_id=action_id))
 
     def session_projects(self):
         return self._session({'op': 'session_projects'})

@@ -659,8 +659,9 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
                 return error(code if code in ('invalid_request', 'stale') else 'unavailable',
                              {'invalid_request': 422, 'stale': 409}.get(code, 503))
             if set(result) == {'status', 'message_id', 'queued_submission_id', 'turn_id', 'reason'}:
-                from _control_web_broker import queue_transfer_result
-                result = queue_transfer_result(result, result['message_id'], result['queued_submission_id'])
+                from _control_web_broker import queue_transfer_result, queue_start_result
+                validate = queue_start_result if result['status'] in ('started', 'busy') or result['reason'] == 'row_missing' else queue_transfer_result
+                result = validate(result, result['message_id'], result['queued_submission_id'])
                 if 'error' in result:
                     return error('unavailable', 503)
                 return JSONResponse(result, status_code=503 if sending and result['status'] == 'delivery_unknown' else 200)
@@ -701,10 +702,11 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
             data['page'] = int(data['page'])
         return data
 
-    async def chat_read(request, required, optional, call, preserve_forbidden=False):
-        _, failure = session(request)
+    async def chat_read(request, required, optional, call, preserve_forbidden=False, owner=False):
+        current, failure = session(request)
         if failure:
             return failure
+        if owner and current.get('principal') != 'owner':return error('forbidden', 403)
         supplied_origin = request.headers.get('origin')
         if supplied_origin is not None and supplied_origin != origin:
             return error('forbidden', 403)
@@ -938,6 +940,47 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
         return await run_in_threadpool(rename_response,
             lambda: backend.session_rename(data['project'], data['sid'], data['operation_id'], data['title']),
             data['operation_id'], True)
+
+    @app.get('/api/session-pins')
+    async def session_pins(request: Request):
+        from _control_web_broker import pins_result
+        return await chat_read(request, (), (), lambda _: pins_result(backend.session_pins('owner')), preserve_forbidden=True, owner=True)
+
+    @app.get('/api/session-queue-start')
+    async def session_queue_start_support(request: Request):
+        from _control_web_broker import queue_start_support_result
+        return await chat_read(request, ('project', 'sid'), (), lambda data: queue_start_support_result(
+            backend.session_queue_start_support(data['project'], data['sid'])), preserve_forbidden=True, owner=True)
+
+    async def navigation_write(request, operation):
+        current, failure = session(request, True)
+        if failure:return failure
+        if current.get('principal') != 'owner':return error('forbidden', 403)
+        data = await body(request)
+        from _control_web_broker import pin_result, queue_start_result, valid_queue_id
+        fields = {'project', 'sid'} if operation == 'pin' else {'pin_id'} if operation == 'unpin' else {'project', 'sid', 'queued_submission_id', 'action_id'}
+        if (data is None or set(data) != fields or 'project' in data and not chat_project(data['project'])
+                or any(not valid_uuid(data[key]) for key in ('sid', 'pin_id', 'action_id') if key in data)
+                or 'queued_submission_id' in data and not valid_queue_id(data['queued_submission_id'])):
+            return error('invalid_request', 422)
+        def call():
+            if operation == 'pin':return pin_result(backend.session_pin(current['principal'], data['project'], data['sid']), True)
+            if operation == 'unpin':return pin_result(backend.session_unpin(current['principal'], data['pin_id']), False, data['pin_id'])
+            return queue_start_result(backend.session_queue_start(data['project'], data['sid'], data['queued_submission_id'], data['action_id']), data['action_id'], data['queued_submission_id'])
+        try:result = await run_in_threadpool(call)
+        except Exception:return error('unavailable', 503)
+        if 'error' in result:
+            code = result['error'];return error(code, {'invalid_request':422, 'forbidden':403, 'stale':409, 'capacity':429}.get(code,503))
+        return JSONResponse(result, status_code=503 if result.get('status') == 'delivery_unknown' else 200)
+
+    @app.post('/api/session-pin')
+    async def session_pin(request: Request):return await navigation_write(request, 'pin')
+
+    @app.post('/api/session-unpin')
+    async def session_unpin(request: Request):return await navigation_write(request, 'unpin')
+
+    @app.post('/api/session-queue-start')
+    async def session_queue_start(request: Request):return await navigation_write(request, 'start')
 
     @app.get('/api/session-queue')
     async def session_queue(request: Request):
