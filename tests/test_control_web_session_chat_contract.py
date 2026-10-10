@@ -549,12 +549,14 @@ class InteractiveRPCContract(unittest.TestCase):
         frame = json.loads(ws.recv(timeout=3))
         self.frames.append(frame)
         return frame
-    def handshake(self, ws):
+    def handshake(self, ws, *, native_version=None):
         request = self.receive(ws)
         self.assertEqual(request['method'], 'initialize')
         self.assertEqual(request['params'], {'clientInfo': {'name': 'ai_control_web', 'version': '0.1'},
                                              'capabilities': {'experimentalApi': True}})
-        ws.send(json.dumps({'id': request['id'], 'result': {}}))
+        # Mutation scenarios explicitly negotiate a reviewed version; read fixtures stay null.
+        result = {} if native_version is None else {'userAgent': 'codex/' + native_version + ' (synthetic)'}
+        ws.send(json.dumps({'id': request['id'], 'result': result}))
         initialized = self.receive(ws)
         self.assertEqual(initialized['method'], 'initialized')
         self.assertNotIn('id', initialized)
@@ -591,7 +593,7 @@ class InteractiveRPCContract(unittest.TestCase):
         connections = []
         def handler(ws):
             connections.append(1)
-            self.handshake(ws)
+            self.handshake(ws, native_version='0.161.0')
             request = self.receive(ws)
             if request['method'] == 'turn/start':
                 ws.close()
@@ -618,7 +620,7 @@ class InteractiveRPCContract(unittest.TestCase):
         errors = [{'code': -32000, 'message': 'synthetic-private-remote-error', 'data': {'secret': 'synthetic-payload'}},
                   {'code': True, 'message': 'synthetic-private-remote-error'}]
         def handler(ws):
-            self.handshake(ws)
+            self.handshake(ws, native_version='0.161.0')
             request = self.receive(ws)
             ws.send(json.dumps({'id': request['id'], 'error': errors.pop(0)}))
             if errors:
