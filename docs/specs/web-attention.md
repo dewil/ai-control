@@ -30,7 +30,7 @@ Feature: [2026-10-06-spec-web-attention-pool.md](../dev/2026-10-06-spec-web-atte
 не входят и сохранены для отдельного создания сессий.
 
 ## Реализация источников — согласованный DESIGN 10.10
-Новый ограниченный feature contract — [session participation](../dev/2026-10-10-spec-session-participation.md), INV-PART01..07. Pure AttentionOverview остаётся foundation; production adapters/UI этого среза ещё не реализованы. Базовые INV-WATTN01..03 сохраняются: fresh exact running, независимые reasons, grants/root/host binding, no fake completed/0.
+Новый ограниченный feature contract — [session participation](../dev/done/2026-10-10-spec-session-participation.md), INV-PART01..07. Pure AttentionOverview остаётся foundation; production adapters/UI этого среза ещё не реализованы. Базовые INV-WATTN01..03 сохраняются: fresh exact running, независимые reasons, grants/root/host binding, no fake completed/0.
 
 Общий GET отдаёт bounded cache без синхронного native fanout. Отдельный owner refresh worker вправе обновлять read-only source в бюджете≤5s/≤32RPC и не чаще5s; это не browser-hidden mutation/новая dispatch очередь. Selected question GET/POST используют собственный fresh scoped read-proof, не global history fanout. Ready witness — latestcompletedturn/lastnonemptyagentMessage phasefinal_answer. Неподтверждённые TASK источники не становятся shared sessions; archive/incarnation mismatch исключает refs, coveragebinding_incompleteявно.
 

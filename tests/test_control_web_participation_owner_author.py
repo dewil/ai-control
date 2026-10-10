@@ -9,6 +9,11 @@ class ParticipationOwnerAuthor(WireCase):
             dict(id='final',type='agentMessage',phase='final_answer',text='Bounded answer')])]
         before=len(self.native.frames)
         value=self.overview()
+        # Measure the completed owner batch, retaining the pre-GET RPC baseline.
+        if 'source_unavailable' in value.get('coverage',{}).get('reasons',[]):
+            value=self.wait_for(lambda:(d if 'source_unavailable' not in
+                (d:=self.overview()).get('coverage',{}).get('reasons',[]) else None),
+                'Owner refresh batch did not publish within 5s', timeout=5)
         self.assertIn('rows',value)
         self.assertIn('limit',value['coverage']['reasons'])
         self.assertLessEqual(len(self.native.frames)-before,32)

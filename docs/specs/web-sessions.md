@@ -198,7 +198,7 @@ PASS; full SOURCE/CI/installed acceptance пока отсутствуют. INV44
 Queue0.161 start и удаление native SQL row не являются одной доказанной crash-transaction; end-to-end exactly-once не заявляется. Interrupted может приостановить очередь; отдельное web управление её стартом пока не реализовано. Очереди других вендоров требуют своего API исследования/адаптера. Multiaccount principal proof и vendor auth этим срезом не добавляются. SOURCE, полный CI и установленная проверка фиксируются отдельно от source implementation.
 
 ## Участие и быстрый доступ — DESIGN 10.10
-Спецификации: [participation](../dev/2026-10-10-spec-session-participation.md), [pins](../dev/2026-10-10-spec-pinned-sessions.md), [queue start](../dev/2026-10-10-spec-native-queue-start.md). Семейства INV-PART01..07, INV-PIN01..08, INV-QSTART01..08 не заменяют прежние IDs. Source/runtime ещё не поставлены.
+Спецификации: [participation](../dev/done/2026-10-10-spec-session-participation.md), [pins](../dev/done/2026-10-10-spec-pinned-sessions.md), [queue start](../dev/done/2026-10-10-spec-native-queue-start.md). Семейства INV-PART01..07, INV-PIN01..08, INV-QSTART01..08 не заменяют прежние IDs. Source/runtime ещё не поставлены.
 
 Ответы на native approvals явно отложены пользователем; read-resume/attach отсутствует. Вопросы actionable только при actual current callback binding и явном user submit; локальный send не native applied. Global pool read-only, exact running proof отдельно от coarse flags; completed final_answer turn — «Ответ готов», не whole-goal completion. Callback coverage и непривязанные TASK честно partial, существующий Tasks view не объявляется новой native subscription.
 
