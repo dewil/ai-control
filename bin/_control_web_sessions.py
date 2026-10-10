@@ -23,6 +23,8 @@ HISTORY_LIMIT = 96 * 1024
 RECEIPT_LIMIT = 10000
 NAMESPACE_ENTRY_LIMIT = 10002
 SUPPORTED_NATIVE_VERSIONS = ('0.160.0', '0.161.0')
+READ_METHODS = frozenset({'thread/list', 'thread/read', 'thread/turns/list', 'thread/items/list', 'thread/loaded/list'})
+VERSION_TOKEN = r'[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(?:-[A-Za-z0-9][A-Za-z0-9.-]{0,31})?'
 
 
 class RPCRejected(RuntimeError):
@@ -91,8 +93,15 @@ def _operation(method):
     @functools.wraps(method)
     def bounded(self, *args, **kwargs):
         self._local.deadline = time.monotonic() + 55
+        self._local.read_context = None
         try:
-            return method(self, *args, **kwargs)
+            result = method(self, *args, **kwargs)
+            capture = self._local.read_context
+            if capture is not None and method.__name__ not in ('send', 'enqueue', 'cancel_queued', 'rename'):
+                _need(self._catalog_context() == capture, 'stale')
+            if method.__name__ == 'history' and type(result) is dict and 'turns' in result:
+                self._history_observation = copy.deepcopy(capture)
+            return result
         except _DomainError as error:
             return {'error': error.code}
         except Exception:
@@ -550,6 +559,7 @@ class SessionChat:
         self._model_clock = model_clock or time.monotonic
         self._model_lock = threading.Lock()
         self._model_cache = OrderedDict()
+        self._history_observation = None
 
     def _configured_call(self, method, *args):
         self._remaining()
@@ -569,7 +579,8 @@ class SessionChat:
         context, namespace = dict(identity.context), identity.namespace
         _need(set(context) == {'schema', 'vendor', 'context_kind', 'context_id',
                               'transport_generation', 'context_generation', 'native_version'}
-              and self._catalog_reason(context) is None)
+              and self._read_context_reason(context) is None)
+        self._capture_read_context(context)
         if namespace is not None:
             namespace = dict(namespace)
             _need(set(namespace) == {'dev', 'ino', 'mtime_ns', 'ctime_ns'}
@@ -588,7 +599,7 @@ class SessionChat:
         _need(record.get('status') == 'accepted' and record.get('project') == project
               and record.get('root') == root and record.get('sid') == sid
               and valid_uuid(record.get('operation_id'))
-              and self._catalog_reason(context) is None
+              and self._read_context_reason(context) is None
               and record.get('context_id') == context.get('context_id')
               and context == self._catalog_context(), 'stale')
         _need(set(session) == {'sid', 'project', 'vendor', 'context_mode', 'title'}
@@ -627,8 +638,24 @@ class SessionChat:
         _need(value > 0)
         return value
 
+    def _capture_read_context(self, context=None):
+        prepare = getattr(self.rpc, 'prepare_context', None)
+        if not callable(prepare):
+            return None
+        capture = getattr(self._local, 'read_context', None)
+        if capture is None:
+            capture = copy.deepcopy(context if context is not None else prepare(timeout=self._remaining()))
+            _need(self._read_context_reason(capture) is None)
+            self._local.read_context = capture
+        _need(context is None or context == capture, 'stale')
+        _need(self._catalog_context() == capture, 'stale')
+        return capture
+
     def _rpc(self, method, params):
         remaining = self._remaining()
+        capture = self._capture_read_context() if method in READ_METHODS else None
+        if capture is not None:
+            return self._send_fenced(method, params, capture)
         result = (self.rpc.call(method, params, timeout=remaining)
                   if isinstance(self.rpc, InteractiveRPC) else self.rpc(method, params))
         self._remaining()
@@ -679,7 +706,7 @@ class SessionChat:
     def _receipt_context(self):
         fields = ('schema', 'vendor', 'context_kind', 'context_id')
         def model_snapshot(context):
-            _need(self._catalog_reason(context) != 'unverified_context'
+            _need(self._read_context_reason(context) is None
                   and context['vendor'] == 'codex'
                   and (context['native_version'] is None or type(context['native_version']) is str))
             return {key: context[key] for key in fields}
@@ -737,7 +764,7 @@ class SessionChat:
         return result
 
     @staticmethod
-    def _catalog_reason(context):
+    def _read_context_reason(context):
         if (type(context) is not dict or set(context) != {
                 'schema', 'vendor', 'context_kind', 'context_id',
                 'transport_generation', 'context_generation', 'native_version'}
@@ -754,9 +781,19 @@ class SessionChat:
         # A metadata binding does not authorize shared legacy transport discovery.
         if context['context_kind'] != 'legacy_unbound':
             return 'unverified_context'
-        if context['native_version'] not in SUPPORTED_NATIVE_VERSIONS:
-            return 'unsupported_capability'
+        version = context['native_version']
+        if version is not None and (type(version) is not str or len(version) > 64 or re.fullmatch(VERSION_TOKEN, version) is None):
+            return 'unverified_context'
         return None
+
+    @staticmethod
+    def _catalog_reason(context):
+        reason = SessionChat._read_context_reason(context)
+        if reason is not None:
+            return reason
+        return None if context['native_version'] in SUPPORTED_NATIVE_VERSIONS else 'unsupported_capability'
+
+
 
     @staticmethod
     def _catalog_unavailable(context, reason):
@@ -1224,7 +1261,7 @@ class SessionChat:
     def _settings_capture(self):
         try:
             context = self._catalog_context()
-            if self._catalog_reason(context) is not None:
+            if self._read_context_reason(context) is not None:
                 return None
             started = self._model_clock()
             if type(started) not in (int, float) or not math.isfinite(started):
@@ -1264,7 +1301,9 @@ class SessionChat:
     def live_snapshot(self, project, sid):
         # Reuse the complete latest projection with one aggregate native budget.
         self._local.deadline = time.monotonic() + 5
+        self._local.read_context = None
         try:
+            self._capture_read_context()
             context = self._receipt_context()
             native = self._catalog_context() if self._has_model_context or self._explicit_model_context else None
             root = self._root(project)
@@ -1275,6 +1314,8 @@ class SessionChat:
             from _control_web_live import owner_result
             identity = dict(root=root, sid=sid, context=context, native=native)
             result = owner_result(dict(schema=1, scope_id=_context_token(identity), history=history))
+            if 'turns' in history:
+                self._history_observation = copy.deepcopy(getattr(self._local, 'read_context', None))
             self._remaining()
             return result
         except Exception:
@@ -1282,6 +1323,7 @@ class SessionChat:
 
     def _history(self, project, sid, cursor=None):
         _need(valid_uuid(sid) and valid_cursor(cursor), 'invalid_request')
+        self._capture_read_context()
         context = self._receipt_context()
         root = self._root(project)
         capture = self._settings_capture() if cursor is None else None
@@ -1560,6 +1602,27 @@ class SessionChat:
                 self._summary_revision += 1
             return self._rename_result(record, name)
 
+    @_operation
+    def capabilities(self, project, sid):
+        _need(valid_uuid(sid), 'invalid_request')
+        root = self._root(project)
+        self._proof(root, sid)
+        context = self._catalog_context()
+        _need(self._read_context_reason(context) is None)
+        self._capture_read_context(context)
+        version = context['native_version']
+        reviewed = version in SUPPORTED_NATIVE_VERSIONS
+        operations = {'sessions_read': dict(supported=True, reason=None),
+                      'history_read': dict(supported=True, reason=None) if self._history_observation == context else dict(supported=None, reason='not_observed')}
+        for name in ('model_selection', 'send', 'create', 'rename', 'queue'):
+            operations[name] = (dict(supported=False, reason='unsupported_native_version') if not reviewed else
+                dict(supported=False, reason='unsupported_operation') if name == 'queue' and version == '0.160.0' else
+                dict(supported=None, reason='not_observed') if name == 'queue' else dict(supported=True, reason=None))
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        return dict(schema=1, native_version=version, version_source='initialize_reported',
+                    version_review='unknown' if version is None else 'reviewed' if reviewed else 'unreviewed',
+                    read_status='compatible', operations=operations)
+
     @staticmethod
     def _queue_unavailable():
         return dict(schema=1, vendor='codex', supported=False, reason='unsupported_queue',
@@ -1804,6 +1867,8 @@ class SessionChat:
             _need(model_context.get('context_id') == context['context_id'], 'stale')
         root = self._root(project)
         self._proof(root, sid)
+        if self._has_model_context or self._explicit_model_context:
+            _need(self._catalog_reason(self._catalog_context()) is None)
         _need(self._receipt_context() == context, 'stale')
         # Existing UUID lookup precedes live catalog validation: stored wire
         # mapping is the only authority for an exact replay.
@@ -2000,12 +2065,20 @@ class InteractiveRPC:
         except Exception:
             self._fail(ws, generation)
 
+    def _method_allowed(self, method):
+        if method == 'initialize' or method in READ_METHODS:
+            return True
+        if method.startswith('thread/queue/') or method == 'turn/steer':
+            return self._native_version == '0.161.0'
+        return self._native_version in SUPPORTED_NATIVE_VERSIONS
+
     def _request(self, ws, generation, method, params, deadline, *, context_generation=None):
         waiter = {'event': threading.Event()}
         request_id = str(uuid.uuid4())
         with self._lock:
             if (self._ws is not ws or self._generation != generation or len(self._pending) >= 64
-                    or (context_generation is not None and self._context_generation != context_generation)):
+                    or (context_generation is not None and self._context_generation != context_generation)
+                    or not self._method_allowed(method)):
                 raise RuntimeError('RPC unavailable')
             self._pending[request_id] = waiter
         timer = threading.Timer(max(0, deadline - time.monotonic()), self._expire, args=(ws, generation))
@@ -2019,17 +2092,12 @@ class InteractiveRPC:
                 if time.monotonic() >= deadline:
                     raise TimeoutError('RPC deadline exceeded')
                 payload = _json({'id': request_id, 'method': method, 'params': params}).decode('utf-8')
-                if context_generation is None:
+                with self._lock:
+                    if (self._closed or self._ws is not ws or self._generation != generation
+                            or context_generation is not None and self._context_generation != context_generation
+                            or not self._method_allowed(method)):
+                        raise RuntimeError('RPC generation unavailable')
                     ws.send(payload)
-                else:
-                    # Serialize dispatch with observed context invalidation. The
-                    # deadline timer shuts down this captured socket independently.
-                    with self._lock:
-                        if (self._closed or self._ws is not ws or self._generation != generation
-                                or self._context_generation != context_generation
-                                or self._native_version not in SUPPORTED_NATIVE_VERSIONS):
-                            raise RuntimeError('RPC generation unavailable')
-                        ws.send(payload)
             finally:
                 self._send_lock.release()
             if not waiter['event'].wait(max(0, deadline - time.monotonic())):
@@ -2119,7 +2187,7 @@ class InteractiveRPC:
                         raise RuntimeError('RPC deadline exceeded')
                     ws.send('{"method":"initialized"}')
                     hint = initialized.get('userAgent')
-                    match = (re.match(r'^[\x20-\x2e\x30-\x7e]{1,128}/(0\.160\.0|0\.161\.0) \(', hint)
+                    match = (re.match(r'^[\x20-\x2e\x30-\x7e]{1,128}/(' + VERSION_TOKEN + r') \(', hint)
                              if type(hint) is str and len(hint) <= 4096 else None)
                     version = match.group(1) if match else None
                     with self._lock:
@@ -2181,7 +2249,7 @@ class InteractiveRPC:
             raise ValueError('RPC deadline refused')
         with self._lock:
             if (type(transport_generation) is not int or type(context_generation) is not int
-                    or self._closed or self._ws is None or self._native_version not in SUPPORTED_NATIVE_VERSIONS
+                    or self._closed or self._ws is None or not self._method_allowed(method)
                     or self._generation != transport_generation or self._context_generation != context_generation):
                 raise RuntimeError('RPC generation unavailable')
             ws = self._ws

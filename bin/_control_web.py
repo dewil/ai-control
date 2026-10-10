@@ -822,6 +822,15 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
     async def session_live_snapshot(request: Request):
         return await live_read(request)
 
+    @app.get('/api/session-capabilities')
+    async def session_capabilities(request: Request):
+        from _control_web_broker import capabilities_result
+        origins, sites = request.headers.getlist('origin'), request.headers.getlist('sec-fetch-site')
+        if origins and origins != [origin] or sites and sites != ['same-origin']:
+            return error('forbidden', 403)
+        return await chat_read(request, ('project', 'sid'), (),
+            lambda data: capabilities_result(backend.session_capabilities(data['project'], data['sid'])), preserve_forbidden=True)
+
     @app.get('/api/session-models')
     async def session_models(request: Request):
         return await chat_read(request, ('project', 'sid'), (), lambda data: backend.session_models(data['project'], data['sid']), preserve_forbidden=True)

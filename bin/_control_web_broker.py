@@ -564,6 +564,42 @@ def queue_result(value):
         return {'error': 'unavailable'}
 
 
+
+def capabilities_result(value):
+    if type(value) is dict and set(value) == {'error'}:
+        return {'error': value['error'] if value['error'] in ('invalid_request', 'forbidden', 'stale', 'unavailable') else 'unavailable'}
+    try:
+        from _control_web_sessions import VERSION_TOKEN, SUPPORTED_NATIVE_VERSIONS
+        if (type(value) is not dict or set(value) != {'schema', 'native_version', 'version_source', 'version_review', 'read_status', 'operations'}
+                or type(value['schema']) is not int or value['schema'] != 1
+                or value['version_source'] != 'initialize_reported'
+                or value['read_status'] not in ('compatible', 'unverified')):
+            raise ValueError()
+        version = value['native_version']
+        if version is not None and (type(version) is not str or len(version) > 64 or re.fullmatch(VERSION_TOKEN, version) is None):
+            raise ValueError()
+        review = 'unknown' if version is None else 'reviewed' if version in SUPPORTED_NATIVE_VERSIONS else 'unreviewed'
+        if value['version_review'] != review:
+            raise ValueError()
+        operations = value['operations']
+        writes = {'model_selection', 'send', 'create', 'rename', 'queue'}
+        if type(operations) is not dict or set(operations) != writes | {'sessions_read', 'history_read'}:
+            raise ValueError()
+        for name, row in operations.items():
+            if (type(row) is not dict or set(row) != {'supported', 'reason'}
+                    or row['supported'] is not None and type(row['supported']) is not bool
+                    or (row['reason'] is None) != (row['supported'] is True)
+                    or row['reason'] is not None and row['reason'] not in ('not_observed', 'unsupported_native_version',
+                        'unsupported_operation', 'incompatible_response', 'unverified_context', 'stale', 'unavailable')
+                    or review != 'reviewed' and name in writes and row != {'supported': False, 'reason': 'unsupported_native_version'}
+                    or name == 'queue' and version == '0.160.0' and row != {'supported': False, 'reason': 'unsupported_operation'}):
+                raise ValueError()
+        if value['read_status'] == 'compatible' and operations['sessions_read'] != {'supported': True, 'reason': None}:
+            raise ValueError()
+        return copy.deepcopy(value)
+    except Exception:
+        return {'error': 'unavailable'}
+
 def queue_mutation_result(value, message_id, queued_submission_id=None):
     if type(value) is not dict:
         return {'error': 'unavailable'}
@@ -586,6 +622,8 @@ def queue_mutation_result(value, message_id, queued_submission_id=None):
 
 
 def _queue_boundary(request, value):
+    if request['op'] == 'session_capabilities':
+        return capabilities_result(value)
     if request['op'] == 'session_queue':
         return queue_result(value)
     if request['op'] in ('session_enqueue', 'session_queue_cancel'):
@@ -604,6 +642,7 @@ SESSION_FIELDS = {
     'session_history': {'op', 'project', 'sid', 'cursor'},
     'session_live_snapshot': {'op', 'project', 'sid'},
     'session_models': {'op', 'project', 'sid'},
+    'session_capabilities': {'op', 'project', 'sid'},
     'session_send': {'op', 'project', 'sid', 'message_id', 'text'},
     'session_send_status': {'op', 'project', 'sid', 'message_id'},
     'session_queue': {'op', 'project', 'sid'},
@@ -942,6 +981,8 @@ class RegistryBackend:
                 result = self.sessions.history(request['project'], request['sid'], request['cursor'])
             elif op == 'session_live_snapshot':
                 result = self.sessions.live_snapshot(request['project'], request['sid'])
+            elif op == 'session_capabilities':
+                result = self.sessions.capabilities(request['project'], request['sid'])
             elif op == 'session_models':
                 result = self.sessions.models(request['project'], request['sid'])
             elif op == 'session_send':
@@ -981,6 +1022,9 @@ class RegistryBackend:
     def session_live_snapshot(self, project, sid):
         from _control_web_live import owner_result
         return owner_result(self._session(dict(op='session_live_snapshot', project=project, sid=sid)))
+
+    def session_capabilities(self, project, sid):
+        return self._session(dict(op='session_capabilities', project=project, sid=sid))
 
     def session_models(self, project, sid):
         return self._session(dict(op='session_models', project=project, sid=sid))
@@ -1315,6 +1359,8 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                     elif op == 'session_live_snapshot':
                         from _control_web_live import owner_result
                         result = owner_result(backend.session_live_snapshot(request['project'], request['sid']))
+                    elif op == 'session_capabilities':
+                        result = backend.session_capabilities(request['project'], request['sid'])
                     elif op == 'session_models':
                         result = backend.session_models(request['project'], request['sid'])
                     elif op == 'session_send':
@@ -1501,6 +1547,9 @@ class SocketBackend:
         if result == {'error': 'invalid_or_stale'}:
             return {'error': 'unsupported'}
         return owner_result(result, private_errors=True)
+
+    def session_capabilities(self, project, sid):
+        return self._session(dict(op='session_capabilities', project=project, sid=sid))
 
     def session_models(self, project, sid):
         return self._session(dict(op='session_models', project=project, sid=sid))
