@@ -222,3 +222,6 @@ Own coverage local source read/design only, никаких code/tests/native exp
 
 ## Traceability IDs (frozen)
 INV-CAP-01 unknown-version structurally compatible read and configured overlay. INV-CAP-02 fresh peer/root/full-context capture, no mixed-generation page result. INV-CAP-03 unknown-version mutation refused at both ordinary/fenced wire boundary before effects. INV-CAP-04 fixed read-method set, no resume/probe mutation. INV-CAP-05 reviewed known versions and queue0.161 separate per-operation gates. INV-CAP-06 bounded honest initialize-reported version/null, no invented model authority. INV-CAP-07 fixed authenticated capabilities DTO/unsupported explanation, no broad discovery registry. INV-CAP-08 read failure isolated by operation, security validators and legacy account-proof limits retained.
+
+## SOURCE scope clarification
+A positive history observation is scoped to canonical project root, full thread ID and the complete current native context. A validated history read for threadA must not advertise history_read=true for threadB merely because they share a transport. An invalid/rejected projection forB leaves its history observation unproved. A bounded single last-observation tuple is sufficient; no new discovery/cache framework is required. Observation is published only after the complete validated history and final context/root checks.
