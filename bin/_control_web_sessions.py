@@ -2444,7 +2444,28 @@ class SessionChat:
         elif thread['status']['type'] == 'notLoaded':reason = 'not_loaded'
         elif thread['status']['type'] != 'idle':reason = 'not_idle'
         else:reason = None
-        return dict(schema=1, supported=reason is None, reason=reason)
+        blocked = set()
+        if reason is None:
+            from _control_web_broker import valid_queue_id
+            # Read every validated record in the existing locked root/SID
+            # namespace, across native contexts. Absence never clears unknown.
+            with self.receipts.namespace(root, sid, self._local.deadline) as ns:
+                for mid in self.receipts.names(ns, self._local.deadline):
+                    record = self.receipts.read(ns, root, sid, mid, self._local.deadline)
+                    _need(record is not None)
+                    if record.get('kind') != 'queue_start':
+                        continue
+                    qid = record['queued_submission_id']
+                    _need(valid_queue_id(qid) and record['digest'] == self._queue_digest(
+                        record['context_id'], root, sid, 'queue_start', qid))
+                    if record['status'] == 'delivery_unknown':
+                        blocked.add(qid)
+                        _need(len(blocked) <= 256)
+                _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        result = dict(schema=1, supported=reason is None, reason=reason,
+                      blocked_queue_ids=sorted(blocked))
+        _need(len(_json(result)) <= HISTORY_LIMIT)
+        return result
 
     @_operation
     def start_queued(self, project, sid, queued_submission_id, action_id):

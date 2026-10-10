@@ -713,12 +713,12 @@ async function loadQueueStartSupport(force=false){
   const controller=newObservationController(),timer=pageTimeout(()=>controller.abort(),15000);
   try{const data=await api(queryPath('/api/session-queue-start',{project,sid}),undefined,controller.signal,current);
     if(!current())return;
-    if(!exactFields(data,['schema','supported','reason'])||data.schema!==1||typeof data.supported!=='boolean'||(data.supported?data.reason!==null:!['unsupported_queue','not_loaded','not_idle','unavailable'].includes(data.reason)))throw new Error(messages.unavailable);
+    if(!exactFields(data,['schema','supported','reason','blocked_queue_ids'])||data.schema!==1||typeof data.supported!=='boolean'||(data.supported?data.reason!==null:!['unsupported_queue','not_loaded','not_idle','unavailable'].includes(data.reason))||!Array.isArray(data.blocked_queue_ids)||data.blocked_queue_ids.length>256||!data.blocked_queue_ids.every(validQueueId)||new Set(data.blocked_queue_ids).size!==data.blocked_queue_ids.length||new TextEncoder().encode(JSON.stringify(data)).length>96*1024)throw new Error(messages.unavailable);
     view.startSupport=data;view.startAdmission=epoch;view.startGeneration=generation;
   }catch(error){if(current()&&(error.status===401||error.status===403)){stopNavigation();if(error.status===403)ownerForbidden();}}
   finally{pageClearTimer(timer);if(view.startFlight===flight)view.startFlight=null;if(current()){renderHistory(key);syncCurrentSessionControls();}if(view.startPending){view.startPending=false;if(key===currentSessionKey()&&navigationVisible())loadQueueStartSupport(true);}}
 }
-function canStartQueued(view,qid){return navigationVisible()&&view.startAdmission===navigationEpoch&&view.startGeneration===selectionGeneration&&view.startSupport?.supported===true&&!view.starts.has(qid)&&!view.transfers.has(qid);}
+function canStartQueued(view,qid){return navigationVisible()&&view.startAdmission===navigationEpoch&&view.startGeneration===selectionGeneration&&view.startSupport?.supported===true&&!view.startSupport.blocked_queue_ids.includes(qid)&&!view.starts.has(qid)&&!view.transfers.has(qid);}
 function validQueueStart(data,intent){return exactFields(data,['status','message_id','queued_submission_id','turn_id','reason'])&&data.message_id===intent.action_id&&data.queued_submission_id===intent.queued_submission_id&&(data.status==='started'?validHistoryId(data.turn_id)&&data.reason===null:data.status==='busy'?data.turn_id===null&&data.reason==='not_idle':data.status==='changed'?data.turn_id===null&&data.reason==='row_missing':data.status==='delivery_unknown'&&data.turn_id===null&&[null,'unavailable'].includes(data.reason));}
 function acceptQueueStartResult(view,intent,data){
   intent.status=data.status;

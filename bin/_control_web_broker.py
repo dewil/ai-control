@@ -713,9 +713,17 @@ def participation_result(value, operation, request=None):
 def queue_start_support_result(value):
     failure = navigation_error(value)
     if failure:return failure
-    return dict(value) if (type(value) is dict and set(value) == {'schema', 'supported', 'reason'}
-        and type(value['schema']) is int and value['schema'] == 1 and type(value['supported']) is bool
-        and (value['reason'] is None if value['supported'] else value['reason'] in ('unsupported_queue', 'not_loaded', 'not_idle', 'unavailable'))) else {'error': 'unavailable'}
+    try:
+        valid = (type(value) is dict and set(value) == {'schema', 'supported', 'reason', 'blocked_queue_ids'}
+            and type(value['schema']) is int and value['schema'] == 1 and type(value['supported']) is bool
+            and (value['reason'] is None if value['supported'] else value['reason'] in ('unsupported_queue', 'not_loaded', 'not_idle', 'unavailable'))
+            and type(value['blocked_queue_ids']) is list and len(value['blocked_queue_ids']) <= 256
+            and all(valid_queue_id(qid) for qid in value['blocked_queue_ids'])
+            and len(set(value['blocked_queue_ids'])) == len(value['blocked_queue_ids'])
+            and len(json.dumps(value,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode('utf-8')) <= 96*1024)
+        return copy.deepcopy(value) if valid else {'error': 'unavailable'}
+    except Exception:
+        return {'error': 'unavailable'}
 
 
 def queue_start_result(value, action_id, queued_submission_id):
