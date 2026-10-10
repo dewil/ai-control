@@ -14,7 +14,7 @@ DESIGN draft; owner CONTROL-WEB-ATTENTION-INTEGRATION, parent CONTROL-WEB-SESSIO
 
 ## Инварианты
 
-- **INV-PART-01 — scope/read.** GET/poll/SSE/reconnect/status только reads/snapshots, без resume/start/steer/queue mutations/callback replies/errors. Current auth/grants, registered canonical root, configured context и полный SID проверяются до export/counts и action. Raw roots/native IDs/credentials не DTO. Same SID/root не связывает TASK-owned и shared host.
+- **INV-PART-01 — scope/read.** GET/poll/SSE/reconnect/status только reads/snapshots, без resume/start/steer/queue mutations/callback replies/errors. Current auth/grants, registered canonical root, configured context и полный SID проверяются до export/counts и action. Raw roots/native JSON-RPC request IDs/credentials не DTO; существующие bounded thread/turn/item references разрешены. Same SID/root не связывает TASK-owned и shared host.
 - **INV-PART-02 — состояния.** Activity/waits/result независимы. Flags дают coarse wait; отсутствие callback не означает отсутствие запроса. Running требует fresh bound metadata и exact inProgress turn bounded latest-turn read. Coarse active отдельно; unknown/stale/partial не idle/0. Counts session-unique per group; total — union.
 - **INV-PART-03 — вопрос.** Только фактически полученный `item/tool/requestUserInput` текущего owned initialized WebSocket0.161. Binding: owner epoch/context/transport+context generations/typed request ID/root/SID/turn/item/payload digest. Thread cwd совпадает с registered root; root/grants/context перепроверяются до dispatch. isSecret native-only.
 - **INV-PART-04 — once-only.** Под lock callback+action UUID резервируются до possible wire; другие UUID также не повторяют ответ. Socket ошибка после reserve не retry. Exact captured socket/native ID/typed result, без RPC method. Send не applied; resolved не раскрывает winner/decision. «Запрос закрыт» не «ваш ответ применён».
@@ -24,7 +24,7 @@ DESIGN draft; owner CONTROL-WEB-ATTENTION-INTEGRATION, parent CONTROL-WEB-SESSIO
 
 ## Публичный контракт
 
-Proposed exact schema1, закрытые поля. `epoch` random32lowerhex; revision positive JS-safe integer. Project/SID/action UUID — existing validators. session_key opaque64lowerhex от context/root/SID, не account principal. Labels≤120 chars/redactor/textContent. Nullable поля обязательны; UTC seconds0..253402300799.
+Proposed exact schema1, закрытые поля. `epoch` random32lowerhex; revision positive JS-safe integer. Project/SID/action UUID — existing validators. session_key opaque64lowerhex от verified web principal (`owner` сейчас)/context/root/SID; это не native account principal и не замена auth. Labels≤120 chars/redactor/textContent. Nullable поля обязательны; UTC seconds0..253402300799.
 
 ### Общий обзор
 
@@ -142,3 +142,12 @@ TASK source должен быть отдельным trusted adapter в форм
 Read-only проверка точной публичной базы: `_control_web_sessions.py:71,1322,1399,2228` — coarse attention/history snapshot и receiver, который пропускает method frames; `_control_web_live.py:26,80` — закрытая history schema; broker session op allowlist и HTTP routes не имеют session question responder. `_control_web_attention.py` — pure injected snapshot projection, без production adapters. Source не installed proof.
 
 Pinned native0.161 commit `979011409de0a60b52f179721948e65531d26144`: [callback map/first response](https://github.com/openai/codex/blob/979011409de0a60b52f179721948e65531d26144/codex-rs/app-server/src/outgoing_message.rs#L330), [resume replay/resolved](https://github.com/openai/codex/blob/979011409de0a60b52f179721948e65531d26144/codex-rs/app-server/src/request_processors/thread_lifecycle.rs#L808). Future-thread auto-attach (`lib.rs:1282`) best-effort/lag, не полный passive snapshot. Read resume может вызвать queue dispatch/cold load и исключён. Native question schemas не задают maxLength/maxItems; bounds Control собственные.
+
+## Финальные уточнения DESIGN
+Owner API: `SessionChat.participation_overview()`, `questions(project,sid)`, `answer_question(project,sid,epoch,interaction_id,action_id,answers)`. Optional trusted task source seam допускается у RegistryBackend: `task_attention_source=None`, объект с `.snapshot()` accepted AttentionOverview public projection. None/raw legacy snapshot не создаёт TASK authority; emptytasks+binding_incomplete честны, существующий TASKview сохраняется.
+
+GET `/api/participation-overview`, GET `/api/session-questions` и POST `/api/session-question-answer` явно проверяют verified server principal==owner ДО backend (иной403), как и pin routes; public principal не принимается. Native principal не выводится из этого web principal.
+
+Если хотя бы один discovered loaded SID не имеет proof за последние15s, coverage.partial=true и limit включён (limit freshness coverage window); deadline/source_unavailable добавляются по причине. Это правило не превращает partial вfalse, даже если все прочие cached rows fresh. Nativecallbacks_partial независимо остаётся true из-за upstream coverage.
+
+UI для state=closed,reason=delivery_unknown ОБЯЗАН показать в той же карточке «Запрос закрыт. Доставка ответа неизвестна; проверьте Codex». Состояниеclosed никогда не обозначается «Ваш ответ применён». RED проверяет эту точную комбинацию, commentary-only latest completed turn ready=false, owner-only gates на всех трёх participation routes и budget-exceeded loaded set.
