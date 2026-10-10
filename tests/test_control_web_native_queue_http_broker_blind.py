@@ -31,13 +31,12 @@ class NativeQueueHTTPBlind(unittest.TestCase):
     def headers(self):return {'Origin':ORIGIN,'X-CSRF-Token':self.csrf}
 
     def test_supported_native_rows_exact_read_DTO_no_store_and_busy_sendnow_unavailable(self):
-        # INV-SQUEUE-01 INV-SQUEUE-04 INV-SQUEUE-06(deferred) INV-SQUEUE-08
+        # INV-SQUEUE-01 INV-SQUEUE-04 INV-SQUEUE-08; approved transfer adds a route,
+        # while this inactive-turn fixture still honestly advertises disabled.
         self.login();response=self.client.get(self.path)
         self.assertEqual(response.status_code,200,response.text)
         self.assertEqual(response.json(),s.queue_dto());self.assertIn('no-store',response.headers.get('cache-control',''))
         self.assertFalse(response.json()['send_now_supported'])
-        absent=self.client.post('/api/session-queue-send-now',json={**self.cancel_payload,'expected_turn_id':s.TURN},headers=self.headers())
-        self.assertEqual(absent.status_code,404,'Deferred transfer must have no mutation route')
         self.assertEqual(self.backend.calls,[('queue','demo',s.SID)])
 
     def test_unauthenticated_and_expired_sessions_never_reach_queue(self):
@@ -103,7 +102,10 @@ class NativeQueueHTTPBlind(unittest.TestCase):
         for state in ['changed','delivery_unknown']:
             self.backend.cancel_status=state
             response=self.client.post('/api/session-queue-cancel',json=self.cancel_payload,headers=self.headers())
-            self.assertEqual(response.status_code,200,response.text);self.assertEqual(response.json()['status'],state)
+            # Owner's explicit clarification: POST unknown uses existing chat503,
+            # GET receipt reconciliation remains200; changed is a normal200.
+            self.assertEqual(response.status_code,503 if state=='delivery_unknown' else 200,response.text)
+            self.assertEqual(response.json()['status'],state)
 
 
 class NativeQueueBrokerBlind(unittest.TestCase):

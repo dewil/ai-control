@@ -32,7 +32,8 @@ def public_row(qid=QID,mid=MID,text=TEXT):
 
 def queue_dto(rows=None,partial=False):
     return dict(schema=1,vendor='codex',supported=True,reason=None,
-                rows=deepcopy(rows if rows is not None else [public_row()]),partial=partial,send_now_supported=False)
+                rows=deepcopy(rows if rows is not None else [public_row()]),partial=partial,send_now_supported=False,
+                active_turn_id=None,send_now_reason='inactive_turn',recovery=[])
 
 
 class QueueRPC(RPC):
