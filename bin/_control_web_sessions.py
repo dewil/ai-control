@@ -97,7 +97,7 @@ def _operation(method):
         try:
             result = method(self, *args, **kwargs)
             capture = self._local.read_context
-            if capture is not None and method.__name__ not in ('send', 'enqueue', 'cancel_queued', 'send_queued_now', 'rename'):
+            if capture is not None and method.__name__ not in ('send', 'enqueue', 'cancel_queued', 'send_queued_now', 'start_queued', 'rename'):
                 _need(self._catalog_context() == capture, 'stale')
             return result
         except _DomainError as error:
@@ -274,15 +274,20 @@ class _Receipts:
             elif record.get('schema') == 3:
                 _need(set(record) == fields | {'schema', 'context_id', 'kind',
                       'queued_submission_id', 'reason'} and type(record['schema']) is int
-                      and record['kind'] in ('queue_enqueue', 'queue_cancel')
+                      and record['kind'] in ('queue_enqueue', 'queue_cancel', 'queue_start')
                       and type(record['context_id']) is str
                       and re.fullmatch('[0-9a-f]{64}', record['context_id'])
                       and (record['queued_submission_id'] is None or _identity(record['queued_submission_id']))
-                      and record['reason'] in (None, 'conflict', 'unavailable', 'stale', 'unsupported_queue'))
+                      and record['reason'] in ((None, 'not_idle', 'row_missing', 'unavailable') if record['kind'] == 'queue_start' else
+                          (None, 'conflict', 'unavailable', 'stale', 'unsupported_queue')))
                 if context_id is not None:
                     _need(record['context_id'] == context_id, 'invalid_request')
                 _need(record['status'] in (('queued', 'accepted', 'delivery_unknown')
-                      if record['kind'] == 'queue_enqueue' else ('cancelled', 'changed', 'delivery_unknown')))
+                      if record['kind'] == 'queue_enqueue' else ('started', 'busy', 'changed', 'delivery_unknown')
+                      if record['kind'] == 'queue_start' else ('cancelled', 'changed', 'delivery_unknown')))
+                _need(record['kind'] != 'queue_start' or _identity(record['queued_submission_id'])
+                      and ((record['status'] == 'started' and _identity(record['turn_id']) and record['reason'] is None)
+                           or record['status'] != 'started' and record['turn_id'] is None))
                 _need(record['kind'] != 'queue_cancel' or _identity(record['queued_submission_id']))
                 _need(record['status'] != 'queued' or _identity(record['queued_submission_id']))
             elif 'schema' in record:
@@ -333,6 +338,8 @@ class _Receipts:
 
     @staticmethod
     def result(record):
+        if record.get('kind') == 'queue_start':
+            return {key: record[key] for key in ('status', 'message_id', 'queued_submission_id', 'turn_id', 'reason')}
         if record.get('schema') == 4:
             return {key: record[key] for key in ('status', 'message_id', 'queued_submission_id', 'turn_id', 'reason')}
         if record.get('schema') == 3 and record['status'] != 'accepted':
@@ -377,7 +384,7 @@ class _Receipts:
         _need(all(record is not None for record in records))
         # Queue rows have their own native projection; cancellation actions are
         # not outgoing chat messages. Keep the existing history receipt schema.
-        records = [record for record in records if record.get('kind') not in ('queue_cancel', 'queue_transfer')
+        records = [record for record in records if record.get('kind') not in ('queue_cancel', 'queue_transfer', 'queue_start')
                    and record['status'] != 'queued']
         records.sort(key=lambda record: (record['created'], record['message_id']), reverse=True)
         _budget(deadline)
@@ -530,6 +537,72 @@ class RenameStore(_Receipts):
         _need(count < RECEIPT_LIMIT)
 
 
+
+class PrivatePinStore(RenameStore):
+    """Owner-local preferences; directory lock is separate from send receipts."""
+    @staticmethod
+    def _principal(principal):
+        _need(type(principal) is str and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', principal), 'forbidden')
+        return _context_token({'principal': principal}) + '.json'
+
+    def load(self, base, principal, deadline):
+        name = self._principal(principal)
+        empty = dict(schema=1, principal=principal, items=[])
+        if base is None:
+            return empty, None
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=base)
+        except FileNotFoundError:
+            return empty, None
+        try:
+            self._check(fd, deadline)
+            info = os.fstat(fd)
+            _need(info.st_size <= 128 * 1024)
+            with os.fdopen(fd, 'rb', closefd=False) as stream:
+                raw = stream.read(128 * 1024 + 1)
+            _budget(deadline)
+            _need(len(raw) <= 128 * 1024)
+            value = json.loads(raw, object_pairs_hook=_pairs)
+            _need(type(value) is dict and set(value) == {'schema', 'principal', 'items'}
+                  and type(value['schema']) is int and value['schema'] == 1 and value['principal'] == principal
+                  and type(value['items']) is list and len(value['items']) <= 24)
+            ids, identities = set(), set()
+            for row in value['items']:
+                _need(type(row) is dict and set(row) == {'pin_id', 'project', 'sid', 'root', 'context_id', 'vendor', 'title'}
+                      and valid_uuid(row['pin_id']) and valid_project(row['project']) and valid_uuid(row['sid'])
+                      and type(row['root']) is str and os.path.isabs(row['root']) and os.path.normpath(row['root']) == row['root']
+                      and type(row['context_id']) is str and re.fullmatch('[0-9a-f]{64}', row['context_id'])
+                      and row['vendor'] == 'codex' and type(row['title']) is str and len(row['title']) <= 500)
+                row['title'].encode('utf-8')
+                identity = (row['vendor'], row['context_id'], row['root'], row['sid'])
+                _need(row['pin_id'] not in ids and identity not in identities)
+                ids.add(row['pin_id']);identities.add(identity)
+            return value, info
+        finally:
+            os.close(fd)
+
+    def save(self, base, value, deadline, previous):
+        data = _json(value);_need(len(data) <= 128 * 1024 and len(value['items']) <= 24, 'capacity')
+        name = self._principal(value['principal']);temp = '.tmp-' + uuid.uuid4().hex
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=base)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, 'wb', closefd=False) as stream:
+                stream.write(data);stream.flush();os.fsync(fd)
+            self._check(fd, deadline);self._anchor(base, deadline)
+            if previous is not None:
+                _need(self._pin(os.stat(name, dir_fd=base, follow_symlinks=False)) == self._pin(previous))
+            else:
+                try:os.stat(name, dir_fd=base, follow_symlinks=False)
+                except FileNotFoundError:pass
+                else:raise _DomainError('unavailable')
+            os.replace(temp, name, src_dir_fd=base, dst_dir_fd=base)
+            os.fsync(base);self._anchor(base, deadline);_budget(deadline)
+        finally:
+            os.close(fd)
+            try:os.unlink(temp, dir_fd=base)
+            except FileNotFoundError:pass
+
 def _valid_selection(value, private=False):
     from _control_web_broker import SECRET_RE
     fields = {'catalog_id', 'model_id', 'effort'} | ({'wire_model'} if private else set())
@@ -558,10 +631,12 @@ def _context_token(value):
 class SessionChat:
     def __init__(self, rpc, project_path, project_names, receipt_dir, *,
                  summary_clock=None, summary_wall_clock=None, summary_generation=None,
-                 model_context=None, model_clock=None, rename_store=None, configured_creator=None):
+                 model_context=None, model_clock=None, rename_store=None, configured_creator=None, pin_store=None):
         self.rpc, self.project_path, self.project_names = rpc, project_path, project_names
         self.configured_creator = configured_creator
         self.receipts = _Receipts(receipt_dir)
+        self.pin_store = PrivatePinStore(pin_store if pin_store is not None else
+            os.path.join(os.path.dirname(self.receipts.path), 'web-session-pins'))
         self.renames = (rename_store if rename_store is not None else
                         RenameStore(os.path.join(os.path.dirname(self.receipts.path), 'web-rename-receipts')))
         _need(all(callable(getattr(self.renames, method, None))
@@ -1624,6 +1699,72 @@ class SessionChat:
                 self._summary_revision += 1
             return self._rename_result(record, name)
 
+    def _pin_proof(self, project, sid):
+        _need(valid_uuid(sid), 'invalid_request')
+        self._capture_read_context()
+        context = self._catalog_context()
+        _need(self._read_context_reason(context) is None)
+        root = self._root(project);thread = self._proof(root, sid)
+        _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        from _control_web_broker import redact
+        title = thread.get('name')
+        title = redact(title)[:500] if type(title) is str and title.strip() else 'Сессия ' + sid[:8]
+        return root, context, title
+
+    @_operation
+    def pins(self, principal):
+        with self.pin_store.locked(self._local.deadline) as base:
+            saved, _ = self.pin_store.load(base, principal, self._local.deadline)
+        rows = []
+        for row in saved['items']:
+            public = dict(pin_id=row['pin_id'], project=None, sid=None, title='Недоступная сессия',
+                          vendor=None, available=False, metadata_state='unavailable')
+            try:
+                self._capture_read_context()
+                context = self._catalog_context()
+                _need(self._read_context_reason(context) is None)
+                root = self._root(row['project'])
+                if root == row['root'] and context['context_id'] == row['context_id']:
+                    public.update(project=row['project'], sid=row['sid'], title=row['title'],
+                                  vendor='codex', available=True, metadata_state='saved')
+            except Exception:pass
+            rows.append(public)
+        # Re-filter current project/context even when another row's read failed.
+        for row, public in zip(saved['items'], rows):
+            if not public['available']:continue
+            try:allowed = self._root(row['project']) == row['root'] and self._catalog_context()['context_id'] == row['context_id']
+            except Exception:allowed = False
+            if not allowed:public.update(project=None, sid=None, title='Недоступная сессия', vendor=None, available=False, metadata_state='unavailable')
+        return dict(schema=1, items=rows)
+
+    @_operation
+    def pin(self, principal, project, sid):
+        self.pin_store._principal(principal)
+        root, context, title = self._pin_proof(project, sid)
+        with self.pin_store.locked(self._local.deadline, create=True) as base:
+            saved, previous = self.pin_store.load(base, principal, self._local.deadline)
+            row = next((row for row in saved['items'] if (row['context_id'], row['root'], row['sid']) ==
+                        (context['context_id'], root, sid)), None)
+            if row is None:
+                _need(len(saved['items']) < 24, 'capacity')
+                row = dict(pin_id=str(uuid.uuid4()), project=project, sid=sid, root=root,
+                           context_id=context['context_id'], vendor='codex', title=title)
+                saved['items'].insert(0, row)
+            else:row.update(title=title, project=project)
+            _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+            self.pin_store.save(base, saved, self._local.deadline, previous)
+        return dict(schema=1, pin_id=row['pin_id'], pinned=True)
+
+    @_operation
+    def unpin(self, principal, pin_id):
+        _need(valid_uuid(pin_id), 'invalid_request')
+        with self.pin_store.locked(self._local.deadline) as base:
+            saved, previous = self.pin_store.load(base, principal, self._local.deadline)
+            keep = [row for row in saved['items'] if row['pin_id'] != pin_id]
+            if len(keep) != len(saved['items']):
+                saved['items'] = keep;self.pin_store.save(base, saved, self._local.deadline, previous)
+        return dict(schema=1, pin_id=pin_id, pinned=False)
+
     @_operation
     def capabilities(self, project, sid):
         _need(valid_uuid(sid), 'invalid_request')
@@ -1778,6 +1919,64 @@ class SessionChat:
             if error.code == 'conflict':
                 raise _DomainError('unavailable') from None
             raise
+
+    @_operation
+    def queue_start_support(self, project, sid):
+        root, thread, context = self._queue_scope(project, sid)
+        if context is None:reason = 'unsupported_queue'
+        elif thread['status']['type'] == 'notLoaded':reason = 'not_loaded'
+        elif thread['status']['type'] != 'idle':reason = 'not_idle'
+        else:reason = None
+        return dict(schema=1, supported=reason is None, reason=reason)
+
+    @_operation
+    def start_queued(self, project, sid, queued_submission_id, action_id):
+        from _control_web_broker import valid_queue_id
+        _need(valid_uuid(action_id) and valid_queue_id(queued_submission_id), 'invalid_request')
+        root, thread, context = self._queue_scope(project, sid)
+        _need(context is not None, 'unsupported_queue')
+        _need(thread['status']['type'] != 'notLoaded')
+        digest = self._queue_digest(context['context_id'], root, sid, 'queue_start', queued_submission_id)
+        with self.receipts.namespace(root, sid, self._local.deadline, create=True) as ns:
+            record = self.receipts.read(ns, root, sid, action_id, self._local.deadline, context['context_id'])
+            if record is not None:
+                _need(record.get('kind') == 'queue_start' and record['digest'] == digest, 'invalid_request')
+                return self.receipts.result(record)
+            record = self._queue_record(context, root, sid, action_id, 'queue_start', queued_submission_id)
+            record.update(queued_submission_id=queued_submission_id, reason='unavailable')
+            # Stable root/thread/owner safety fence also spans native context rotation.
+            for mid in self.receipts.names(ns, self._local.deadline):
+                old = self.receipts.read(ns, root, sid, mid, self._local.deadline)
+                if old.get('kind') == 'queue_start' and old['queued_submission_id'] == queued_submission_id and old['status'] == 'delivery_unknown':
+                    _need(len(self.receipts.names(ns, self._local.deadline, reserve=True)) < RECEIPT_LIMIT)
+                    _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+                    self.receipts.write(ns, record, self._local.deadline)
+                    return self.receipts.result(record)
+            _need(len(self.receipts.names(ns, self._local.deadline, reserve=True)) < RECEIPT_LIMIT)
+            if thread['status']['type'] != 'idle':record.update(status='busy', reason='not_idle')
+            else:
+                listing, _ = self._queue_listing(project, root, sid, context)
+                if not any(row['queued_submission_id'] == queued_submission_id for row in listing['rows']):
+                    record.update(status='changed', reason='row_missing')
+            _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+            self.receipts.write(ns, record, self._local.deadline)
+            if record['status'] != 'delivery_unknown':return self.receipts.result(record)
+            try:
+                fresh = self._queue_proof(project, root, sid, context)
+                if fresh['status']['type'] != 'idle':
+                    settled = dict(record, status='busy', reason='not_idle')
+                else:
+                    value = self._send_fenced('thread/queue/start', dict(threadId=sid, queuedSubmissionId=queued_submission_id), context)
+                    turn = value.get('turn')
+                    _need(set(value) == {'turn'} and type(turn) is dict and _identity(turn.get('id'))
+                          and turn.get('status') == 'inProgress' and turn.get('items') == []
+                          and turn.get('itemsView', 'notLoaded') == 'notLoaded')
+                    _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+                    settled = dict(record, status='started', turn_id=turn['id'], reason=None)
+                self.receipts.write(ns, settled, self._local.deadline)
+                return self.receipts.result(settled)
+            except Exception:
+                return self.receipts.result(record)
 
     def _queue_active_turn(self, project, root, sid, context):
         thread = self._queue_proof(project, root, sid, context)
@@ -2148,6 +2347,8 @@ class SessionChat:
         with self.receipts.namespace(root, sid, self._local.deadline) as ns:
             record = self.receipts.read(ns, root, sid, message_id, self._local.deadline, context['context_id'])
             _need(record is not None, 'stale')
+            if record.get('kind') == 'queue_start':
+                return self.receipts.result(record)
             if record.get('kind') == 'queue_transfer':
                 return self._transfer_reconcile(ns, record, project, root, sid, self._catalog_context())
             if record.get('kind') == 'queue_enqueue':
@@ -2177,7 +2378,7 @@ class SessionChat:
 
 class InteractiveRPC:
     """One receiver per connection; never responds to native server requests."""
-    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/items/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set', 'thread/start', 'thread/loaded/list', 'thread/queue/list', 'thread/queue/add', 'thread/queue/delete', 'turn/steer'}
+    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/items/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set', 'thread/start', 'thread/loaded/list', 'thread/queue/list', 'thread/queue/add', 'thread/queue/delete', 'turn/steer', 'thread/queue/start'}
 
     def __init__(self, socket_path, timeout=25):
         if type(socket_path) is not str or type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 55:
