@@ -41,3 +41,6 @@ Mutation result exact `{schema:1,pin_id,pinned:boolean}`. Unpin неизвест
 ## Значимые RED и приёмка
 Module: два проекта и два storage principals, identical title/differentSID, rename, replay pin/unpin, unknown native compatible read, native context/root remap, unauthorized project, capacity/corrupt/symlink/hardlink/repo path, crash-write atomicity. Все pin/unpin paths без native mutations; unpin при offline native работает по своему opaque ID.
 HTTP/broker: unauth/CSRF/crossOrigin/wrongpeer, spoofed principal/extra keys/duplicate JSON, exact DTO bounds, no cross-principal leakage. Browser: global block across project switching/reload, pin/unpin, unavailable unpin, saved title vs fresh rename,320/360px, old GET after mutation/logout, hidden→resume without background work, draft/focus/anchor preservation. Общий SOURCE/CI пакета на стабильном SHA и installed owner/API/UI smoke.
+
+## Уточнение DESIGN 10.10
+PinStore — отдельное preference хранилище, не send/queue-start receipt namespace. Pin/unpin не консультируют unknown send/start receipts и не очищают их. Offline unpin по собственному opaque pin_id остаётся доступным независимо от native unknown outcome. RED явно проверяет эту независимость.

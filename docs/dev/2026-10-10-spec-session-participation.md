@@ -90,6 +90,37 @@ Seams: SessionChat/InteractiveRPC — registry/proof; broker — три fixed op
 
 Current owner web/app auth/same-origin/no-store; POST exact Origin/current CSRF. TTL/TOTP/grants/revoke неизменны. Ошибки invalid422/stale409/auth401/scope403/unavailable503/cap429; auth отказ до backend. Visible poll не чаще одного раза в5s, через общий page lifecycle/coordinator (один общий interval допустим), один inflight на scope, stop hidden/pagehide/logout; late view/auth/source response не оживляет controls. Cached stale rows повторно фильтруются current grants.
 
+## Уточнения независимого DESIGN 10.10
+
+### Ответ и закрытие — две разные фактические оси
+Внутри reserve хранятся `attempted` и local outcome (not_attempted|sent|unknown) отдельно от native closed. Публичный state=closed означает только закрытие исходного запроса и никогда не подтверждает применённый web-ответ.
+
+| Порядок | Эффект / публичное состояние |
+| --- | --- |
+| Resolved до reserve или повторного guard под send-lock | wire0, closed; UUID потреблён, повтор не отправляет |
+| Reserve, затем guard, attempted=true ДО possible write | допускается ровно один write; другие UUID его не повторяют |
+| ws.send успешно вернул, resolved ещё не наблюдался | sent/null, только local send proof |
+| Write/transport uncertain, resolved ещё не наблюдался | delivery_unknown/delivery_unknown, no retry |
+| Resolved после attempted, до/после результата write | closed; reason=delivery_unknown если local outcome unknown, иначе null; никакого applied/winner claim |
+| Context/connection/root loss | authority stale, no wire/retry; consumed reservation сохраняется в рамках owner epoch |
+
+Resolved закрывает карточку даже при неизвестной доставке, сохраняя отдельную честную пометку об ответе; не изображать закрытый native request всё ещё pending. Late callback не побеждает tombstone. RED проверяет все места resolved относительно reserve/attempted/send-return/throw.
+
+### Полнота и время
+Owner epoch — lifetime одного registry/RPC owner; revision монотонна в этом epoch, включая context invalidations. Restart меняет epoch. Browser связывает все participation scopes общим epoch-admission generation: принятие нового epoch от одного endpoint инвалидирует in-flight старого поколения, включая late overview/selected-questions responses. Epoch не account identity.
+
+Любая omitted root/session, неохваченный loaded set, исчерпанный RPC/deadline budget или невозможность покрыть rows за freshness window =>coverage.partial=true; limit и/или deadline соответствуют факту. Row с последним proof старше15s =>freshness=stale, running=unconfirmed и result.ready=false. Без времени/proof =>unavailable, не свежая0. Cached metadata не получает новое observed_at от HTTP чтения. Current grants/root registry фильтруются даже для stale cache.
+
+Malformed/unsupported question с unknown `isBlocking` остаётся native-only (blocking=null допустим только в таком observational entry), без поля ответа. Его закрывает только resolved/context/connection loss, не предположение по terminal/new turn. Для валидного native request обязательное isBlocking — bool; оно не выводится из activeFlags.
+
+### Конкретный completion witness
+Рассматривается только latest наблюдаемый turn с producer order из bounded native turns/items read. ready=true требует status=completed и последний в producer item-order непустой `agentMessage` с явным phase=`final_answer`; item_id берётся из этого validated native item. Несколько таких items => последний. Без phase/такого item, commentary-only, failed/interrupted, только metadata или event без item witness =>ready=false. Если latest turn inProgress, старый completed turn не выдаётся за новый готовый ответ. Raw phase берётся из native item, не из r12 history DTO, который её не экспортирует. Native TurnComplete сам по себе может дать terminal status, но не ready без item witness.
+
+### Principal и TASK boundary
+Новые participation routes owner-only: проверяют authenticated server principal==`owner` до backend; иной principal403. Broker ops доступны только уже trusted owner peer. Session_key не заменяет эту проверку. Реальное multiuser/project grant расширение требует отдельного контракта; не разрешать будущего второго principal молча.
+
+TASK source должен быть отдельным trusted adapter в формате accepted `_control_web_attention.py::_task`: registry_id/agent/incarnation/generation/attempt_id/project_binding/session_binding. Ни label, ни shared root/SID, ни legacy RegistryBackend.snapshot не создают этот proof. Adapter проверяет current registry incarnation/generation и собственный task-host route, current grants/root; archived/unlinked/mismatched TASK исключаются из tasks и дают coverage.binding_incomplete. Если production adapter отсутствует, tasks=[] с явной неполнотой; существующий Tasks view и его проверяемые writers остаются рабочими. Это не объявляет старую TASK-интеграцию завершённой и не сливает dedicated host с shared native host. Positive injected adapter и archive/replacement negatives входят в RED; родитель CONTROL-WEB-ATTENTION-INTEGRATION остаётся открытым для непоставленных TASK/approval scopes.
+
 ## Blind RED и приёмка
 
 Каждый тест несёт соответствующий INV-PART-01..07. Проверяются эффекты spy transport/backend, а не наличие имени функции.
