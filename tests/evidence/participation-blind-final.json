@@ -1,0 +1,13 @@
+{
+  "base": "65a271c6a08ab8403445e3f7dcaa8ec3d7db414e",
+  "tests": 70,
+  "failed_tests": 67,
+  "failure_records_including_subtests": 91,
+  "passed_tests": 3,
+  "errors": 0,
+  "skips": 0,
+  "status": "RED",
+  "browser": "153.0.8010.12; actual assets/application, local HTTP",
+  "errors_detail": [],
+  "usage": "unknown; partial coverage; root owns ledger"
+}

@@ -1,0 +1,30 @@
+# Participation/access — SOURCE и подготовка r13
+
+Ревью runtime: `bbd435a074e6b47d3515ea31fc6c6104a594d2f9`. Независимая модель Anthropic Haiku5.5 через OpenRouter, pinned Anthropic, reasoning disabled. Все три component scopes (owner/transport, HTTP/broker, browser) проверены; followup integration закрыл прежние findings по полным функциям и actual delta. Последний focused R1 closure имеет финальный **PASS**; начальный BLOCKED заголовок в ответе устарел внутри того же текста, незакрытых условий в заключении нет. Root проверил фактические аргументы, не применял speculative suggestions.
+
+## Подтверждённые исправления
+
+- Global participation GET отдаёт кэш; один owner worker обновляет bounded source (5s/≤32RPC) и останавливается при close/replace/RPC shutdown. Cached context helpers не делают native IO.
+- «Ответ готов» требует latest completed turn и последнее непустое producer-order agentMessage с phase=final_answer; позднее commentary снимает ready.
+- Queue/start support отдаёт полный bounded scoped набор unknown qids, сохраняемый через restart/context rotation. После reload browser восстанавливает per-qid guard без persistent receipts; старый r12 Queue DTO неизменён.
+
+## Проверки
+
+До worker delta:152affected tests PASS. Worker delta: meaningful cold/due GET latency и final→commentary RED воспроизведены до исправления;4author regressions PASS. Независимый timing amendment только loaded80 case сохранил каждый исходный assertion, original frame baseline и first GET;10repeatsPASS и70blind+4author=74PASS. Аналогичная publication barrier в author-only completed-batch test:1PASS, старые≤32RPC/limit/no-mutation assertions сохранены. Reader fixture исправлена с40items до публичногоcap24 при прежних anchor/focus/scroll assertions.
+
+Следующий gate — полный GitHub CI на окончательном SHA, затем подписанный fixed22 deploy и installed owner API/HTTPS. На момент этого документа production остаётся r12; r13 не объявлен установленным. Source tree после reviewed bbd435a не менялся, только tests/docs; точное сравнение bin при выпуске обязательно.
+
+## Границы
+
+Approval responses/attach/read-resume отложены пользователем. Native question forms доступны только для реально полученного текущим соединением callback; passive coverage partial. Sent не означает applied, native resolved не раскрывает winner. TASK linked refs не выдумываются: текущий adapter gap остаётся открытым с tasks=[]/binding_incomplete и сохранённым Tasks view. NATS observer отдельный blocked DESIGN; multiaccount/auth/native service не меняются. APK0.1.7/code8 не пересобирается.
+
+Feature specifications перенесены в docs/dev/done после SOURCE acceptance; delivery/installed acceptance учитываются отдельно у umbrella package owner. Нет заявления о завершении всего родительского backlog.
+
+## CI regression followup11.10
+
+Первый fullCI38086534124 наdb5ef5a не прошёл:1489tests/3FAIL/2ERROR/1existingSKIP, последующиеstagesSKIPPED. Тот checkpoint не поставлялся. Исправлены три общих browser причины: пустое initial window до первой history, истекающее trusted End намерение и offscreen focused anchor. Независимая поправка superseded test contracts добавила только reviewedqueue/start и4точных visible-resume GET; hiddenzeroIO/noPOST/security/count assertions сохранены.
+
+Exactruntime aab357bd9381389f194e575b3188872e188b0079:74adjacent browser/legacy cases PASS/0errors/skips118.476s, включая6sharedwindowconsumer groups и controlled delayedEnd; SOURCE delta/focused closure Haiku5.5/Anthropic finalPASS. Evidence-only handback4fff2c4. Окончательный footer timestamp обновлён после этой проверки, observable behavior unchanged. Следующий gate — новый полный CI, старый failedrun не переиспользуется. Production до него остаётсяr12.
+
+## Negative peer fixture closure
+ВторойfullCI38089041049 на024:1490tests/1488PASS/1ERROR/1existingSKIP. Единственнаяошибка — раннее корректное закрытие forbidden UID соединения давало BrokenPipeError до sendall. Independent one-line negative-test amendment добавляет только этот transport-close outcome к ранее допускавшимся EOF/Reset; sharedwire/runtime/positiveassertions и backendcalls=[] не изменены. Controlled realbroker earlyclose воспроизведён; negative+4positivecontrols по10повторов=50PASS/0errors/skips. Доказательства tests/evidence/participation-peer-early-close.md. НовыйfullCI обязателен; runtime bin byte-identical024.

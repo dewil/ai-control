@@ -1,0 +1,19 @@
+{
+  "candidate": "bbd435a074e6b47d3515ea31fc6c6104a594d2f9",
+  "reproduced_original": "1FAIL: initial cache lacked limit before loaded-set discovery",
+  "targeted_repeats": 10,
+  "failures": 0,
+  "errors": 0,
+  "skips": 0,
+  "elapsed_seconds": 0.332,
+  "original_assertions_AST_identical": true,
+  "amendment": "Only wait <=5s for a nonempty owner projection in loaded80 fixture; original wire baseline remains before firstGET",
+  "usage": "unknown/partial; root owns ledger",
+  "combined_tests": 74,
+  "combined_failures": 0,
+  "combined_errors": 0,
+  "combined_skips": 0,
+  "combined_elapsed_seconds": 37.196,
+  "missing_limit_control_probe_detected": true,
+  "scope": "Only copied public DTO has limit removed; no runtime/source edits"
+}

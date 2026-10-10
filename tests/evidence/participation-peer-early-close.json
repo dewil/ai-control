@@ -1,0 +1,21 @@
+{
+  "base": "024ecf2436c26beff32076ef95be3fcd55a4be17",
+  "tests": 50,
+  "repeats_per_case": 10,
+  "failures": 0,
+  "errors": 0,
+  "skips": 0,
+  "elapsed_seconds": 10.097,
+  "test_names": [
+    "test_INV_PART_01_wrong_peer_UID_and_arbitrary_callback_no_backend",
+    "test_INV_PART_01_fixed_ops_roundtrip_over_actual_owner_socket",
+    "test_INV_PART_01_SocketBackend_fixed_public_names",
+    "test_INV_PART_01_registry_delegates_exact_owner_methods",
+    "test_INV_PART_03_closed_op_shapes_reject_duplicate_and_arbitrary_response"
+  ],
+  "original_assertions_AST_identical": true,
+  "controlled_before": "Actual wrong-UID rejection drained to EOF before original sendall: kernel BrokenPipeError, 1ERROR, backendcalls[]",
+  "controlled_after": "Same EOF barrier on all3 ops: 1PASS, 3real kernel BrokenPipeError outcomes, backendcalls[]",
+  "amendment": "One negative except tuple adds BrokenPipeError only; sharedwire/runtime/positiveassertions untouched",
+  "usage": "unknown/partial; root owns ledger"
+}

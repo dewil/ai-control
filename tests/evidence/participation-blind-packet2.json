@@ -1,0 +1,26 @@
+{
+  "base": "65a271c6a08ab8403445e3f7dcaa8ec3d7db414e",
+  "tests": 30,
+  "failure_records": 50,
+  "errors": 0,
+  "skips": 0,
+  "status": "RED",
+  "browser": "153.0.8010.12; real Chromium, actual served JS and HTTP app; no asset mocks",
+  "errors_detail": [],
+  "failure_reasons": [
+    "AssertionError: 'task_attention_source' not found in mappingproxy(OrderedDict({'registry': <Parameter \"registry\">, 'bin_dir': <Parameter \"bin_dir\">, 'runner': <Parameter \"runner=None\">, 'sessions': <Parameter \"sessions=None\">, 'configured_creator': <Parameter \"configured_creator=None\">, 'devbus': <Parameter \"devbus=None\">})) : Public optional trusted task source seam absent (semantic RED)",
+    "AssertionError: 404 != 200",
+    "AssertionError: 404 != 401",
+    "AssertionError: 404 != 403",
+    "AssertionError: 404 != 422",
+    "AssertionError: False is not true : Missing public RegistryBackend.participation_overview",
+    "AssertionError: False is not true : Missing public SocketBackend.participation_overview",
+    "AssertionError: False is not true : Overview read missing (semantic RED)",
+    "AssertionError: False is not true : Question read missing (semantic RED)",
+    "AssertionError: False is not true : Selected chat question read missing (semantic RED)",
+    "AssertionError: False is not true : Visible session must observe common overview and selected questions (semantic RED)",
+    "Diff is 926 characters long. Set self.maxDiff to None to see it."
+  ],
+  "TASK_limit": "AttentionOverview linked projection lacks compact agent/qid; positive bridge deferred by owner; no fabricated refs",
+  "usage": "unknown; partial coverage; root owns ledger"
+}

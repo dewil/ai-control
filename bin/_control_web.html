@@ -7,6 +7,8 @@
   <nav class="tabs" role="tablist" aria-label="Раздел Control"><button id="tab-tasks" type="button" role="tab" aria-selected="true" aria-controls="tasks-panel">Задачи</button><button id="tab-sessions" type="button" role="tab" aria-selected="false" aria-controls="sessions-panel">Сессии</button><button id="tab-devbus" type="button" role="tab" aria-selected="false" aria-controls="devbus-panel">Шина</button></nav>
   <section id="tasks-panel" role="tabpanel" aria-labelledby="tab-tasks"><div class="toolbar"><p id="count"></p><button id="refresh">Обновить</button></div><div id="cards"></div></section>
   <section id="sessions-panel" role="tabpanel" aria-labelledby="tab-sessions" hidden>
+    <details id="pinned-sessions" open><summary>Закреплённые</summary><small id="pin-snapshot-note" hidden>Сохранённые названия</small><div id="pin-list"></div><p id="pin-status" class="meta" role="status"></p></details>
+    <details id="participation-overview" open><summary>Работа и вопросы</summary><div id="participation-list"></div><p id="participation-status" class="meta" role="status"></p></details>
     <div class="page-navigation"><button type="button" class="secondary" data-page-scroll="up">↑ В начало</button><button type="button" class="secondary" data-page-scroll="down">↓ В конец</button></div>
     <div class="project-navigation">
     <div class="projects-header"><span id="projects-heading">Проекты</span><button id="projects-toggle" type="button" class="secondary" aria-controls="projects-body" aria-expanded="true">Проекты</button></div>
@@ -22,8 +24,8 @@
     <button id="sessions-more" type="button" class="secondary" hidden>Ещё сессии</button>
     </aside>
     <section id="chat-panel" hidden aria-label="Переписка с Codex">
-      <header class="chat-heading"><h2 id="chat-title">Переписка</h2><div class="chat-navigation"><button id="rename-open" type="button" class="secondary">Переименовать</button><button id="rename-current-check" type="button" class="secondary" hidden>Проверить название</button><button id="history-new" type="button" class="secondary" hidden>Есть новые сообщения</button><button id="chat-latest" type="button" class="secondary">К последним сообщениям</button><button id="chat-refresh" type="button" class="secondary">Обновить переписку</button></div></header>
-      <p id="native-attention" class="attention" hidden>Нужно действие в клиенте Codex; ответы из панели пока недоступны.</p>
+      <header class="chat-heading"><h2 id="chat-title">Переписка</h2><div class="chat-navigation"><button id="pin-current" type="button" class="secondary">Закрепить</button><button id="rename-open" type="button" class="secondary">Переименовать</button><button id="rename-current-check" type="button" class="secondary" hidden>Проверить название</button><button id="history-new" type="button" class="secondary" hidden>Есть новые сообщения</button><button id="chat-latest" type="button" class="secondary">К последним сообщениям</button><button id="chat-refresh" type="button" class="secondary">Обновить переписку</button></div></header>
+      <p id="native-attention" class="attention" hidden>Codex ожидает действия. Подтверждения разрешений доступны только в Codex.</p>
       <p id="history-status" class="meta" role="status" aria-live="polite"></p>
       <button id="history-retry" type="button" class="secondary" hidden>Повторить загрузку</button>
       <button id="history-older" type="button" class="secondary" hidden>Загрузить более старые сообщения</button>
@@ -32,7 +34,7 @@
       <div id="receipt-list" class="receipt-list"></div>
       <p id="model-status" class="meta" role="status" aria-live="polite"></p>
       <p id="current-model-status" class="meta" aria-describedby="session-settings-note">Сессия: модель неизвестна · Размышление: уровень неизвестен</p>
-      <p id="queue-status" class="meta" role="status"></p>
+      <p id="queue-status" class="meta" role="status"></p><p id="queue-start-status" class="meta" role="status"></p>
       <div id="queue-recovery"></div>
       <p id="capability-status" class="meta" role="status"></p>
       <form id="chat-form">
@@ -55,6 +57,7 @@
           </div>
         </div>
       </form>
+      <div id="session-questions" aria-label="Вопросы Codex"></div>
     </section>
   </section>
   <section id="devbus-panel" role="tabpanel" aria-labelledby="tab-devbus" hidden><div id="devbus-root"></div></section>
@@ -75,6 +78,6 @@
 <button id="create-check" type="button" class="secondary" hidden>Проверить статус</button>
 </dialog>
 <!-- BUILD-INFO:START -->
-<footer id="build-info" class="build-info" data-release-id="12">ai-control · r12 · Собрано: <time datetime="2026-10-10T13:37:27.331398Z">10.10.2026 16:37 МСК</time> · Ветка: feat/native-message-queue</footer>
+<footer id="build-info" class="build-info" data-release-id="13">ai-control · r13 · Собрано: <time datetime="2026-10-10T21:48:33.827086Z">11.10.2026 00:48 МСК</time> · Ветка: feat/participation-access</footer>
 <!-- BUILD-INFO:END -->
 </body></html>
