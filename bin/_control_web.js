@@ -498,11 +498,11 @@ function renderModelControls(){
 }
 
 function navigationVisible(){return pageActive()&&Boolean(csrf)&&currentTab==='sessions'&&document.visibilityState==='visible'&&!$('workspace').hidden;}
-function stopNavigation(){navigationEpoch++;if(partView.selected)partView.selected.rendered='';disablePartControls();if(navigationTimer!==null){pageClearTimer(navigationTimer);navigationTimer=null;}}
+function stopNavigation(){navigationEpoch++;if(partView.selected)partView.selected.rendered='';disablePartControls();for(const button of document.querySelectorAll('[data-queue-start]'))button.disabled=true;if(navigationTimer!==null){pageClearTimer(navigationTimer);navigationTimer=null;}}
 function syncNavigation(force=false){
   if(!navigationVisible()){stopNavigation();return;}
-  if(navigationTimer===null)navigationTimer=pageInterval(()=>{loadPins();loadParticipation();loadSessionQuestions();},5000);
-  loadPins(force);loadParticipation(force);loadSessionQuestions(force);
+  if(navigationTimer===null)navigationTimer=pageInterval(()=>{loadPins();loadParticipation();loadSessionQuestions();loadQueueStartSupport();},5000);
+  loadPins(force);loadParticipation(force);loadSessionQuestions(force);loadQueueStartSupport(force);
 }
 function partText(value,bound,empty=false){return typeof value==='string'&&(empty||value.length>0)&&!/[\ud800-\udfff]/u.test(value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g,''))&&new TextEncoder().encode(value).length<=bound;}
 function validPartBase(data){return exactFields(data.coverage,['partial','reasons'])&&typeof data.coverage.partial==='boolean'&&Array.isArray(data.coverage.reasons)&&new Set(data.coverage.reasons).size===data.coverage.reasons.length&&data.coverage.reasons.every(value=>['limit','deadline','native_callbacks_partial','source_unavailable','unsupported','binding_incomplete'].includes(value))&&data.schema===1&&typeof data.epoch==='string'&&/^[0-9a-f]{32}$/.test(data.epoch)&&Number.isSafeInteger(data.revision)&&data.revision>0;}
@@ -672,14 +672,14 @@ async function changePin(add,pinId=null){
   }catch(error){if(!error.stale&&current())$('pin-status').textContent='Не удалось изменить закрепление. Обновите список.';}
   finally{pinView.busy=false;if(current()){renderPins();syncCurrentSessionControls();}}
 }
-function queueView(key){if(!queueViews.has(key))queueViews.set(key,{supported:null,mode:null,flight:null,last:0,rows:[],recovery:[],transfers:new Map(),target:null,sendNow:false,message:'Проверяем доступность очереди…',capabilities:null});return queueViews.get(key);}
+function queueView(key){if(!queueViews.has(key))queueViews.set(key,{supported:null,mode:null,flight:null,last:0,rows:[],recovery:[],transfers:new Map(),target:null,sendNow:false,message:'Проверяем доступность очереди…',capabilities:null,startSupport:null,startAdmission:-1,startGeneration:-1,startFlight:null,startLast:0,startPending:false,startMessage:'',starts:new Map()});return queueViews.get(key);}
 function queueMode(key){return queueView(key).supported===true&&queueView(key).mode!=='direct';}
 function queueCanonicalIds(state){return new Set([...state.turns.values()].flatMap(turn=>(turn.items||[]).filter(item=>item?.role==='user').map(item=>item.client_id)));}
 function renderQueueControls(key){
   const view=key&&queueView(key),select=$('chat-mode');
   select.hidden=!view?.supported;select.value=view?.mode||'queue';
   select.disabled=!pageActive()||Boolean(key&&(sendsInFlight.has(key)||hasUnknown(key)));
-  $('queue-status').textContent=view?.message||'';renderQueueRecovery(key);
+  $('queue-status').textContent=view?.message||'';$('queue-start-status').textContent=view?.startMessage||'';renderQueueRecovery(key);
   const cap=view?.capabilities,blocked=cap&&cap.operations.send.supported===false;
   $('capability-status').textContent=blocked?(cap.native_version===null?'Версия Codex не определена; чтение проверяется по ответам, команды недоступны.':'Codex '+cap.native_version+': чтение работает; отправка для этой версии пока не проверена.') : '';
 }
@@ -703,6 +703,48 @@ async function loadCapabilities(){
     if(activeSelection(project,sid,generation)&&validCapabilities(data)){queueView(key).capabilities=data;syncCurrentSessionControls();}
   }catch(_){}
 }
+async function loadQueueStartSupport(force=false){
+  const key=currentSessionKey();if(!key||!activeSelection()||!navigationVisible())return;
+  const view=queueView(key),now=performance.now();if(view.startFlight){if(force)view.startPending=true;return;}if(!force&&view.startLast&&now-view.startLast<5000)return;
+  const project=selectedProject,sid=selectedSession.sid,generation=selectionGeneration,auth=chatAuthGeneration,lifecycle=pageGeneration,epoch=navigationEpoch;
+  const current=()=>navigationVisible()&&activeSelection(project,sid,generation)&&auth===chatAuthGeneration&&lifecycle===pageGeneration&&epoch===navigationEpoch;
+  const flight={};view.startFlight=flight;view.startLast=now;view.startSupport=null;view.startAdmission=-1;
+  for(const button of document.querySelectorAll('[data-queue-start]'))button.disabled=true;
+  const controller=newObservationController(),timer=pageTimeout(()=>controller.abort(),15000);
+  try{const data=await api(queryPath('/api/session-queue-start',{project,sid}),undefined,controller.signal,current);
+    if(!current())return;
+    if(!exactFields(data,['schema','supported','reason'])||data.schema!==1||typeof data.supported!=='boolean'||(data.supported?data.reason!==null:!['unsupported_queue','not_loaded','not_idle','unavailable'].includes(data.reason)))throw new Error(messages.unavailable);
+    view.startSupport=data;view.startAdmission=epoch;view.startGeneration=generation;
+  }catch(error){if(current()&&(error.status===401||error.status===403)){stopNavigation();if(error.status===403)ownerForbidden();}}
+  finally{pageClearTimer(timer);if(view.startFlight===flight)view.startFlight=null;if(current()){renderHistory(key);syncCurrentSessionControls();}if(view.startPending){view.startPending=false;if(key===currentSessionKey()&&navigationVisible())loadQueueStartSupport(true);}}
+}
+function canStartQueued(view,qid){return navigationVisible()&&view.startAdmission===navigationEpoch&&view.startGeneration===selectionGeneration&&view.startSupport?.supported===true&&!view.starts.has(qid)&&!view.transfers.has(qid);}
+function validQueueStart(data,intent){return exactFields(data,['status','message_id','queued_submission_id','turn_id','reason'])&&data.message_id===intent.action_id&&data.queued_submission_id===intent.queued_submission_id&&(data.status==='started'?validHistoryId(data.turn_id)&&data.reason===null:data.status==='busy'?data.turn_id===null&&data.reason==='not_idle':data.status==='changed'?data.turn_id===null&&data.reason==='row_missing':data.status==='delivery_unknown'&&data.turn_id===null&&[null,'unavailable'].includes(data.reason));}
+function acceptQueueStartResult(view,intent,data){
+  intent.status=data.status;
+  view.startMessage=data.status==='started'?'Запуск очереди принят; выполнение не подтверждено.':data.status==='busy'?'Codex уже занят; запуск не выполнен.':data.status==='changed'?'Сообщение уже изменилось; запуск не выполнен.':'Доставка команды запуска неизвестна; проверьте Codex. Автоматического повтора нет.';
+  if(data.status==='busy'||data.status==='changed'){view.starts.delete(intent.queued_submission_id);view.startSupport=null;view.startAdmission=-1;}
+}
+async function submitQueueStart(intent){
+  const view=queueView(intent.key);if(activeSelection(intent.project,intent.sid,intent.generation))renderHistory(intent.key);
+  try{let data;try{data=await api('/api/session-queue-start',{project:intent.project,sid:intent.sid,queued_submission_id:intent.queued_submission_id,action_id:intent.action_id});}catch(error){if(error.data?.status==='delivery_unknown')data=error.data;else throw error;}
+    if(intent.auth!==chatAuthGeneration)return;
+    if(!validQueueStart(data,intent))throw new Error(messages.unavailable);
+    acceptQueueStartResult(view,intent,data);
+  }catch(_){if(intent.auth!==chatAuthGeneration)return;intent.status='delivery_unknown';view.startMessage='Доставка команды запуска неизвестна; проверьте Codex. Автоматического повтора нет.';}
+  finally{if(intent.auth===chatAuthGeneration&&intent.lifecycle===pageGeneration&&activeSelection(intent.project,intent.sid,intent.generation)){renderHistory(intent.key);syncCurrentSessionControls();if(intent.status!=='delivery_unknown')loadQueueStartSupport(true);}}
+}
+async function checkQueueStart(intent){
+  if(!navigationVisible()||!activeSelection()||currentSessionKey()!==intent.key||intent.auth!==chatAuthGeneration||intent.checking)return;
+  const generation=selectionGeneration,auth=chatAuthGeneration,lifecycle=pageGeneration,epoch=navigationEpoch;
+  const current=()=>navigationVisible()&&activeSelection(intent.project,intent.sid,generation)&&auth===chatAuthGeneration&&lifecycle===pageGeneration&&epoch===navigationEpoch;
+  intent.checking=true;
+  try{const data=await api(queryPath('/api/session-send-status',{project:intent.project,sid:intent.sid,message_id:intent.action_id}),undefined,undefined,current);
+    if(!current()||!validQueueStart(data,intent))return;
+    acceptQueueStartResult(queueView(intent.key),intent,data);
+  }catch(_){}finally{intent.checking=false;if(current()){renderHistory(intent.key);syncCurrentSessionControls();}}
+}
+
 async function loadQueue(force=false){
   const key=currentSessionKey();if(!key||!activeSelection()||document.visibilityState!=='visible'||!pageActive())return;
   const view=queueView(key),now=performance.now();if(view.flight||!force&&view.last&&now-view.last<5000)return;
@@ -756,6 +798,16 @@ function queueArticleActions(article,entry,key){
   if(!now){now=node('button','Отправить сейчас','secondary');now.type='button';now.dataset.sendNow='true';now.addEventListener('click',()=>openQueueTransferDialog(key,entry.item.id));controls.append(now);}
   now.disabled=!pageActive()||!queueView(key).sendNow||attempt.cancelPending||attempt.cancelUnknown||queueView(key).transfers.has(attempt.queued_submission_id);
   now.title=queueView(key).sendNow?'Будет отправлен показанный текст':'Активный ход не подтверждён';
+  const view=queueView(key),intent=view.starts.get(attempt.queued_submission_id);
+  let start=controls.querySelector('[data-queue-start]');
+  if(!start){start=node('button','Запустить из очереди','secondary');start.type='button';start.dataset.queueStart='true';start.addEventListener('click',()=>openQueueTransferDialog(key,entry.item.id,'start'));controls.append(start);}
+  start.disabled=!canStartQueued(view,attempt.queued_submission_id)||attempt.cancelPending||attempt.cancelUnknown;
+  start.title='Запускается текущая нативная версия; она может отличаться от показанного текста';
+  let check=controls.querySelector('[data-start-check]');
+  if(intent?.status==='delivery_unknown'){
+    if(!check){check=node('button','Проверить статус запуска','secondary');check.type='button';check.dataset.startCheck='true';check.addEventListener('click',()=>checkQueueStart(intent));controls.append(check);}
+    check.disabled=!navigationVisible()||intent.checking;
+  }else check?.remove();
 }
 
 function closeQueueTransferDialog(){
@@ -763,24 +815,26 @@ function closeQueueTransferDialog(){
   document.removeEventListener('keydown',dialog.keydown);dialog.overlay.remove();
   if(activeSelection(dialog.project,dialog.sid,dialog.generation)&&dialog.focus?.isConnected)dialog.focus.focus({preventScroll:true});
 }
-function openQueueTransferDialog(key,id){
+function openQueueTransferDialog(key,id,kind='transfer'){
   if(!pageActive()||!activeSelection()||key!==currentSessionKey())return;
   const view=queueView(key),attempt=normalizeHistoryState(key).outgoing.get(id);
-  if(!view.sendNow||!view.target||attempt?.status!=='queued'||!attempt.queued_submission_id||view.transfers.has(attempt.queued_submission_id))return;
+  if(attempt?.status!=='queued'||!attempt.queued_submission_id||attempt.cancelPending||attempt.cancelUnknown||(kind==='start'?!canStartQueued(view,attempt.queued_submission_id):!view.sendNow||!view.target||view.transfers.has(attempt.queued_submission_id)))return;
   closeQueueTransferDialog();
-  const context=Object.freeze({key,id,project:selectedProject,sid:selectedSession.sid,generation:selectionGeneration,auth:chatAuthGeneration,lifecycle:pageGeneration,
+  const context=Object.freeze({kind,key,id,project:selectedProject,sid:selectedSession.sid,generation:selectionGeneration,auth:chatAuthGeneration,lifecycle:pageGeneration,
     queued_submission_id:attempt.queued_submission_id,snapshot_text:attempt.text,expected_turn_id:view.target});
   const overlay=node('div',undefined,'queue-transfer-overlay'),box=node('div',undefined,'queue-transfer-dialog');
   box.setAttribute('role','dialog');box.setAttribute('aria-modal','true');box.setAttribute('aria-labelledby','queue-transfer-title');
-  const heading=node('h2','Отправить сейчас');heading.id='queue-transfer-title';
-  const warning=node('p','Будет отправлен показанный текст. Изменения этого сообщения на Mac могут не попасть в отправку.');
+  const heading=node('h2',kind==='start'?'Запустить из очереди':'Отправить сейчас');heading.id='queue-transfer-title';
+  const warning=node('p',kind==='start'?'Будет запущена текущая нативная версия сообщения. Актуальный текст на Mac может отличаться от показанного.':'Будет отправлен показанный текст. Изменения этого сообщения на Mac могут не попасть в отправку.');
   const preview=node('pre',context.snapshot_text,'queue-transfer-preview'),actions=node('div',undefined,'queue-actions');
   const confirm=node('button','Подтвердить'),cancel=node('button','Отмена','secondary');confirm.type=cancel.type='button';
   cancel.addEventListener('click',closeQueueTransferDialog);
   confirm.addEventListener('click',()=>{
     if(queueTransferDialog?.context!==context||!activeSelection(context.project,context.sid,context.generation)||context.auth!==chatAuthGeneration||context.lifecycle!==pageGeneration)return;
+    if(kind==='start'&&!canStartQueued(view,context.queued_submission_id))return;
     const intent={...context,action_id:crypto.randomUUID(),status:'sending'};
-    view.transfers.set(context.queued_submission_id,intent);closeQueueTransferDialog();submitQueueTransfer(intent);
+    (kind==='start'?view.starts:view.transfers).set(context.queued_submission_id,intent);closeQueueTransferDialog();
+    if(kind==='start')submitQueueStart(intent);else submitQueueTransfer(intent);
   });
   actions.append(confirm,cancel);box.append(heading,warning,preview,actions);overlay.append(box);document.body.append(overlay);
   const dialog={...context,context,overlay,focus:document.activeElement,keydown:null};
@@ -1062,7 +1116,7 @@ function chatError(err){if(err&&err.code==='stale')return 'Сессия уста
 function clearHistoryScrollSlack(){historyScrollSlack=0;pinnedHistoryScope=null;historyScrollIntent=false;historyTouchY=null;historyScrollbarStartY=null;if(historyScrollSpacer){historyScrollSpacer.remove();historyScrollSpacer=null;}}
 function setHistoryScrollSlack(height){const bounded=Math.max(0,Math.min(window.innerHeight,Math.ceil(height)));historyScrollSlack=bounded;if(!bounded){clearHistoryScrollSlack();return;}if(!historyScrollSpacer){historyScrollSpacer=node('li',undefined,'history-scroll-slack');historyScrollSpacer.setAttribute('aria-hidden','true');historyScrollSpacer.append(document.createElementNS('http://www.w3.org/2000/svg','svg'));}const svg=historyScrollSpacer.firstElementChild;svg.setAttribute('width','0');svg.setAttribute('height',String(bounded));svg.setAttribute('focusable','false');const list=$('chat-items');if(historyScrollSpacer.parentNode!==list)list.append(historyScrollSpacer);}
 function clearHistoryView(){stopMessageAges();clearHistoryScrollSlack();historyData.delete(chatKey(selectedProject,selectedSession&&selectedSession.sid||''));$('chat-panel').hidden=true;$('history-new').hidden=true;$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-status').textContent='';$('history-retry').hidden=true;$('send-status').textContent='';$('history-truncated').hidden=true;$('native-attention').hidden=true;$('chat-draft').value='';}
-function openChat(row){if(!pageActive())return;closeQueueTransferDialog();if(!row||!UUID_RE.test(row.sid))return;const proven=selectedSession?.sid===row.sid&&selectedSession.proven===true;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;projectsSelectionProof=proven?null:selectionGeneration;selectedSession={proven,created:row.configuredCreated===true,sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;$('history-new').hidden=true;if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();loadHistory(false);loadModelCatalog();loadQueue(true);loadCapabilities();loadSessionQuestions(true);startPolling();}
+function openChat(row){if(!pageActive())return;closeQueueTransferDialog();if(!row||!UUID_RE.test(row.sid))return;const proven=selectedSession?.sid===row.sid&&selectedSession.proven===true;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;projectsSelectionProof=proven?null:selectionGeneration;selectedSession={proven,created:row.configuredCreated===true,sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;$('history-new').hidden=true;if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();loadHistory(false);loadModelCatalog();loadQueue(true);loadCapabilities();loadSessionQuestions(true);loadQueueStartSupport(true);startPolling();}
 // INV-WSESS-37: immutable in-memory operations survive dialog closure, never retry POST.
 function exactFields(value,keys){return Boolean(value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key)));}
 function createState(project){if(!creates.has(project))creates.set(project,{operation:null,status:'draft',inFlight:false,loading:false,available:false,message:'',generation:0,auth:chatAuthGeneration});return creates.get(project);}
