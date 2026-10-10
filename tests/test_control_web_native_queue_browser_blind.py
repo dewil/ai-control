@@ -37,6 +37,10 @@ class BrowserQueueBackend(live.Backend):
         return dict(status='accepted' if accepted else 'delivery_unknown',message_id=mid,turn_id=live.TURN if accepted else None)
     def session_history(self,project,sid,cursor):
         return deepcopy(self.value if sid==live.SID else live.history('Queue browser B history'))
+    def session_list(self,project,page):
+        result=super().session_list(project,page)
+        for row in result['rows']:row['vendor']='codex'
+        return result
 
 
 class NativeQueueBrowserBlind(unittest.TestCase):

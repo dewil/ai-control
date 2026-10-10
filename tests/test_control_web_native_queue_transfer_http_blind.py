@@ -35,6 +35,7 @@ class NativeQueueTransferHTTPBlind(unittest.TestCase):
             with self.subTest(headers=list(headers)):
                 self.assertEqual(self.client.post(self.path,json=self.payload,headers=headers).status_code,403)
         bad=[{**self.payload,'account':'private'},{**self.payload,'snapshot_text':'  '},
+             {**self.payload,'selection':{'model_id':'do-not-change-model','effort':'high'}},
              {**self.payload,'snapshot_text':'x'*16001},{**self.payload,'expected_turn_id':True},
              {**self.payload,'action_id':'mac-non-uuid'},
              {key:value for key,value in self.payload.items() if key!='snapshot_text'}]

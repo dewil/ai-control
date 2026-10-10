@@ -98,6 +98,7 @@ class NativeQueueTransferBlind(s.QueueModuleCase):
         result=self.transfer()
         self.assertEqual(result,dict(status='accepted',message_id=s.ACTION,queued_submission_id=s.QID,turn_id=TARGET,reason=None))
         self.assertEqual(self.mutation_methods(),['thread/queue/delete','turn/steer'])
+        self.assertNotIn('thread/resume',self.rpc.methods(),'Send-now read proofs must never load/start another native context')
         params=self.rpc.calls_for('turn/steer')[0]
         self.assertEqual(set(params),{'threadId','input','expectedTurnId','clientUserMessageId'})
         self.assertEqual((params['threadId'],params['expectedTurnId'],params['clientUserMessageId']),(s.SID,TARGET,MAC))
@@ -193,7 +194,7 @@ class NativeQueueTransferBlind(s.QueueModuleCase):
                 hit=[]
                 def boundary(real):
                     def interrupted(src,dst,*args,**kwargs):
-                        target=Path(dst)
+                        target=Path(os.fsdecode(dst))
                         if kwargs.get('dst_dir_fd') is not None:target=Path(os.readlink('/proc/self/fd/'+str(kwargs['dst_dir_fd'])))/target
                         eligible=bool(self.rpc.calls_for('thread/queue/delete')) and (phase=='delete' or bool(self.rpc.calls_for('turn/steer')))
                         if eligible and not hit and self.receipts in target.parents:
@@ -205,6 +206,7 @@ class NativeQueueTransferBlind(s.QueueModuleCase):
                 self.assertTrue(hit,'Atomic recovery persistence was not exercised')
                 before=deepcopy(self.mutation_methods());result=self.transfer(action=action,chat=self.new_chat())
                 self.assertEqual(result['status'],'delivery_unknown');self.assertEqual(self.mutation_methods(),before)
+                self.assert_private_snapshot()
 
     def test_recovery_record_corruption_or_symlink_refuses_new_delete(self):
         # INV-SQUEUE-06F
