@@ -185,8 +185,8 @@ class NavigationStartBrowserBlind(unittest.TestCase):
         # INV-PIN-08 INV-QSTART-07
         self.select();self.pins_title()
         history=live.history('Reader synthetic first')
-        history['turns'][0]['items']=[dict(id='reader-'+str(i),role='assistant',text='Reader synthetic '+str(i)+'\n'+'long line\n'*5,
-            truncated=False,timestamp=1770000000+i,time_precision='item') for i in range(40)]
+        history['turns'][0]['items']=[dict(id='reader-'+str(i),role='assistant',text='Reader synthetic '+str(i)+'\n'+'long line\n'*12,
+            truncated=False,timestamp=1770000000+i,time_precision='item') for i in range(24)]
         self.backend.value=history;self.fixture.transport.emit(live.snapshot(2,value=history))
         anchor=self.page.get_by_text(history['turns'][0]['items'][10]['text'],exact=True);expect(anchor).to_have_count(1)
         anchor.evaluate("e=>{e.scrollIntoView({block:'start'});window.pinnedReaderNode=e}")

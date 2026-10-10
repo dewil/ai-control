@@ -21,3 +21,11 @@ Usage coverage:unknown (no agent-local token receipt exposed). Root owner remain
 Baseline:11 tests,11 assertion failures,0 errors,0 skips, Chromium153. Failures identify absent global pins block / absent selected-row start button; fixtures reached the existing queue/history page. PIN08/QSTART07 cover global two-project navigation/reload/collapse320/360, generic unavailable unpin, exact pin body and draft preservation, delayed GET focus/stale mutation fence, reader node+anchor, explicit current-native-version accessible confirmation and zero UUID before confirm, doubleclick one exact POST, no second bubble, unknown status/reload/no start retry, late ACK selection fence, missing support endpoint keeps native queue, hidden/browser logout fences and real Android protocol2 suspend/admit/activate without requests while suspended. No invented lifecycle event is used.
 
 Combined frozen acceptance:38 cases,37 expected baseline assertion failures,1 existing peer-denial pass,0 setup errors,0 skips. Neither baseline RED nor seam presence claims final feature validation; final owner must reach every assertion after implementation. Full CI and actual-native/installed proof remain root-owned later stages.
+
+## Narrow independent reader-fixture amendment
+
+Base5156488. The reader fixture generated40 LIVE items, exceeding the unchanged24-item public LIVE budget; that input was invalid. Reduced only fixture item count to24 and lengthened each synthetic item from5 to12 lines to retain scrollable height. Anchor item10, node identity, draft preservation and≤8px reader displacement assertions are unchanged; all other frozen assertions remain intact.
+
+Targeted command: `PYTHONPATH=tests:/var/tmp/control-web-browser-venv/lib/python3.12/site-packages /var/tmp/control-devbus-test-venv/bin/python -m unittest test_control_web_navigation_start_browser_blind.NavigationStartBrowserBlind.test_pin_refresh_preserves_reader_node_and_scroll_anchor -q`:1 PASS,0 errors/skips (2.527s). No runtime/spec changes or implementation source inspection. Token usage receipt:unknown.
+
+Actual unittest collection also independently verified:19 module (10 QSTART+1 wire+8 PIN),8 HTTP/broker (5 HTTP+3 broker),11 browser =38 cases. A source-only21-module estimate is not the collected count; original27 module+HTTP/broker evidence remains accurate.
