@@ -22,6 +22,7 @@ from _codex_rc import CodexSessions, PROJECT_RE, canonical
 HISTORY_LIMIT = 96 * 1024
 RECEIPT_LIMIT = 10000
 NAMESPACE_ENTRY_LIMIT = 10002
+SUPPORTED_NATIVE_VERSIONS = ('0.160.0', '0.161.0')
 
 
 class RPCRejected(RuntimeError):
@@ -726,7 +727,7 @@ class SessionChat:
         # A metadata binding does not authorize shared legacy transport discovery.
         if context['context_kind'] != 'legacy_unbound':
             return 'unverified_context'
-        if context['native_version'] != '0.160.0':
+        if context['native_version'] not in SUPPORTED_NATIVE_VERSIONS:
             return 'unsupported_capability'
         return None
 
@@ -1764,7 +1765,7 @@ class InteractiveRPC:
                     with self._lock:
                         if (self._closed or self._ws is not ws or self._generation != generation
                                 or self._context_generation != context_generation
-                                or self._native_version != '0.160.0'):
+                                or self._native_version not in SUPPORTED_NATIVE_VERSIONS):
                             raise RuntimeError('RPC generation unavailable')
                         ws.send(payload)
             finally:
@@ -1856,8 +1857,9 @@ class InteractiveRPC:
                         raise RuntimeError('RPC deadline exceeded')
                     ws.send('{"method":"initialized"}')
                     hint = initialized.get('userAgent')
-                    version = ('0.160.0' if type(hint) is str and len(hint) <= 4096
-                               and re.match(r'^[\x20-\x2e\x30-\x7e]{1,128}/0\.160\.0 \(', hint) else None)
+                    match = (re.match(r'^[\x20-\x2e\x30-\x7e]{1,128}/(0\.160\.0|0\.161\.0) \(', hint)
+                             if type(hint) is str and len(hint) <= 4096 else None)
+                    version = match.group(1) if match else None
                     with self._lock:
                         if self._ws is not ws or self._generation != generation:
                             raise RuntimeError('RPC initialization unavailable')
@@ -1917,7 +1919,7 @@ class InteractiveRPC:
             raise ValueError('RPC deadline refused')
         with self._lock:
             if (type(transport_generation) is not int or type(context_generation) is not int
-                    or self._closed or self._ws is None or self._native_version != '0.160.0'
+                    or self._closed or self._ws is None or self._native_version not in SUPPORTED_NATIVE_VERSIONS
                     or self._generation != transport_generation or self._context_generation != context_generation):
                 raise RuntimeError('RPC generation unavailable')
             ws = self._ws
