@@ -44,3 +44,5 @@ HTTP/broker: unauth/CSRF/crossOrigin/wrongpeer, spoofed principal/extra keys/dup
 
 ## Уточнение DESIGN 10.10
 PinStore — отдельное preference хранилище, не send/queue-start receipt namespace. Pin/unpin не консультируют unknown send/start receipts и не очищают их. Offline unpin по собственному opaque pin_id остаётся доступным независимо от native unknown outcome. RED явно проверяет эту независимость.
+
+Blind-writer seam clarification: `pin_store` — trusted absolute directory path (str/PathLike), default None выбирает secure sibling store. Никакого HTTP/broker path selector. Core SessionChat pin methods принимают bounded opaque principal IDs от доверенного caller для изоляции namespace; production HTTP и broker допускают только verified `owner` и отвергают иных до core. Unit owner/second-owner с одним private directory проверяет хранение, не объявляя multiuser включённым. Это уточняет dependency injection, не расширяет production authority.
