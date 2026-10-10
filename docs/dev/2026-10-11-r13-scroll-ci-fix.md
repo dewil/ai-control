@@ -23,3 +23,38 @@ Initial runtime patch focused command adds `test_control_web_page_navigation_scr
 After independent legacy fd267c4 integration, run entire page-navigation/message-times/queue UI+blind/transfer/NAV+blockers/PART browser modules, the controlled-End author regression, exact configured-create allowlist case. Add six existing history-window consumers (initial1000, focused/readable/older window preservation, follow-bottom and explicit-latest) because shared capture/initial-window/latest helpers changed. Keep original caps, no redundant reads, focus, draft, lifetime and no-resend assertions. No local whole1500-suite/full CI; parent runs independent SOURCE delta then one final remote CI.
 
 Usage unknown; parent owns ledger and release gates. Runtime diff is only existing `_control_web.js`; author test/evidence separate.
+
+## Final bounded validation and handback
+
+Runtime fix `f75b14a`; independent legacy amendment fd267c4 cherry-picked as `aab357bd9381389f194e575b3188872e188b0079`. Exact adjacent run on clean aab357b: **74 PASS, 0 failures/errors/skips, 118.476s**, `/var/tmp/control-r13-scroll-adjacent-aab357b.log`. No mutations during the run. Command used the same Python/browser environment above and unittest names:
+
+```python
+names = [
+ 'test_control_web_page_navigation_browser',
+ 'test_control_web_page_navigation_scroll_author',
+ 'test_control_web_message_times_browser',
+ 'test_control_web_native_queue_ui_author',
+ 'test_control_web_native_queue_browser_blind',
+ 'test_control_web_native_queue_transfer_browser_blind',
+ 'test_control_web_navigation_start_browser_blind',
+ 'test_control_web_queue_start_blockers_browser_blind',
+ 'test_control_web_participation_browser_blind',
+ 'test_control_web_participation_browser_author',
+ 'test_control_web_configured_create_module.ConfiguredTransportContract.test_interactive_rpc_prepare_and_fixed_start_allowlist_over_owned_unix_socket',
+]
+for method in [
+ 'test_initial_1000_keeps_newest100_chronological_full_ids',
+ 'test_bottom_and_latest_choose_newest100_without_fetch_after_older',
+ 'test_incoming_reader_freezes_window_nodes_anchor_draft_then_accessible_latest',
+ 'test_incoming_focused_bubble_preserves_node_focus_selection_and_window',
+ 'test_incoming_older_window_stays_frozen_until_explicit_latest',
+ 'test_follow_bottom_incoming_slides_to_newest100',
+]:
+ names.append('test_control_web_history_window_browser.HistoryWindowBrowser.' + method)
+result = unittest.TextTestRunner(verbosity=2).run(unittest.TestLoader().loadTestsFromNames(names))
+sys.exit(not result.wasSuccessful())
+```
+
+Parent confirmed independent SOURCE closure PASS on exact aab357b (`source-browser-ci-closure-aab357bd-round2.md`). Initial four reviewer claims were closed from actual bodies: trusted wheel/touch/pointer/non-End key overwrites the End epoch with null; original80px explicit-return boundary is preserved with cached-latest flush; focused fallback preserves original offscreen Y via `scrollY + currentTop - capturedTop`, never scrollIntoView; independent resume assertion uses exact four-path multiset counts, one exact queue GET, all-GET/noPOST and no-other-request checks. The six shared-window regressions above PASS. No speculative runtime patch followed review.
+
+This final addition is evidence-only, leaving tested runtime/tests byte-identical to aab357b. Author writer/index handback follows; full remote CI and release/footer preparation remain parent-owned. No local whole-suite repeat, production/native/auth/signing/paid calls. Usage unknown.
