@@ -99,8 +99,6 @@ def _operation(method):
             capture = self._local.read_context
             if capture is not None and method.__name__ not in ('send', 'enqueue', 'cancel_queued', 'send_queued_now', 'rename'):
                 _need(self._catalog_context() == capture, 'stale')
-            if method.__name__ == 'history' and type(result) is dict and 'turns' in result:
-                self._history_observation = copy.deepcopy(capture)
             return result
         except _DomainError as error:
             return {'error': error.code}
@@ -1337,8 +1335,6 @@ class SessionChat:
             from _control_web_live import owner_result
             identity = dict(root=root, sid=sid, context=context, native=native)
             result = owner_result(dict(schema=1, scope_id=_context_token(identity), history=history))
-            if 'turns' in history:
-                self._history_observation = copy.deepcopy(getattr(self._local, 'read_context', None))
             self._remaining()
             return result
         except Exception:
@@ -1348,6 +1344,7 @@ class SessionChat:
         _need(valid_uuid(sid) and valid_cursor(cursor), 'invalid_request')
         self._capture_read_context()
         context = self._receipt_context()
+        native = self._catalog_context()
         root = self._root(project)
         capture = self._settings_capture() if cursor is None else None
         thread = self._proof(root, sid)
@@ -1503,6 +1500,8 @@ class SessionChat:
         encoded_result = _json(result)
         self._remaining()
         _need(len(encoded_result) <= HISTORY_LIMIT)
+        _need(self._root(project) == root and self._catalog_context() == native, 'stale')
+        self._history_observation = (root, sid, copy.deepcopy(native))
         return result
 
     @staticmethod
@@ -1636,7 +1635,7 @@ class SessionChat:
         version = context['native_version']
         reviewed = version in SUPPORTED_NATIVE_VERSIONS
         operations = {'sessions_read': dict(supported=True, reason=None),
-                      'history_read': dict(supported=True, reason=None) if self._history_observation == context else dict(supported=None, reason='not_observed')}
+                      'history_read': dict(supported=True, reason=None) if self._history_observation == (root, sid, context) else dict(supported=None, reason='not_observed')}
         for name in ('model_selection', 'send', 'create', 'rename', 'queue'):
             operations[name] = (dict(supported=False, reason='unsupported_native_version') if not reviewed else
                 dict(supported=False, reason='unsupported_operation') if name == 'queue' and version == '0.160.0' else
