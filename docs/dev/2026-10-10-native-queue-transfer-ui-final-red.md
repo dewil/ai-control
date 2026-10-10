@@ -19,3 +19,9 @@ Command used for UI RED:
 ```
 
 Independent RED writing is complete. Dialog/recovery UI implementation may start, followed by integrated exact-SHA targeted tests, independent SOURCE and full CI owned by root. Remaining native/desktop/process-crash/4MiB-threshold/device evidence gaps are listed in earlier packet; preexisting CI geometry issue remains separate. No production/native RPC/auth/config/services/paid API calls. Usage unknown/partial; root owns ledger.
+
+## Independent narrow hook-installation correction
+
+Standalone Chromium153.0.8010.12 page (hermetic intercepted HTTPS fixture, no app/runtime) reproduced the counter before any copy action. Original evaluate expression ended with the assigned function: after installation counter=1, after one explicit crypto.randomUUID call counter=2. Appending `;undefined` yields after installation=0, after one explicit call=1. Thus installation itself executed the returned function; the prior counter failure was a fixture error, not proof of product copy dispatch.
+
+Only the installation expression changed. The frozen `recoveryCopyUUIDs==0`, zero POST and other assertions remain unchanged. No product source/runtime or unrelated held/reconciliation/recent_sends behavior modified. No full CI/native/prod/paid calls; usage unknown/partial.

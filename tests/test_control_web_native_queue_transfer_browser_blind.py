@@ -95,7 +95,7 @@ class NativeQueueTransferBrowserBlind(unittest.TestCase):
         self.select();expect(self.page.get_by_text(SNAPSHOT,exact=True)).to_have_count(1)
         self.select();expect(self.page.get_by_text(SNAPSHOT,exact=True)).to_have_count(1)
         before=len(self.posts())
-        self.page.evaluate("window.recoveryCopyUUIDs=0;const originalUUID=crypto.randomUUID.bind(crypto);crypto.randomUUID=()=>{recoveryCopyUUIDs++;return originalUUID()}")
+        self.page.evaluate("window.recoveryCopyUUIDs=0;const originalUUID=crypto.randomUUID.bind(crypto);crypto.randomUUID=()=>{recoveryCopyUUIDs++;return originalUUID()};undefined")
         self.page.get_by_role('button',name='В черновик',exact=True).click()
         expect(self.page.locator('textarea')).to_have_value(SNAPSHOT)
         self.assertEqual(self.page.evaluate('recoveryCopyUUIDs'),0,'Copying recovery text must not create a new delivery action UUID')
