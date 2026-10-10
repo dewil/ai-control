@@ -1,0 +1,13 @@
+{
+  "base": "65a271c6a08ab8403445e3f7dcaa8ec3d7db414e",
+  "tests": 31,
+  "failure_records": 32,
+  "errors": 0,
+  "skips": 0,
+  "status": "RED",
+  "failure_reasons": [
+    "AssertionError: False is not true : INV-PART public SessionChat.participation_overview seam missing (semantic RED)",
+    "AssertionError: False is not true : INV-PART public SessionChat.questions seam missing (semantic RED)"
+  ],
+  "usage": "unknown; partial coverage; root owns ledger"
+}
