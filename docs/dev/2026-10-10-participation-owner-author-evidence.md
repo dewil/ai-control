@@ -25,3 +25,9 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=tests /var/tmp/control-devbus-test-venv/bin
 ```
 
 **35 PASS, 0 errors/skips, 1.824s**, `/var/tmp/control-participation-reserve-green.log`. Includes two additive author regressions (closed reserve digest, actual socket expiry before delayed possible write). Original frozen tests unchanged. No broad/full CI or external calls.
+
+## Final owner bounds/proof follow-up
+
+Additional author REDs exposed (1) oversized unknown method/identity retained outside the byte accounting (12,753,501 traced retained bytes after 24 synthetic 512KiB frames), (2) callbacks outside the bounded native turn proof still offered controls, (3) context reset allowed a consumed UUID to bind to a new callback. The final owner clips unsupported envelopes, accounts raw ingress and retained envelope plus reserve bookkeeping, bounds the compact proof cache to 96KiB and root index to that cache, and reserves room inside 2MiB for source/index/loaded bookkeeping. Current turns come from one bounded metadata page (four turns, no extra history item fanout). Unknown turn bindings have no form controls. Consumed handle/answer digests remain bounded owner-epoch tombstones across native generations; raw callbacks and old handles remain invalidated.
+
+Owner-only focused command as above plus projection: **48 PASS, 0 errors/skips, 18.433s**, `/var/tmp/control-participation-owner-final-slice.log` (before the final conservative reserve-bookkeeping margin adjustment). The final combined package run will cover that adjustment. Memory test uses public Unix wire and tracemalloc, with a 4MiB process-bookkeeping threshold; it does not claim exact interpreter heap equals serialized payload. No frozen edits/new product API/dependency/leaf/auth change.

@@ -58,3 +58,40 @@ class ParticipationOwnerAuthor(WireCase):
         self.assertEqual(result['reason'],'delivery_unknown')
         self.answer(dto,row);self.answer(dto,row,action=ACTION2)
         self.assertEqual(len(self.native.replies()),0)
+
+    def test_oversized_unknown_callback_payload_not_retained_as_private_identity(self):
+        import gc
+        import tracemalloc
+        self.questions()
+        payload=callback(100,method='future/'+'x'*(512*1024))
+        gc.collect();tracemalloc.start()
+        try:
+            before=tracemalloc.get_traced_memory()[0]
+            for identifier in range(100,124):
+                payload['id']=identifier;self.native.emit(payload)
+            self.synchronize();gc.collect()
+            retained=tracemalloc.get_traced_memory()[0]-before
+            # Serialized 2MiB cap plus interpreter/transport bookkeeping margin.
+            self.assertLess(retained,4*1024*1024)
+            self.assert_read_only()
+        finally:tracemalloc.stop()
+
+    def test_callback_outside_bounded_current_native_turns_has_no_controls(self):
+        self.questions()
+        self.native.emit(callback(30,form(turnId='foreign-blocking-turn')))
+        self.native.emit(callback(31,form(blocking=False,turnId='foreign-nonblocking-turn')))
+        self.synchronize()
+        self.assertFalse(any(row['state']=='actionable' for row in self.questions()['questions']))
+        self.assert_read_only()
+
+    def test_context_reset_cannot_rebind_consumed_action_uuid_to_new_callback(self):
+        dto,row=self.capture()
+        self.assertEqual(self.answer(dto,row)['state'],'sent')
+        before=self.rpc.model_context()['context_generation']
+        self.native.emit(dict(method='config/updated',params={}))
+        self.wait_for(lambda:self.rpc.model_context()['context_generation']!=before)
+        self.assertIn('turns',self.chat.history('demo',SID))
+        fresh,new_row=self.capture(8)
+        self.assertEqual(self.answer(fresh,new_row),{'error':'invalid_request'})
+        self.wait_for(lambda:len(self.native.replies())==1)
+        self.assertEqual(len(self.native.replies()),1)

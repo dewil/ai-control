@@ -630,12 +630,18 @@ def _context_token(value):
 
 class _Participation:
     """Ephemeral typed callback authority; receiver never performs native proof."""
+    # Leave room inside the 2MiB owner budget for the 96KiB proof cache,
+    # its bounded root index, loaded IDs and registry bookkeeping.
+    CALLBACK_BYTES = 2*1024*1024 - (2*HISTORY_LIMIT + 64*1024)
+
     def __init__(self):
         self.lock = threading.RLock()
         self.epoch = uuid.uuid4().hex
         self.revision = 1
         self.context = None
         self.entries = OrderedDict()
+        self.consumed = {}
+        self.prior_reserves = 0
         self.bytes = 0
         self.limited = False
         self.bindings = {}
@@ -654,22 +660,54 @@ class _Participation:
                 self.context = copy.deepcopy(context)
                 self.entries.clear()
                 self.bindings.clear()
-                self.bytes = 0
-                self.limited = False
+                self.prior_reserves = len(self.consumed)
+                self.bytes = sum(len(_json(value))+len(key)+128 for key,value in self.consumed.items())
+                self.limited = self.prior_reserves >= 1024 or self.bytes > self.CALLBACK_BYTES
                 self.revision += 1
+
+    def overflow(self):
+        self.limited = True
+        for entry in self.entries.values():
+            entry['reason'] = 'limit'
+        self.revision += 1
 
     def put(self, key, row, size):
         if self.limited:
             return
-        if len(self.entries) >= 1024 or self.bytes + size > 2 * 1024 * 1024:
-            self.limited = True
-            for entry in self.entries.values():
-                entry['reason'] = 'limit'
-            self.revision += 1
+        if len(self.entries) + self.prior_reserves >= 1024 or self.bytes + size > self.CALLBACK_BYTES:
+            self.overflow()
             return
         self.entries[key] = row
         self.bytes += size
         self.revision += 1
+
+    def reserve(self, row, action_id, digest):
+        previous = self.consumed.get(action_id)
+        value = dict(handle=row['handle'], digest=digest)
+        _need(previous is None or previous == value, 'invalid_request')
+        if row.get('action') is None:
+            row.update(action=action_id, answer_digest=digest)
+            self.consumed[action_id] = value
+            # Each callback's accounted envelope reserves 512 bytes for this
+            # index; generation reset retains and accounts the compact tombstone.
+            self.revision += 1
+
+    def bind(self, row, root):
+        if self.limited:
+            return
+        cost = len(root.encode('utf-8')) + 16
+        if self.bytes + cost > self.CALLBACK_BYTES:
+            self.overflow()
+            return
+        row['root'] = root
+        self.bytes += cost
+
+    @staticmethod
+    def identity(value):
+        try:
+            return value if _identity(value) and len(value.encode('utf-8')) <= 2000 else None
+        except UnicodeError:
+            return None
 
     @staticmethod
     def form(params):
@@ -729,12 +767,15 @@ class _Participation:
                         old['questions'] = []
                         self.revision += 1
                     return
+                sid = params.get('threadId') if valid_uuid(params.get('threadId')) else None
                 row = dict(native_id=identifier, handle=str(uuid.uuid4()), digest=digest,
-                    sid=params.get('threadId'), root=self.bindings.get(params.get('threadId')) if type(params.get('threadId')) is str else None,
-                    turn=params.get('turnId'), item=params.get('itemId'),
+                    sid=sid, root=self.bindings.get(sid),
+                    turn=self.identity(params.get('turnId')) if not oversized else None,
+                    item=self.identity(params.get('itemId')) if not oversized else None,
                     blocking=params.get('isBlocking') if type(params.get('isBlocking')) is bool else None,
                     questions=[], reason='native_required', closed=False, attempted=False,
-                    outcome=None, action=None, answer_digest=None, method=method)
+                    outcome=None, action=None, answer_digest=None,
+                    method=method if method == 'item/tool/requestUserInput' else None)
                 if not oversized and method == 'item/tool/requestUserInput' and valid_uuid(row['sid']) and _identity(row['turn']) and _identity(row['item']):
                     try:
                         row['questions'] = self.form(params)
@@ -743,7 +784,9 @@ class _Participation:
                         secret = type(params.get('questions')) is list and any(
                             type(q) is dict and q.get('isSecret') is True for q in params['questions'])
                         row['reason'] = 'secret' if secret else 'unsupported'
-                self.put(key, row, 1024 if oversized else size + 1024)
+                # Account both raw ingress and retained envelope, plus future reserve.
+                # Oversized frames retain no raw method/identity/form material.
+                self.put(key, row, min(size, 128*1024) + len(_json(row)) + 512)
             elif method == 'serverRequest/resolved' and self.native_id(params.get('requestId')):
                 key = (type(params['requestId']), params['requestId'])
                 row = self.entries.get(key)
@@ -867,8 +910,11 @@ class SessionChat:
                 root = canonical(thread['cwd'])
                 if root not in roots.values():
                     continue
-                turns = self._rpc('thread/turns/list', dict(threadId=sid, itemsView='notLoaded', sortDirection='desc', limit=1))
-                _need(type(turns.get('data')) is list and len(turns['data']) <= 1)
+                turns = self._rpc('thread/turns/list', dict(threadId=sid, itemsView='notLoaded', sortDirection='desc', limit=4))
+                _need(type(turns.get('data')) is list and len(turns['data']) <= 4
+                      and all(type(turn) is dict and _identity(turn.get('id'))
+                              and turn.get('status') in ('inProgress','completed','failed','interrupted')
+                              for turn in turns['data']))
                 latest = copy.deepcopy(turns['data'][0]) if turns['data'] else None
                 if latest is not None:
                     _need(_identity(latest.get('id')) and latest.get('status') in ('inProgress', 'completed', 'failed', 'interrupted'))
@@ -882,7 +928,7 @@ class SessionChat:
                             latest['items'] = []
                             reasons.append('limit')
                 _need(self._catalog_context() == context and root in self._part_roots().values(), 'stale')
-                self._part_publish(sid, root, context, thread, latest)
+                self._part_publish(sid, root, context, thread, latest, turns['data'])
 
             self._part_reasons = list(dict.fromkeys(reasons))
         except Exception:
@@ -891,7 +937,7 @@ class SessionChat:
         finally:
             self._part_source_lock.release()
 
-    def _part_publish(self, sid, root, context, thread, latest):
+    def _part_publish(self, sid, root, context, thread, latest, turns=None):
         # Retain a compact completion witness, never raw history text/tools.
         proof = None
         if latest is not None:
@@ -912,9 +958,11 @@ class SessionChat:
                 self._part_source[sid] = dict(root=root, context=copy.deepcopy(context),
                     thread=dict(name=name[:120] if type(name) is str else None,
                         status=dict(type=status['type'], activeFlags=flags)), latest=proof,
-                    at=time.monotonic(), observed=min(253402300799, int(time.time())))
-                while len(self._part_source) > 256:
-                    del self._part_source[next(iter(self._part_source))]
+                    turns={turn['id']:turn['status'] for turn in (turns or [])[:4]}, at=time.monotonic(), observed=min(253402300799, int(time.time())))
+                while len(self._part_source) > 256 or len(_json(self._part_source)) > HISTORY_LIMIT:
+                    oldest = next(iter(self._part_source))
+                    del self._part_source[oldest]
+                    self._participation.bindings.pop(oldest, None)
                 self._participation.bindings[sid] = root
                 self._participation.revision += 1
 
@@ -930,11 +978,20 @@ class SessionChat:
                     continue
                 state, reason = registry.state(entry)
                 if entry.get('root') is None and valid:
-                    entry['root'] = root
+                    registry.bind(entry, root)
                 if entry.get('root') != root:
                     continue
                 if not valid and state != 'closed':
                     state, reason = 'stale', 'stale'
+                elif state == 'actionable' and (time.monotonic()-source['at'] > 15
+                        or entry['turn'] not in source['turns']):
+                    state, reason = 'native_only', 'native_required'
+                elif state == 'actionable' and entry['blocking'] is True and (
+                        source['latest'] is None or source['latest']['id'] != entry['turn']
+                        or source['turns'][entry['turn']] != 'inProgress'):
+                    state, reason = 'closed', None
+                    entry['closed'] = True
+                    registry.revision += 1
                 rows.append(dict(interaction_id=entry['handle'], turn_id=entry['turn'], item_id=entry['item'],
                     state=state, is_blocking=entry['blocking'], reason=reason,
                     questions=copy.deepcopy(entry['questions']) if state != 'native_only' else []))
@@ -1033,8 +1090,8 @@ class SessionChat:
         with registry.lock:
             entry = next((entry for entry in registry.entries.values() if entry.get('handle') == interaction_id), None)
             _need(entry is not None and entry.get('sid') == sid and entry.get('root') == root, 'stale')
-            _need(not any(other is not entry and other.get('action') == action_id
-                          for other in registry.entries.values()), 'invalid_request')
+            previous = registry.consumed.get(action_id)
+            _need(previous is None or previous == dict(handle=interaction_id,digest=digest), 'invalid_request')
             if entry.get('action') == action_id:
                 _need(entry['answer_digest'] == digest, 'invalid_request')
             elif entry.get('action') is None and entry.get('questions'):
@@ -1051,8 +1108,7 @@ class SessionChat:
                 return dict(schema=1,epoch=registry.epoch,interaction_id=interaction_id,action_id=action_id,state=state,reason=reason)
             def consume_closed():
                 if entry.get('closed') and entry.get('action') is None:
-                    entry.update(action=action_id, answer_digest=digest)
-                    registry.revision += 1
+                    registry.reserve(entry, action_id, digest)
             if entry.get('attempted') or entry.get('closed') or entry.get('reason') is not None:
                 consume_closed()
                 return outcome()
@@ -1086,7 +1142,8 @@ class SessionChat:
                 if entry.get('attempted') or entry.get('closed') or entry.get('reason') is not None:
                     consume_closed()
                     return outcome()
-                entry.update(action=action_id, answer_digest=digest, attempted=True, outcome='unknown')
+                registry.reserve(entry, action_id, digest)
+                entry.update(attempted=True, outcome='unknown')
                 registry.revision += 1
                 payload = _json(dict(id=entry['native_id'], result=dict(answers=answers))).decode('utf-8')
             # Receiver must be free to apply native resolved while send waits.
@@ -2033,8 +2090,8 @@ class SessionChat:
         self._history_observation = (root, sid, copy.deepcopy(native))
         if cursor is None and type(native) is dict and native.get('native_version') == '0.161.0':
             try:
-                self._part_publish(sid, root, native, thread, page['data'][0] if page['data'] else None)
-            except _DomainError:
+                self._part_publish(sid, root, native, thread, page['data'][0] if page['data'] else None, page['data'])
+            except Exception:
                 # Optional participation metadata never changes history admission.
                 pass
         return result
