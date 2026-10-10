@@ -748,14 +748,15 @@ class LiveUXBlindBrowser(unittest.TestCase):
         for path in self.feed.iterdir(): path.unlink()
 
     def test_INV50_single_short_download_navigation_login_tasks_sessions(self):
+        # Требование изменено явно 11.10: кнопка единственной Android-ссылки подписана APP.
         for admitted in (False, True):
             context = self.browser.new_context(**({"storage_state": self.storage} if admitted else {})); self.addCleanup(context.close)
             page = context.new_page(); page.goto(self.url)
-            link = page.get_by_role("link", name="Андроид", exact=True)
+            link = page.get_by_role("link", name="APP", exact=True)
             expect(link).to_have_count(1); expect(link).to_be_visible()
             self.assertEqual(link.get_attribute("href"), "/download/android/")
         self.open()
-        link = self.page.get_by_role("link", name="Андроид", exact=True)
+        link = self.page.get_by_role("link", name="APP", exact=True)
         expect(link).to_have_count(1); self.assert_hit(link)
 
 
