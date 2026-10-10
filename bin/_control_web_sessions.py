@@ -871,10 +871,51 @@ class SessionChat:
         self._part_refresh_at = -100.0
         self._part_loaded = []
         self._part_cursor = 0
-        self._part_reasons = []
+        self._part_reasons = ['source_unavailable']
+        self._part_stop = threading.Event()
+        self._part_worker_lock = threading.Lock()
+        self._part_worker = None
         if isinstance(rpc, InteractiveRPC):
             with rpc._lock:
+                previous_stop = rpc._participation_stop
                 rpc._participation = self._participation
+                rpc._participation_stop = self.close
+            if callable(previous_stop):
+                previous_stop()
+
+    def _part_start(self):
+        # Lazy owner lifetime: a GET admits one worker, never performs its IO.
+        with self._part_worker_lock:
+            if self._part_stop.is_set():
+                return False
+            if self._part_worker is None:
+                self._part_worker = threading.Thread(target=self._part_run,
+                    name='control-participation-source', daemon=True)
+                self._part_worker.start()
+            return True
+
+    def _part_run(self):
+        while not self._part_stop.is_set():
+            self._local.deadline = time.monotonic() + 5
+            self._local.read_context = None
+            self._part_refresh()
+            delay = max(.01, 5 - (time.monotonic() - self._part_refresh_at))
+            if self._part_stop.wait(delay):
+                break
+
+    def close(self):
+        with self._part_worker_lock:
+            self._part_stop.set()
+            worker = self._part_worker
+        if isinstance(self.rpc, InteractiveRPC):
+            with self.rpc._lock:
+                if self.rpc._participation is self._participation:
+                    self.rpc._participation = None
+                    self.rpc._participation_stop = None
+        self._participation.reset(None)
+        if worker is not None and worker is not threading.current_thread():
+            # Production RPC IO is bounded by the worker's aggregate 5s budget.
+            worker.join(5.5)
 
     def _part_roots(self):
         return {name: self._root(name) for name in self._names()}
@@ -891,13 +932,19 @@ class SessionChat:
         if now - self._part_refresh_at < 5 or not self._part_source_lock.acquire(False):
             return
         try:
+            _need(not self._part_stop.is_set())
             self._part_refresh_at = now
             self._local.deadline = min(self._local.deadline, now + 5)
             context = self._capture_read_context()
             _need(context is not None and context['native_version'] == '0.161.0')
             _need(self._part_context() == context, 'stale')
+            def read(method, params):
+                _need(not self._part_stop.is_set())
+                result = self._rpc(method, params)
+                _need(not self._part_stop.is_set())
+                return result
             roots = self._part_roots()
-            page = self._rpc('thread/loaded/list', {'limit': 256})
+            page = read('thread/loaded/list', {'limit': 256})
             _need(type(page.get('data')) is list and all(valid_uuid(v) for v in page['data']))
             loaded = list(dict.fromkeys(page['data']))
             self._part_loaded = loaded[:1024]
@@ -905,12 +952,12 @@ class SessionChat:
             chosen = (loaded[self._part_cursor:] + loaded[:self._part_cursor])[:7]
             self._part_cursor = (self._part_cursor + len(chosen)) % max(1, len(loaded))
             for sid in chosen:
-                thread = self._rpc('thread/read', {'threadId': sid, 'includeTurns': False}).get('thread')
+                thread = read('thread/read', {'threadId': sid, 'includeTurns': False}).get('thread')
                 _need(type(thread) is dict and thread.get('id') == sid and type(thread.get('cwd')) is str)
                 root = canonical(thread['cwd'])
                 if root not in roots.values():
                     continue
-                turns = self._rpc('thread/turns/list', dict(threadId=sid, itemsView='notLoaded', sortDirection='desc', limit=4))
+                turns = read('thread/turns/list', dict(threadId=sid, itemsView='notLoaded', sortDirection='desc', limit=4))
                 _need(type(turns.get('data')) is list and len(turns['data']) <= 4
                       and all(type(turn) is dict and _identity(turn.get('id'))
                               and turn.get('status') in ('inProgress','completed','failed','interrupted')
@@ -920,7 +967,7 @@ class SessionChat:
                     _need(_identity(latest.get('id')) and latest.get('status') in ('inProgress', 'completed', 'failed', 'interrupted'))
                     # Completion needs a bounded raw phase witness; inProgress does not.
                     if latest['status'] == 'completed':
-                        items = self._rpc('thread/items/list', dict(threadId=sid, turnId=latest['id'], sortDirection='desc', limit=32))
+                        items = read('thread/items/list', dict(threadId=sid, turnId=latest['id'], sortDirection='desc', limit=32))
                         _need(type(items.get('data')) is list and len(items['data']) <= 32)
                         latest['items'] = list(reversed([entry['item'] for entry in items['data']
                             if type(entry) is dict and entry.get('turnId') == latest['id'] and type(entry.get('item')) is dict]))
@@ -939,13 +986,16 @@ class SessionChat:
 
     def _part_publish(self, sid, root, context, thread, latest, turns=None):
         # Retain a compact completion witness, never raw history text/tools.
+        _need(not self._part_stop.is_set())
         proof = None
         if latest is not None:
-            finals = [item for item in latest.get('items', []) if type(item) is dict
-                and item.get('type') == 'agentMessage' and item.get('phase') == 'final_answer'
-                and _identity(item.get('id')) and type(item.get('text')) is str and item['text'].strip()]
+            messages = [item for item in latest.get('items', []) if type(item) is dict
+                and item.get('type') == 'agentMessage' and type(item.get('text')) is str
+                and item['text'].strip()]
+            last = messages[-1] if messages else None
             proof = {key: latest[key] for key in ('id', 'status', 'completedAt') if key in latest}
-            proof['final_item'] = finals[-1]['id'] if finals else None
+            proof['final_item'] = (last['id'] if last is not None
+                and last.get('phase') == 'final_answer' and _identity(last.get('id')) else None)
         name = thread.get('name')
         status = thread.get('status')
         _need(type(status) is dict and status.get('type') in ('active', 'idle', 'notLoaded', 'systemError'))
@@ -1010,8 +1060,11 @@ class SessionChat:
     def questions(self, project, sid):
         _need(valid_uuid(sid), 'invalid_request')
         root = self._root(project)
-        self._part_refresh()
+        _need(self._part_start())
         context = self._part_context()
+        if context is not None:
+            # Capture the cached context without prepare/connect/native IO.
+            self._capture_read_context(context)
         rows = self._part_rows(project, sid, root, context)
         result = dict(schema=1, epoch=self._participation.epoch, revision=self._participation.revision,
             session_key=_context_token(dict(principal='owner', context=context, root=root, sid=sid)),
@@ -1027,8 +1080,11 @@ class SessionChat:
 
     @_operation
     def participation_overview(self):
-        self._part_refresh()
+        _need(self._part_start())
         context = self._part_context()
+        if context is not None:
+            # Capture the cached context without prepare/connect/native IO.
+            self._capture_read_context(context)
         roots = self._part_roots()
         registry = self._participation
         result = dict(schema=1, epoch=registry.epoch, revision=registry.revision,
@@ -1077,6 +1133,7 @@ class SessionChat:
 
     @_operation
     def answer_question(self, project, sid, epoch, interaction_id, action_id, answers):
+        _need(not self._part_stop.is_set(), 'stale')
         _need(valid_uuid(sid) and valid_uuid(interaction_id) and valid_uuid(action_id)
               and type(epoch) is str and re.fullmatch('[0-9a-f]{32}', epoch), 'invalid_request')
         try:
@@ -2935,6 +2992,7 @@ class InteractiveRPC:
         self._pending = {}
         self._closed = False
         self._participation = None
+        self._participation_stop = None
 
     @property
     def generation(self):
@@ -3211,5 +3269,9 @@ class InteractiveRPC:
         with self._lock:
             self._closed = True
             ws, generation = self._ws, self._generation
+            stop = self._participation_stop
+            self._participation_stop = None
         if ws is not None:
             self._fail(ws, generation)
+        if callable(stop):
+            stop()
