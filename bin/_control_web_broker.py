@@ -503,7 +503,7 @@ FIELD_LIMIT = 16000
 NAME = re.compile(r'[a-z][a-z0-9-]{0,30}[a-z0-9]\Z')
 GEN = re.compile(r'[0-9a-f]{8}\Z')
 PROJECT = re.compile(r'[a-zA-Z0-9_-]{1,32}\Z')
-QUEUE_OPS = {'session_queue', 'session_enqueue', 'session_queue_cancel'}
+QUEUE_OPS = {'session_queue', 'session_enqueue', 'session_queue_cancel', 'session_queue_send_now'}
 
 
 def valid_queue_id(value):
@@ -525,7 +525,6 @@ def queue_result(value):
                 or type(value['schema']) is not int or value['schema'] != 1 or value['vendor'] != 'codex'
                 or type(value['supported']) is not bool or type(value['partial']) is not bool
                 or type(value['send_now_supported']) is not bool
-                or value['send_now_supported'] is not False
                 or value['reason'] != (None if value['supported'] else 'unsupported_queue')
                 or type(value['rows']) is not list or len(value['rows']) > 256
                 or not value['supported'] and (value['rows'] or value['partial'])):
@@ -534,8 +533,30 @@ def queue_result(value):
         result.setdefault('active_turn_id', None)
         result.setdefault('send_now_reason', 'inactive_turn' if value['supported'] else 'unsupported_queue')
         result.setdefault('recovery', [])
-        if result['active_turn_id'] is not None or result['recovery'] != [] or result['send_now_reason'] not in ('inactive_turn', 'unsupported_queue'):
+        if (result['active_turn_id'] is not None and not valid_queue_id(result['active_turn_id'])
+                or result['send_now_supported'] != (result['supported'] and result['active_turn_id'] is not None)
+                or result['send_now_supported'] and result['send_now_reason'] is not None
+                or result['supported'] and not result['send_now_supported'] and result['send_now_reason'] not in ('inactive_turn', 'unavailable')
+                or not result['supported'] and result['send_now_reason'] != 'unsupported_queue'
+                or type(result['recovery']) is not list or len(result['recovery']) > 64):
             raise ValueError()
+        recovery, actions = [], set()
+        for row in result['recovery']:
+            if (type(row) is not dict or set(row) != {'action_id', 'queued_submission_id', 'text', 'status', 'reason'}
+                    or not valid_qid(row['action_id']) or row['action_id'] in actions
+                    or not valid_queue_id(row['queued_submission_id'])
+                    or type(row['text']) is not str or not 0 < len(row['text']) <= 16000
+                    or row['status'] not in ('held', 'delivery_unknown')
+                    or row['reason'] not in (None, 'target_changed', 'unavailable', 'conflict')):
+                raise ValueError()
+            row['text'].encode('utf-8');actions.add(row['action_id'])
+            recovery.append(dict(row, text=redact(row['text'])))
+        result['recovery'] = recovery
+        # The existing public partial flag also covers complete recovery rows
+        # omitted by the shared broker budget; never cut a recovery payload.
+        while len(json.dumps(dict(result, rows=[]), ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')) > 96 * 1024:
+            result['partial'] = True
+            result['recovery'].pop()
         ids, clients, rows = set(), set(), []
         for row in value['rows']:
             if (type(row) is not dict or set(row) != {'queued_submission_id', 'message_id', 'text', 'state'}
@@ -621,7 +642,24 @@ def queue_mutation_result(value, message_id, queued_submission_id=None):
     return dict(value)
 
 
+
+def queue_transfer_result(value, action_id, queued_submission_id):
+    if type(value) is dict and set(value) == {'error'}:
+        return {'error': value['error'] if value['error'] in ('invalid_request', 'stale', 'unavailable', 'unsupported_queue') else 'unavailable'}
+    if (type(value) is not dict or set(value) != {'status', 'message_id', 'queued_submission_id', 'turn_id', 'reason'}
+            or value['status'] not in ('held', 'accepted', 'changed', 'delivery_unknown')
+            or not valid_qid(action_id) or value['message_id'] != action_id
+            or not valid_queue_id(queued_submission_id) or value['queued_submission_id'] != queued_submission_id
+            or value['turn_id'] is not None and not valid_queue_id(value['turn_id'])
+            or value['status'] == 'accepted' and value['turn_id'] is None
+            or value['status'] != 'accepted' and value['turn_id'] is not None
+            or value['reason'] not in (None, 'target_changed', 'unavailable', 'conflict')):
+        return {'error': 'unavailable'}
+    return dict(value)
+
 def _queue_boundary(request, value):
+    if request['op'] == 'session_queue_send_now':
+        return queue_transfer_result(value, request['action_id'], request['queued_submission_id'])
     if request['op'] == 'session_capabilities':
         return capabilities_result(value)
     if request['op'] == 'session_queue':
@@ -629,6 +667,8 @@ def _queue_boundary(request, value):
     if request['op'] in ('session_enqueue', 'session_queue_cancel'):
         return queue_mutation_result(value, request.get('message_id', request.get('action_id')),
                                      request.get('queued_submission_id'))
+    if request['op'] == 'session_send_status' and type(value) is dict and set(value) == {'status', 'message_id', 'queued_submission_id', 'turn_id', 'reason'}:
+        return queue_transfer_result(value, request['message_id'], value['queued_submission_id'])
     if request['op'] == 'session_send_status' and type(value) is dict and (
             value.get('status') in ('queued', 'changed', 'cancelled') or 'queued_submission_id' in value):
         return queue_mutation_result(value, request['message_id'])
@@ -648,6 +688,7 @@ SESSION_FIELDS = {
     'session_queue': {'op', 'project', 'sid'},
     'session_enqueue': {'op', 'project', 'sid', 'message_id', 'text'},
     'session_queue_cancel': {'op', 'project', 'sid', 'queued_submission_id', 'action_id'},
+    'session_queue_send_now': {'op', 'project', 'sid', 'queued_submission_id', 'action_id', 'snapshot_text', 'expected_turn_id'},
     'session_rename': {'op', 'project', 'sid', 'operation_id', 'title'},
     'session_rename_status': {'op', 'project', 'sid', 'operation_id'},
     'session_create_options': {'op', 'project'},
@@ -671,6 +712,10 @@ def _valid_session(request):
     if 'project' in request and (type(request['project']) is not str or not PROJECT.fullmatch(request['project'])):
         return False
     if any(not valid_qid(request[key]) for key in ('sid', 'message_id', 'operation_id', 'action_id') if key in request):
+        return False
+    if 'snapshot_text' in request and (type(request['snapshot_text']) is not str or not 0 < len(request['snapshot_text']) <= FIELD_LIMIT or not request['snapshot_text'].strip()):
+        return False
+    if 'expected_turn_id' in request and not valid_queue_id(request['expected_turn_id']):
         return False
     if 'queued_submission_id' in request and not valid_queue_id(request['queued_submission_id']):
         return False
@@ -991,6 +1036,8 @@ class RegistryBackend:
                 result = self.sessions.queue(request['project'], request['sid'])
             elif op == 'session_enqueue':
                 result = _forward_send(self.sessions.enqueue, request)
+            elif op == 'session_queue_send_now':
+                result = self.sessions.send_queued_now(request['project'], request['sid'], request['queued_submission_id'], request['action_id'], request['snapshot_text'], request['expected_turn_id'])
             elif op == 'session_queue_cancel':
                 result = self.sessions.cancel_queued(request['project'], request['sid'], request['queued_submission_id'], request['action_id'])
             elif op == 'session_rename':
@@ -1039,6 +1086,9 @@ class RegistryBackend:
         request = _send_request(project, sid, message_id, text, selection)
         request['op'] = 'session_enqueue'
         return self._session(request)
+
+    def session_queue_send_now(self, project, sid, queued_submission_id, action_id, snapshot_text, expected_turn_id):
+        return self._session(dict(op='session_queue_send_now', project=project, sid=sid, queued_submission_id=queued_submission_id, action_id=action_id, snapshot_text=snapshot_text, expected_turn_id=expected_turn_id))
 
     def session_queue_cancel(self, project, sid, queued_submission_id, action_id):
         return self._session(dict(op='session_queue_cancel', project=project, sid=sid,
@@ -1369,6 +1419,8 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = backend.session_queue(request['project'], request['sid'])
                     elif op == 'session_enqueue':
                         result = _forward_send(backend.session_enqueue, request)
+                    elif op == 'session_queue_send_now':
+                        result = backend.session_queue_send_now(request['project'], request['sid'], request['queued_submission_id'], request['action_id'], request['snapshot_text'], request['expected_turn_id'])
                     elif op == 'session_queue_cancel':
                         result = backend.session_queue_cancel(request['project'], request['sid'], request['queued_submission_id'], request['action_id'])
                     elif op == 'session_create_options':
@@ -1564,6 +1616,9 @@ class SocketBackend:
         request = _send_request(project, sid, message_id, text, selection)
         request['op'] = 'session_enqueue'
         return self._session(request)
+
+    def session_queue_send_now(self, project, sid, queued_submission_id, action_id, snapshot_text, expected_turn_id):
+        return self._session(dict(op='session_queue_send_now', project=project, sid=sid, queued_submission_id=queued_submission_id, action_id=action_id, snapshot_text=snapshot_text, expected_turn_id=expected_turn_id))
 
     def session_queue_cancel(self, project, sid, queued_submission_id, action_id):
         return self._session(dict(op='session_queue_cancel', project=project, sid=sid,

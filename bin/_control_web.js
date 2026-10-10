@@ -522,7 +522,10 @@ async function loadQueue(force=false){
     view.supported=data.supported;if(view.mode===null)view.mode=data.supported?'queue':'direct';view.rows=data.rows;
     view.message=data.supported?'Очередь: настройки сессии при запуске'+(data.partial?' · показана часть очереди':''):'Очередь недоступна для этой сессии. Доступна прямая отправка.';
     const state=normalizeHistoryState(key),canonical=queueCanonicalIds(state),present=new Set(data.rows.map(row=>row.message_id)),decision=captureHistoryScroll(project,sid,generation,false);
-    if(!data.partial)for(const [id,attempt]of state.outgoing)if((attempt.nativeQueue||attempt.mode==='queue'&&attempt.status==='queued')&&!present.has(id)){attempt.status='delivery_unknown';attempt.queued_submission_id=null;attempt.queueAbsent=true;if(UUID_RE.test(id))applyReceipt(key,{status:'delivery_unknown',message_id:id,turn_id:null});}
+    if(!data.partial)for(const [id,attempt]of state.outgoing)if((attempt.nativeQueue||attempt.mode==='queue'&&attempt.status==='queued')&&!present.has(id)){
+      if(attempt.mode!=='queue'){if(UUID_RE.test(id)){state.queueCorrelations.add(id);if(state.queueCorrelations.size>256)state.queueCorrelations.delete(state.queueCorrelations.values().next().value);}state.outgoing.delete(id);}
+      else{attempt.status='delivery_unknown';attempt.queued_submission_id=null;attempt.queueAbsent=true;applyReceipt(key,{status:'delivery_unknown',message_id:id,turn_id:null});}
+    }
     for(const row of data.rows){
       if(canonical.has(row.message_id)||ensureReceipts(key).get(row.message_id)?.status==='accepted')continue;
       let attempt=state.outgoing.get(row.message_id);
@@ -903,7 +906,7 @@ async function checkRename(){if(!pageActive())return;
   finally{state.inFlight=false;if(auth===chatAuthGeneration&&renames.get(key)===state)syncRenameControls();}
 }
 
-function normalizeHistoryState(key){if(!historyData.has(key))historyData.set(key,{turns:new Map(),outgoing:new Map(),sessionSettings:null,settingsFailure:false,order:[],olderAnchors:[],initialized:false,truncated:false,attention:false,paginationError:'',historyError:'',historyErrorOrigin:null,latestHistoryError:'',windowIds:null,windowOlder:false,pendingLatest:false});return historyData.get(key);}
+function normalizeHistoryState(key){if(!historyData.has(key))historyData.set(key,{turns:new Map(),outgoing:new Map(),queueCorrelations:new Set(),sessionSettings:null,settingsFailure:false,order:[],olderAnchors:[],initialized:false,truncated:false,attention:false,paginationError:'',historyError:'',historyErrorOrigin:null,latestHistoryError:'',windowIds:null,windowOlder:false,pendingLatest:false});return historyData.get(key);}
 function validHistoryId(value){return typeof value==='string'&&value.length>0&&value.length<=500;}
 function mergeHistory(key,data,olderAnchor){const state=normalizeHistoryState(key);const incoming=Array.isArray(data.turns)?data.turns:[];const chronological=incoming.slice().reverse().filter(turn=>turn&&validHistoryId(turn.id));const incomingIds=new Set(chronological.map(turn=>turn.id));const existingIds=new Set(state.order);const hadOverlap=chronological.some(turn=>existingIds.has(turn.id));for(const turn of chronological){const previous=state.turns.get(turn.id);const itemMap=new Map();for(const item of (previous&&previous.items)||[])if(validHistoryId(item&&item.id))itemMap.set(item.id,item);for(const item of (Array.isArray(turn.items)?turn.items:[])){if(item&&validHistoryId(item.id)&&(!olderAnchor||!itemMap.has(item.id)))itemMap.set(item.id,item);}state.turns.set(turn.id,{...(olderAnchor&&previous?previous:turn),items:[...itemMap.values()]});}
   const ids=chronological.map(turn=>turn.id).filter((id,i,a)=>a.indexOf(id)===i);if(olderAnchor){const anchorIndex=state.olderAnchors.indexOf(olderAnchor);const originalOrder=state.order;const overlapId=ids.find(id=>existingIds.has(id));const boundaryId=overlapId||olderAnchor.afterId;const boundaryIndex=boundaryId===null?-1:originalOrder.indexOf(boundaryId);const insertAt=boundaryIndex<0?0:originalOrder.slice(0,boundaryIndex).filter(id=>!incomingIds.has(id)).length;state.order=originalOrder.filter(id=>!incomingIds.has(id));state.order.splice(insertAt,0,...ids.filter(id=>!state.order.includes(id)));if(anchorIndex>=0){if(data.next_cursor){if(olderAnchor.seen.has(data.next_cursor)){olderAnchor.error=true;state.paginationError='Продолжение истории недоступно: сервер повторил cursor.';}else{state.olderAnchors[anchorIndex]={cursor:data.next_cursor,afterId:ids[0]||olderAnchor.afterId,seen:new Set([...olderAnchor.seen,data.next_cursor]),error:false};}}else state.olderAnchors.splice(anchorIndex,1);}}else{state.order=[...state.order.filter(id=>!incomingIds.has(id)),...ids];if(!state.initialized){state.olderAnchors=[];if(data.next_cursor)state.olderAnchors.push({cursor:data.next_cursor,afterId:ids[0]||state.order[0]||null,seen:new Set([data.next_cursor]),error:false});state.initialized=true;}else if(data.next_cursor&&!hadOverlap&&!state.olderAnchors.some(anchor=>anchor.cursor===data.next_cursor)){state.olderAnchors.push({cursor:data.next_cursor,afterId:ids[0]||state.order[0]||null,seen:new Set([data.next_cursor]),error:false});}}
@@ -911,10 +914,12 @@ function mergeHistory(key,data,olderAnchor){const state=normalizeHistoryState(ke
   // Only authoritative user correlation replaces a local record. Remap a visible
   // local window slot so reconciliation cannot hide the canonical replacement.
   for(const turnId of state.order)for(const item of state.turns.get(turnId)?.items||[]){
-    if(item?.role!=='user'||typeof item.text!=='string'||!validHistoryId(item.id)||typeof item.client_id!=='string'||!state.outgoing.has(item.client_id))continue;
+    if(item?.role!=='user'||typeof item.text!=='string'||!validHistoryId(item.id)||typeof item.client_id!=='string'||!state.outgoing.has(item.client_id)&&!state.queueCorrelations.has(item.client_id))continue;
     const localKey=JSON.stringify(['local-outgoing',item.client_id]),canonicalKey=JSON.stringify([turnId,item.id]);
     if(state.windowIds)state.windowIds=state.windowIds.map(id=>id===localKey?canonicalKey:id);
-    state.outgoing.delete(item.client_id);
+    const pending=state.outgoing.get(item.client_id);
+    if(pending?.mode==='queue'&&pending.text===item.text)applyReceipt(key,{status:'accepted',message_id:item.client_id,turn_id:turnId});
+    state.outgoing.delete(item.client_id);state.queueCorrelations.delete(item.client_id);
   }
   state.truncated=state.truncated||data.truncated===true;state.attention=data.needs_native_attention===true;for(const receipt of Array.isArray(data.recent_sends)?data.recent_sends:[])applyReceipt(key,receipt);return state;}
 function reconcileHistoryCorrelations(state,known,scrollDecision){
