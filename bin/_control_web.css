@@ -51,7 +51,7 @@ label{display:block;margin:12px 0;font-weight:500}input,textarea,select{display:
 #current-model-status,#session-settings-note,#next-model-status{margin:4px 0;overflow-wrap:anywhere}
 
 /* INV-WSESS-47..50: compact normal-flow controls keep real touch targets. */
-body>main>header>a,.android-download a{display:inline-flex;align-items:center;min-width:44px;min-height:44px;color:#b7c0ff;overflow-wrap:anywhere}
+.android-download a{display:inline-flex;align-items:center;min-width:44px;min-height:44px;color:#b7c0ff;overflow-wrap:anywhere}
 body>main>header{flex-wrap:wrap}
 summary{overflow-wrap:anywhere;min-width:44px;min-height:44px;padding:10px 8px;cursor:pointer;font-size:14px;border-radius:5px;background:#303036;color:#e6e6e9}
 summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2px}
@@ -91,3 +91,7 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 .participation-option input{width:20px;min-width:20px;margin:0;flex:none}.participation-option span{min-width:0}.participation-option small{display:block;margin-top:4px}
 .participation-question input[type=text]{max-width:100%;box-sizing:border-box;min-height:44px}
 .participation-question button{min-width:44px;min-height:44px;max-width:100%}.participation-preview{white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* Header navigation shares the secondary-button appearance and stays grouped. */
+.header-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
+.app-button{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:9px 12px;border-radius:5px;background:#303036;color:#e6e6e9;font:inherit;font-weight:500;text-decoration:none}
