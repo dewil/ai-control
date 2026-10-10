@@ -190,7 +190,7 @@ class ParticipationBrokerBlind(unittest.TestCase):
             self.start()
             for request in self.requests:
                 try:result=self.wire(request)
-                except (ConnectionResetError,EOFError,json.JSONDecodeError):result={'error':'forbidden'}
+                except (BrokenPipeError,ConnectionResetError,EOFError,json.JSONDecodeError):result={'error':'forbidden'}
                 self.assertIn('error',result)
         self.assertEqual(self.backend.part_calls,[])
     def test_INV_PART_03_closed_op_shapes_reject_duplicate_and_arbitrary_response(self):
