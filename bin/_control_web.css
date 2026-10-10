@@ -75,3 +75,10 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 .queue-transfer-preview{white-space:pre-wrap;overflow-wrap:anywhere;max-height:45vh;overflow-y:auto;min-height:2rem;padding:.5rem;border:1px solid var(--border,#555)}
 .queue-recovery-item{margin:.75rem 0;padding:.75rem;border:1px solid var(--border,#555);border-radius:.5rem}
 .queue-recovery-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:18rem;overflow-y:auto}
+
+#pinned-sessions{grid-column:1/-1;margin-bottom:12px;border:1px solid #38383e;border-radius:6px;padding:8px 10px;min-width:0}
+#pinned-sessions summary{cursor:pointer;font-weight:600;min-height:32px}
+.pin-row{display:flex;gap:8px;align-items:center;min-width:0;margin-top:6px}
+.pin-title{flex:1;min-width:0;text-align:left;overflow-wrap:anywhere}
+.pin-remove{flex:none}
+#pin-snapshot-note{display:block;margin:2px 0;font-size:12px;line-height:1.3;color:#adaeb7}
