@@ -97,7 +97,7 @@ def _operation(method):
         try:
             result = method(self, *args, **kwargs)
             capture = self._local.read_context
-            if capture is not None and method.__name__ not in ('send', 'enqueue', 'cancel_queued', 'send_queued_now', 'start_queued', 'rename'):
+            if capture is not None and method.__name__ not in ('send', 'enqueue', 'cancel_queued', 'send_queued_now', 'start_queued', 'answer_question', 'rename'):
                 _need(self._catalog_context() == capture, 'stale')
             return result
         except _DomainError as error:
@@ -628,6 +628,172 @@ def _context_token(value):
                                     separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
 
 
+class _Participation:
+    """Ephemeral typed callback authority; receiver never performs native proof."""
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.epoch = uuid.uuid4().hex
+        self.revision = 1
+        self.context = None
+        self.entries = OrderedDict()
+        self.bytes = 0
+        self.limited = False
+        self.bindings = {}
+
+    @staticmethod
+    def native_id(value):
+        try:
+            return (type(value) is int and -(2**63) <= value < 2**63
+                    or type(value) is str and 0 < len(value.encode('utf-8')) <= 500)
+        except UnicodeError:
+            return False
+
+    def reset(self, context):
+        with self.lock:
+            if context != self.context:
+                self.context = copy.deepcopy(context)
+                self.entries.clear()
+                self.bindings.clear()
+                self.bytes = 0
+                self.limited = False
+                self.revision += 1
+
+    def put(self, key, row, size):
+        if self.limited:
+            return
+        if len(self.entries) >= 1024 or self.bytes + size > 2 * 1024 * 1024:
+            self.limited = True
+            for entry in self.entries.values():
+                entry['reason'] = 'limit'
+            self.revision += 1
+            return
+        self.entries[key] = row
+        self.bytes += size
+        self.revision += 1
+
+    @staticmethod
+    def form(params):
+        from _control_web_broker import redact
+        def text(value, bound, empty=False):
+            _need(type(value) is str and (empty or bool(value))
+                  and len(value.encode('utf-8')) <= bound)
+            _need(redact(value) == value)
+            return value
+        _need(type(params) is dict and type(params.get('isBlocking')) is bool)
+        rows = params.get('questions')
+        _need(type(rows) is list and 0 < len(rows) <= 3)
+        result, ids = [], set()
+        for row in rows:
+            _need(type(row) is dict and set(row) == {'id', 'header', 'question', 'isOther', 'isSecret', 'options'})
+            _need(row['isSecret'] is False and type(row['isOther']) is bool)
+            identifier = text(row['id'], 128)
+            _need(identifier not in ids)
+            ids.add(identifier)
+            options = row['options']
+            _need(options is None or type(options) is list and 0 < len(options) <= 16)
+            projected, labels = None, set()
+            if options is not None:
+                projected = []
+                for option in options:
+                    _need(type(option) is dict and set(option) == {'label', 'description'})
+                    label = text(option['label'], 1024)
+                    _need(label not in labels)
+                    labels.add(label)
+                    projected.append(dict(label=label, description=text(option['description'], 4096, True)))
+            result.append(dict(id=identifier, header=text(row['header'], 256, True),
+                question=text(row['question'], 16384), is_other=row['isOther'], options=projected))
+        return result
+
+    def observe(self, value, context, size):
+        with self.lock:
+            self.reset(context)
+            if context is None or context.get('native_version') != '0.161.0':
+                return
+            method, params = value.get('method'), value.get('params')
+            if type(params) is not dict:
+                params = {}
+            if 'id' in value:
+                identifier = value['id']
+                if not self.native_id(identifier):
+                    return
+                key = (type(identifier), identifier)
+                try:
+                    digest = hashlib.sha256(_json(value)).hexdigest()
+                except (UnicodeError, ValueError):
+                    digest = None
+                oversized = size > 128 * 1024 or digest is None
+                old = self.entries.get(key)
+                if old is not None:
+                    if old.get('digest') != digest and not old.get('closed'):
+                        old['reason'] = 'unsupported'
+                        old['questions'] = []
+                        self.revision += 1
+                    return
+                row = dict(native_id=identifier, handle=str(uuid.uuid4()), digest=digest,
+                    sid=params.get('threadId'), root=self.bindings.get(params.get('threadId')) if type(params.get('threadId')) is str else None,
+                    turn=params.get('turnId'), item=params.get('itemId'),
+                    blocking=params.get('isBlocking') if type(params.get('isBlocking')) is bool else None,
+                    questions=[], reason='native_required', closed=False, attempted=False,
+                    outcome=None, action=None, answer_digest=None, method=method)
+                if not oversized and method == 'item/tool/requestUserInput' and valid_uuid(row['sid']) and _identity(row['turn']) and _identity(row['item']):
+                    try:
+                        row['questions'] = self.form(params)
+                        row['reason'] = None
+                    except Exception:
+                        secret = type(params.get('questions')) is list and any(
+                            type(q) is dict and q.get('isSecret') is True for q in params['questions'])
+                        row['reason'] = 'secret' if secret else 'unsupported'
+                self.put(key, row, 1024 if oversized else size + 1024)
+            elif method == 'serverRequest/resolved' and self.native_id(params.get('requestId')):
+                key = (type(params['requestId']), params['requestId'])
+                row = self.entries.get(key)
+                if row is None:
+                    self.put(key, dict(closed=True, digest=None, method=None), 256)
+                else:
+                    row['closed'] = True
+                    self.revision += 1
+            elif method in ('thread/closed', 'turn/completed', 'turn/started'):
+                turn = params.get('turn', {})
+                for row in self.entries.values():
+                    if row.get('sid') == params.get('threadId') and (method == 'thread/closed'
+                        or row.get('blocking') is True and type(turn) is dict
+                        and (method == 'turn/started' and row.get('turn') != turn.get('id')
+                             or method == 'turn/completed' and row.get('turn') == turn.get('id'))):
+                        row['closed'] = True
+                        self.revision += 1
+
+    @staticmethod
+    def state(row):
+        if row.get('closed'):
+            return 'closed', 'delivery_unknown' if row.get('outcome') == 'unknown' else None
+        if row.get('attempted'):
+            return ('sent', None) if row.get('outcome') == 'sent' else ('delivery_unknown', 'delivery_unknown')
+        if row.get('reason') is not None:
+            return 'native_only', row['reason']
+        return 'actionable', None
+
+    @staticmethod
+    def answers(value, questions=None):
+        _need(type(value) is dict and 0 < len(value) <= 3, 'invalid_request')
+        total_chars, total_bytes = 0, 0
+        for key, row in value.items():
+            _need(type(key) is str and 0 < len(key.encode('utf-8')) <= 128
+                  and type(row) is dict and set(row) == {'answers'}
+                  and type(row['answers']) is list and len(row['answers']) == 1, 'invalid_request')
+            text = row['answers'][0]
+            _need(type(text) is str and bool(text.strip()), 'invalid_request')
+            total_chars += len(text)
+            total_bytes += len(text.encode('utf-8'))
+        _need(total_chars <= 8000 and total_bytes <= 32 * 1024, 'invalid_request')
+        if questions is not None:
+            _need(set(value) == {q['id'] for q in questions}, 'invalid_request')
+            for question in questions:
+                text = value[question['id']]['answers'][0]
+                options = question['options']
+                _need(options is None or question['is_other'] or text in [o['label'] for o in options], 'invalid_request')
+        return hashlib.sha256(_json(value)).hexdigest()
+
+
 class SessionChat:
     def __init__(self, rpc, project_path, project_names, receipt_dir, *,
                  summary_clock=None, summary_wall_clock=None, summary_generation=None,
@@ -656,6 +822,273 @@ class SessionChat:
         self._model_lock = threading.Lock()
         self._model_cache = OrderedDict()
         self._history_observation = None
+        self._participation = _Participation()
+        self._part_source_lock = threading.Lock()
+        self._part_source = {}
+        self._part_refresh_at = -100.0
+        self._part_loaded = []
+        self._part_cursor = 0
+        self._part_reasons = []
+        if isinstance(rpc, InteractiveRPC):
+            with rpc._lock:
+                rpc._participation = self._participation
+
+    def _part_roots(self):
+        return {name: self._root(name) for name in self._names()}
+
+    def _part_context(self):
+        # Match the receiver lock order so an older snapshot cannot reset authority.
+        with self.rpc._lock if isinstance(self.rpc, InteractiveRPC) else self._participation.lock:
+            context = self._catalog_context()
+            self._participation.reset(context)
+            return context
+
+    def _part_refresh(self):
+        now = time.monotonic()
+        if now - self._part_refresh_at < 5 or not self._part_source_lock.acquire(False):
+            return
+        try:
+            self._part_refresh_at = now
+            self._local.deadline = min(self._local.deadline, now + 5)
+            context = self._capture_read_context()
+            _need(context is not None and context['native_version'] == '0.161.0')
+            _need(self._part_context() == context, 'stale')
+            roots = self._part_roots()
+            page = self._rpc('thread/loaded/list', {'limit': 256})
+            _need(type(page.get('data')) is list and all(valid_uuid(v) for v in page['data']))
+            loaded = list(dict.fromkeys(page['data']))
+            self._part_loaded = loaded[:1024]
+            reasons = ['limit'] if page.get('nextCursor') is not None or len(loaded) > 7 else []
+            chosen = (loaded[self._part_cursor:] + loaded[:self._part_cursor])[:7]
+            self._part_cursor = (self._part_cursor + len(chosen)) % max(1, len(loaded))
+            for sid in chosen:
+                thread = self._rpc('thread/read', {'threadId': sid, 'includeTurns': False}).get('thread')
+                _need(type(thread) is dict and thread.get('id') == sid and type(thread.get('cwd')) is str)
+                root = canonical(thread['cwd'])
+                if root not in roots.values():
+                    continue
+                turns = self._rpc('thread/turns/list', dict(threadId=sid, itemsView='notLoaded', sortDirection='desc', limit=1))
+                _need(type(turns.get('data')) is list and len(turns['data']) <= 1)
+                latest = copy.deepcopy(turns['data'][0]) if turns['data'] else None
+                if latest is not None:
+                    _need(_identity(latest.get('id')) and latest.get('status') in ('inProgress', 'completed', 'failed', 'interrupted'))
+                    # Completion needs a bounded raw phase witness; inProgress does not.
+                    if latest['status'] == 'completed':
+                        items = self._rpc('thread/items/list', dict(threadId=sid, turnId=latest['id'], sortDirection='desc', limit=32))
+                        _need(type(items.get('data')) is list and len(items['data']) <= 32)
+                        latest['items'] = list(reversed([entry['item'] for entry in items['data']
+                            if type(entry) is dict and entry.get('turnId') == latest['id'] and type(entry.get('item')) is dict]))
+                        if items.get('nextCursor') is not None:
+                            latest['items'] = []
+                            reasons.append('limit')
+                _need(self._catalog_context() == context and root in self._part_roots().values(), 'stale')
+                self._part_publish(sid, root, context, thread, latest)
+
+            self._part_reasons = list(dict.fromkeys(reasons))
+        except Exception:
+            self._local.read_context = None
+            self._part_reasons = ['source_unavailable']
+        finally:
+            self._part_source_lock.release()
+
+    def _part_publish(self, sid, root, context, thread, latest):
+        # Retain a compact completion witness, never raw history text/tools.
+        proof = None
+        if latest is not None:
+            finals = [item for item in latest.get('items', []) if type(item) is dict
+                and item.get('type') == 'agentMessage' and item.get('phase') == 'final_answer'
+                and _identity(item.get('id')) and type(item.get('text')) is str and item['text'].strip()]
+            proof = {key: latest[key] for key in ('id', 'status', 'completedAt') if key in latest}
+            proof['final_item'] = finals[-1]['id'] if finals else None
+        name = thread.get('name')
+        status = thread.get('status')
+        _need(type(status) is dict and status.get('type') in ('active', 'idle', 'notLoaded', 'systemError'))
+        flags = status.get('activeFlags', [])
+        _need(type(flags) is list and len(flags) <= 16 and all(type(flag) is str and len(flag) <= 128 for flag in flags))
+        with self.rpc._lock if isinstance(self.rpc, InteractiveRPC) else self._participation.lock:
+            _need(self._catalog_context() == context, 'stale')
+            with self._participation.lock:
+                self._participation.reset(context)
+                self._part_source[sid] = dict(root=root, context=copy.deepcopy(context),
+                    thread=dict(name=name[:120] if type(name) is str else None,
+                        status=dict(type=status['type'], activeFlags=flags)), latest=proof,
+                    at=time.monotonic(), observed=min(253402300799, int(time.time())))
+                while len(self._part_source) > 256:
+                    del self._part_source[next(iter(self._part_source))]
+                self._participation.bindings[sid] = root
+                self._participation.revision += 1
+
+    def _part_rows(self, project, sid, root, context):
+        registry = self._participation
+        source = self._part_source.get(sid)
+        valid = source is not None and source['root'] == root and source['context'] == context
+        rows = []
+        with registry.lock:
+            for entry in registry.entries.values():
+                if (entry.get('method') != 'item/tool/requestUserInput' or entry.get('sid') != sid
+                        or not _identity(entry.get('turn')) or not _identity(entry.get('item'))):
+                    continue
+                state, reason = registry.state(entry)
+                if entry.get('root') is None and valid:
+                    entry['root'] = root
+                if entry.get('root') != root:
+                    continue
+                if not valid and state != 'closed':
+                    state, reason = 'stale', 'stale'
+                rows.append(dict(interaction_id=entry['handle'], turn_id=entry['turn'], item_id=entry['item'],
+                    state=state, is_blocking=entry['blocking'], reason=reason,
+                    questions=copy.deepcopy(entry['questions']) if state != 'native_only' else []))
+        return rows
+
+    def _part_coverage(self):
+        reasons = ['native_callbacks_partial'] + self._part_reasons
+        with self._participation.lock:
+            sources = dict(self._part_source)
+        if self._participation.limited or any(sid not in sources or
+                time.monotonic()-sources[sid]['at'] > 15 for sid in self._part_loaded):
+            reasons.append('limit')
+        return dict(partial=True, reasons=list(dict.fromkeys(reasons)))
+
+    @_operation
+    def questions(self, project, sid):
+        _need(valid_uuid(sid), 'invalid_request')
+        root = self._root(project)
+        self._part_refresh()
+        context = self._part_context()
+        rows = self._part_rows(project, sid, root, context)
+        result = dict(schema=1, epoch=self._participation.epoch, revision=self._participation.revision,
+            session_key=_context_token(dict(principal='owner', context=context, root=root, sid=sid)),
+            coverage=self._part_coverage(), questions=[])
+        for row in rows:
+            if len(result['questions']) >= 16 or len(_json(result)) + len(_json(row)) > HISTORY_LIMIT - 1024:
+                if 'limit' not in result['coverage']['reasons']:
+                    result['coverage']['reasons'].append('limit')
+                break
+            result['questions'].append(row)
+        _need(self._root(project) == root, 'stale')
+        return result
+
+    @_operation
+    def participation_overview(self):
+        self._part_refresh()
+        context = self._part_context()
+        roots = self._part_roots()
+        registry = self._participation
+        result = dict(schema=1, epoch=registry.epoch, revision=registry.revision,
+            generated_at=min(253402300799, int(time.time())), health='fresh', coverage=self._part_coverage(), rows=[], tasks=[])
+        with registry.lock:
+            sources = list(self._part_source.items())
+        for sid, source in sources:
+            project = next((p for p, root in roots.items() if root == source['root']), None)
+            if project is None or source['context'] != context or sid not in self._part_loaded:
+                continue
+            thread, latest = source['thread'], source['latest']
+            status = thread.get('status', {})
+            activity = {'active':'active', 'idle':'idle', 'notLoaded':'not_loaded', 'systemError':'system_error'}.get(status.get('type'), 'unknown')
+            fresh = 0 <= time.monotonic() - source['at'] <= 15
+            questions = self._part_rows(project, sid, source['root'], context)
+            flags = status.get('activeFlags', [])
+            waits = [name for flag, name in [('waitingOnApproval','approval'), ('waitingOnUserInput','question')]
+                     if flag in flags or name == 'question' and any(q['state'] not in ('closed','stale') for q in questions)]
+            running = ('confirmed' if fresh and latest is not None and latest['status'] == 'inProgress'
+                and 'approval' not in waits and not any(q['is_blocking'] is not False and q['state'] == 'actionable' for q in questions)
+                and 'waitingOnUserInput' not in flags else 'unconfirmed')
+            completion = None
+            if latest is not None and latest['status'] in ('completed','failed','interrupted'):
+                witness = latest.get('final_item')
+                completed = latest.get('completedAt')
+                completed = completed if type(completed) in (int,float) and math.isfinite(completed) and 0 <= completed <= 253402300799 else None
+                completion = dict(turn_id=latest['id'], item_id=witness,
+                    status=latest['status'], ready=fresh and latest['status'] == 'completed' and witness is not None, completed_at=completed)
+            from _control_web_broker import redact
+            label = thread.get('name')
+            row = dict(session_key=_context_token(dict(principal='owner',context=context,root=source['root'],sid=sid)),
+                project=project, sid=sid, label=redact(label)[:120] if type(label) is str else 'Сессия', vendor='codex',
+                activity=activity, running=running, waits=waits,
+                questions=[dict(interaction_id=q['interaction_id'],state=q['state'],blocking=q['is_blocking']) for q in questions[:16]],
+                result=completion, freshness=dict(state='fresh' if fresh else 'stale', observed_at=source['observed']))
+            if len(result['rows']) >= 256 or len(_json(result))+len(_json(row)) > HISTORY_LIMIT-1024:
+                result['coverage']['reasons'].append('limit')
+                break
+            result['rows'].append(row)
+            if not fresh:
+                result['health'] = 'stale'
+        if not result['rows'] and 'source_unavailable' in result['coverage']['reasons']:
+            result['health'] = 'unavailable'
+        _need(self._part_roots() == roots, 'stale')
+        return result
+
+    @_operation
+    def answer_question(self, project, sid, epoch, interaction_id, action_id, answers):
+        _need(valid_uuid(sid) and valid_uuid(interaction_id) and valid_uuid(action_id)
+              and type(epoch) is str and re.fullmatch('[0-9a-f]{32}', epoch), 'invalid_request')
+        try:
+            digest = _Participation.answers(answers)
+        except Exception:
+            raise _DomainError('invalid_request') from None
+        registry = self._participation
+        _need(epoch == registry.epoch, 'stale')
+        root = self._root(project)
+        context = self._part_context()
+        with registry.lock:
+            entry = next((entry for entry in registry.entries.values() if entry.get('handle') == interaction_id), None)
+            _need(entry is not None and entry.get('sid') == sid and entry.get('root') == root, 'stale')
+            _need(not any(other is not entry and other.get('action') == action_id
+                          for other in registry.entries.values()), 'invalid_request')
+            if entry.get('action') == action_id:
+                _need(entry['answer_digest'] == digest, 'invalid_request')
+            elif entry.get('action') is None and not entry.get('closed'):
+                try:
+                    _Participation.answers(answers, entry['questions'])
+                except Exception:
+                    raise _DomainError('invalid_request') from None
+            def outcome():
+                state, reason = registry.state(entry)
+                if state in ('actionable','native_only'):
+                    state, reason = 'stale', 'native_required'
+                return dict(schema=1,epoch=registry.epoch,interaction_id=interaction_id,action_id=action_id,state=state,reason=reason)
+            if entry.get('attempted') or entry.get('closed') or entry.get('reason') is not None:
+                return outcome()
+        try:
+            _need(context is not None and context['native_version'] == '0.161.0')
+            self._capture_read_context(context)
+            self._proof(root, sid)
+            turns = self._rpc('thread/turns/list', dict(threadId=sid, itemsView='notLoaded', sortDirection='desc', limit=4))
+            _need(type(turns.get('data')) is list and len(turns['data']) <= 4)
+            turn = next((turn for turn in turns['data'] if type(turn) is dict and turn.get('id') == entry['turn']), None)
+            _need(turn is not None and (entry['blocking'] is False or turns['data'][0] is turn and turn.get('status') == 'inProgress'), 'stale')
+            items = self._rpc('thread/items/list', dict(threadId=sid, turnId=entry['turn'], sortDirection='desc', limit=32))
+            _need(type(items.get('data')) is list and len(items['data']) <= 32
+                  and any(type(item) is dict and item.get('turnId') == entry['turn']
+                          and type(item.get('item')) is dict and item['item'].get('id') == entry['item']
+                          for item in items['data']), 'stale')
+            _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+        except Exception:
+            with registry.lock:
+                if not entry.get('closed'):
+                    entry['reason'] = 'stale'
+                return outcome()
+        # Fixed captured-response path; no generic callback response API.
+        with self.rpc._send_lock:
+            _need(self._root(project) == root and self._catalog_context() == context, 'stale')
+            with self.rpc._lock, registry.lock:
+                _need(self.rpc._participation is registry and registry.context == context, 'stale')
+                ws = self.rpc._ws
+                if entry.get('attempted') or entry.get('closed') or entry.get('reason') is not None:
+                    return outcome()
+                entry.update(action=action_id, answer_digest=digest, attempted=True, outcome='unknown')
+                registry.revision += 1
+                payload = _json(dict(id=entry['native_id'], result=dict(answers=answers))).decode('utf-8')
+            # Receiver must be free to apply native resolved while send waits.
+            try:
+                ws.send(payload)
+                with registry.lock:
+                    entry['outcome'] = 'sent'
+            except Exception:
+                pass
+            with registry.lock:
+                registry.revision += 1
+                return outcome()
 
     def _configured_call(self, method, *args):
         self._remaining()
@@ -1059,7 +1492,7 @@ class SessionChat:
                   and type(turn.get('items')) is list and not turn['items']
                   and turn.get('itemsView', 'notLoaded') == 'notLoaded')
             turn_ids.add(turn['id'])
-            turns.append({key: turn[key] for key in ('id', 'status', 'items', 'startedAt')
+            turns.append({key: turn[key] for key in ('id', 'status', 'items', 'startedAt', 'completedAt')
                           if key in turn})
         used, truncated, stopped = 0, False, False
         item_ids = set()
@@ -1114,7 +1547,8 @@ class SessionChat:
                     elif item['type'] == 'agentMessage':
                         _need(type(item.get('text')) is str)
                         page_projection.append({'id': item['id'], 'type': item['type'],
-                                                'text': item['text']})
+                                                'text': item['text'],
+                                                'phase': item.get('phase') if item.get('phase') in ('commentary', 'final_answer') else None})
                     if item['type'] in ('userMessage', 'agentMessage'):
                         page_projection[-1]['startedAtMs'] = entry.get('startedAtMs')
                 entry = item = part = None
@@ -1577,6 +2011,12 @@ class SessionChat:
         _need(len(encoded_result) <= HISTORY_LIMIT)
         _need(self._root(project) == root and self._catalog_context() == native, 'stale')
         self._history_observation = (root, sid, copy.deepcopy(native))
+        if cursor is None and type(native) is dict and native.get('native_version') == '0.161.0':
+            try:
+                self._part_publish(sid, root, native, thread, page['data'][0] if page['data'] else None)
+            except _DomainError:
+                # Optional participation metadata never changes history admission.
+                pass
         return result
 
     @staticmethod
@@ -2377,7 +2817,7 @@ class SessionChat:
 
 
 class InteractiveRPC:
-    """One receiver per connection; never responds to native server requests."""
+    """One receiver; only captured, one-shot user-question responses are allowed."""
     METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/items/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set', 'thread/start', 'thread/loaded/list', 'thread/queue/list', 'thread/queue/add', 'thread/queue/delete', 'turn/steer', 'thread/queue/start'}
 
     def __init__(self, socket_path, timeout=25):
@@ -2396,6 +2836,7 @@ class InteractiveRPC:
             'socket_alias': os.path.abspath(socket_path)})
         self._pending = {}
         self._closed = False
+        self._participation = None
 
     @property
     def generation(self):
@@ -2408,6 +2849,8 @@ class InteractiveRPC:
                 return
             self._ws = None
             self._native_version = None
+            if self._participation is not None:
+                self._participation.reset(None)
             for waiter in self._pending.values():
                 waiter['error'] = RuntimeError('RPC connection unavailable')
                 waiter['event'].set()
@@ -2429,16 +2872,22 @@ class InteractiveRPC:
     def _receive(self, ws, generation):
         try:
             while True:
-                value = json.loads(ws.recv(), object_pairs_hook=_pairs)
+                raw = ws.recv()
+                value = json.loads(raw, object_pairs_hook=_pairs)
                 if type(value) is not dict:
                     raise ValueError('invalid response')
-                # Both callbacks and notifications are observational only.
+                # Retain only bounded typed callback authority; no receiver IO.
                 if 'method' in value:
                     if 'id' not in value and value['method'] in ('account/updated', 'config/updated'):
                         with self._lock:
                             if self._ws is not ws or self._generation != generation:
                                 return
                             self._context_generation += 1
+                    with self._lock:
+                        if self._ws is not ws or self._generation != generation:
+                            return
+                        if self._participation is not None:
+                            self._participation.observe(value, self.model_context(), len(raw.encode('utf-8') if type(raw) is str else raw))
                     continue
                 if type(value.get('id')) is not str:
                     continue
