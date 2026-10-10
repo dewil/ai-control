@@ -1813,17 +1813,18 @@ class SessionChat:
 
     def _transfer_reconcile(self, ns, record, project, root, sid, context):
         _need(self._root(project) == root and self._catalog_context() == context, 'stale')
-        if record['status'] in ('accepted', 'changed'):
+        if record['status'] in ('accepted', 'changed') or record['phase'] != 'steer_reserved':
             return self.receipts.result(record)
         cursor, seen, matches, conflict = None, set(), [], False
         for _ in range(8):
             page = self._page(sid, cursor)
             for turn in page['data']:
                 for item in turn['items']:
-                    if item['type'] == 'userMessage' and item.get('clientId') == record['client_id']:
+                    if item['type'] == 'userMessage' and item.get('clientId') == record['message_id']:
                         parts = item['content']
                         text = '\n'.join(part['text'] for part in parts if part['type'] == 'text')
-                        if any(part['type'] != 'text' for part in parts) or text != record['snapshot_text']:
+                        if (turn['id'] != record['expected_turn_id'] or any(part['type'] != 'text' for part in parts)
+                                or text != record['snapshot_text']):
                             conflict = True
                         else:
                             matches.append(turn['id'])
@@ -1834,6 +1835,8 @@ class SessionChat:
         _need(self._root(project) == root and self._catalog_context() == context, 'stale')
         if len(matches) == 1 and not conflict:
             return self._transfer_finish(ns, record, 'accepted', matches[0])
+        if conflict or len(matches) > 1:
+            return self._transfer_finish(ns, record, 'delivery_unknown', reason='conflict')
         # Neither absence nor a native rejection authorizes another mutation.
         return self.receipts.result(record)
 
@@ -1864,8 +1867,8 @@ class SessionChat:
                 original = self.receipts.read(ns, root, sid, row['message_id'], self._local.deadline, context['context_id'])
                 if (original is not None and original.get('kind') == 'queue_enqueue'
                         and original['queued_submission_id'] is None and not listing['partial']
-                        and original['digest'] in {self._queue_digest(context['context_id'], root, sid, 'queue_enqueue', value)
-                            for value in (snapshot_text, native_texts[queued_submission_id])}):
+                        and original['digest'] == self._queue_digest(context['context_id'], root, sid,
+                            'queue_enqueue', native_texts[queued_submission_id])):
                     original['queued_submission_id'] = queued_submission_id
                     self.receipts.write(ns, original, self._local.deadline)
             record = dict(schema=4, kind='queue_transfer', context_id=context['context_id'], root=root, sid=sid,
@@ -1898,7 +1901,7 @@ class SessionChat:
             self.receipts.write(ns, record, self._local.deadline)
             try:
                 response = self._send_fenced('turn/steer', dict(threadId=sid, expectedTurnId=expected_turn_id,
-                    input=[dict(type='text', text=snapshot_text)], clientUserMessageId=row['message_id']), context)
+                    input=[dict(type='text', text=snapshot_text)], clientUserMessageId=action_id), context)
                 _need(set(response) == {'turnId'} and response['turnId'] == expected_turn_id)
                 return self._transfer_finish(ns, record, 'accepted', expected_turn_id)
             except Exception:
