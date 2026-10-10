@@ -65,6 +65,7 @@ const queueViews = new Map();
 let queueTransferDialog=null;
 const pinView={items:[],version:0,flight:null,pending:false,last:0,busy:false};
 let navigationTimer=null,navigationEpoch=0;
+const partView={epoch:null,admission:0,overview:{last:0,flight:null,data:null,rendered:''},selected:null,target:null,actions:new Map()};
 let modelExpiryTimer=null;
 let sessionSettingsTimer=null;
 let chatAuthGeneration=0;
@@ -215,7 +216,7 @@ async function api(path,body,signal,isCurrent=()=>true,admission=false){
     return data;
   }finally{if(controller){const remaining=(observationControllers.get(controller)||0)-1;if(remaining>0)observationControllers.set(controller,remaining);else observationControllers.delete(controller);if(bridge)signal.removeEventListener('abort',abort);}}
 }
-function signedOut(){stopNavigation();pinView.items=[];pinView.version++;$('pin-list').replaceChildren();closeQueueTransferDialog();stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();queueViews.clear();if(acceptedStatusTimer!==null){pageClearTimer(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
+function signedOut(){stopNavigation();resetParticipation();pinView.items=[];pinView.version++;$('pin-list').replaceChildren();closeQueueTransferDialog();stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();queueViews.clear();if(acceptedStatusTimer!==null){pageClearTimer(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
 function field(parent,key,label,kind='textarea'){const wrap=node('label',label);const input=node(kind);input.maxLength=16000;input.value=drafts.get(key)||'';input.addEventListener('input',()=>drafts.set(key,input.value));wrap.append(input);parent.append(wrap);return input;}
 function button(parent,label,action,cls){const b=node('button',label,cls);b.type='button';b.addEventListener('click',action);parent.append(b);return b;}
 async function mutate(card,path,body){if(!pageActive())return;const lifecycle=pageGeneration,auth=chatAuthGeneration;if(busy)return;busy=true;const controls=[...document.querySelectorAll('#tasks-panel button')];controls.forEach(b=>b.disabled=true);const status=card.querySelector('.message');status.textContent='Сохраняем…';try{const data=await api(path,body);if(lifecycle!==pageGeneration||!pageActive())return;status.textContent=data.status==='already'?'Решение уже было принято.':'Решение принято.';await refresh();}catch(err){if(err.stale||lifecycle!==pageGeneration||!pageActive())return;status.textContent=err.message;if(err.code==='saved_pending'){await refresh();notice(err.message);}}finally{busy=false;if(pageActive()&&auth===chatAuthGeneration){if(lifecycle===pageGeneration)controls.forEach(b=>b.disabled=false);else{taskLoaded=false;if(currentTab==='tasks')refresh();}}}}
@@ -497,12 +498,123 @@ function renderModelControls(){
 }
 
 function navigationVisible(){return pageActive()&&Boolean(csrf)&&currentTab==='sessions'&&document.visibilityState==='visible'&&!$('workspace').hidden;}
-function stopNavigation(){navigationEpoch++;if(navigationTimer!==null){pageClearTimer(navigationTimer);navigationTimer=null;}}
+function stopNavigation(){navigationEpoch++;if(partView.selected)partView.selected.rendered='';disablePartControls();if(navigationTimer!==null){pageClearTimer(navigationTimer);navigationTimer=null;}}
 function syncNavigation(force=false){
   if(!navigationVisible()){stopNavigation();return;}
-  if(navigationTimer===null)navigationTimer=pageInterval(()=>loadPins(),5000);
-  loadPins(force);
+  if(navigationTimer===null)navigationTimer=pageInterval(()=>{loadPins();loadParticipation();loadSessionQuestions();},5000);
+  loadPins(force);loadParticipation(force);loadSessionQuestions(force);
 }
+function partText(value,bound,empty=false){return typeof value==='string'&&(empty||value.length>0)&&!/[\ud800-\udfff]/u.test(value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g,''))&&new TextEncoder().encode(value).length<=bound;}
+function validPartBase(data){return exactFields(data.coverage,['partial','reasons'])&&typeof data.coverage.partial==='boolean'&&Array.isArray(data.coverage.reasons)&&new Set(data.coverage.reasons).size===data.coverage.reasons.length&&data.coverage.reasons.every(value=>['limit','deadline','native_callbacks_partial','source_unavailable','unsupported','binding_incomplete'].includes(value))&&data.schema===1&&typeof data.epoch==='string'&&/^[0-9a-f]{32}$/.test(data.epoch)&&Number.isSafeInteger(data.revision)&&data.revision>0;}
+function validPartQuestion(row){
+  if(!exactFields(row,['interaction_id','turn_id','item_id','state','is_blocking','reason','questions'])||!UUID_RE.test(row.interaction_id)||!validHistoryId(row.turn_id)||!validHistoryId(row.item_id)||!['actionable','native_only','responding','sent','delivery_unknown','closed','stale'].includes(row.state)||![true,false,null].includes(row.is_blocking)||![null,'native_required','secret','unsupported','stale','limit','delivery_unknown'].includes(row.reason)||!Array.isArray(row.questions)||row.questions.length>3||row.state==='actionable'&&(!row.questions.length||row.is_blocking===null)||row.state==='native_only'&&row.questions.length)return false;
+  return new Set(row.questions.map(q=>q?.id)).size===row.questions.length&&row.questions.every(q=>exactFields(q,['id','header','question','is_other','options'])&&partText(q.id,128)&&partText(q.header,256,true)&&partText(q.question,16384)&&typeof q.is_other==='boolean'&&(q.options===null||Array.isArray(q.options)&&q.options.length>0&&q.options.length<=16&&new Set(q.options.map(o=>o?.label)).size===q.options.length&&q.options.every(o=>exactFields(o,['label','description'])&&partText(o.label,1024)&&partText(o.description,4096,true))));
+}
+function validPartSelected(data){return exactFields(data,['schema','epoch','revision','session_key','coverage','questions'])&&validPartBase(data)&&typeof data.session_key==='string'&&/^[0-9a-f]{64}$/.test(data.session_key)&&Array.isArray(data.questions)&&data.questions.length<=16&&data.questions.every(validPartQuestion);}
+function validPartOverview(data){
+  const stamp=v=>v===null||typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=253402300799;
+  return exactFields(data,['schema','epoch','revision','generated_at','health','coverage','rows','tasks'])&&validPartBase(data)&&data.generated_at!==null&&stamp(data.generated_at)&&['fresh','stale','unavailable'].includes(data.health)&&Array.isArray(data.rows)&&data.rows.length<=256&&Array.isArray(data.tasks)&&data.tasks.length<=128&&data.rows.every(row=>exactFields(row,['session_key','project','sid','label','vendor','activity','running','waits','questions','result','freshness'])&&typeof row.session_key==='string'&&/^[0-9a-f]{64}$/.test(row.session_key)&&typeof row.project==='string'&&/^[A-Za-z0-9_-]{1,32}$/.test(row.project)&&UUID_RE.test(row.sid)&&typeof row.label==='string'&&Array.from(row.label).length<=120&&row.vendor==='codex'&&['active','idle','not_loaded','system_error','unknown'].includes(row.activity)&&['confirmed','unconfirmed'].includes(row.running)&&Array.isArray(row.waits)&&[JSON.stringify([]),JSON.stringify(['approval']),JSON.stringify(['question']),JSON.stringify(['approval','question'])].includes(JSON.stringify(row.waits))&&Array.isArray(row.questions)&&row.questions.every(q=>exactFields(q,['interaction_id','state','blocking'])&&UUID_RE.test(q.interaction_id)&&['actionable','native_only','responding','sent','delivery_unknown','closed','stale'].includes(q.state)&&[true,false,null].includes(q.blocking))&&exactFields(row.freshness,['state','observed_at'])&&['fresh','stale','unavailable'].includes(row.freshness.state)&&stamp(row.freshness.observed_at)&&(row.result===null||exactFields(row.result,['turn_id','item_id','status','ready','completed_at'])&&validHistoryId(row.result.turn_id)&&(row.result.item_id===null||validHistoryId(row.result.item_id))&&['completed','failed','interrupted'].includes(row.result.status)&&typeof row.result.ready==='boolean'&&(!row.result.ready||row.result.status==='completed'&&row.result.item_id!==null)&&stamp(row.result.completed_at)));
+}
+function resetParticipation(){partView.epoch=null;partView.admission++;partView.overview={last:0,flight:null,data:null,rendered:''};partView.selected=null;partView.target=null;partView.actions.clear();$('participation-list').replaceChildren();$('session-questions').replaceChildren();$('participation-status').textContent='';}
+function admitPartEpoch(data,admission,previousEpoch){
+  if(partView.epoch===data.epoch)return true;
+  if(partView.admission!==admission||partView.epoch!==null&&!previousEpoch)return false;
+  partView.epoch=data.epoch;partView.admission++;partView.target=null;partView.actions.clear();partView.overview.data=null;partView.overview.rendered='';$('participation-list').replaceChildren();
+  if(partView.selected){partView.selected.data=null;partView.selected.rendered='';}$('session-questions').replaceChildren();return true;
+}
+function disablePartControls(){for(const control of $('session-questions').querySelectorAll('button,input,textarea'))control.disabled=true;}
+async function loadPartScope(scope,selected,force){
+  if(!navigationVisible()||scope.flight)return;
+  const now=performance.now();if(!force&&scope.last&&now-scope.last<5000)return;
+  const auth=chatAuthGeneration,lifecycle=pageGeneration,epoch=navigationEpoch,admission=partView.admission;
+  const current=()=>navigationVisible()&&auth===chatAuthGeneration&&lifecycle===pageGeneration&&epoch===navigationEpoch&&(!selected||partView.selected===scope&&activeSelection(scope.project,scope.sid,scope.generation));
+  const flight={};scope.flight=flight;scope.last=now;
+  const controller=newObservationController(),timer=pageTimeout(()=>controller.abort(),15000);
+  try{
+    const data=await api(selected?queryPath('/api/session-questions',{project:scope.project,sid:scope.sid}):'/api/participation-overview',undefined,controller.signal,current);
+    if(!current()||!(selected?validPartSelected(data):validPartOverview(data))||!admitPartEpoch(data,admission,scope.data?.epoch)||scope.data&&scope.data.epoch===data.epoch&&scope.data.revision>data.revision)return;
+    scope.data=data;scope.navigationEpoch=epoch;if(selected)renderPartQuestions();else renderParticipation();
+  }catch(error){if(current()){if(error.status===401||error.status===403){stopNavigation();if(error.status===403)ownerForbidden();}else if(!error.stale){if(selected){scope.rendered='';disablePartControls();}else $('participation-status').textContent='Обзор недоступен; полнота не подтверждена.';}}}
+  finally{pageClearTimer(timer);if(scope.flight===flight)scope.flight=null;}
+}
+function loadParticipation(force=false){return loadPartScope(partView.overview,false,force);}
+function loadSessionQuestions(force=false){
+  if(!activeSelection()||!navigationVisible())return;
+  const key=currentSessionKey(),scope=partView.selected;
+  if(!scope||scope.key!==key||scope.generation!==selectionGeneration){partView.selected={key,project:selectedProject,sid:selectedSession.sid,generation:selectionGeneration,last:0,flight:null,data:null,rendered:''};$('session-questions').replaceChildren();}
+  return loadPartScope(partView.selected,true,force);
+}
+function renderParticipation(){
+  const scope=partView.overview,data=scope.data;if(!data||!navigationVisible()||data.epoch!==partView.epoch)return;
+  const signature=JSON.stringify([data.epoch,data.rows,data.coverage,data.health]);if(signature===scope.rendered)return;scope.rendered=signature;
+  const decision=activeSelection()?captureHistoryScroll(selectedProject,selectedSession.sid,selectionGeneration,false):null;
+  const list=$('participation-list'),fragment=document.createDocumentFragment(),groups=[['confirmed','Сейчас работают'],['active','Активна по Codex'],['waiting','Требуют внимания'],['result','Результаты']];
+  const group=row=>row.running==='confirmed'?'confirmed':row.activity==='active'&&!row.waits.length?'active':row.waits.length?'waiting':'result';
+  for(const [id,title]of groups){const rows=data.rows.filter(row=>group(row)===id);if(!rows.length)continue;fragment.append(node('h3',title));for(const row of rows){
+    const article=node('article',undefined,'participation-row');article.append(node('strong',row.label));
+    const labels=[];if(row.running==='confirmed')labels.push('Работа подтверждена');else if(row.activity==='active')labels.push('Активна по Codex');
+    if(row.waits.includes('approval'))labels.push('Подтвердите в Codex');if(row.waits.includes('question'))labels.push('Есть вопрос');
+    if(row.result?.ready)labels.push('Ответ готов');else if(row.result?.status==='failed')labels.push('Ход завершился с ошибкой');else if(row.result?.status==='interrupted')labels.push('Ход прерван');
+    if(row.freshness.state!=='fresh')labels.push('Сведения устарели');article.append(node('p',labels.join(' · '),'meta'));
+    const open=node('button','Открыть сессию','secondary');open.type='button';open.addEventListener('click',()=>openParticipationTarget(row,null));article.append(open);
+    for(const question of row.questions){const button=node('button','Открыть вопрос','secondary');button.type='button';button.addEventListener('click',()=>openParticipationTarget(row,{interaction:question.interaction_id}));article.append(button);}
+    if(row.result?.ready){const button=node('button','Открыть результат','secondary');button.type='button';button.addEventListener('click',()=>openParticipationTarget(row,{turn:row.result.turn_id,item:row.result.item_id}));article.append(button);}
+    fragment.append(article);
+  }}
+  list.replaceChildren(fragment);$('participation-status').textContent=data.coverage.partial?'Показана часть сессий; native callbacks наблюдаются не полностью.':'';
+  if(decision)restoreHistoryScroll(decision,selectedProject,selectedSession.sid,selectionGeneration);
+}
+async function openParticipationTarget(row,target){
+  const epoch=partView.epoch;
+  await openPinnedSession({available:true,project:row.project,sid:row.sid,title:row.label,vendor:'codex'});
+  if(!target||partView.epoch!==epoch||!activeSelection(row.project,row.sid))return;
+  partView.target={...target,epoch,project:row.project,sid:row.sid,generation:selectionGeneration};focusParticipationTarget();
+}
+function focusParticipationTarget(){
+  const target=partView.target;if(!target||partView.epoch!==target.epoch||!activeSelection(target.project,target.sid,target.generation))return;
+  const element=target.interaction?[...$('session-questions').children].find(card=>card.dataset.interactionId===target.interaction):[...$('chat-items').querySelectorAll('article.chat-message')].find(card=>card.dataset.turnId===target.turn&&card.dataset.itemId===target.item);
+  if(!element)return;partView.target=null;initialScrollTarget=null;element.tabIndex=-1;element.scrollIntoView({block:'center'});element.focus({preventScroll:true});
+}
+function partActionKey(epoch,handle){return epoch+'|'+handle;}
+function partMessage(state,reason){if(state==='closed')return reason==='delivery_unknown'?'Запрос закрыт. Доставка ответа неизвестна; проверьте Codex':'Запрос закрыт';if(state==='sent')return 'Ответ отправлен; применение не подтверждено';if(state==='delivery_unknown')return 'Доставка ответа неизвестна; проверьте Codex';if(state==='responding')return 'Отправляем ответ…';if(state==='stale')return 'Вопрос устарел; проверьте Codex';return 'Ответьте в Codex';}
+function renderPartQuestions(){
+  const scope=partView.selected,data=scope?.data;if(!data||scope.navigationEpoch!==navigationEpoch||!activeSelection(scope.project,scope.sid,scope.generation)||data.epoch!==partView.epoch)return;
+  const signature=JSON.stringify([data.epoch,data.questions,data.questions.map(row=>partView.actions.get(partActionKey(data.epoch,row.interaction_id))||null)]);if(scope.rendered===signature)return;scope.rendered=signature;
+  const decision=captureHistoryScroll(scope.project,scope.sid,scope.generation,false),cards=[],existing=new Map([...$('session-questions').children].map(card=>[card.dataset.interactionId,card]));
+  for(const row of data.questions){
+    const action=partView.actions.get(partActionKey(data.epoch,row.interaction_id));let state=action?.state||row.state,reason=action?.reason??row.reason;
+    if(row.state==='closed'){state='closed';reason=action?.state==='delivery_unknown'||action?.reason==='delivery_unknown'?'delivery_unknown':row.reason;}
+    else if(row.state==='stale'||row.state==='native_only'){state=row.state;reason=row.reason;}
+    const signature=JSON.stringify([data.epoch,row,action||null]),previous=existing.get(row.interaction_id);
+    if(previous?.dataset.partSignature===signature){if(state==='actionable'){for(const input of previous.querySelectorAll('input,textarea'))input.disabled=false;previous.querySelector('form')?.dispatchEvent(new Event('input'));}cards.push(previous);continue;}
+    const card=node('article',undefined,'participation-question');card.dataset.interactionId=row.interaction_id;card.dataset.partSignature=signature;
+    if(row.is_blocking===false)card.append(node('p','Вопрос не останавливает независимую работу','meta'));
+    if(state!=='actionable'||partView.actions.size>=1024){for(const q of row.questions)card.append(node('p',q.question));card.append(node('p',partMessage(state,reason),'attention'));cards.push(card);continue;}
+    const form=node('form'),inputs=[];
+    for(const q of row.questions){
+      const field=node('fieldset');field.append(node('legend',q.header),node('p',q.question));const entry={q,radios:[],free:null};
+      if(q.options)for(const option of q.options){const label=node('label',undefined,'participation-option'),radio=node('input');radio.type='radio';radio.name=row.interaction_id+'-'+q.id;radio.value=option.label;const text=node('span',option.label);if(option.description)text.append(node('small',option.description));label.append(radio,text);field.append(label);entry.radios.push(radio);}
+      if(q.options===null||q.is_other){const label=node('label',q.options===null?'Ваш ответ':'Другой ответ'),free=node('input');free.type='text';free.maxLength=8000;free.autocomplete='off';label.append(free);field.append(label);entry.free=free;}
+      inputs.push(entry);form.append(field);
+    }
+    const preview=node('p','Выберите ответ перед отправкой','participation-preview'),submit=node('button','Отправить ответ');submit.type='submit';submit.disabled=true;
+    const answers=()=>{const value=Object.create(null);for(const entry of inputs){const text=entry.free?.value.trim()?entry.free.value:entry.radios.find(radio=>radio.checked)?.value;if(!text||!text.trim())return null;value[entry.q.id]={answers:[text]};}const texts=Object.values(value).map(row=>row.answers[0]);if(texts.reduce((n,text)=>n+Array.from(text).length,0)>8000||texts.reduce((n,text)=>n+new TextEncoder().encode(text).length,0)>32768)return null;return value;};
+    const update=()=>{const value=answers();preview.textContent=value?'Будет отправлено: '+Object.values(value).map(row=>row.answers[0]).join(' / '):'Выберите ответ перед отправкой';submit.disabled=!value||!pageActive();};
+    form.addEventListener('input',update);form.addEventListener('change',update);form.addEventListener('submit',event=>{event.preventDefault();const value=answers();if(value)answerPartQuestion(scope,data.epoch,row,value);});form.append(preview,submit);card.append(form);cards.push(card);
+  }
+  reconcileHistoryChildren($('session-questions'),cards);restoreHistoryScroll(decision,scope.project,scope.sid,scope.generation);focusParticipationTarget();
+}
+async function answerPartQuestion(scope,epoch,row,answers){
+  const key=partActionKey(epoch,row.interaction_id);if(!navigationVisible()||!activeSelection(scope.project,scope.sid,scope.generation)||partView.epoch!==epoch||partView.actions.has(key)||partView.actions.size>=1024)return;
+  const action={id:crypto.randomUUID(),state:'responding',reason:null};partView.actions.set(key,action);renderPartQuestions();
+  const auth=chatAuthGeneration,lifecycle=pageGeneration,current=()=>navigationVisible()&&auth===chatAuthGeneration&&lifecycle===pageGeneration&&partView.epoch===epoch&&partView.selected===scope&&activeSelection(scope.project,scope.sid,scope.generation);
+  try{const data=await api('/api/session-question-answer',{project:scope.project,sid:scope.sid,epoch,interaction_id:row.interaction_id,action_id:action.id,answers},undefined,current);
+    if(!exactFields(data,['schema','epoch','interaction_id','action_id','state','reason'])||data.schema!==1||data.epoch!==epoch||data.interaction_id!==row.interaction_id||data.action_id!==action.id||!['sent','delivery_unknown','closed','stale'].includes(data.state)||![null,'delivery_unknown','stale','native_required'].includes(data.reason))throw new Error(messages.unavailable);
+    action.state=data.state;action.reason=data.reason;
+  }catch(error){action.state=['invalid_request','stale','forbidden'].includes(error.code)?'stale':'delivery_unknown';action.reason=action.state==='stale'?'stale':'delivery_unknown';if(current()&&(error.status===401||error.status===403)){stopNavigation();if(error.status===403)ownerForbidden();}}
+  finally{if(current())renderPartQuestions();}
+}
+
 function validPins(data){return exactFields(data,['schema','items'])&&data.schema===1&&Array.isArray(data.items)&&data.items.length<=24&&new Set(data.items.map(row=>row?.pin_id)).size===data.items.length&&data.items.every(row=>exactFields(row,['pin_id','project','sid','title','vendor','available','metadata_state'])&&UUID_RE.test(row.pin_id)&&typeof row.available==='boolean'&&(row.available?typeof row.project==='string'&&/^[A-Za-z0-9_-]{1,32}$/.test(row.project)&&UUID_RE.test(row.sid)&&row.vendor==='codex'&&typeof row.title==='string'&&Array.from(row.title).length<=500&&row.metadata_state==='saved':row.project===null&&row.sid===null&&row.vendor===null&&row.title==='Недоступная сессия'&&row.metadata_state==='unavailable'));}
 async function loadPins(force=false){
   if(!navigationVisible())return;
@@ -515,7 +627,7 @@ async function loadPins(force=false){
   try{const data=await api('/api/session-pins',undefined,controller.signal,current);if(!current())return;
     if(!validPins(data))throw new Error(messages.unavailable);
     pinView.items=data.items;renderPins();$('pin-status').textContent='';
-  }catch(error){if(!error.stale&&current())$('pin-status').textContent='Закреплённые сессии пока недоступны.';}
+  }catch(error){if(!error.stale&&current()){if(error.status===401||error.status===403){stopNavigation();if(error.status===403)ownerForbidden();}$('pin-status').textContent='Закреплённые сессии пока недоступны.';}}
   finally{pageClearTimer(timer);if(pinView.flight===flight)pinView.flight=null;if(pinView.pending){pinView.pending=false;if(navigationVisible())loadPins(true);}}
 }
 function renderPins(){
@@ -950,7 +1062,7 @@ function chatError(err){if(err&&err.code==='stale')return 'Сессия уста
 function clearHistoryScrollSlack(){historyScrollSlack=0;pinnedHistoryScope=null;historyScrollIntent=false;historyTouchY=null;historyScrollbarStartY=null;if(historyScrollSpacer){historyScrollSpacer.remove();historyScrollSpacer=null;}}
 function setHistoryScrollSlack(height){const bounded=Math.max(0,Math.min(window.innerHeight,Math.ceil(height)));historyScrollSlack=bounded;if(!bounded){clearHistoryScrollSlack();return;}if(!historyScrollSpacer){historyScrollSpacer=node('li',undefined,'history-scroll-slack');historyScrollSpacer.setAttribute('aria-hidden','true');historyScrollSpacer.append(document.createElementNS('http://www.w3.org/2000/svg','svg'));}const svg=historyScrollSpacer.firstElementChild;svg.setAttribute('width','0');svg.setAttribute('height',String(bounded));svg.setAttribute('focusable','false');const list=$('chat-items');if(historyScrollSpacer.parentNode!==list)list.append(historyScrollSpacer);}
 function clearHistoryView(){stopMessageAges();clearHistoryScrollSlack();historyData.delete(chatKey(selectedProject,selectedSession&&selectedSession.sid||''));$('chat-panel').hidden=true;$('history-new').hidden=true;$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-status').textContent='';$('history-retry').hidden=true;$('send-status').textContent='';$('history-truncated').hidden=true;$('native-attention').hidden=true;$('chat-draft').value='';}
-function openChat(row){if(!pageActive())return;closeQueueTransferDialog();if(!row||!UUID_RE.test(row.sid))return;const proven=selectedSession?.sid===row.sid&&selectedSession.proven===true;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;projectsSelectionProof=proven?null:selectionGeneration;selectedSession={proven,created:row.configuredCreated===true,sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;$('history-new').hidden=true;if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();loadHistory(false);loadModelCatalog();loadQueue(true);loadCapabilities();startPolling();}
+function openChat(row){if(!pageActive())return;closeQueueTransferDialog();if(!row||!UUID_RE.test(row.sid))return;const proven=selectedSession?.sid===row.sid&&selectedSession.proven===true;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;projectsSelectionProof=proven?null:selectionGeneration;selectedSession={proven,created:row.configuredCreated===true,sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;$('history-new').hidden=true;if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();loadHistory(false);loadModelCatalog();loadQueue(true);loadCapabilities();loadSessionQuestions(true);startPolling();}
 // INV-WSESS-37: immutable in-memory operations survive dialog closure, never retry POST.
 function exactFields(value,keys){return Boolean(value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key)));}
 function createState(project){if(!creates.has(project))creates.set(project,{operation:null,status:'draft',inFlight:false,loading:false,available:false,message:'',generation:0,auth:chatAuthGeneration});return creates.get(project);}
@@ -1442,7 +1554,7 @@ function renderHistory(key,force=false){
   $('history-older').hidden=state.unavailable||!state.initialized;
   $('history-older').disabled=!(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error));
   $('history-new').hidden=!state.pendingLatest;
-  $('native-attention').hidden=!(state.attention||(selectedSession&&selectedSession.needs));renderReceipts(key);
+  $('native-attention').hidden=!(state.attention||(selectedSession&&selectedSession.needs));renderReceipts(key);focusParticipationTarget();
 }
 
 function statusText(status){return status==='cancelled'?'Отменено.':status==='held'?'Снимок сохранён для ручного восстановления.':status==='queued'?'В очереди. Настройки сессии применятся при запуске.':status==='accepted'?'Сообщение принято Codex; работа может продолжаться.':status==='rejected'?'Codex отклонил сообщение; черновик сохранён.':status==='delivery_unknown'?'Доставка неизвестна. Проверьте статус вручную; отправка не повторяется автоматически.':status==='sending'?'Отправляем сообщение…':'Статус сообщения недоступен.';}
