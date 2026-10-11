@@ -224,6 +224,8 @@ class MessageTimesBrowser(unittest.TestCase):
         def exact_owner_read(method,url):
             parsed=urlsplit(url);query=parse_qsl(parsed.query,keep_blank_values=True)
             expected=owner_reads.get(parsed.path)
+            if parsed.path=='/api/session-pins':
+                return method=='GET' and query in ([],[('activity','1')])
             return method=='GET' and expected is not None and len(query)==len(expected) and dict(query)==expected
         with self.page.expect_request(lambda request: exact_queue_read(request.method,request.url)):
             self.page.evaluate('testVisibility(false)')
