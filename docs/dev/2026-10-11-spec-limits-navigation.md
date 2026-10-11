@@ -11,3 +11,5 @@ INV-WSESS48. Настоящий trusted End внеinput/textarea/select/contente
 ОдинUIwriter дляJS/CSS/HTML. НезависимыеbrowserREDдоimplementation; reviewHaikuonly; fullCI exactSHA; stagedsigned22release, authnative/APKpreserved. Не входит: внешняяпубликацияALPэкспорта, NATSуправление, approvals, мультиавторизация, новыйAPK.
 
 Приёмка: groupsorderandcardconservation/schema1/errorstates/mobile; delayedmanualtogglevsnormalcollapse; trustedEnddelayandreader/editornegativecontrols. Общаяregressionexistinglimits/navigation/lifecycle.
+
+Уточнения DESIGN11.10: текущая schema1/2 закрыта и допускает только перечисленные сочетанияnode/provider; никакогоschema-validнеперечисленногопровайдерасейчаснет. Новыепровайдеры/узлы требуютотдельногопересмотраконтракта; вэтойфичепо-прежнемуотвергатьихнасуществующемвалидаторе, не вводитьfallbackgroup. Manualoverrideставитсялюбымручнымtoggleпослевыборакакдо, такипослепервогоуспеха, сбрасываетсятольконовымвыбором/reset. Endизeditableилиdialogконтекстанеизменяетfollow, черновик, scrollдругихпанелей; штатноередакторскоеповедениенеперехватывается.
