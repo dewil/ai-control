@@ -234,6 +234,7 @@ async function refresh(){if(!pageActive())return;if(!csrf)return;const lifecycle
 let selectedProject='';
 let selectedSession=null;
 let projectsSelectionProof=null;
+let projectsManualGeneration=null;
 let selectionGeneration=0;
 let initialScrollTarget=null;
 let pageReaderScope=null;
@@ -1097,31 +1098,39 @@ function limitsPrepaid(card,source){
 function renderLimits(){
   if(!limitsVisible()||!limitsView.data)return;
   const data=limitsView.data,native=data.schema===2?data.native:data,now=limitsClock(),cards=$('limits-cards');cards.replaceChildren();
-  for(const source of [...native.sources,...(data.schema===2?data.cached_sources:[])]){
-    const cached=Boolean(source.kind),observed=cached?source.observed_at:source.captured_at;
-    const unavailable=source.status==='unavailable';
-    const age=observed===null?null:Math.max(0,now-observed);
-    const stale=!unavailable&&(source.status==='stale'||age===null||age>=(cached?source.max_age_seconds:180));
-    const card=node('article',undefined,'lm-card'+(stale?' lm-stale':'')+(unavailable?' lm-unavailable':''));
-    const heading=node('div',undefined,'lm-card-heading'),identity=node('div');
-    const providerNames={codex:'Codex',claude:'Claude',kimi:'Kimi',openrouter:'OpenRouter',yandex:'YandexGPT'};
-    identity.append(node('h3',providerNames[source.provider]),node('span',source.node_id.toUpperCase()+(source.plan?' · '+source.plan:''),'lm-muted'));
-    heading.append(identity,node('span',unavailable?'Недоступно':stale?'Устарело':'Свежий снимок','lm-status'));card.append(heading);
-    if(cached){
-      card.append(node('p',source.origin==='bot_cache'?'Кеш бота · аккаунт не указан':'Экспорт ALP · аккаунт '+(source.account_ref?source.account_ref.slice(0,12):'неизвестен')+' · время начала сбора','lm-muted'));
-      if(source.origin==='bot_cache')card.append(node('p','Аккаунт источника не указан','lm-muted'));
-    }else if(source.account_id){
-      card.append(node('p','Аккаунт '+source.account_id.slice(0,12),'lm-account'));
-      card.append(node('p','Codex App Server, аккаунт источника','lm-muted'));
-    }else card.append(node('p','Аккаунт неизвестен','lm-muted'));
-    if(unavailable||source.kind!=='prepaid'&&!source.windows.length){
-      const reasons={missing_source:'Источник не подключён',source_error:'Нет данных: ошибка источника',invalid_snapshot:'Снимок недоступен',unknown_identity:'Аккаунт неизвестен',reset_pending:'Ожидаем новое окно'};
-      card.append(node('p',unavailable?(cached?(reasons[source.reason]||'Источник недоступен')+' · Неизвестно':'Источник недоступен · Неизвестно'):'Окна недоступны · Неизвестно','lm-empty'));
+  // INV-WLIM26: closed source types form compact groups; provider order is stable per account.
+  const sources=[...native.sources,...(data.schema===2?data.cached_sources:[])];
+  for(const [label,nodeId,providers] of [['Локальные','llm',['codex','claude','kimi']],['Облачные','llm',['openrouter','yandex']],['ALP','alp',['codex','claude']]]){
+    const grouped=providers.flatMap(provider=>sources.filter(source=>source.node_id===nodeId&&source.provider===provider));
+    if(!grouped.length)continue;
+    const section=node('section',undefined,'lm-group'),grid=node('div',undefined,'lm-cards');
+    section.append(node('h2',label),grid);cards.append(section);
+    for(const source of grouped){
+      const cached=Boolean(source.kind),observed=cached?source.observed_at:source.captured_at;
+      const unavailable=source.status==='unavailable';
+      const age=observed===null?null:Math.max(0,now-observed);
+      const stale=!unavailable&&(source.status==='stale'||age===null||age>=(cached?source.max_age_seconds:180));
+      const card=node('article',undefined,'lm-card'+(stale?' lm-stale':'')+(unavailable?' lm-unavailable':''));
+      const heading=node('div',undefined,'lm-card-heading'),identity=node('div');
+      const providerNames={codex:'Codex',claude:'Claude',kimi:'Kimi',openrouter:'OpenRouter',yandex:'YandexGPT'};
+      identity.append(node('h3',providerNames[source.provider]),node('span',source.node_id.toUpperCase()+(source.plan?' · '+source.plan:''),'lm-muted'));
+      heading.append(identity,node('span',unavailable?'Недоступно':stale?'Устарело':'Свежий снимок','lm-status'));card.append(heading);
+      if(cached){
+        card.append(node('p',source.origin==='bot_cache'?'Кеш бота · аккаунт не указан':'Экспорт ALP · аккаунт '+(source.account_ref?source.account_ref.slice(0,12):'неизвестен')+' · время начала сбора','lm-muted'));
+        if(source.origin==='bot_cache')card.append(node('p','Аккаунт источника не указан','lm-muted'));
+      }else if(source.account_id){
+        card.append(node('p','Аккаунт '+source.account_id.slice(0,12),'lm-account'));
+        card.append(node('p','Codex App Server, аккаунт источника','lm-muted'));
+      }else card.append(node('p','Аккаунт неизвестен','lm-muted'));
+      if(unavailable||source.kind!=='prepaid'&&!source.windows.length){
+        const reasons={missing_source:'Источник не подключён',source_error:'Нет данных: ошибка источника',invalid_snapshot:'Снимок недоступен',unknown_identity:'Аккаунт неизвестен',reset_pending:'Ожидаем новое окно'};
+        card.append(node('p',unavailable?(cached?(reasons[source.reason]||'Источник недоступен')+' · Неизвестно':'Источник недоступен · Неизвестно'):'Окна недоступны · Неизвестно','lm-empty'));
+      }
+      if(source.kind==='prepaid')limitsPrepaid(card,source);
+      else limitsQuotaWindows(card,source,now);
+      if(observed!==null)card.append(node('p',(cached?'Наблюдение ':'Получено ')+limitsDate(observed)+(age!==null?' · '+Math.floor(age/60)+' мин назад':''),'lm-received'));
+      grid.append(card);
     }
-    if(source.kind==='prepaid')limitsPrepaid(card,source);
-    else limitsQuotaWindows(card,source,now);
-    if(observed!==null)card.append(node('p',(cached?'Наблюдение ':'Получено ')+limitsDate(observed)+(age!==null?' · '+Math.floor(age/60)+' мин назад':''),'lm-received'));
-    cards.append(card);
   }
   $('limits-coverage').textContent=(native.coverage.partial?'Часть native-данных LLM недоступна. ':'')+(data.schema===2?'Источники показаны отдельно: native LLM, кеш бота и экспорт ALP.':'Покрытие: только native-источники LLM. Удалённые узлы не подключены.');
 }
@@ -1159,9 +1168,10 @@ function setProjectsExpanded(expanded){
 function confirmProjectSelection(generation){
   if(projectsSelectionProof!==generation)return;
   projectsSelectionProof=null;if(selectedSession)selectedSession.proven=true;
-  setProjectsExpanded(false);
+  // INV-WSESS47: confirmation survives a manual disclosure override in this selection.
+  if(projectsManualGeneration!==generation)setProjectsExpanded(false);
 }
-$('projects-toggle').addEventListener('click',()=>setProjectsExpanded($('projects-body').hidden));
+$('projects-toggle').addEventListener('click',()=>{projectsManualGeneration=selectionGeneration;setProjectsExpanded($('projects-body').hidden);});
 document.addEventListener('keydown',event=>{
   if(event.key!=='Escape'||event.defaultPrevented||event.isComposing)return;
   const details=document.activeElement?.closest('details[open]');

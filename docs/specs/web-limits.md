@@ -67,3 +67,8 @@ active for externalALProllout. Code/bot delivery does not claim liveALPdata.
 Tests test_control_web_cached_limits_backend_red.py,
  test_control_web_cached_limits_browser_red.py and
  test_control_web_alp_limits_sync_red.py trace these invariants.
+
+## INV-WLIM26 — группы источников
+
+Карточки сгруппированы: «Локальные» (LLM Codex/Claude/Kimi), «Облачные» (LLM OpenRouter/YandexGPT), «ALP» (ALP Codex/Claude). Все карточки, статусы и метрики сохраняются. Пустые группы скрыты; неизвестные сочетания отклоняются существующим закрытым валидатором.
+Трассируемость: tests/test_control_web_limits_groups_browser_blind.py; подробности docs/dev/2026-10-11-spec-limits-navigation.md.
