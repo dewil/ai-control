@@ -63,7 +63,7 @@ Max8windows; id/bucket — только нормализованные знач�
 Kimi buckets five_hour/seven_day/month_total/month_code; duration300/10080/null/null.
 ALP bucket primary/secondary для известных категорий, иначе window_N по позиции;
 duration_minutes только real validated duration_seconds/60, иначе null.
-anchor derived_reset_and_duration лишь при достоверной duration/reset, иначе unknown.
+anchor derived_reset_and_duration лишь при достоверной duration/reset, иначе null (семантически неизвестно).
 Unknown remaining/reset не равен0. Past reset => remaining=null до нового окна.
 Тексты периода из фиксированных bucket/duration labels, не из внешних строк.
 
@@ -83,7 +83,7 @@ observed_at=snapshot.captured_at, observation_basis=snapshot_tick.
 Иной Kimi status => source_error, без выдуманного fresh usage.
 OpenRouter/Yandex statusok: observed_at=section.captured_at,
 observation_basis=provider_capture; currency задаётся adapter USD/RUB,
-не произвольной строкой. observed_at<=snapshot.received_at<=server_now;
+не произвольной строкой. observed_at<=envelope.received_at<=server_now;
 age=server_now-observed_at, age>=2700 => stale. Для Kimi same age rule.
 Невалидный observed => unavailable без current windows/prepaid.
 Nodata/error => current prepaid=null, last_known из last_balance/last_at
@@ -214,3 +214,27 @@ Producer freshness diagnostics НЕ выходят в API вообще. Един
 одноимённое полеpublicsource.max_age_seconds — literal2700 consumer.
 Как ownerотноситсякproducer45min/35min — решениепубликацииэкспорта,
 не JSONнастройкаполномочийпотребителя.
+
+Input timestamp representation: received_at, snapshot.captured_at,
+prepaid.captured_at/scale_at/last_at и ALPexported_at/observed_at/reset —
+ISO8601 awareUTC strings (Z/+00:00); публичныеDTO timestamp fields — epochseconds.
+Cached quota window.id=provider+':'+normalizedbucket, напримерkimi:five_hour,
+codex:secondary. Bot prepaid input использует точно balance/scale/scale_at/
+captured_at/spend_day/spend_week/burn_per_day/forecast_days; currency inputнет,
+это adapterconstant. Botnodata last_known derivedfromlast_balance/last_at,
+сыройreason/fail_streakневыводятся. Envelope received_at лежит top-level.
+
+
+Nativefallback literal выше соответствует СУЩЕСТВУЮЩЕМУ schema1 sourcefieldset
+из bin/_control_web_broker.py:limits_result: account_id,identity,node_id,
+provider,status,captured_at,age_seconds,plan,windows,error. Nullableaccount_id
+и identityunknown для unavailable уже поддержаны r16 и не новыйконтракт.
+Cached freshness formula: age=server_now−observed_at; если age>=2700 ИЛИ
+producerstatusstale, publicstatusstale. Для future/missing/unknown/reset_pending
+publicstatusunavailable по правилам выше. Producer freshness diagnostics
+проверяются и отбрасываются; source max_age_seconds public всегда2700.
+Publicaccount_ref является псевдонимом для отображения и сопоставления,
+не секретом и не обещанием анонимности/неидентифицируемости. Owner создаёт
+случайный UUID4 один раз, не UUID из провайдера/не email. API owner-only401
+для остальных, account_ref не записывается в логи. HMAC/newsecret не требуется
+для выбранного scope и не добавляется. Это не меняет public nativehashaccount_id.
