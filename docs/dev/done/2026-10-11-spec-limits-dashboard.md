@@ -170,3 +170,8 @@ value/7 от начала трека. Видимые подписи совпад
 Известный остаток (включая0 и100) имеет role=progressbar, aria-valuemin=0,
 aria-valuemax=100, aria-valuenow=remaining. Null не создаёт progressbar;
 видимый текст «Неизвестно». Weekly time markers остаются role=meter отдельно.
+
+SOURCE уточнение11.10: captured_at не позже server_now, age_seconds точно
+server_now−captured_at. При откате часов старый future-capture не выдаётся
+с искусственным age0: fresh native read или unavailable. Значения с будущим
+capture/неверным age отвергаются на HTTP/broker boundary.
