@@ -109,3 +109,13 @@ JSONflag. If unavailable, command returns sanitized JSON and leaves lastgood
 cache unchanged; no account switch/session restart. Do not use synthetic
 fixtures in the production cache or claim ALPdata before real acceptance.
 APK remains0.1.7/code8; refresh browser/WebView after web deployment.
+
+## Файлы из переписки, r20
+
+Ссылки на текстовые файлы проекта открываются в просмотрщике панели. Поддерживаются абсолютный путь, file:/// с пустым host и относительные ссылки на документы/код; :12 или #L12 переходят к строке. Пути с пробелами передаются percent-encoded либо в Markdown <...>. Обычные HTTP/HTTPS и /download/ остаются веб-ссылками.
+
+Просмотр доступен только owner и только внутри canonical root выбранного проекта. Alias допустим, если его конечный файл остаётся внутри корня. Скрытые/credential-файлы и выход наружу не открываются. Текст показывается буквально: HTML не исполняется.
+
+Лимит просмотра — первые48КБ. Усечение подписано; строка за пределами префикса отмечается как незагруженная. PDF/office/image и другие бинарные форматы пока не поддержаны. Ошибка показывается в viewer, не уводит чат на404. Закрытие, смена проекта/сессии, logout или background отменяют запрос; повторного чтения по таймеру нет. APK обновлять не нужно.
+
+API: owner GET /api/project-file, query ровно project/path. Успех {name,text,truncated}; genericfile_unavailable404 скрывает различие missing/denied/race, unsupported_type415, invalid_request422. API не принимает root и не предоставляет чтение произвольного пути сервера.
