@@ -27,7 +27,7 @@ Time tooltip и доступное имя содержат полную дату
 ## Проверки и границы
 Независимые RED: producerstatus/time/partialfailure/rootcontext/privacy/readbudget/no mutations; closedDTOschema1/2; browserorder/ties/unknown/ageclock/tooltips/status/scrollfocus/mobile/legacy/bglifecycle. Один runtimewriter, HaikuDESIGN/SOURCE, exactfullCI/signed22deploy. Не входит: новые вендорные runtime/мультиаккаунтность/NATS/APK.
 
-Прежнее legacy ожидание «pins никогда не делает thread/read» мигрируется исходным независимым автором: чтение metadata теперь прямо требуется пользователем, запрещены запуск/resume/история/изменения. Остальные security/owner/context/persistence проверки сохраняются.
+Legacy producer assertions мигрируются независимым автором: unavailable DTO получает5unknown полей, сравнение последовательных live-ответов заменяется проверкой неизменных pin IDs/порядка и persisted bytes, поскольку observed_at/server_now изменяются. Legacy schema1 HTTP/browser fixtures остаются допустимыми. Чтение metadata требуется пользователем; запуск/resume/история/изменения запрещены. Owner/context/persistence проверки сохраняются.
 
 ### Уточнения DESIGN
 Metadata reads последовательные, каждый<=250мс;6с — абсолютный бюджет только metadata-фазы. При истечении остаток строк получает unknown metadata, уже полученные разрешённые результаты сохраняются; итоговая authority-проверка всё равно обязательна. Один timeout не обнуляет соседние успешные результаты.
