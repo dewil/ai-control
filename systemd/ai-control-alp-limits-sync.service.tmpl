@@ -1,0 +1,10 @@
+# Source template only. Activate after owner-approved publication and read-only smoke.
+[Unit]
+Description=Fetch the safe ALP limits export into the owner cache
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ai-control-web/venv/bin/python /opt/ai-control-web/bin/ai-control-web sync-limits-alp
+TimeoutStartSec=15s
+UMask=0077
+NoNewPrivileges=yes

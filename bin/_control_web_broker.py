@@ -9,6 +9,8 @@ import math
 import os
 from pathlib import Path
 import re
+import selectors
+import shlex
 import socket
 import stat
 import struct
@@ -871,6 +873,239 @@ def _cached_window(provider, bucket, remaining, reset, duration, now):
     return dict(id=provider + ':' + bucket, bucket=bucket, duration_minutes=duration,
                 remaining_percent=remaining, resets_at=reset, window_started_at=started,
                 anchor='derived_reset_and_duration' if started is not None else None)
+
+
+# The same closed stdlib decoder runs before remote stdout and local persistence.
+# Its only executable input is this constant; transport data is always JSON.
+_ALP_EXPORT_PROTOCOL = r'''
+import json, math, uuid
+from datetime import datetime
+
+def timestamp(value):
+    if type(value) is not str or len(value) > 100 or not value.endswith(('Z', '+00:00')):
+        raise ValueError('invalid export')
+    parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    result = parsed.timestamp()
+    if parsed.tzinfo is None or not math.isfinite(result) or not 0 <= result <= 253402300799:
+        raise ValueError('invalid export')
+    return result
+
+def number(value, low, high):
+    return type(value) in (int, float) and math.isfinite(value) and low <= value <= high
+
+def pairs(items):
+    result = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError('invalid export')
+        result[key] = value
+    return result
+
+def floating(raw):
+    value = float(raw)
+    if not math.isfinite(value):
+        raise ValueError('invalid export')
+    return value
+
+def nonfinite(_value):
+    raise ValueError('invalid export')
+
+def decode(data, now=None):
+    if type(data) is not bytes or len(data) > 131072:
+        raise ValueError('invalid export')
+    value = json.loads(data, object_pairs_hook=pairs, parse_float=floating, parse_constant=nonfinite)
+    fields = {'schema_version', 'node_id', 'exported_at', 'accounts'}
+    if (type(value) is not dict or set(value) not in (fields, fields | {'freshness'})
+            or type(value['schema_version']) is not int or value['schema_version'] != 1
+            or value['node_id'] != 'alp' or type(value['accounts']) is not list or len(value['accounts']) > 16):
+        raise ValueError('invalid export')
+    exported = timestamp(value['exported_at'])
+    if now is not None and exported > now:
+        raise ValueError('invalid export')
+    if 'freshness' in value:
+        item = value['freshness']
+        if (type(item) is not dict or set(item) != {'max_age_seconds', 'future_skew_seconds'}
+                or type(item['max_age_seconds']) is not int or not 1 <= item['max_age_seconds'] <= 86400
+                or type(item['future_skew_seconds']) is not int or not 0 <= item['future_skew_seconds'] <= 300):
+            raise ValueError('invalid export')
+    seen = set()
+    for account in value['accounts']:
+        if (type(account) is not dict or set(account) != {'account_ref', 'provider', 'status', 'observed_at',
+                'observed_at_semantics', 'windows'} or account['provider'] not in ('codex', 'claude')
+                or account['status'] not in ('ok', 'stale', 'unknown', 'reset_pending', 'missing', 'future')
+                or account['observed_at_semantics'] != 'tick_start' or type(account['account_ref']) is not str
+                or type(account['windows']) is not list or len(account['windows']) > 8):
+            raise ValueError('invalid export')
+        ref = uuid.UUID(account['account_ref'])
+        key = (account['provider'], account['account_ref'])
+        if str(ref) != account['account_ref'] or ref.version != 4 or ref.variant != uuid.RFC_4122 or key in seen:
+            raise ValueError('invalid export')
+        seen.add(key)
+        if account['observed_at'] is None:
+            if account['status'] not in ('unknown', 'missing'):
+                raise ValueError('invalid export')
+        else:
+            # Causality/future observations are isolated by the cache reader.
+            timestamp(account['observed_at'])
+        slots = ({'primary_window', 'secondary_window'} if account['provider'] == 'codex' else
+                 {'five_hour', 'seven_day', 'scoped:sonnet', 'scoped:opus', 'scoped:fable'})
+        used_slots = set()
+        for window in account['windows']:
+            if (type(window) is not dict or set(window) != {'slot', 'used_percent', 'reset', 'duration_seconds'}
+                    or window['slot'] not in slots or window['slot'] in used_slots
+                    or window['used_percent'] is not None and not number(window['used_percent'], 0, 100)
+                    or window['duration_seconds'] is not None and not number(window['duration_seconds'], 60, 31536000)):
+                raise ValueError('invalid export')
+            used_slots.add(window['slot'])
+            if window['reset'] is not None:
+                timestamp(window['reset'])
+    return value
+'''
+_ALP_EXPORT_NAMESPACE = {'__name__': 'alp_export_protocol'}
+exec(_ALP_EXPORT_PROTOCOL, _ALP_EXPORT_NAMESPACE)
+
+_ALP_EXPORT_REMOTE = _ALP_EXPORT_PROTOCOL + r'''
+import os, stat, sys
+try:
+    fd = os.open('/var/lib/alp-limits-export/limits-v1.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or before.st_mode & stat.S_IWOTH or before.st_size > 131072):
+            raise ValueError('invalid export')
+        data = bytearray()
+        while len(data) <= 131072:
+            block = os.read(fd, min(65536, 131073 - len(data)))
+            if not block:
+                break
+            data.extend(block)
+        after = os.fstat(fd)
+        if (len(data) != before.st_size or (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+            raise ValueError('invalid export')
+    finally:
+        os.close(fd)
+    value = decode(bytes(data))
+    output = json.dumps(value, allow_nan=False, separators=(',', ':')).encode()
+    if len(output) > 131072:
+        raise ValueError('invalid export')
+except Exception:
+    sys.exit(1)
+sys.stdout.buffer.write(output)
+'''
+
+
+def _alp_sync_transport(argv, *, timeout=8, max_bytes=131072):
+    """Bound the child deadline and stdout without ever exposing stderr."""
+    deadline = time.monotonic() + timeout
+    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, shell=False)
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            data = bytearray()
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise ValueError('sync failed')
+                block = os.read(process.stdout.fileno(), min(65536, max_bytes + 1 - len(data)))
+                if not block:
+                    break
+                data.extend(block)
+                if len(data) > max_bytes:
+                    raise ValueError('sync failed')
+            if process.wait(timeout=max(0, deadline - time.monotonic())) != 0:
+                raise ValueError('sync failed')
+            return bytes(data)
+    finally:
+        try:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=1)
+        finally:
+            process.stdout.close()
+
+
+def _alp_sync_parent(destination):
+    """Walk directory descriptors so no component may redirect the write."""
+    path = Path(os.path.abspath(destination))
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for component in path.parent.parts[1:]:
+            try:
+                next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                os.mkdir(component, mode=0o700, dir_fd=fd)
+                next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        info = os.fstat(fd)
+        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise ValueError('sync failed')
+        return fd, path.name
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _alp_sync_leaf(parent, name):
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    except FileNotFoundError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != 0o600):
+            raise ValueError('sync failed')
+        return info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns
+    finally:
+        os.close(fd)
+
+
+def sync_alp_limits(destination, *, runner=None, clock=time.time):
+    """Explicit owner delivery worker; never called by a cache read or HTTP."""
+    parent, temporary = None, None
+    try:
+        # Literal Python command and fixed SSH configuration; no payload interpolation.
+        argv = ['ssh', '-T']
+        for option in ('BatchMode=yes', 'StrictHostKeyChecking=yes', 'ForwardAgent=no',
+                       'ClearAllForwardings=yes', 'RequestTTY=no', 'ControlMaster=no',
+                       'ControlPath=none', 'ForwardX11=no', 'ConnectTimeout=5'):
+            argv.extend(('-o', option))
+        argv.extend(('alp-ai-dev-1-dwl', 'python3 -c ' + shlex.quote(_ALP_EXPORT_REMOTE)))
+        data = (runner or _alp_sync_transport)(argv, timeout=8, max_bytes=131072)
+        value = _ALP_EXPORT_NAMESPACE['decode'](data, clock())
+        output = json.dumps(value, allow_nan=False, separators=(',', ':')).encode()
+        if len(output) > 131072:
+            raise ValueError('sync failed')
+        parent, name = _alp_sync_parent(destination)
+        previous = _alp_sync_leaf(parent, name)
+        candidate = '.alp-limits-' + uuid.uuid4().hex
+        fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+        temporary = candidate
+        with os.fdopen(fd, 'wb') as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(output)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if _alp_sync_leaf(parent, name) != previous:
+            raise ValueError('sync failed')
+        os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+        temporary = None
+        os.fsync(parent)
+        return dict(status='updated', accounts=len(value['accounts']))
+    except Exception:
+        return dict(status='unavailable', reason='sync_failed')
+    finally:
+        if parent is not None:
+            try:
+                if temporary is not None:
+                    os.unlink(temporary, dir_fd=parent)
+            except OSError:
+                pass
+            finally:
+                os.close(parent)
 
 
 class CachedLimitsReader:
