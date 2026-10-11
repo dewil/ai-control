@@ -163,7 +163,7 @@ class NavigationIntentBlind(unittest.TestCase):
         self.assert_update_stays_buffered(anchor, anchor.bounding_box()['y'], len(self.history_requests()))
         self.assertEqual(draft.input_value(), text)
 
-    def test_INV_WSESS48_End_inside_dialog_does_not_enable_follow(self):
+    def dialog_context(self, end=True):
         self.open_history()
         self.activate('up')
         anchor = self.page.get_by_text('LATEST message 2', exact=True)
@@ -175,40 +175,68 @@ class NavigationIntentBlind(unittest.TestCase):
             const dialog=document.createElement('dialog');
             dialog.id='intent-dialog';
             dialog.tabIndex=0;
-            dialog.style='width:300px;height:120px;overflow:auto';
-            dialog.innerHTML='<p style="height:1200px">Local dialog contents</p>';
+            dialog.style.width='300px';
+            dialog.style.height='120px';
+            dialog.style.overflow='auto';
+            const contents=document.createElement('p');
+            contents.textContent='Local dialog contents';
+            // CSSOM keeps this synthetic fixture compatible with app CSP.
+            // An HTML style attribute is blocked and silently removes the
+            // inner scroll range, changing native End's scroll target.
+            contents.style.height='1200px';
+            dialog.append(contents);
             document.body.append(dialog); dialog.showModal();
             dialog.focus();
         }""")
+        geometry = self.page.locator('#intent-dialog').evaluate('''el=>({
+            client:el.clientHeight,scroll:el.scrollHeight,
+            child:el.firstElementChild.getBoundingClientRect().height})''')
+        self.assertGreater(geometry['scroll'], geometry['client'],
+                           'Fixture precondition: dialog must have its own scroll range')
+        self.assertGreaterEqual(geometry['child'], 1200,
+                                'Fixture CSSOM height must survive the actual app CSP')
         before = self.metrics()['y']
+        anchor_y = anchor.bounding_box()['y']
+        before_requests = len(self.history_requests())
         events = []
         self.page.expose_function('dialogEndEvidence', lambda data: events.append(data))
         self.page.evaluate("""document.addEventListener('keydown',e=>{
             if(e.key==='End') window.dialogEndEvidence({trusted:e.isTrusted,
                 tag:e.target.tagName,dialog:!!e.target.closest('dialog')});
         },{capture:true})""")
-        self.page.keyboard.press('End')
+        if end:
+            self.page.keyboard.press('End')
         self.page.wait_for_timeout(100)
         after_end = self.metrics()['y']
         self.control(count=28)
         self.wait_received(28)
         self.page.wait_for_timeout(150)
         observation = {'before_y': before, 'after_y': self.metrics()['y'],
+            'initial_dialog_geometry': geometry,
             'immediate_after_end_y': after_end,
+            'before_anchor_y': anchor_y,
+            'after_anchor_y': anchor.bounding_box()['y'],
             'dialog_scroll': self.page.locator('#intent-dialog').evaluate('el=>el.scrollTop'),
             'live27_dom': self.page.get_by_text('LATEST message 27', exact=True).count(),
             'pending': self.page.get_by_role('button', name=re.compile('Есть новые сообщения|Перейти к последним', re.I)).count(),
             'events': events}
-        private_json(self.evidence / 'dialog-end.json', observation)
-        self.assertEqual(events, [{'trusted': True, 'tag': 'DIALOG', 'dialog': True}],
+        private_json(self.evidence / ('dialog-end.json' if end else 'dialog-no-end.json'), observation)
+        self.assertEqual(events, [{'trusted': True, 'tag': 'DIALOG', 'dialog': True}] if end else [],
                          'Actual trusted End must originate in the dialog')
         self.assertEqual(observation['live27_dom'], 0,
                          'INV-WSESS48: dialog End must not resume app history follow')
-        self.assertLessEqual(abs(self.metrics()['y'] - before), 8)
-        self.assertGreater(self.page.locator('#intent-dialog').evaluate('el=>el.scrollTop'), 0,
-                           'Native End scrolls the focused dialog itself')
+        self.assertLessEqual(abs(after_end - before), 8,
+                             'Dialog input must not move the background document')
+        self.assertLessEqual(abs(anchor.bounding_box()['y'] - anchor_y), 8,
+                             'LIVE preserves the visible reader anchor across pending-action layout')
+        self.assertEqual(len(self.history_requests()), before_requests)
+        if end:
+            self.assertGreater(self.page.locator('#intent-dialog').evaluate('el=>el.scrollTop'), 0,
+                               'Native End scrolls the focused dialog itself')
         self.page.evaluate("document.querySelector('#intent-dialog').close();document.querySelector('#intent-dialog').remove()")
-        self.assert_update_stays_buffered(anchor, anchor.bounding_box()['y'], len(self.history_requests()))
+
+    def test_INV_WSESS48_End_inside_dialog_does_not_enable_follow(self):
+        self.dialog_context()
 
     def test_INV_WSESS48_explicit_up_after_End_cancels_follow_intent(self):
         self.open_history()

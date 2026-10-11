@@ -11,10 +11,10 @@ Runtime baseline: `c1fa87ff3bb15e2a18b71aab4ba98f1a71325c54`, r18.
 
 ## Результат до реализации
 
-`test_control_web_navigation_intent_blind.py`: **10 tests: 8 PASS,
-2 assertion FAIL, 0 errors/skips**. Browser page errors: 0.
-Лог `/var/tmp/control-navigation-intent-red.log`, private screenshots
-`/var/tmp/control-navigation-qa-gqdc8ckk/`.
+`test_control_web_navigation_intent_blind.py`: **10 tests: 9 PASS,
+1 assertion FAIL, 0 errors/skips**. Browser page errors: 0.
+Лог `/var/tmp/control-navigation-intent-final-red.log`, private screenshots
+`/var/tmp/control-navigation-qa-9hkh02qx/`.
 
 * INV-WSESS47 RED: выбрать сессию с задержкой истории 1.2s, вручную
   закрыть и снова открыть проекты до первого успеха. До ответа раскрыто;
@@ -32,29 +32,35 @@ Runtime baseline: `c1fa87ff3bb15e2a18b71aab4ba98f1a71325c54`, r18.
   Чтение старой истории без End, End в textarea с сохранением текста,
   explicit up после End также GREEN: принятый LIVE27 остаётся buffered,
   reader anchor сохраняется, history GET не добавляется.
-* INV-WSESS48 RED: trusted End в обычном scrollable modal dialog
-  прокручивает фоновый документ, не прокручивая сам dialog. **Follow
-  остаётся frozen**: это отдельное нарушение scroll isolation,
-  не сбой восстановления follow после delayed End.
+* INV-WSESS48 GREEN: trusted End в scrollable modal dialog прокручивает
+  сам dialog, немедленно не двигает background document, сохраняет reader
+  anchor и frozen follow после настоящего LIVE27; нового history GET нет.
 
-Dialog отдельно повторён после добавления evidence, **1 assertion FAIL,
-0 errors/skips**: `/var/tmp/control-navigation-dialog-red.log`,
-`/var/tmp/control-navigation-qa-3lso93ga/dialog-end.json`.
-Trusted target `DIALOG`, `closest('dialog')=true`;
-document y `1096 → 6604` непосредственно после End, `8230` после
-полученного LIVE27; dialog scrollTop `0`, LIVE27 DOM count `0`, pending `1`.
+## Исправление dialog fixture и причинная контрольная проба
 
-## Дифференциальная проверка штатного browser dialog
+Первоначальный dialog RED в коммите296de10 **недействителен**.
+HTML-атрибут `style="height:1200px"` у содержимого блокировался app CSP;
+dialog фактически не имел собственного диапазона прокрутки. Сравнение
+с чистым Chromium без этой CSP не сохраняло условия fixture и не
+доказывало runtime дефект. Автор реализации обнаружил различие через
+публичные geometry observations, без изменения runtime.
 
-Отдельная чистая Chromium page в том же Playwright окружении, без app:
-длинный paragraph height10000px; scrollTo(0,1000); `dialog.tabIndex=0`,
-style `width:300px;height:120px;overflow:auto`, paragraph height1200px;
-`showModal(); dialog.focus(); keyboard.press('End')`.
-До: document y1000, focus DIALOG, dialog scrollTop0.
-После300ms: document y1000, focus DIALOG, dialog scrollTop1112.
-Таким образом движение фонового app document имеет наблюдаемое отличие
-от штатного Chromium поведения того же DOM-контекста. Факт follow frozen
-выделен отдельно выше; тест не выдаёт его за follow regression.
+Fixture исправлен: DOM createElement и CSSOM для размеров содержимого;
+перед End явно проверяются `scrollHeight > clientHeight` и child height1200.
+Получено: dialog client114, scroll1264, child1200. Trusted target DIALOG.
+Тест отдельно проверяет немедленное влияние End на background document,
+затем сохранение visible message anchor после LIVE; post-layout абсолютный
+scrollY не является oracle, когда появляется новая pending-action строка.
+
+Дополнительная причинная проба **того же dialog без End** на неизменном
+baseline, с тем же LIVE27: **1 PASS, 0 errors/skips**, лог
+`/var/tmp/control-navigation-dialog-no-end-control.log`, JSON
+`/var/tmp/control-navigation-qa-bhng3ls2/dialog-no-end.json`.
+Document y1096 сразу сохраняется; после LIVE y1148 (+52), но видимый
+message anchor437.5→437.5; dialog scrollTop0, DOM27=0, pending1.
+Таким образом +52 появляется без End и сохраняет читательский якорь;
+это не evidence нарушения End isolation. Ни delayed End, ни dialog
+не требуют runtime исправления по независимой проверке текущего baseline.
 
 ## Уже исправленный delayed End
 
