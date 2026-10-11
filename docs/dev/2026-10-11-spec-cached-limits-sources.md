@@ -262,7 +262,9 @@ fields, UUID4, ISOtimestamps, enumslot/status/provider, finite numeric/null,
 никаких extra fields/private strings), output содержит только safe DTO.
 Никаких rawstate/auth/config/credentials, переменных команд из payload,
 remote installation или измененийcustomerфайлов. Localvalidatedinput снова
-проверяется согласованным consumercontract, observed<=exported<=now.
+проверяется согласованным consumercontract: top exported_at<=now;
+individual observed<=exported — условие пригодности метрик конкретного
+аккаунта, не причина отбрасывать весь structurallysafeexport.
 
 Destinationowner-controlled только private dedicatedcache path; CLIdefault
 HOME/.local/state/ai-control/limits/alp.json. Parentсоздаётся0700 и долженбыть
@@ -285,3 +287,11 @@ rejectwithoutlocaloverwrite, nonzero/timeout/oversize, priorfilepreservation,
 localsymlink/FIFO/nonprivate ownership, sourceage unchanged, no readworker
 invocation from HTTP, CLI fixeddefaults/sanitizedexit, unitsschedule/disabledgate.
 No actualSSH/vendorcalls in tests. Послеэтойдельты общий SOURCEHaiku/CI.
+
+INV25 уточнениеизоляциидоimplementation: структурновалидныйэкспорт с одним
+observed>exported разрешён к безопасному транспорту/сохранению; reader
+показывает этому аккаунту unavailable/invalid_snapshot и не отдаёт егоокна,
+а здоровыеаккаунтысохраняются. Нельзя считать clock-invalid метрику актуальной.
+Top-level exported_atfuture/malformed, privateextra, неверныйUUID/provider/
+slot/schema — protocolerror, syncfailure без заменыстарогофайла.
+CLI stdout — JSON exactlysync_alp_limits result, exit0updated/exit1unavailable.

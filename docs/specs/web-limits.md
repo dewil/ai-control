@@ -46,3 +46,24 @@ installed sessions/broker/web files, with no deployment-scope expansion.
 расход и прошедшее время движутся слева направо; Telegram glyph renderer
 не переносится в HTML. Это текущий снимок, не история измерений.
 Трассировка: tests/test_control_web_limits_spend_overlay_browser_red.py.
+
+
+## Cached sources and delivery (11.10.2026)
+- INV-WLIM-20: schema2 composes valid legacy nativev1 with cached sources;
+  owner auth and independent source failure isolation remain mandatory.
+- INV-WLIM-21: owner-only bounded nofollow reads; bot0664 legacy/unbound and
+  localALP0600; no provider/auth/network/process from the reader or HTTP.
+- INV-WLIM-22: Kimi fixed quota buckets; OpenRouterUSD/YandexCloudRUB prepaid
+  metrics; native money is not subscription capacity, nodata != zero/current.
+- INV-WLIM-23: only closed safeALPexport, mappedpseudonymousUUID refs,
+  tickstarttime, no raw source metadata; bad clock isolated per account.
+- INV-WLIM-24: spent quota/commonweeklyCodexmarkers and currency/prepaid
+  scales are distinct; mobile320/360, stale/lastknown and lifecycle visible.
+- INV-WLIM-25: separate fixed ownerSSH syncCLI, validated before transfer/write,
+  bounded transport and atomicprivatecache. No worker viaHTTP. User timer
+  is inactive until owner-approved export publication and read-only smoke.
+Feature contract docs/dev/2026-10-11-spec-cached-limits-sources.md remains
+active for externalALProllout. Code/bot delivery does not claim liveALPdata.
+Tests test_control_web_cached_limits_backend_red.py,
+ test_control_web_cached_limits_browser_red.py and
+ test_control_web_alp_limits_sync_red.py trace these invariants.
