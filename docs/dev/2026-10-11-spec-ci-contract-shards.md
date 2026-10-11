@@ -74,3 +74,5 @@ top hash alloriginalIDs sameencoding. topcount sumshardcounts.
 Matrixjobkey contract_groups; matrix.group exact web_0,web_1,web_2,web_3,
 android_publication,provider,deployment_install. Finalcontractsneedscontract_groups.
 Collectionimportstdout redirectedstderr so --list stdoutonlyJSON.
+
+Diagnostic --list можетпоказатьemptyplan; execution--shard пустогонабораnonzero.
