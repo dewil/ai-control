@@ -99,6 +99,32 @@ class CachedLimitsAuthorTests(unittest.TestCase):
                                  'ok' if now == s.NOW else 'stale')
                 self.assertNotIn(s.PRIVATE, json.dumps(result))
 
+    def test_alp_observation_after_export_is_unavailable_without_hiding_other_sources(self):
+        # INV-WLIM-23: collection cannot occur after its enclosing export.
+        import limits_dashboard_blind_support as native
+        class Chat:
+            def limits_overview(self):
+                return native.overview()
+        self.write(self.digest, s.bot())
+        account = s.alp_account(observed_at=s.stamp(s.NOW - 10))
+        other = s.alp_account('claude', observed_at=s.stamp(s.NOW - 20))
+        exported = s.alp(account, other)
+        exported['exported_at'] = s.stamp(s.NOW - 20)
+        self.write(self.alp, exported)
+        backend = self.module.RegistryBackend(str(self.base), str(self.base), sessions=Chat(),
+                                              cached_limits_reader=self.reader)
+        result = backend.limits_overview()
+        self.assertEqual(result['native'], native.overview())
+        invalid = next(item for item in result['cached_sources'] if item['node_id'] == 'alp' and item['provider'] == 'codex')
+        self.assertEqual((invalid['status'], invalid['reason'], invalid['windows']),
+                         ('unavailable', 'invalid_snapshot', []))
+        self.assertEqual((invalid['observed_at'], invalid['age_seconds'], invalid['observation_basis']),
+                         (None, None, 'unknown'))
+        self.assertEqual((invalid['identity'], invalid['account_ref']), ('collector_mapped', s.hashed()))
+        healthy = [item for item in result['cached_sources'] if item is not invalid]
+        self.assertEqual(len(healthy), 4)
+        self.assertTrue(all(item['status'] == 'ok' for item in healthy))
+
     def test_cli_exposes_cache_paths_only_on_owner_broker_subcommand(self):
         # INV-WLIM-21: HTTP/web callers cannot choose owner file paths.
         cli = Path(__file__).resolve().parents[1] / 'bin' / 'ai-control-web'

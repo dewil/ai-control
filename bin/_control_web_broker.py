@@ -985,11 +985,11 @@ class CachedLimitsReader:
 
     def _alp(self, now):
         value = self._read(self.alp_path, private=True)
+        exported = _cache_timestamp(value.get('exported_at'))
         if (set(value) not in ({'schema_version', 'node_id', 'exported_at', 'accounts'},
                                {'schema_version', 'node_id', 'exported_at', 'accounts', 'freshness'})
                 or type(value['schema_version']) is not int or value['schema_version'] != 1
-                or value['node_id'] != 'alp' or _cache_timestamp(value['exported_at']) is None
-                or _cache_timestamp(value['exported_at']) > now
+                or value['node_id'] != 'alp' or exported is None or exported > now
                 or type(value['accounts']) is not list or len(value['accounts']) > 16):
             raise ValueError('invalid snapshot')
         if 'freshness' in value:
@@ -1017,7 +1017,9 @@ class CachedLimitsReader:
             source.update(identity='collector_mapped', account_ref=hashlib.sha256(
                 ('alp-limits-account:' + provider + ':' + ref).encode()).hexdigest())
             observed = _cache_timestamp(account['observed_at'])
-            if account['observed_at'] is None and account['status'] in ('missing', 'unknown'):
+            if observed is not None and observed > exported:
+                source['reason'] = 'invalid_snapshot'
+            elif account['observed_at'] is None and account['status'] in ('missing', 'unknown'):
                 source['reason'] = 'missing_source' if account['status'] == 'missing' else 'source_error'
             elif self._observe(source, observed, 'snapshot_tick', now):
                 if account['status'] in ('unknown', 'reset_pending', 'missing', 'future'):
