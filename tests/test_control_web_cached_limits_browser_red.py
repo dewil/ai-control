@@ -154,7 +154,8 @@ class CachedLimitsBrowserRED(unittest.TestCase):
                     self.assertGreaterEqual(mark['y']+mark['height']/2, track['y']-2)
                     self.assertLessEqual(mark['y']+mark['height']/2, track['y']+track['height']+2)
         unknown = v2.kimi()
-        unknown['windows'][0].update(remaining_percent=None, resets_at=v2.NOW-1)
+        unknown['windows'][0].update(remaining_percent=None, resets_at=v2.NOW-1,
+                                     window_started_at=v2.NOW-1-300*60)
         unknown['windows'][1].update(remaining_percent=None, resets_at=None,
                                      window_started_at=None, anchor=None)
         self.open_value(v2.overview([unknown]))
