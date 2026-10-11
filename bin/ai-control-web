@@ -89,6 +89,8 @@ def main():
     broker.add_argument('--allowed-uid', type=int, required=True)
     broker.add_argument('--codex-socket', help='Existing shared App Server Unix socket')
     broker.add_argument('--session-receipts', default=str(Path.home() / '.local/state/ai-control-web/session-receipts'))
+    broker.add_argument('--limits-digest-cache', default=str(Path.home() / '.ai-control/limits/last.json'))
+    broker.add_argument('--limits-alp-cache', default=str(Path.home() / '.local/state/ai-control/limits/alp.json'))
     args = parser.parse_args()
     os.umask(0o077)
     if args.command == 'init-auth':
@@ -133,7 +135,7 @@ def main():
         uvicorn.run(app, host=args.host, port=args.port, workers=1, reload=False, proxy_headers=False,
                     timeout_graceful_shutdown=0, access_log=False, log_level='warning')
     else:
-        from _control_web_broker import DevbusRuntime, RegistryBackend, serve_broker
+        from _control_web_broker import CachedLimitsReader, DevbusRuntime, RegistryBackend, serve_broker
         from _control_web_sessions import InteractiveRPC, SessionChat
         from _codex_rc import socket_path
         rpc = InteractiveRPC(args.codex_socket if args.codex_socket is not None else socket_path())
@@ -155,7 +157,8 @@ def main():
         try:
             devbus.start()
             serve_broker(args.socket, RegistryBackend(args.registry, args.bin_dir, sessions=sessions,
-                         configured_creator=creator, devbus=devbus), args.allowed_uid, stop_event=stopped)
+                         configured_creator=creator, devbus=devbus,
+                         cached_limits_reader=CachedLimitsReader(args.limits_digest_cache, args.limits_alp_cache)), args.allowed_uid, stop_event=stopped)
         finally:
             try:
                 devbus.stop()
