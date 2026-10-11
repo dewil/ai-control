@@ -693,7 +693,7 @@ function validQueueProjection(data){
 function validCapabilities(data){
   const names=['send','create','rename','model_selection','queue','history_read','sessions_read'];
   if(!exactFields(data,['schema','native_version','version_source','version_review','read_status','operations'])||data.schema!==1||data.version_source!=='initialize_reported'||!['compatible','unverified'].includes(data.read_status)||!exactFields(data.operations,names))return false;
-  const version=data.native_version,review=version===null?'unknown':['0.160.0','0.161.0'].includes(version)?'reviewed':'unreviewed';
+  const version=data.native_version,review=version===null?'unknown':['0.160.0','0.161.0','0.162.1'].includes(version)?'reviewed':'unreviewed';
   if(version!==null&&(typeof version!=='string'||version.length>64||!/^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[A-Za-z0-9][A-Za-z0-9.-]{0,31})?$/.test(version))||data.version_review!==review)return false;
   return names.every(name=>{const row=data.operations[name];return exactFields(row,['supported','reason'])&&[true,false,null].includes(row.supported)&&(row.supported===true?row.reason===null:['not_observed','unsupported_native_version','unsupported_operation','incompatible_response','unverified_context','stale','unavailable'].includes(row.reason))&&(!(review!=='reviewed'&&['send','create','rename','model_selection','queue'].includes(name))||row.supported===false&&row.reason==='unsupported_native_version');});
 }
