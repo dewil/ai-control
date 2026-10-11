@@ -33,3 +33,12 @@ PYTHONPATH=/var/tmp/control-web-test-venv/lib/python3.12/site-packages:tests:bin
 
 Внешних директив-попыток не обнаружено. Receipt: **unknown**, coverage partial;
 ledger ведёт только root-владелец CONTROL-WEB-LIMITS-INTEGRATION.
+
+Уточнение owner-контракта до реализации: structurally safe account с
+`observed_at > exported_at` (в том числе future observed) доставляется, затем
+reader изолирует только этот account как `unavailable/invalid_snapshot`,
+`observed_at=null`, `windows=[]`. Тест проверяет двух siblings, сохранение
+здорового и то, что поздний wall clock не лечит causality error. Future
+top-level `exported_at`, malformed/private/bounds остаются whole-export
+ошибками с сохранением прежних bytes. Remote whitelist проверяет safe
+структуру и не превращает per-account clock error в отказ всех siblings.

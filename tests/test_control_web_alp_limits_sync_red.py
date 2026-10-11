@@ -77,7 +77,8 @@ class AlpLimitsSyncRED(unittest.TestCase):
         events = self.base / 'remote-open-events.json'
         launchers = self.base / 'remote-bin'
         launchers.mkdir(exist_ok=True, mode=0o700)
-        launcher = '''import atexit, builtins, io, json, os, stat, sys, datetime, uuid, math
+        launcher = '''import atexit, builtins, io, json, os, stat, sys, datetime, uuid, math, time
+time.time=lambda:float(os.environ['SYNTHETIC_NOW'])
 original_os_open, original_open, original_io_open = os.open, builtins.open, io.open
 events=[]
 def checked_path(path):
@@ -121,7 +122,8 @@ exec(compile(program, '<synthetic-remote-program>', 'exec'), {'__name__':'__main
         result = subprocess.run([sys.executable, str(launchers/'python3'), *arguments],
                                 input=stdin, capture_output=True, timeout=4,
                                 env={'PATH': str(launchers), 'EXPECTED_EXPORT': REMOTE,
-                                     'SYNTHETIC_EXPORT': str(source), 'OPEN_EVENTS': str(events)})
+                                     'SYNTHETIC_EXPORT': str(source), 'OPEN_EVENTS': str(events),
+                                     'SYNTHETIC_NOW': str(s.NOW)})
         return result, json.loads(events.read_text()) if events.exists() else []
 
     def test_fixed_transport_and_remote_whitelist_rejects_private_payload_before_stdout(self):
@@ -146,6 +148,16 @@ exec(compile(program, '<synthetic-remote-program>', 'exec'), {'__name__':'__main
         self.assertEqual(json.loads(good.stdout), s.alp())
         self.assertTrue(opens, 'fixed export must be opened through nofollow/nonblocking descriptor')
         self.assertTrue(all(flags & os.O_NOFOLLOW and flags & os.O_NONBLOCK for flags in opens))
+        # A structurally safe account clock error belongs to reader isolation.
+        for observed in (s.NOW-30, s.NOW+1):
+            value = s.alp(s.alp_account(observed_at=s.stamp(s.NOW-60)),
+                          s.alp_account(ref='11111111-1111-4111-8111-111111111111',
+                                        observed_at=s.stamp(observed)))
+            value['exported_at'] = s.stamp(s.NOW-31)
+            with self.subTest(remote_account_observed=observed):
+                result, _ = self.remote(command, encoded(value))
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(json.loads(result.stdout), value)
         bad_account = s.alp_account(private=s.PRIVATE)
         bad_window = s.alp_account()
         bad_window['windows'][0]['command'] = 'touch ' + s.PRIVATE
@@ -200,6 +212,26 @@ exec(compile(program, '<synthetic-remote-program>', 'exec'), {'__name__':'__main
         self.assertEqual(self.sync(encoded(newer)), {'status': 'updated', 'accounts': 1})
         self.assertNotEqual(self.destination.stat().st_ino, before_inode)
         self.assertEqual(set(self.destination.parent.iterdir()), {self.destination})
+        # Owner clarification: one account's impossible clock must not reject
+        # delivery of a healthy sibling. Export time stays a global boundary.
+        bad_ref = '11111111-1111-4111-8111-111111111111'
+        for observed in (s.NOW-30, s.NOW+1):
+            value = s.alp(s.alp_account(observed_at=s.stamp(s.NOW-60)),
+                          s.alp_account(ref=bad_ref, observed_at=s.stamp(observed)))
+            value['exported_at'] = s.stamp(s.NOW-31)
+            with self.subTest(account_observed=observed):
+                self.assertEqual(self.sync(encoded(value)), {'status':'updated', 'accounts':2})
+                self.assertEqual(json.loads(self.destination.read_bytes()), value)
+                # Later wall time cannot heal observed > exported causality.
+                for now in (s.NOW, s.NOW+120):
+                    rows = {row['account_ref']:row for row in reader.snapshot(now) if row['node_id']=='alp'}
+                    good, bad = rows[s.hashed()], rows[s.hashed(ref=bad_ref)]
+                    self.assertEqual((good['status'], good['observed_at'], good['age_seconds']),
+                                     ('ok', s.NOW-60, now-(s.NOW-60)))
+                    self.assertEqual(good['windows'][0]['remaining_percent'], 75)
+                    self.assertEqual((bad['status'], bad['reason'], bad['observed_at'],
+                                      bad['age_seconds'], bad['windows']),
+                                     ('unavailable', 'invalid_snapshot', None, None, []))
 
     def test_invalid_protocol_timestamps_numbers_extra_fields_duplicate_and_oversize_preserve_bytes(self):
         # INV-WLIM-25: exact producer protocol is stricter than window projection.
@@ -209,8 +241,6 @@ exec(compile(program, '<synthetic-remote-program>', 'exec'), {'__name__':'__main
                  lambda v:v.update(exported_at=s.stamp(s.NOW+1)),
                  lambda v:v.update(exported_at='2027-01-15T08:00:00'),
                  lambda v:v.update(exported_at='2027-01-15T09:00:00+01:00'),
-                 lambda v:v['accounts'][0].update(observed_at=s.stamp(s.NOW+1)),
-                 lambda v:v.update(exported_at=s.stamp(s.NOW-31)),
                  lambda v:v['accounts'][0].update(observed_at_semantics='capture_end'),
                  lambda v:v['accounts'][0].update(status='success'),
                  lambda v:v['accounts'][0]['windows'][0].update(slot='private-label'),
