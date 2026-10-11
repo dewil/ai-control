@@ -238,3 +238,50 @@ Publicaccount_ref является псевдонимом для отображ�
 случайный UUID4 один раз, не UUID из провайдера/не email. API owner-only401
 для остальных, account_ref не записывается в логи. HMAC/newsecret не требуется
 для выбранного scope и не добавляется. Это не меняет public nativehashaccount_id.
+
+
+## INV-WLIM-25: подготовленная автоматическая доставка ALP
+Чтобы после ownerпубликации не копировать JSON вручную, отдельный ownerCLI
+subcommand `ai-control-web sync-limits-alp` (без path/host/source flags)
+получает единственный фиксированный экспорт по существующему SSHalias
+alp-ai-dev-1-dwl: /var/lib/alp-limits-export/limits-v1.json.
+Этот network/process path НЕ вызывается CachedLimitsReader/HTTP/broker.
+Public Python seam в existing _control_web_broker.py:
+sync_alp_limits(destination, *, runner=None, clock=time.time) ->
+{status:'updated',accounts:<count>} или {status:'unavailable',reason:'sync_failed'}.
+runner(argv, *, timeout=8,max_bytes=131072)->bytes — инъекциятестов, default
+boundedPopen transport, stdout<=128KiB, boundeddeadline включаяSSHstartup,
+nonzero/timeout/oversize => failure без повтора. Не печататьstderr/сырыеданные.
+
+Fixed argv SSH uses -T,BatchMode=yes,StrictHostKeyChecking=yes,
+ForwardAgent=no,ClearAllForwardings=yes,RequestTTY=no; remotecommand —
+наша stdlibPythonпрограмма, не customercode. Fixed remote file открывается
+nofollow/nonblocking, regular/nlink1/notworldwritable/<=128KiB. Программа
+перед stdout проверяет closed whitelist экспортера (top-level/account/window
+fields, UUID4, ISOtimestamps, enumslot/status/provider, finite numeric/null,
+никаких extra fields/private strings), output содержит только safe DTO.
+Никаких rawstate/auth/config/credentials, переменных команд из payload,
+remote installation или измененийcustomerфайлов. Localvalidatedinput снова
+проверяется согласованным consumercontract, observed<=exported<=now.
+
+Destinationowner-controlled только private dedicatedcache path; CLIdefault
+HOME/.local/state/ai-control/limits/alp.json. Parentсоздаётся0700 и долженбыть
+owned euid/non-symlink/private; существующий leaf только0600/euid/nlink1/regular.
+Atomic tempfile0600+fsync+replace+directoryfsync. Любаяошибка до replace
+сохраняет предыдущие bytes; отказ от outputalias/symlink/foreignownership
+и чужихкаталогов. Ответ CLI только sanitizedstatus, exit0updated/exit1unavailable.
+Sourceexported/observed times сохраняются, fetch не омолаживает их.
+
+Sourceuserunits ai-control-alp-limits-sync.service/.timer размещаются
+вsystemd/ как отдельные templates, не расширяютroot22allowlist. Service
+запускает root-installed /opt/...venv/bin/python /opt/...bin/ai-control-web
+sync-limits-alp, TimeoutStartSec15s,UMask0077,NoNewPrivilegesyes; timerкаждые5мин
+сOnBoot2min, безoverlap (oneshot). Установкаowneruserunits обратима;
+включение только после подтверждённойowner-approved публикации и успешного
+read-onlysmoke. Доэтого кодготов, timerнеактивен, ALPнеобъявляетсяподключённым.
+
+MeaningfulRED: fixedtransport/onlysafeexport, whitespace/privateextra payload
+rejectwithoutlocaloverwrite, nonzero/timeout/oversize, priorfilepreservation,
+localsymlink/FIFO/nonprivate ownership, sourceage unchanged, no readworker
+invocation from HTTP, CLI fixeddefaults/sanitizedexit, unitsschedule/disabledgate.
+No actualSSH/vendorcalls in tests. Послеэтойдельты общий SOURCEHaiku/CI.
