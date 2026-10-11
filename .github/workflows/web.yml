@@ -4,13 +4,21 @@ on:
     branches: [main]
   pull_request:
 jobs:
-  contracts:
+  contract_groups:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [web_0, web_1, web_2, web_3, android_publication, provider, deployment_install]
+    env:
+      CONTROL_LIVE_UX_SCOPE_REVISION: 73eb36b4eba7b13b893014e400b30b7f918de986
+      CONTROL_LIVE_UX_QA_REPO: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v6
         with:
           # Signed deploy bootstrap fixtures read the immutable accepted Git snapshot.
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -35,23 +43,31 @@ jobs:
           curl -fsSL -o "$yq_download" https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64
           printf '%s  %s\n' 'fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4' "$yq_download" | sha256sum -c -
           sudo install -m 0755 "$yq_download" /usr/local/bin/yq
+      - name: Verify exact source and clean checkout
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --exit-code HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"
       - name: Permanent Android publication boundary contracts
+        if: matrix.group == 'android_publication'
         run: python -m unittest discover -s tests -p 'test_control_android_publish*.py'
       - name: Web boundary contracts and writer integration
+        if: startsWith(matrix.group, 'web_')
         # test_current16_startup_boundary_at_reviewed_UX_revision covers the
         # immutable UX-only deployment boundary inside this discovery.
         # All behavior tests execute this actual LIVE/BUS checkout; never replace
         # it with the old UX snapshot. Reject working-tree/untracked drift.
         env:
-          CONTROL_LIVE_UX_SCOPE_REVISION: 73eb36b4eba7b13b893014e400b30b7f918de986
-          CONTROL_LIVE_UX_QA_REPO: ${{ github.workspace }}
+          CONTRACT_GROUP: ${{ matrix.group }}
         run: |
-          git diff --exit-code HEAD --
-          test -z "$(git ls-files --others --exclude-standard)"
-          python -m unittest discover -s tests -p 'test_control_web*.py'
-          python -m unittest discover -s tests -p 'test_ai_control_names.py'
-          python -m py_compile bin/_control_web.py bin/_control_web_live.py bin/_control_web_broker.py bin/_control_web_sessions.py bin/_codex_rc.py bin/ai-control-web
+          python ci/control_web_contracts.py --shard "${CONTRACT_GROUP#web_}"
+      - name: Web compile gate
+        if: matrix.group == 'web_0'
+        run: python -m py_compile bin/_control_web.py bin/_control_web_live.py bin/_control_web_broker.py bin/_control_web_sessions.py bin/_codex_rc.py bin/ai-control-web
       - name: Provider account binding and runtime admission
+        if: matrix.group == 'provider'
         run: |
           python tests/test-provider-accounts.py
           python tests/test-provider-account-binding.py
@@ -67,10 +83,12 @@ jobs:
           bash tests/test-agent-io.sh
           python tests/test-codex-task-runtime.py
       - name: Signed deployment boundary and recovery
+        if: matrix.group == 'deployment_install'
         run: |
           python tests/test-web-universal-deploy.py
           python -m py_compile deployment/ai-control-web-deploy.py
       - name: Installation regression
+        if: matrix.group == 'deployment_install'
         run: |
           # These install tests mock launchd; they need an inert CLI prerequisite,
           # not a Claude account or a runnable agent on the hosted runner.
@@ -88,3 +106,26 @@ jobs:
           bash tests/test-install-completeness.sh
           bash tests/test-install-idempotent.sh
           bash tests/test-install-macos-legacy.sh
+  contracts:
+    needs: contract_groups
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Verify exact source and clean checkout
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --exit-code HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"
+      - name: Require every contract group to succeed
+        env:
+          CONTRACT_GROUP_RESULT: ${{ needs.contract_groups.result }}
+        run: python ci/control_web_contracts.py --aggregate "$CONTRACT_GROUP_RESULT"
