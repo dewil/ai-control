@@ -209,3 +209,20 @@ Pins — per authenticated web principal, stable native context/root/SID и от
 
 ## INV-WSESS48 — возврат к последним сообщениям
 Trusted End вне поля ввода, достигший низа, возобновляет follow даже при задержке обработки; чтение старой истории и черновика не прыгает. Подробности docs/dev/2026-10-11-spec-limits-navigation.md. Трассируемость: tests/test_control_web_navigation_intent_blind.py.
+
+## INV-WFILE01 — файловые полномочия
+Owner-only API использует только доверенный project alias→canonical root. Никаких новых vendor/native мутаций или файлового выполнения.
+
+## INV-WFILE02 — файловая граница
+Canonical target остаётся внутри project-root; fd/O_NOFOLLOW и identity checks предотвращают замену путей. Скрытые/credential/special/hardlink файлы запрещены. Видимые aliases к разрешённым файлам допустимы.
+
+## INV-WFILE03 — ограниченное чтение
+Буквальный строгий UTF-8 префикс до48КБ, явное усечение, закрытый DTO name/text/truncated, без path/stat в ответе.
+
+## INV-WFILE04 — ссылки из чата
+Локальные file URI/absolute/relative ссылки открывают viewer; :line/#Lline и пробелы поддерживаются. HTTP/HTTPS и веб-маршруты сохраняют прежнее поведение.
+
+## INV-WFILE05 — lifecycle просмотра
+Dialog показывает literal text и строку, не исполняет HTML. Закрытие/новый запрос/смена scope/background инвалидируют ответ без polling и потери чата.
+
+Трассируемость: tests/test_control_web_project_file_backend_red.py и tests/test_control_web_project_file_browser_red.py. Подробности docs/dev/2026-10-11-spec-project-file-viewer.md.

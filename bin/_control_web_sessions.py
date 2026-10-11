@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from collections import OrderedDict
 import copy
+import codecs
 import ctypes
 import fcntl
 import functools
@@ -60,6 +61,25 @@ def valid_uuid(value):
 
 def valid_project(value):
     return type(value) is str and PROJECT_RE.fullmatch(value) is not None
+
+
+PROJECT_FILE_LIMIT = 48 * 1024
+
+
+def valid_project_file_path(path):
+    return (type(path) is str and 0 < len(path) <= 4096
+            and not re.search(r'[\x00-\x1f\x7f-\x9f\\?#]', path)
+            and not path.startswith('//') and not re.match(r'^[^/]*:', path)
+            and '..' not in path.split('/'))
+
+
+def _project_file_allowed(relative):
+    reserved = {'auth.json', 'totp-state.json', 'credentials.json',
+                'credentials.yaml', 'credentials.yml', 'id_rsa', 'id_ed25519'}
+    parts = relative.split('/')
+    return (all(part and not part.startswith('.') for part in parts)
+            and parts[-1].lower() not in reserved
+            and os.path.splitext(parts[-1])[1].lower() not in {'.pem', '.key', '.p12', '.pfx'})
 
 
 def valid_cursor(value):
@@ -1510,6 +1530,85 @@ class SessionChat:
         _need(os.path.isdir(root))
         self._remaining()
         return root
+
+    @_operation
+    def project_file(self, project, path):
+        _need(valid_project_file_path(path), 'invalid_request')
+        descriptors = []
+        try:
+            root = self._root(project)
+            original = os.path.abspath(os.path.join(root, path))
+            target = os.path.realpath(original, strict=True)
+            _need(os.path.commonpath((root, target)) == root, 'file_unavailable')
+            relative = os.path.relpath(target, root)
+            # An absolute alias can lie outside root; its shared ancestor is
+            # only a base for checking original names, never filesystem authority.
+            original_relative = os.path.relpath(original, os.path.commonpath((root, original)))
+            _need(_project_file_allowed(original_relative)
+                  and _project_file_allowed(relative), 'file_unavailable')
+            # Resolve aliases, then walk canonical components from a pinned root.
+            # Every subsequent open refuses replacement symlinks.
+            root_before = os.stat(root, follow_symlinks=False)
+            target_before = os.stat(target, follow_symlinks=False)
+            _need(stat.S_ISREG(target_before.st_mode) and target_before.st_nlink == 1, 'file_unavailable')
+            fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            descriptors.append(fd)
+            bindings = []
+            for part in root.split('/')[1:]:
+                if part:
+                    child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                    bindings.append((fd, part, child))
+                    descriptors.append(child)
+                    fd = child
+            root_after = os.fstat(fd)
+            _need((root_before.st_dev, root_before.st_ino) ==
+                  (root_after.st_dev, root_after.st_ino), 'file_unavailable')
+            parts = relative.split('/')
+            for part in parts[:-1]:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                bindings.append((fd, part, child))
+                descriptors.append(child)
+                fd = child
+            child = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+            bindings.append((fd, parts[-1], child))
+            descriptors.append(child)
+            fd = child
+            before = os.fstat(fd)
+            identity = lambda info: (info.st_dev, info.st_ino, info.st_size,
+                                     info.st_mtime_ns, info.st_ctime_ns, info.st_nlink)
+            _need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                  and identity(target_before) == identity(before), 'file_unavailable')
+            raw = bytearray()
+            while len(raw) < PROJECT_FILE_LIMIT + 4:
+                self._remaining()
+                block = os.read(fd, PROJECT_FILE_LIMIT + 4 - len(raw))
+                if not block:
+                    break
+                raw.extend(block)
+            after = os.fstat(fd)
+            _need(identity(before) == identity(after), 'file_unavailable')
+            for parent, part, child in bindings:
+                bound = os.stat(part, dir_fd=parent, follow_symlinks=False)
+                opened = os.fstat(child)
+                _need((bound.st_dev, bound.st_ino, bound.st_mode) ==
+                      (opened.st_dev, opened.st_ino, opened.st_mode), 'file_unavailable')
+            truncated = before.st_size > PROJECT_FILE_LIMIT
+            try:
+                decoder = codecs.getincrementaldecoder('utf-8')('strict')
+                text = decoder.decode(bytes(raw[:PROJECT_FILE_LIMIT]), final=not truncated)
+            except UnicodeError:
+                raise _DomainError('unsupported_type') from None
+            _need(not re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', text), 'unsupported_type')
+            return dict(name=parts[-1], text=text, truncated=truncated)
+        except _DomainError as error:
+            if error.code in ('invalid_request', 'unsupported_type', 'file_unavailable'):
+                raise
+            raise _DomainError('file_unavailable') from None
+        except (OSError, ValueError):
+            raise _DomainError('file_unavailable') from None
+        finally:
+            for fd in reversed(descriptors):
+                os.close(fd)
 
     def _provider(self, provider, *args):
         # Real owner resolvers accept a remaining deadline; simple synthetic

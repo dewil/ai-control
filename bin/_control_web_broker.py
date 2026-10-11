@@ -816,6 +816,7 @@ def queue_transfer_result(value, action_id, queued_submission_id):
     return dict(value)
 
 def _queue_boundary(request, value):
+    if request['op'] == 'project_file':return project_file_result(value)
     if request['op'] in PART_OPS:return participation_result(value, request['op'], request)
     if request['op'] == 'session_pins':return pins_result(value)
     if request['op'] == 'session_pin':return pin_result(value, True)
@@ -1475,7 +1476,29 @@ def limits_result(value):
         return {'error': 'unavailable'}
 
 
+def project_file_result(value):
+    if type(value) is not dict:
+        return {'error': 'file_unavailable'}
+    if set(value) == {'error'} and value['error'] in ('invalid_request', 'unsupported_type', 'file_unavailable'):
+        return dict(value)
+    if set(value) != {'name', 'text', 'truncated'}:
+        return {'error': 'file_unavailable'}
+    name, text = value['name'], value['text']
+    try:
+        if (type(name) is not str or not name or name in ('.', '..') or len(name) > 255
+                or re.search(r'[/\\\x00-\x1f\x7f-\x9f]', name)
+                or type(text) is not str or len(text) > 48 * 1024 or len(text.encode('utf-8')) > 48 * 1024
+                or re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', text)
+                or type(value['truncated']) is not bool
+                or len(json.dumps(value, ensure_ascii=False).encode('utf-8')) >= LIMIT):
+            return {'error': 'file_unavailable'}
+    except (UnicodeError, ValueError):
+        return {'error': 'file_unavailable'}
+    return dict(value)
+
+
 SESSION_FIELDS = {
+    'project_file': {'op', 'project', 'path'},
     'limits_overview': {'op'},
     'participation_overview': {'op'},
     'session_questions': {'op', 'project', 'sid'},
@@ -1514,6 +1537,10 @@ def _valid_session(request):
     if set(request) != fields and not (
             request['op'] in ('session_send', 'session_enqueue') and set(request) == fields | {'selection'}):
         return False
+    if 'path' in request:
+        from _control_web_sessions import valid_project_file_path
+        if not valid_project_file_path(request['path']):
+            return False
     if 'principal' in request and (type(request['principal']) is not str or not re.fullmatch('[A-Za-z0-9_-]{1,64}', request['principal'])):
         return False
     if request['op'] == 'session_question_answer':
@@ -1837,6 +1864,8 @@ class RegistryBackend:
             return {'error': 'unavailable'}
         try:
             op = request['op']
+            if op == 'project_file':
+                return project_file_result(self.sessions.project_file(request['project'], request['path']))
             if op == 'limits_overview':
                 return limits_result(self.sessions.limits_overview())
             if op == 'participation_overview':
@@ -1937,6 +1966,9 @@ class RegistryBackend:
 
     def session_queue_start(self, project, sid, queued_submission_id, action_id):
         return self._session(dict(op='session_queue_start', project=project, sid=sid, queued_submission_id=queued_submission_id, action_id=action_id))
+
+    def project_file(self, project, path):
+        return self._session(dict(op='project_file', project=project, path=path))
 
     def session_projects(self):
         return self._session({'op': 'session_projects'})
@@ -2219,11 +2251,11 @@ def _receive(conn, deadline=None):
     if rest:
         raise ValueError('multiple requests')
     duplicates = []
-    limits_operation = False
+    typed_operation = False
     def pairs(items):
-        nonlocal limits_operation
-        if any(key == 'op' and value == 'limits_overview' for key, value in items):
-            limits_operation = True
+        nonlocal typed_operation
+        if any(key == 'op' and value in ('limits_overview', 'project_file') for key, value in items):
+            typed_operation = True
         result = {}
         for key, value in items:
             if key in result:
@@ -2232,7 +2264,7 @@ def _receive(conn, deadline=None):
         return result
     result = json.loads(line, object_pairs_hook=pairs)
     if duplicates:
-        error = ValueError('duplicate field');error.invalid_queue = type(result) is dict and (result.get('op') in QUEUE_OPS | NAV_OPS | PART_OPS | {'limits_overview'} or limits_operation)
+        error = ValueError('duplicate field');error.invalid_queue = type(result) is dict and (typed_operation or type(result.get('op')) is str and result['op'] in QUEUE_OPS | NAV_OPS | PART_OPS | {'limits_overview', 'project_file'})
         raise error
     return result
 
@@ -2286,6 +2318,7 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = backend.answer(request['agent'], request['qid'], request['decision'], request['text'])
                     elif op == 'verdict':
                         result = backend.verdict(request['agent'], request['generation'], request['decision'], request['comment'])
+                    elif op == 'project_file':result = project_file_result(backend.project_file(request['project'], request['path']))
                     elif op == 'limits_overview':result = limits_result(backend.limits_overview())
                     elif op == 'participation_overview':result = backend.participation_overview()
                     elif op == 'session_questions':result = backend.session_questions(request['project'], request['sid'])
@@ -2378,7 +2411,7 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = {'error': 'unsupported'}
                     elif (set(request) != fields[request['op']] and not (
                             request['op'] in ('session_send', 'session_enqueue') and set(request) == fields[request['op']] | {'selection'})):
-                        result = {'error': 'unavailable' if live or bus else 'invalid_request' if request['op'] in QUEUE_OPS | NAV_OPS | PART_OPS | {'session_project_summary', 'limits_overview'} else 'invalid_or_stale'}
+                        result = {'error': 'unavailable' if live or bus else 'invalid_request' if request['op'] in QUEUE_OPS | NAV_OPS | PART_OPS | {'session_project_summary', 'limits_overview', 'project_file'} else 'invalid_or_stale'}
                     elif request['op'] in NAV_OPS and request.get('principal', 'owner') != 'owner':
                         result = {'error': 'forbidden'}
                     elif request['op'] in SESSION_FIELDS and not _valid_session(request):
@@ -2505,6 +2538,9 @@ class SocketBackend:
 
     def session_queue_start(self, project, sid, queued_submission_id, action_id):
         return self._session(dict(op='session_queue_start', project=project, sid=sid, queued_submission_id=queued_submission_id, action_id=action_id))
+
+    def project_file(self, project, path):
+        return self._session(dict(op='project_file', project=project, path=path))
 
     def session_projects(self):
         return self._session({'op': 'session_projects'})
