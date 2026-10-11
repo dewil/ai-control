@@ -126,8 +126,9 @@ class LimitsBrowserRED(unittest.TestCase):
         expect(self.panel().get_by_role('progressbar')).to_have_count(0)
         self.assertNotRegex(self.page.locator('body').inner_text(),r'(?<!\d)0\s*%')
 
-    def test_remaining_bar_zero_full_and_three_quarters_have_real_visual_geometry(self):
-        # INV-WLIM-14: compare rendered pixels, without private fill-node selectors.
+    def test_spent_bar_zero_full_and_one_quarter_have_real_visual_geometry(self):
+        # INV-WLIM-17: user changed the primary bar from remaining to spent;
+        # retain INV-WLIM-14 pixel geometry coverage with the accepted semantics.
         self.open();expect(self.panel().get_by_role('progressbar')).to_be_visible()
         for width in (320,390,1280):
             rows={}
@@ -138,26 +139,26 @@ class LimitsBrowserRED(unittest.TestCase):
                     bar=self.panel().get_by_role('progressbar');expect(bar).to_be_visible()
                     self.assertEqual(float(bar.get_attribute('aria-valuemin')),0)
                     self.assertEqual(float(bar.get_attribute('aria-valuemax')),100)
-                    self.assertEqual(float(bar.get_attribute('aria-valuenow')),remaining)
+                    self.assertEqual(float(bar.get_attribute('aria-valuenow')),100-remaining)
                     box=bar.bounding_box();self.assertGreater(box['width'],100)
                     self.assertGreaterEqual(box['x'],-1);self.assertLessEqual(box['x']+box['width'],width+1)
                     png=base64.b64encode(bar.screenshot(scale='css')).decode('ascii')
-                    rows[remaining]=self.page.evaluate('''async encoded=>{
+                    rows[100-remaining]=self.page.evaluate('''async encoded=>{
                       const bytes=Uint8Array.from(atob(encoded),c=>c.charCodeAt(0));
                       const bitmap=await createImageBitmap(new Blob([bytes],{type:'image/png'}));
                       const canvas=document.createElement('canvas');canvas.width=bitmap.width;canvas.height=bitmap.height;
                       const context=canvas.getContext('2d');context.drawImage(bitmap,0,0);
                       return Array.from(context.getImageData(0,Math.floor(bitmap.height/4),bitmap.width,1).data);
                     }''',png)
-            self.assertEqual(len(rows[0]),len(rows[100]));self.assertEqual(len(rows[0]),len(rows[75]))
+            self.assertEqual(len(rows[0]),len(rows[100]));self.assertEqual(len(rows[0]),len(rows[25]))
             def changed(reference,current):
                 pixels=len(reference)//4
                 return [x for x in range(4,pixels-4)
                         if sum(abs(reference[4*x+c]-current[4*x+c]) for c in range(3))>45]
-            full=changed(rows[0],rows[100]);partial=changed(rows[0],rows[75])
+            full=changed(rows[0],rows[100]);partial=changed(rows[0],rows[25])
             self.assertGreater(len(full),len(rows[0])//4*.6,'Zero and full must change the actual bar, beyond its text label')
-            self.assertAlmostEqual(len(partial)/len(full),.75,delta=.08,
-                                   msg='75% bar must fill about three quarters of the same track')
+            self.assertAlmostEqual(len(partial)/len(full),.25,delta=.08,
+                                   msg='Remaining75 means spent25 and fills one quarter of the same track')
 
     def test_visible_tick_expires_window_before_pending_poll_response(self):
         # INV-WLIM-11 INV-WLIM-14 INV-WLIM-16

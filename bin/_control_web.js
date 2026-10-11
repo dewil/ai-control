@@ -967,11 +967,12 @@ function validLimitsOverview(data){
 function limitsClock(){return limitsView.data.server_now+Math.max(0,performance.now()-limitsView.received)/1000;}
 function limitsDate(value){return new Date(value*1000).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'});}
 function limitsWait(seconds){const minutes=Math.max(1,Math.ceil(seconds/60));return minutes>=1440?Math.floor(minutes/1440)+' дн '+Math.floor(minutes%1440/60)+' ч':minutes>=60?Math.floor(minutes/60)+' ч '+minutes%60+' мин':minutes+' мин';}
-function limitsTimeline(window,now){
+function limitsTimeline(window,now,bar){
   const elapsed=Math.max(0,now-window.window_started_at)/86400,normal=Math.min(7,elapsed),double=Math.min(7,elapsed*2);
   const timeline=node('div',undefined,'lm-timeline');
   const legend=node('div',undefined,'lm-legend');legend.append(node('span','Ориентир ×2','lm-primary'),node('span','Обычный ×1'));timeline.append(legend);
   const track=node('div',undefined,'lm-track');
+  if(bar)track.append(bar);
   for(const [label,value,cls] of [['Обычный ×1',normal,'lm-normal'],['Ориентир ×2',double,'lm-double']]){
     const marker=node('span',undefined,'lm-marker '+cls);marker.setAttribute('role','meter');marker.setAttribute('aria-label',label);
     marker.setAttribute('aria-valuemin','0');marker.setAttribute('aria-valuemax','7');marker.setAttribute('aria-valuenow',String(value));
@@ -1002,23 +1003,28 @@ function renderLimits(){
     for(const window of source.windows){
       const expired=window.resets_at!==null&&window.resets_at<=now;
       const remaining=expired?null:window.remaining_percent;
+      const spent=remaining===null?null:100-remaining;
       const block=node('div',undefined,'lm-window'),summary=node('div',undefined,'lm-window-heading');
       const duration=window.duration_minutes;
       const label=duration===10080?'Неделя · 7 дней':duration===null?'Длительность неизвестна':duration%60===0?duration/60+' ч':duration+' мин';
-      summary.append(node('span',label,'lm-window-name'),node('strong',remaining===null?'Неизвестно':Number(remaining.toFixed(1))+'%','lm-remaining'));block.append(summary);
-      block.append(node('p',window.bucket+' · остаток','lm-muted'));
+      summary.append(node('span',label,'lm-window-name'),node('strong',spent===null?'Неизвестно':Number(spent.toFixed(1))+'%','lm-spent'));block.append(summary);
+      block.append(node('p','Израсходовано · '+window.bucket,'lm-muted'));
+      if(remaining!==null)block.append(node('p','Остаток '+Number(remaining.toFixed(1))+'%','lm-muted'));
+      let bar=null;
       if(remaining!==null){
-        const bar=node('div',undefined,'lm-quota'+(remaining<=10?' lm-exhausted':''));bar.setAttribute('role','progressbar');
-        bar.setAttribute('aria-label','Остаток · '+label);bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');bar.setAttribute('aria-valuenow',String(remaining));
-        const fill=node('span',undefined,'lm-quota-fill');fill.style.width=remaining+'%';bar.append(fill);block.append(bar);
+        bar=node('div',undefined,'lm-quota'+(remaining<=10?' lm-exhausted':''));bar.setAttribute('role','progressbar');
+        bar.setAttribute('aria-label','Израсходовано · '+label);bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');bar.setAttribute('aria-valuenow',String(spent));
+        const fill=node('span',undefined,'lm-quota-fill');fill.style.width=spent+'%';bar.append(fill);
       }
+      // INV-WLIM-17/18: spent fill and elapsed markers share one scale, independently.
+      const validAnchor=source.provider==='codex'&&duration===10080&&window.anchor==='derived_reset_and_duration'&&window.window_started_at!==null&&window.resets_at!==null&&window.resets_at>now&&Math.abs(window.resets_at-duration*60-window.window_started_at)<1;
+      if(validAnchor)block.append(limitsTimeline(window,now,bar));
+      else if(bar)block.append(bar);
       if(remaining===0)block.append(node('p','Лимит исчерпан','lm-expired'));
       if(expired)block.append(node('p','Окно истекло, ожидаем новые данные','lm-expired'));
       else if(window.resets_at!==null)block.append(node('p','Сброс через '+limitsWait(window.resets_at-now),'lm-reset'));
       if(window.resets_at!==null){const time=node('time',limitsDate(window.resets_at),'lm-muted');time.dateTime=new Date(window.resets_at*1000).toISOString();block.append(time);}
       else block.append(node('p','Время сброса неизвестно','lm-muted'));
-      const validAnchor=source.provider==='codex'&&duration===10080&&window.anchor==='derived_reset_and_duration'&&window.window_started_at!==null&&window.resets_at!==null&&window.resets_at>now&&Math.abs(window.resets_at-duration*60-window.window_started_at)<1;
-      if(validAnchor)block.append(limitsTimeline(window,now));
       card.append(block);
     }
     if(source.captured_at!==null)card.append(node('p','Получено '+limitsDate(source.captured_at)+(age!==null?' · '+Math.floor(age/60)+' мин назад':''),'lm-received'));
