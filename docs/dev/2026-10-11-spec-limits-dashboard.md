@@ -167,3 +167,6 @@ SessionChat.model_clock — epoch clock для server_now/captured_at/TTL/age;
 aria-valuemin=0, aria-valuemax=7, aria-valuenow — clipped elapsed days/×2days.
 Они расположены на одной общей шкале, положение их центра соответствует
 value/7 от начала трека. Видимые подписи совпадают; шкала остаётся 7 дней.
+Известный остаток (включая0 и100) имеет role=progressbar, aria-valuemin=0,
+aria-valuemax=100, aria-valuenow=remaining. Null не создаёт progressbar;
+видимый текст «Неизвестно». Weekly time markers остаются role=meter отдельно.
