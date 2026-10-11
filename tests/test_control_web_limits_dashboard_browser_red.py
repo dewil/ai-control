@@ -41,6 +41,9 @@ class LimitsBrowserRED(unittest.TestCase):
     def tab(self,name):
         return self.page.get_by_role('tab',name=name,exact=True).or_(self.page.get_by_role('button',name=name,exact=True))
 
+    def panel(self):
+        return self.page.get_by_role('tabpanel',name='Лимиты',exact=True)
+
     def open(self):
         self.page.goto(self.fixture.origin)
         expect(self.tab('Лимиты')).to_be_visible()
@@ -54,8 +57,8 @@ class LimitsBrowserRED(unittest.TestCase):
     def gets(self):return [request for request in self.requests if request==('GET','/api/limits-overview')]
 
     def meters(self):
-        normal=self.page.get_by_role('meter',name=NORMAL,exact=True)
-        double=self.page.get_by_role('meter',name=DOUBLE,exact=True)
+        normal=self.panel().get_by_role('meter',name=NORMAL,exact=True)
+        double=self.panel().get_by_role('meter',name=DOUBLE,exact=True)
         expect(normal).to_be_visible();expect(double).to_be_visible()
         return normal,double
 
@@ -64,7 +67,7 @@ class LimitsBrowserRED(unittest.TestCase):
             self.assertEqual(float(meter.get_attribute('aria-valuemin')),0)
             self.assertEqual(float(meter.get_attribute('aria-valuemax')),7)
             self.assertAlmostEqual(float(meter.get_attribute('aria-valuenow')),value,delta=.002)
-            expect(self.page.get_by_text(label,exact=True).first).to_be_visible()
+            expect(self.panel().get_by_text(label,exact=True).first).to_be_visible()
 
     def test_real_route_primary_weekly_markers_at_0_1_3point5_days_and_mobile_geometry(self):
         # INV-WLIM-14 INV-WLIM-15: primary is weekly, rather than assumed 5h.
@@ -74,14 +77,14 @@ class LimitsBrowserRED(unittest.TestCase):
                 self.backend.limits_value=s.overview(elapsed=elapsed)
                 self.open();self.assert_marker_values(elapsed/s.DAY)
                 self.assertEqual(len(self.backend.limits_calls),len(self.gets()),'GET must traverse actual authenticated API')
-                expect(self.page.get_by_text(re.compile(r'7\s*(?:дней|дн\b)')).first).to_be_visible()
-                expect(self.page.get_by_text(re.compile(r'75\s*%')).first).to_be_visible()
-                expect(self.page.get_by_text(re.compile('Codex',re.I)).first).to_be_visible()
+                expect(self.panel().get_by_text(re.compile(r'7\s*(?:дней|дн\b)')).first).to_be_visible()
+                expect(self.panel().get_by_text(re.compile(r'75\s*%')).first).to_be_visible()
+                expect(self.panel().get_by_text(re.compile('Codex',re.I)).first).to_be_visible()
                 rendered=self.page.locator('body').inner_text()
                 self.assertTrue(any(part in s.identity() for part in re.findall(r'\b[0-9a-f]{8,64}\b',rendered)),
                                 'Source account identity must be readable in full or abbreviated form')
-                expect(self.page.get_by_text(re.compile('Claude',re.I)).first).to_be_visible()
-                expect(self.page.get_by_text(re.compile('Недоступ|Не подключ',re.I)).first).to_be_visible()
+                expect(self.panel().get_by_text(re.compile('Claude',re.I)).first).to_be_visible()
+                expect(self.panel().get_by_text(re.compile('Недоступ|Не подключ',re.I)).first).to_be_visible()
                 for width in (320,390,1280):
                     with self.subTest(width=width):
                         self.page.set_viewport_size(dict(width=width,height=900))
@@ -107,7 +110,7 @@ class LimitsBrowserRED(unittest.TestCase):
                         self.assertTrue(button.evaluate('e=>{const s=getComputedStyle(e);return document.activeElement===e&&(parseFloat(s.outlineWidth)>0&&s.outlineStyle!=="none"||s.boxShadow!=="none")}'),
                                         'Keyboard focus must remain visible')
                 if elapsed==3.5*s.DAY:
-                    expect(self.page.get_by_text('Ориентир достиг границы',exact=True)).to_be_visible()
+                    expect(self.panel().get_by_text('Ориентир достиг границы',exact=True)).to_be_visible()
                 self.assertEqual(self.backend.limits_value['sources'][0]['windows'][0]['remaining_percent'],75)
                 self.assertNotIn(s.ACCOUNT,self.page.locator('body').inner_text())
 
@@ -116,23 +119,23 @@ class LimitsBrowserRED(unittest.TestCase):
         self.backend.limits_value=s.overview(remaining=None,anchor=False)
         self.backend.limits_value['sources'][0]['windows'][0]['resets_at']=s.NOW-1
         self.open()
-        expect(self.page.get_by_text('Неизвестно',exact=True).first).to_be_visible()
-        expect(self.page.get_by_text('Окно истекло, ожидаем новые данные',exact=True)).to_be_visible()
-        expect(self.page.get_by_role('meter',name=NORMAL)).to_have_count(0)
-        expect(self.page.get_by_role('meter',name=DOUBLE)).to_have_count(0)
-        expect(self.page.get_by_role('progressbar')).to_have_count(0)
+        expect(self.panel().get_by_text('Неизвестно',exact=True).first).to_be_visible()
+        expect(self.panel().get_by_text('Окно истекло, ожидаем новые данные',exact=True)).to_be_visible()
+        expect(self.panel().get_by_role('meter',name=NORMAL)).to_have_count(0)
+        expect(self.panel().get_by_role('meter',name=DOUBLE)).to_have_count(0)
+        expect(self.panel().get_by_role('progressbar')).to_have_count(0)
         self.assertNotRegex(self.page.locator('body').inner_text(),r'(?<!\d)0\s*%')
 
     def test_remaining_bar_zero_full_and_three_quarters_have_real_visual_geometry(self):
         # INV-WLIM-14: compare rendered pixels, without private fill-node selectors.
-        self.open();expect(self.page.get_by_role('progressbar')).to_be_visible()
+        self.open();expect(self.panel().get_by_role('progressbar')).to_be_visible()
         for width in (320,390,1280):
             rows={}
             for remaining in (0,100,75):
                 with self.subTest(width=width,remaining=remaining):
-                    self.backend.limits_value=s.overview(remaining=remaining,duration=300)
+                    self.backend.limits_value=s.overview(elapsed=0,remaining=remaining,duration=300)
                     self.page.set_viewport_size(dict(width=width,height=900));self.open()
-                    bar=self.page.get_by_role('progressbar');expect(bar).to_be_visible()
+                    bar=self.panel().get_by_role('progressbar');expect(bar).to_be_visible()
                     self.assertEqual(float(bar.get_attribute('aria-valuemin')),0)
                     self.assertEqual(float(bar.get_attribute('aria-valuemax')),100)
                     self.assertEqual(float(bar.get_attribute('aria-valuenow')),remaining)
@@ -158,34 +161,35 @@ class LimitsBrowserRED(unittest.TestCase):
 
     def test_visible_tick_expires_window_before_pending_poll_response(self):
         # INV-WLIM-11 INV-WLIM-14 INV-WLIM-16
-        self.page.clock.install();self.backend.limits_value=s.overview(duration=300)
-        self.backend.limits_value['sources'][0]['windows'][0]['resets_at']=s.NOW+30
-        self.open();expect(self.page.get_by_role('progressbar')).to_be_visible()
+        self.page.clock.install();self.backend.limits_value=s.overview(elapsed=0,duration=300)
+        self.backend.limits_value['sources'][0]['windows'][0].update(
+            resets_at=s.NOW+30,window_started_at=s.NOW+30-300*60)
+        self.open();expect(self.panel().get_by_role('progressbar')).to_be_visible()
         held=[];self.page.route('**/api/limits-overview',lambda route:held.append(route))
         self.page.clock.fast_forward(61000);self.until(lambda:len(held)==1)
-        expect(self.page.get_by_text('Окно истекло, ожидаем новые данные',exact=True)).to_be_visible()
-        expect(self.page.get_by_text('Неизвестно',exact=True).first).to_be_visible()
-        expect(self.page.get_by_role('progressbar')).to_have_count(0)
+        expect(self.panel().get_by_text('Окно истекло, ожидаем новые данные',exact=True)).to_be_visible()
+        expect(self.panel().get_by_text('Неизвестно',exact=True).first).to_be_visible()
+        expect(self.panel().get_by_role('progressbar')).to_have_count(0)
 
     def test_known_percent_unknown_anchor_has_remaining_but_no_weekly_markers(self):
         # INV-WLIM-11 INV-WLIM-14 INV-WLIM-15
         self.backend.limits_value=s.overview(anchor=False)
         self.backend.limits_value['sources'][0]['windows'][0]['resets_at']=None
-        self.open();expect(self.page.get_by_text(re.compile(r'75\s*%')).first).to_be_visible()
-        expect(self.page.get_by_role('meter',name=NORMAL)).to_have_count(0)
-        expect(self.page.get_by_role('meter',name=DOUBLE)).to_have_count(0)
+        self.open();expect(self.panel().get_by_text(re.compile(r'75\s*%')).first).to_be_visible()
+        expect(self.panel().get_by_role('meter',name=NORMAL)).to_have_count(0)
+        expect(self.panel().get_by_role('meter',name=DOUBLE)).to_have_count(0)
 
     def test_only_weekly_duration_gets_two_markers_and_payload_text_is_not_HTML(self):
         # INV-WLIM-14 INV-WLIM-15: malicious synthetic bucket remains text.
-        self.backend.limits_value=s.overview(duration=300)
+        self.backend.limits_value=s.overview(elapsed=0,duration=300)
         self.backend.limits_value['sources'][0]['windows'][0].update(
             bucket='<img src=x onerror="window.limitsInjected=1">',id='codex:primary')
         # Malformed browser input is intentionally intercepted outside the safe
         # HTTP validator; rejecting it is also a valid UI outcome.
         self.page.route('**/api/limits-overview',lambda route:route.fulfill(status=200,json=self.backend.limits_value))
         self.open();self.until(lambda:len(self.gets())==1);self.page.wait_for_timeout(80)
-        expect(self.page.get_by_role('meter',name=NORMAL)).to_have_count(0)
-        expect(self.page.get_by_role('meter',name=DOUBLE)).to_have_count(0)
+        expect(self.panel().get_by_role('meter',name=NORMAL)).to_have_count(0)
+        expect(self.panel().get_by_role('meter',name=DOUBLE)).to_have_count(0)
         self.assertIsNone(self.page.evaluate('window.limitsInjected'))
         self.assertEqual(self.page.locator('img[onerror]').count(),0)
 
@@ -199,7 +203,7 @@ class LimitsBrowserRED(unittest.TestCase):
         self.assert_marker_values(1+60/s.DAY)
         self.page.clock.fast_forward(121000);self.page.wait_for_timeout(50)
         self.assertEqual(len(held),1,'Refreshing must remain single-flight')
-        expect(self.page.get_by_text(re.compile('Устарел|stale',re.I)).first).to_be_visible()
+        expect(self.panel().get_by_text(re.compile('Устарел|stale',re.I)).first).to_be_visible()
         self.assert_marker_values(1+181/s.DAY)
 
     def test_hidden_tabclose_and_foreground_reentry_abort_and_request_once(self):
@@ -215,7 +219,7 @@ class LimitsBrowserRED(unittest.TestCase):
         self.page.evaluate("Object.defineProperty(document,'visibilityState',{configurable:true,get:()=> 'visible'});document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('pageshow'))")
         self.until(lambda:len(held)==1)
         self.assertEqual(len(self.gets()),before+1,'Foreground entry duplicated fresh GET')
-        expect(self.page.get_by_text(re.compile('Загруз|Обновл|Устарел|stale',re.I)).first).to_be_visible()
+        expect(self.panel().get_by_text(re.compile('Загруз|Обновл|Устарел|stale',re.I)).first).to_be_visible()
         self.tab('Сессии').click();aborts=self.page.evaluate('testLimitsAborts')
         self.assertGreater(aborts,0,'Closing limits gates must abort the held request')
         self.page.clock.fast_forward(300000);self.page.wait_for_timeout(50)
@@ -243,10 +247,10 @@ class LimitsBrowserRED(unittest.TestCase):
         self.until(lambda:len(held)>=2)
         fresh=s.overview(remaining=88);fresh['sources'][0]['account_id']=s.identity('new-login-account')
         held[-1].fulfill(status=200,json=fresh)
-        expect(self.page.get_by_text(re.compile(r'88\s*%')).first).to_be_visible()
+        expect(self.panel().get_by_text(re.compile(r'88\s*%')).first).to_be_visible()
         held[0].fulfill(status=200,json=old);self.page.wait_for_timeout(80)
-        expect(self.page.get_by_text(re.compile(r'88\s*%')).first).to_be_visible()
-        expect(self.page.get_by_text(re.compile(r'13\s*%'))).to_have_count(0)
+        expect(self.panel().get_by_text(re.compile(r'88\s*%')).first).to_be_visible()
+        expect(self.panel().get_by_text(re.compile(r'13\s*%'))).to_have_count(0)
 
     def test_android_suspend_never_polls_and_resume_gets_fresh_anchor(self):
         # INV-WLIM-16 with existing public Android lifecycle protocol2.
