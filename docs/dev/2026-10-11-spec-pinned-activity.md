@@ -28,3 +28,10 @@ Time tooltip и доступное имя содержат полную дату
 Независимые RED: producerstatus/time/partialfailure/rootcontext/privacy/readbudget/no mutations; closedDTOschema1/2; browserorder/ties/unknown/ageclock/tooltips/status/scrollfocus/mobile/legacy/bglifecycle. Один runtimewriter, HaikuDESIGN/SOURCE, exactfullCI/signed22deploy. Не входит: новые вендорные runtime/мультиаккаунтность/NATS/APK.
 
 Прежнее legacy ожидание «pins никогда не делает thread/read» мигрируется исходным независимым автором: чтение metadata теперь прямо требуется пользователем, запрещены запуск/resume/история/изменения. Остальные security/owner/context/persistence проверки сохраняются.
+
+### Уточнения DESIGN
+Metadata reads последовательные, каждый<=250мс;6с — абсолютный бюджет только metadata-фазы. При истечении остаток строк получает unknown metadata, уже полученные разрешённые результаты сохраняются; итоговая authority-проверка всё равно обязательна. Один timeout не обнуляет соседние успешные результаты.
+
+Обезличенная unavailable authority-строка сохраняет только pin_id для открепления, остальные поля по фиксированному DTO. last_activity=null, поэтому она сортируется в общей unknown-группе в конце с прежним стабильным порядком.
+
+Сервер не сохраняет cache активности: новая timeout/error строка имеет null last_activity даже после прежнего успеха. Только browser при transportfailure всего запроса может оставить предыдущий целый ответ, помечая его статус устаревшим после15с. Успешный новый ответ, включая строку unknown/unavailable, заменяет прежние поля, без per-row слияния старой активности. Если native object получен и identity доказана, malformed status и malformed updatedAt деградируют независимо; потеря authority после чтения обнуляет всё.
