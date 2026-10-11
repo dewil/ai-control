@@ -35,6 +35,7 @@ class PinnedSessionsBlind(s.ModuleCase):
     def test_root_namespace_or_grant_drift_only_opaque_unavailable(self):
         # INV-PIN-01 INV-PIN-04 INV-PIN-07
         pin=self.pin();expected=s.pin_item(pin['pin_id'],available=False)
+        expected.update(status='unknown',waits=[],last_activity=None,observed_at=None,activity_state='unavailable')
         self.rpc.context.update(context_id='b'*64,context_generation=8)
         self.assertEqual(self.pins()['items'],[expected])
         self.rpc.context.update(context_id='a'*64,context_generation=9)
@@ -68,8 +69,12 @@ class PinnedSessionsBlind(s.ModuleCase):
         for index in range(24):
             sid=str(uuid.UUID(int=(4<<76)|(8<<60)|index+1));self.rpc.read_id=sid
             self.assertTrue(self.pin(sid=sid)['pinned'])
-        before=self.pins();sid=str(uuid.uuid4());self.rpc.read_id=sid
-        self.assertIn('error',self.pin(sid=sid));self.assertEqual(self.pins(),before)
+        before_ids=[row['pin_id'] for row in self.pins()['items']]
+        before_bytes={path.relative_to(self.pin_path):path.read_bytes() for path in self.pin_path.rglob('*.json')}
+        sid=str(uuid.uuid4());self.rpc.read_id=sid
+        self.assertIn('error',self.pin(sid=sid))
+        self.assertEqual([row['pin_id'] for row in self.pins()['items']],before_ids)
+        self.assertEqual({path.relative_to(self.pin_path):path.read_bytes() for path in self.pin_path.rglob('*.json')},before_bytes)
         paths=list(self.pin_path.rglob('*.json'));self.assertTrue(paths,'Public injected private store must contain durable JSON')
         for path in paths:
             self.assertEqual(path.stat().st_mode&0o777,0o600);self.assertLessEqual(path.stat().st_size,128*1024)

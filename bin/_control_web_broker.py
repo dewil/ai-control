@@ -602,11 +602,18 @@ def pins_result(value):
     failure = navigation_error(value)
     if failure:return failure
     try:
-        if (type(value) is not dict or set(value) != {'schema', 'items'} or type(value['schema']) is not int
-                or value['schema'] != 1 or type(value['items']) is not list or len(value['items']) > 24):raise ValueError()
+        def timestamp(number):
+            return type(number) in (int, float) and math.isfinite(number) and 0 <= number <= 253402300799
+        if type(value) is not dict or type(value.get('schema')) is not int or value['schema'] not in (1, 2):raise ValueError()
+        live = value['schema'] == 2
+        if (set(value) != ({'schema', 'server_now', 'items'} if live else {'schema', 'items'})
+                or type(value['items']) is not list or len(value['items']) > 24
+                or live and not timestamp(value['server_now'])):raise ValueError()
+        fields = {'pin_id', 'project', 'sid', 'title', 'vendor', 'available', 'metadata_state'}
+        if live:fields |= {'status', 'waits', 'last_activity', 'observed_at', 'activity_state'}
         rows, ids = [], set()
         for row in value['items']:
-            if (type(row) is not dict or set(row) != {'pin_id', 'project', 'sid', 'title', 'vendor', 'available', 'metadata_state'}
+            if (type(row) is not dict or set(row) != fields
                     or not valid_qid(row['pin_id']) or row['pin_id'] in ids or type(row['available']) is not bool):raise ValueError()
             if row['available']:
                 if (type(row['project']) is not str or not PROJECT.fullmatch(row['project']) or not valid_qid(row['sid'])
@@ -615,8 +622,19 @@ def pins_result(value):
                 row['title'].encode('utf-8')
             elif (row['project'] is not None or row['sid'] is not None or row['vendor'] is not None
                     or row['title'] != 'Недоступная сессия' or row['metadata_state'] != 'unavailable'):raise ValueError()
+            if live:
+                if (type(row['status']) is not str or row['status'] not in ('active', 'idle', 'notLoaded', 'systemError', 'unknown')
+                        or type(row['waits']) is not list or row['waits'] not in ([], ['approval'], ['question'], ['approval', 'question'])
+                        or row['status'] != 'active' and row['waits']
+                        or row['activity_state'] not in ('fresh', 'unavailable')):raise ValueError()
+                if row['activity_state'] == 'fresh':
+                    if (not row['available'] or not timestamp(row['observed_at']) or row['observed_at'] > value['server_now']
+                            or row['last_activity'] is not None and
+                            (not timestamp(row['last_activity']) or row['last_activity'] > row['observed_at'])):raise ValueError()
+                elif (row['status'] != 'unknown' or row['waits'] or row['last_activity'] is not None
+                        or row['observed_at'] is not None):raise ValueError()
             ids.add(row['pin_id']);rows.append(dict(row, title=redact(row['title'])))
-        return dict(schema=1, items=rows)
+        return dict(schema=2, server_now=value['server_now'], items=rows) if live else dict(schema=1, items=rows)
     except Exception:return {'error': 'unavailable'}
 
 

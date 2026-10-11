@@ -65,7 +65,7 @@ const drafts = new Map();
 const modelDrafts = new Map();
 const queueViews = new Map();
 let queueTransferDialog=null;
-const pinView={items:[],version:0,flight:null,pending:false,last:0,busy:false};
+const pinView={items:[],version:0,flight:null,pending:false,last:0,busy:false,serverNow:null,received:0};
 let navigationTimer=null,navigationEpoch=0;
 const partView={epoch:null,admission:0,overview:{last:0,flight:null,data:null,rendered:''},selected:null,target:null,actions:new Map()};
 let modelExpiryTimer=null;
@@ -265,7 +265,7 @@ async function api(path,body,signal,isCurrent=()=>true,admission=false){
     return data;
   }finally{if(controller){const remaining=(observationControllers.get(controller)||0)-1;if(remaining>0)observationControllers.set(controller,remaining);else observationControllers.delete(controller);if(bridge)signal.removeEventListener('abort',abort);}}
 }
-function signedOut(){closeProjectFile();stopLimitsView(true);stopNavigation();resetParticipation();pinView.items=[];pinView.version++;$('pin-list').replaceChildren();closeQueueTransferDialog();stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();queueViews.clear();if(acceptedStatusTimer!==null){pageClearTimer(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
+function signedOut(){closeProjectFile();stopLimitsView(true);stopNavigation();resetParticipation();pinView.items=[];pinView.serverNow=null;pinView.received=0;pinView.version++;$('pin-list').replaceChildren();closeQueueTransferDialog();stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();queueViews.clear();if(acceptedStatusTimer!==null){pageClearTimer(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
 function field(parent,key,label,kind='textarea'){const wrap=node('label',label);const input=node(kind);input.maxLength=16000;input.value=drafts.get(key)||'';input.addEventListener('input',()=>drafts.set(key,input.value));wrap.append(input);parent.append(wrap);return input;}
 function button(parent,label,action,cls){const b=node('button',label,cls);b.type='button';b.addEventListener('click',action);parent.append(b);return b;}
 async function mutate(card,path,body){if(!pageActive())return;const lifecycle=pageGeneration,auth=chatAuthGeneration;if(busy)return;busy=true;const controls=[...document.querySelectorAll('#tasks-panel button')];controls.forEach(b=>b.disabled=true);const status=card.querySelector('.message');status.textContent='Сохраняем…';try{const data=await api(path,body);if(lifecycle!==pageGeneration||!pageActive())return;status.textContent=data.status==='already'?'Решение уже было принято.':'Решение принято.';await refresh();}catch(err){if(err.stale||lifecycle!==pageGeneration||!pageActive())return;status.textContent=err.message;if(err.code==='saved_pending'){await refresh();notice(err.message);}}finally{busy=false;if(pageActive()&&auth===chatAuthGeneration){if(lifecycle===pageGeneration)controls.forEach(b=>b.disabled=false);else{taskLoaded=false;if(currentTab==='tasks')refresh();}}}}
@@ -665,33 +665,59 @@ async function answerPartQuestion(scope,epoch,row,answers){
   finally{if(current())renderPartQuestions();}
 }
 
-function validPins(data){return exactFields(data,['schema','items'])&&data.schema===1&&Array.isArray(data.items)&&data.items.length<=24&&new Set(data.items.map(row=>row?.pin_id)).size===data.items.length&&data.items.every(row=>exactFields(row,['pin_id','project','sid','title','vendor','available','metadata_state'])&&UUID_RE.test(row.pin_id)&&typeof row.available==='boolean'&&(row.available?typeof row.project==='string'&&/^[A-Za-z0-9_-]{1,32}$/.test(row.project)&&UUID_RE.test(row.sid)&&row.vendor==='codex'&&typeof row.title==='string'&&Array.from(row.title).length<=500&&row.metadata_state==='saved':row.project===null&&row.sid===null&&row.vendor===null&&row.title==='Недоступная сессия'&&row.metadata_state==='unavailable'));}
+function validPins(data){
+  const live=data?.schema===2,stamp=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0&&value<=253402300799;
+  const fields=['pin_id','project','sid','title','vendor','available','metadata_state'];
+  if(live)fields.push('status','waits','last_activity','observed_at','activity_state');
+  return exactFields(data,live?['schema','server_now','items']:['schema','items'])&&(live||data.schema===1)&&(!live||stamp(data.server_now))&&Array.isArray(data.items)&&data.items.length<=24&&new Set(data.items.map(row=>row?.pin_id)).size===data.items.length&&data.items.every(row=>{
+    if(!exactFields(row,fields)||!UUID_RE.test(row.pin_id)||typeof row.available!=='boolean')return false;
+    if(row.available?!(typeof row.project==='string'&&/^[A-Za-z0-9_-]{1,32}$/.test(row.project)&&UUID_RE.test(row.sid)&&row.vendor==='codex'&&typeof row.title==='string'&&Array.from(row.title).length<=500&&row.metadata_state==='saved'):!(row.project===null&&row.sid===null&&row.vendor===null&&row.title==='Недоступная сессия'&&row.metadata_state==='unavailable'))return false;
+    if(!live)return true;
+    if(!['active','idle','notLoaded','systemError','unknown'].includes(row.status)||!Array.isArray(row.waits)||!['[]','["approval"]','["question"]','["approval","question"]'].includes(JSON.stringify(row.waits))||row.status!=='active'&&row.waits.length)return false;
+    if(row.activity_state==='fresh')return row.available&&stamp(row.observed_at)&&row.observed_at<=data.server_now&&(row.last_activity===null||stamp(row.last_activity)&&row.last_activity<=row.observed_at);
+    return row.activity_state==='unavailable'&&row.status==='unknown'&&!row.waits.length&&row.last_activity===null&&row.observed_at===null;
+  });
+}
 async function loadPins(force=false){
   if(!navigationVisible())return;
+  renderPins();
   if(pinView.flight){if(force)pinView.pending=true;return;}
   if(!force&&pinView.last&&performance.now()-pinView.last<5000)return;
   const auth=chatAuthGeneration,lifecycle=pageGeneration,epoch=navigationEpoch,version=pinView.version,flight={};
   const current=()=>navigationVisible()&&auth===chatAuthGeneration&&lifecycle===pageGeneration&&epoch===navigationEpoch&&version===pinView.version;
   pinView.flight=flight;pinView.last=performance.now();
   const controller=newObservationController(),timer=pageTimeout(()=>controller.abort(),15000);
-  try{const data=await api('/api/session-pins',undefined,controller.signal,current);if(!current())return;
+  try{const data=await api('/api/session-pins?activity=1',undefined,controller.signal,current);if(!current())return;
     if(!validPins(data))throw new Error(messages.unavailable);
-    pinView.items=data.items;renderPins();$('pin-status').textContent='';
-  }catch(error){if(!error.stale&&current()){if(error.status===401||error.status===403){stopNavigation();if(error.status===403)ownerForbidden();}$('pin-status').textContent='Закреплённые сессии пока недоступны.';}}
+    pinView.items=data.items;pinView.serverNow=data.schema===2?data.server_now:null;pinView.received=performance.now();renderPins();$('pin-status').textContent='';
+  }catch(error){if(!error.stale&&current()){if(error.status===401||error.status===403){stopNavigation();if(error.status===403)ownerForbidden();}renderPins();$('pin-status').textContent='Закреплённые сессии пока недоступны.';}}
   finally{pageClearTimer(timer);if(pinView.flight===flight)pinView.flight=null;if(pinView.pending){pinView.pending=false;if(navigationVisible())loadPins(true);}}
 }
 function renderPins(){
   const key=currentSessionKey(),generation=selectionGeneration,project=selectedProject,sid=selectedSession?.sid;
   const decision=key&&captureHistoryScroll(project,sid,generation,false),list=$('pin-list');
   const existing=new Map([...list.children].map(row=>[row.dataset.pinId,row])),children=[];
-  for(const item of pinView.items){
+  const now=pinView.serverNow===null?null:pinView.serverNow+Math.max(0,performance.now()-pinView.received)/1000;
+  const ordered=pinView.items.slice().sort((a,b)=>(b.last_activity??-1)-(a.last_activity??-1));
+  for(const item of ordered){
     let row=existing.get(item.pin_id);
     if(!row){row=node('div',undefined,'pin-row');row.dataset.pinId=item.pin_id;}
     let title=row.querySelector('.pin-title');
-    if(!title){title=node('button',undefined,'secondary pin-title');title.type='button';row.append(title);}
+    if(!title){title=node('button',undefined,'secondary pin-title');title.type='button';row.append(title);row.append(node('div',undefined,'pin-activity'));}
     title.textContent=item.title;title.disabled=!item.available;
     title.title=item.available?'Сохранённый снимок названия':'Сессия недоступна';
     title.onclick=()=>openPinnedSession(item);
+    const activity=row.querySelector('.pin-activity');
+    let status=activity.querySelector('.pin-status-badge'),time=activity.querySelector('.pin-time-badge');
+    if(!status){status=node('span',undefined,'pin-status-badge');time=node('span',undefined,'pin-time-badge');activity.append(status,time);}
+    const stale=item.activity_state==='fresh'&&now!==null&&now-item.observed_at>15;
+    status.textContent=!item.available?'Недоступна':stale?'Нет свежих данных':item.status==='active'&&item.waits?.length?item.waits.map(wait=>wait==='approval'?'Ожидает разрешения':'Ожидает ответа').join(' · '):({active:'Работает',idle:'Готова',notLoaded:'Не загружена',systemError:'Ошибка'})[item.status]||'Нет данных';
+    if(item.last_activity!==null&&item.last_activity!==undefined&&now!==null){
+      const age=Math.max(0,now-item.last_activity);
+      time.textContent=age<60?'сейчас':age<3600?Math.floor(age/60)+'м':age<86400?Math.floor(age/3600)+'ч':Math.floor(age/86400)+'д';
+      const full=new Intl.DateTimeFormat('ru-RU',{timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(item.last_activity*1000))+' (Москва)'+(stale?' · Устаревший снимок':'');
+      time.title=full;time.setAttribute('aria-label','Последняя активность: '+full);
+    }else{time.textContent='—';time.title='Время активности неизвестно';time.setAttribute('aria-label','Время активности неизвестно');}
     let remove=row.querySelector('.pin-remove');
     if(!remove){remove=node('button','Открепить','secondary pin-remove');remove.type='button';row.append(remove);}
     remove.disabled=pinView.busy;remove.onclick=()=>changePin(false,item.pin_id);

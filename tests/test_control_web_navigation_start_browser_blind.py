@@ -16,6 +16,7 @@ START=re.compile(r'Запустить.*очеред',re.I)
 CONFIRM=re.compile(r'^(Подтвердить|Запустить|Запустить из очереди|Да, запустить)$',re.I)
 PIN=re.compile(r'^Закрепить(?: сессию| чат)?$',re.I)
 UNPIN=re.compile(r'Открепить|Удалить закрепление',re.I)
+PINS_ROUTE=re.compile(r'/api/session-pins(?:\?.*)?$')
 
 class NavigationBackend(core.BrowserQueueBackend):
     def __init__(self):
@@ -111,13 +112,13 @@ class NavigationStartBrowserBlind(unittest.TestCase):
 
     def test_initial_late_pins_preserve_composer_focus_and_stale_GET_cannot_restore_unpin(self):
         # INV-PIN-05 INV-PIN-08
-        held=[];self.page.route('**/api/session-pins',lambda route:held.append(route))
+        held=[];self.page.route(PINS_ROUTE,lambda route:held.append(route))
         self.select();self.until(lambda:len(held)==1)
         composer=self.page.locator('textarea');composer.fill('Unsent navigation draft');composer.focus()
         held[0].fulfill(status=200,json=dict(schema=1,items=deepcopy(self.backend.pin_rows)))
         block=self.pin_block();expect(block.get_by_text('Pinned synthetic A',exact=True)).to_be_visible()
         self.assertEqual(composer.input_value(),'Unsent navigation draft');self.assertTrue(composer.evaluate('e=>e===document.activeElement'))
-        self.page.unroute('**/api/session-pins');self.page.route('**/api/session-pins',lambda route:held.append(route))
+        self.page.unroute(PINS_ROUTE);self.page.route(PINS_ROUTE,lambda route:held.append(route))
         self.visible();self.until(lambda:len(held)>=2)
         block.get_by_text('Pinned synthetic A',exact=True).locator('xpath=ancestor::*[.//button][1]').get_by_role('button',name=UNPIN).click()
         self.until(lambda:any(call[0]=='unpin' for call in self.backend.nav_calls))
@@ -180,7 +181,7 @@ class NavigationStartBrowserBlind(unittest.TestCase):
         self.assertEqual(len(self.requests),before,'Hidden Android lifecycle started new foreground work')
         self.assertEqual(self.navposts(),[])
         self.visible();self.until(lambda:len(self.requests)>before)
-        held=[];self.page.route('**/api/session-pins',lambda route:held.append(route));self.visible();self.until(lambda:len(held)>=1)
+        held=[];self.page.route(PINS_ROUTE,lambda route:held.append(route));self.visible();self.until(lambda:len(held)>=1)
         logout=self.page.get_by_role('button',name=re.compile('Выйти|Выход',re.I));self.assertEqual(logout.count(),1);logout.click()
         held[0].fulfill(status=200,json=dict(schema=1,items=[s.pin_item(title='Late private pin after logout')]))
         self.page.wait_for_timeout(100);expect(self.page.get_by_text('Late private pin after logout',exact=True)).to_have_count(0)
