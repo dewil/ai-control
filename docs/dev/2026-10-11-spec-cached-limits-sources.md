@@ -52,7 +52,7 @@ raw errors/provider metadata. Кеш читается только owner broker,
 'codex'|'claude'), kind('quota'|'prepaid'), identity('unbound'|'collector_mapped'|
 'unknown'), account_ref(null|64 lowercase hex), origin('bot_cache'|'alp_export'),
 status('ok'|'stale'|'unavailable'), reason(null|'missing_source'|'source_error'|
-'invalid_snapshot'|'unknown_identity'), observed_at(epoch|null),
+'invalid_snapshot'|'unknown_identity'|'reset_pending'), observed_at(epoch|null),
 observation_basis('snapshot_tick'|'provider_capture'|'unknown'),
 age_seconds(number|null), max_age_seconds(2700), windows:[], prepaid:null,
 last_known:null. Max32sources, unique(node_id,provider,account_ref).
@@ -93,16 +93,27 @@ Nodata/error => current prepaid=null, last_known из last_balance/last_at
 ## INV-WLIM-23: ALP import (публикация владельцем отдельно)
 Вход — schema_version1,node_id=alp,exported_at,accounts; freshness metadata
 может присутствовать, но не расширяет consumer max age2700 или future tolerance0.
+Optional freshness exact keys max_age_seconds(int1..86400), future_skew_seconds(int0..300);
+она не увеличивает max_age2700/future0 consumer. Иные top-level поля отклоняются.
 accounts max16; exact allowlisted fields account_ref,provider,status,
-observed_at,observed_at_semantics,windows. Stable owner ref — opaque string1..128,
-без controls; публичный ref=SHA256('alp-limits-account:'+provider+':'+owner_ref).
+observed_at,observed_at_semantics,windows. Stable owner ref — canonical lowercase UUID4 (проверка version/variant),
+без произвольных ID/строк; публичный ref=SHA256('alp-limits-account:'+provider+':'+owner_ref).
 Raw source IDs/refs/labels не выходят в API. Duplicate source refs/provider
 reject ALP input; не сливать aliases молча. Account providerclaude/codex only.
-statusok/stale/unknown/reset_pending; semantics tick_start. windows fields
+statusok/stale/unknown/reset_pending/missing/future; semantics tick_start.
+Missing/future => unavailable/missing_source или invalid_snapshot соответственно.
+Observednull допустим также уmissing. Exported_at долженбыть nonfutureUTC.
+ALP slots: Claude five_hour/seven_day/scoped:sonnet/scoped:opus/scoped:fable;
+Codex primary_window/secondary_window. Проекция bucket для последних
+primary/secondary, scoped_* нормализуютсябездвоеточия; остальныефиксированы. windows fields
 slot,used_percent,reset,duration_seconds; unknown/null сохраняется, invalid
 numeric => unknown window, не clamp вknown. Source may not infer duration
 from kind5h/week. Reset-past => unknownremaining; observedfuture invalid.
 Ref наличие не означает native/registry attestation; identitycollector_mapped.
+Statusok => ok/stale по возрасту; producerstale сохраняет stale.
+Unknown/reset_pending => unavailable/source_error или reset_pending; current
+windows=[]; account_ref остаётся collector_mapped для идентификации ошибки.
+Observed_atnull допустим только у unknown; age/basis тогда null/unknown.
 exported_at не обновляет возраст observed_at; доставка старого экспорта не
 делает его свежим. Raw malformed/secret extra fields fail closed ALP only.
 Пока export недоступен: два unavailable ALP placeholders(providerclaude/codex,
@@ -135,3 +146,71 @@ stale/debt/unknownbaseline and320/360 geometry, V1 regression and backgroundstop
 После implementation sourceHaiku/полныйCIточногоSHA/signed22 deploy.
 Live bot proof only safe projected fields; ALP acceptance только после реально
 доступного owner-approved export. Не заявлять ALP готовым по syntheticfixture.
+
+
+## Уточнения DESIGN11.10
+Единый live gate ALP: реальные карточки с цифрами допускаются только после
+owner-approved публикации и успешной проверки согласованного DTO. До этого
+только unavailable placeholders; synthetic fixtures не дают liveacceptance.
+Native во wrapper присутствует всегда. При исключении native reader строится
+{schema:1,server_now:now,coverage:{scope:llm_native_only,partial:true},sources:[
+{node_id:llm,provider:codex,account_id:null,identity:unknown,status:unavailable,
+captured_at:null,age_seconds:null,plan:null,windows:[],error:source_unavailable},
+такая же строка providerclaude]}. Строковые значения здесь имеют JSONstrings;
+это exact valid прежний schema1, не объектerror. Wrapper.server_now=now.
+При успешном native read now=его server_now; при fallback now=ownerclock.
+Возраст всех cached sources вычисляется с тем же now.
+ALP freshness metadata строго informational: max_age_seconds/future_skew_seconds
+проверяются по типам/диапазону, но НИКОГДА не используются для вычисления
+consumer freshness. Consumer использует собственные2700s/future0;
+producerstale всё равно остаётсяstale. Наличие в export metadata86400 не
+даёт разрешения считать old snapshot свежим. Public max_age_seconds=2700.
+
+
+Native fallback как настоящий JSON (строки и boolean точно определены):
+```json
+{
+  "schema": 1,
+  "server_now": 1800000000,
+  "coverage": {
+    "scope": "llm_native_only",
+    "partial": true
+  },
+  "sources": [
+    {
+      "node_id": "llm",
+      "provider": "codex",
+      "account_id": null,
+      "identity": "unknown",
+      "status": "unavailable",
+      "captured_at": null,
+      "age_seconds": null,
+      "plan": null,
+      "windows": [],
+      "error": "source_unavailable"
+    },
+    {
+      "node_id": "llm",
+      "provider": "claude",
+      "account_id": null,
+      "identity": "unknown",
+      "status": "unavailable",
+      "captured_at": null,
+      "age_seconds": null,
+      "plan": null,
+      "windows": [],
+      "error": "source_unavailable"
+    }
+  ]
+}
+```
+server_now1800000000 здесь пример; runtime подставляет ownernow.
+ALP observed_at берётся ТОЛЬКО из account.observed_at; exported_at ни при
+каких условиях не заменяет его. Inputsemantics tick_start => publicbasis
+snapshot_tick. Еслиobservednull уmissing/unknown: publicobserved/age=null,
+basisunknown, statusunavailable, windowsprepaidпусты. Futureobserved ->
+publicobservednull иreasoninvalid_snapshot, accountrefможно сохранить.
+Producer freshness diagnostics НЕ выходят в API вообще. Единственное
+одноимённое полеpublicsource.max_age_seconds — literal2700 consumer.
+Как ownerотноситсякproducer45min/35min — решениепубликацииэкспорта,
+не JSONнастройкаполномочийпотребителя.
