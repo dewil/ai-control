@@ -740,6 +740,27 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
             return None, error('forbidden', 403)
         return current, None
 
+    @app.get('/api/limits-overview')
+    async def limits_overview(request: Request):
+        from _control_web_broker import limits_result
+        _, failure = live_auth(request)
+        if failure is not None:
+            return failure
+        if request.headers.getlist('origin') and request.headers.getlist('origin') != [origin]:
+            return error('forbidden', 403)
+        if list(request.query_params.multi_items()):
+            return error('invalid_request', 422)
+        try:
+            result = limits_result(await run_in_threadpool(backend.limits_overview))
+            _, failure = live_auth(request)
+            if failure is not None:
+                return failure
+            if 'error' in result:
+                return error('unavailable', 503)
+            return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+        except Exception:
+            return error('unavailable', 503)
+
     @app.get('/api/devbus/overview')
     async def devbus_overview(request: Request):
         from fastapi.responses import Response
