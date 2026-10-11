@@ -258,9 +258,9 @@ class WorkflowContracts(unittest.TestCase):
         self.assertNotIn("continue-on-error:", block)
 
     def test_checkout_pins_and_clean_tree_guard_before_execution(self):
-        checkout_blocks = [body for body in self.jobs.values() if "actions/checkout@" in body]
+        checkout_blocks = [(name, body) for name, body in self.jobs.items() if "actions/checkout@" in body]
         self.assertTrue(checkout_blocks)
-        for body in checkout_blocks:
+        for name, body in checkout_blocks:
             self.assertIn("actions/checkout@v6", body)
             self.assertIn("actions/setup-python@v6", body)
             self.assertRegex(body, r"fetch-depth:\s*0")
@@ -270,7 +270,11 @@ class WorkflowContracts(unittest.TestCase):
             self.assertIn("git diff --exit-code HEAD --", body)
             self.assertIn("git ls-files --others --exclude-standard", body)
             guard = body.index("git diff --exit-code HEAD --")
-            executions = [m.start() for m in re.finditer(r"(?:--shard|python tests/test-provider|unittest discover -s tests -p 'test_control_android)", body)]
+            execution_pattern = (
+                r"ci/control_web_contracts\.py\s+--aggregate\b" if name == "contracts" else
+                r"(?:--shard|python tests/test-provider|unittest discover -s tests -p 'test_control_android)"
+            )
+            executions = [m.start() for m in re.finditer(execution_pattern, body)]
             self.assertTrue(executions)
             self.assertTrue(all(guard < pos for pos in executions))
         self.assertIn("73eb36b4eba7b13b893014e400b30b7f918de986", self.source)
