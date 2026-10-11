@@ -107,6 +107,26 @@ class LimitsNativeRED(unittest.TestCase):
         self.assertEqual(b['age_seconds'],30)
         self.now+=31;self.invoke();self.assertEqual(len(self.rpc.calls),2)
 
+    def test_server_clock_rollback_cannot_make_future_cached_capture_fresh(self):
+        # INV-WLIM-11 INV-WLIM-16: clamp(age,0) loses capture provenance.
+        first=self.invoke();warm=self.codex(first)
+        self.assertEqual(warm['status'],'ok')
+        self.assertEqual(warm['captured_at'],self.now)
+        self.now-=10
+        result=self.invoke();source=self.codex(result)
+        self.assertEqual(result['server_now'],self.now,'Serve time follows the current trusted epoch clock')
+        captured=source['captured_at']
+        if captured is not None:
+            self.assertLessEqual(captured,result['server_now'],
+                                 'A pre-rollback cache capture is in the future, never a fresh age-zero observation')
+            self.assertEqual(source['age_seconds'],result['server_now']-captured)
+        if source['status']=='unavailable':
+            self.assertIsNone(source['account_id']);self.assertEqual(source['windows'],[])
+        else:
+            self.assertIsNotNone(captured,'Available observations require an actual capture time')
+            self.assertGreaterEqual(source['age_seconds'],0)
+        # A new native read and a safe unavailable result are both valid repairs.
+
     def test_cached_context_mismatch_immediately_discards_identity_and_windows(self):
         # INV-WLIM-10: mismatch must not freshen/relabel the old entry.
         self.invoke();self.rpc.context['context_generation']+=1
@@ -335,6 +355,32 @@ class LimitsHTTPRED(unittest.TestCase):
                 self.assertNotIn(s.PRIVATE,json.dumps(body));self.assertIn('no-store',response.getheader('cache-control',''))
         self.backend.limits_failure=RuntimeError(s.PRIVATE);response,body=self.request()
         self.assertGreaterEqual(response.status,500);self.assertNotIn(s.PRIVATE,json.dumps(body))
+
+    def test_forged_future_capture_or_wrong_age_is_rejected_at_HTTP_boundary(self):
+        # INV-WLIM-11 INV-WLIM-12: syntactically finite timestamps are insufficient.
+        self.fixture.login()
+        for captured,age in ((s.NOW+10,0),(s.NOW-10,0)):
+            with self.subTest(captured=captured,age=age):
+                value=s.overview()
+                value['sources'][0].update(captured_at=captured,age_seconds=age)
+                self.backend.limits_value=value
+                response,body=self.request()
+                self.assertIn('no-store',response.getheader('cache-control',''))
+                if response.status==200:
+                    self.assertIs(type(body),dict)
+                    self.assertIn('sources',body)
+                    self.assertIs(type(body['sources']),list)
+                    codex=[source for source in body['sources']
+                           if isinstance(source,dict) and source.get('provider')=='codex']
+                    self.assertEqual(len(codex),1)
+                    self.assertEqual(codex[0].get('status'),'unavailable',
+                                     'Invalid provenance may only become a safe unavailable DTO')
+                    self.assertIsNone(codex[0].get('account_id'));self.assertEqual(codex[0].get('windows'),[])
+                    if codex[0].get('captured_at') is not None:
+                        self.assertLessEqual(codex[0]['captured_at'],body['server_now'])
+                        self.assertEqual(codex[0]['age_seconds'],body['server_now']-codex[0]['captured_at'])
+                else:
+                    self.assertGreaterEqual(response.status,500);self.assertLess(response.status,600)
 
 
 class LimitsBrokerRED(unittest.TestCase):
