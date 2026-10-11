@@ -1541,7 +1541,10 @@ class SessionChat:
             target = os.path.realpath(original, strict=True)
             _need(os.path.commonpath((root, target)) == root, 'file_unavailable')
             relative = os.path.relpath(target, root)
-            _need(_project_file_allowed(os.path.relpath(original, root))
+            # An absolute alias can lie outside root; its shared ancestor is
+            # only a base for checking original names, never filesystem authority.
+            original_relative = os.path.relpath(original, os.path.commonpath((root, original)))
+            _need(_project_file_allowed(original_relative)
                   and _project_file_allowed(relative), 'file_unavailable')
             # Resolve aliases, then walk canonical components from a pinned root.
             # Every subsequent open refuses replacement symlinks.
