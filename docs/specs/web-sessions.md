@@ -226,3 +226,6 @@ Canonical target остаётся внутри project-root; fd/O_NOFOLLOW и id
 Dialog показывает literal text и строку, не исполняет HTML. Закрытие/новый запрос/смена scope/background инвалидируют ответ без polling и потери чата.
 
 Трассируемость: tests/test_control_web_project_file_backend_red.py и tests/test_control_web_project_file_browser_red.py. Подробности docs/dev/2026-10-11-spec-project-file-viewer.md.
+
+## INV-WPIN01/02/03 — активность закреплений
+Read-only native metadata, строгий schema2 с legacy schema1, последняя активность updatedAt и компактная стабильная сортировка. Подробности docs/dev/2026-10-11-spec-pinned-activity.md.
