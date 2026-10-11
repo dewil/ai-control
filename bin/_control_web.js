@@ -11,7 +11,7 @@ function pageInterval(callback,delay){if(!pageActive())return null;const generat
 function pageClearTimer(timer){window.clearTimeout(timer);window.clearInterval(timer);pageTimers.delete(timer);}
 function closePageGate(){
   pageState='suspended';pageGeneration++;androidResumeGeneration++;taskLoaded=false;
-  stopNavigation();closeQueueTransferDialog();stopPolling();stopDevbusView();devbusAdmitted=false;
+  stopLimitsView();stopNavigation();closeQueueTransferDialog();stopPolling();stopDevbusView();devbusAdmitted=false;
   for(const flight of historyFlights.values())if(!observationControllers.has(flight.controller))observationControllers.set(flight.controller,0);historyFlights.clear();
   for(const controller of observationControllers.keys())controller.abort();observationControllers.clear();
   for(const timer of pageTimers)pageClearTimer(timer);
@@ -34,7 +34,8 @@ function activatePageViews(){
   const key=currentSessionKey();if(key)$('chat-draft').value=drafts.get(key)||'';
   const link=initialDeepLinkPending&&!selectedProject&&!projectEntries.length?parseDeepLink():null;initialDeepLinkPending=false;
   syncCurrentSessionControls();syncNavigation(true);
-  if(currentTab==='devbus')syncDevbusView();
+  if(currentTab==='limits')syncLimitsView();
+  else if(currentTab==='devbus')syncDevbusView();
   else if(currentTab==='sessions'){
     if(selectedSession){loadHistory(false,true);loadQueue(true);loadCapabilities();startPolling();}
     else if(!projectNames.length)loadProjects();else if(selectedProject)loadSessionList(0,false);else startPolling();
@@ -53,7 +54,7 @@ async function resumeV2(command){
   row.promise=(async()=>{try{
     const data=await api('/api/session',undefined,undefined,()=>pageCommand===row,true);
     if(pageCommand!==row||generation!==pageGeneration||document.visibilityState!=='visible'||typeof data.csrf!=='string'||!data.csrf)return false;
-    csrf=data.csrf;pageState='ready';return true;
+    csrf=data.csrf;limitsView.authReady=true;pageState='ready';return true;
   }catch(_){if(pageCommand===row)pageState='suspended';return false;}})();return row.promise;
 }
 let csrf = '';
@@ -198,7 +199,7 @@ function renderMarkdown(text){
 function notice(text){$('notice').textContent=text;}
 let androidResumeGeneration=0;
 function androidAuth(){return window.AndroidAuth&&typeof window.AndroidAuth.requestAuth==='function'?window.AndroidAuth:null;}
-function requestNativeAuth(notify=true){if(lifecycleV2)closePageGate();const native=androidAuth();stopPolling();stopDevbusView();devbusAdmitted=false;androidResumeGeneration++;if(native&&notify)native.requestAuth();return Boolean(native);}
+function requestNativeAuth(notify=true){stopLimitsView(true);if(lifecycleV2)closePageGate();const native=androidAuth();stopPolling();stopDevbusView();devbusAdmitted=false;androidResumeGeneration++;if(native&&notify)native.requestAuth();return Boolean(native);}
 function ownerForbidden(){const notify=liveAndroidAuthGeneration!==chatAuthGeneration;liveAndroidAuthGeneration=chatAuthGeneration;requestNativeAuth(notify);notice('Войдите снова для обновления данных.');}
 function authExpired(){if(!requestNativeAuth())signedOut();}
 async function api(path,body,signal,isCurrent=()=>true,admission=false){
@@ -216,7 +217,7 @@ async function api(path,body,signal,isCurrent=()=>true,admission=false){
     return data;
   }finally{if(controller){const remaining=(observationControllers.get(controller)||0)-1;if(remaining>0)observationControllers.set(controller,remaining);else observationControllers.delete(controller);if(bridge)signal.removeEventListener('abort',abort);}}
 }
-function signedOut(){stopNavigation();resetParticipation();pinView.items=[];pinView.version++;$('pin-list').replaceChildren();closeQueueTransferDialog();stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();queueViews.clear();if(acceptedStatusTimer!==null){pageClearTimer(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
+function signedOut(){stopLimitsView(true);stopNavigation();resetParticipation();pinView.items=[];pinView.version++;$('pin-list').replaceChildren();closeQueueTransferDialog();stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();queueViews.clear();if(acceptedStatusTimer!==null){pageClearTimer(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
 function field(parent,key,label,kind='textarea'){const wrap=node('label',label);const input=node(kind);input.maxLength=16000;input.value=drafts.get(key)||'';input.addEventListener('input',()=>drafts.set(key,input.value));wrap.append(input);parent.append(wrap);return input;}
 function button(parent,label,action,cls){const b=node('button',label,cls);b.type='button';b.addEventListener('click',action);parent.append(b);return b;}
 async function mutate(card,path,body){if(!pageActive())return;const lifecycle=pageGeneration,auth=chatAuthGeneration;if(busy)return;busy=true;const controls=[...document.querySelectorAll('#tasks-panel button')];controls.forEach(b=>b.disabled=true);const status=card.querySelector('.message');status.textContent='Сохраняем…';try{const data=await api(path,body);if(lifecycle!==pageGeneration||!pageActive())return;status.textContent=data.status==='already'?'Решение уже было принято.':'Решение принято.';await refresh();}catch(err){if(err.stale||lifecycle!==pageGeneration||!pageActive())return;status.textContent=err.message;if(err.code==='saved_pending'){await refresh();notice(err.message);}}finally{busy=false;if(pageActive()&&auth===chatAuthGeneration){if(lifecycle===pageGeneration)controls.forEach(b=>b.disabled=false);else{taskLoaded=false;if(currentTab==='tasks')refresh();}}}}
@@ -290,7 +291,7 @@ async function admitDevbusView(){
   try{const data=await api('/api/session',undefined,undefined,()=>generation===devbusGeneration&&auth===chatAuthGeneration);
     if(generation!==devbusGeneration||auth!==chatAuthGeneration||currentTab!=='devbus'||document.visibilityState!=='visible')return;
     if(typeof data.csrf!=='string'||!data.csrf)return;
-    csrf=data.csrf;devbusAdmitted=true;devbusTerminal=false;syncDevbusView();
+    csrf=data.csrf;limitsView.authReady=true;devbusAdmitted=true;devbusTerminal=false;syncDevbusView();
   }catch(_){if(generation===devbusGeneration&&auth===chatAuthGeneration){stopDevbusView();devbusAdmitted=false;}}
 }
 
@@ -927,14 +928,127 @@ async function loadModelCatalog(){if(!pageActive())return;
 }
 function syncCurrentSessionControls(force=false){if(!pageActive()&&!force)return;const key=currentSessionKey();const historyBusy=Boolean(key&&historyFlights.has(key));const state=key&&historyData.get(key);const hasOlder=Boolean(state&&(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error)));renderModelControls();renderQueueControls(key);$('pin-current').disabled=!activeSelection()||pinView.busy;$('chat-send').disabled=!pageActive()||!csrf||currentTab!=='sessions'||!key||Boolean(selectedSession?.created&&!state?.initialized&&!state?.confirmedOrigin)||sendsInFlight.has(key)||hasUnknown(key)||!explicitModelReady(key)||Boolean(key&&queueView(key).capabilities?.operations.send.supported===false);$('chat-refresh').disabled=!key||historyBusy;$('history-older').disabled=!key||historyBusy||!hasOlder;$('history-retry').hidden=!(state&&state.historyError);$('history-retry').disabled=!key||historyBusy;renderCurrentSendStatus();syncRenameControls();syncCreateControls();}
 function showTab(tab,load=true){if(!pageActive())return;
-  if(!['tasks','sessions','devbus'].includes(tab))return;
-  if(currentTab!==tab){stopDevbusView();devbusTerminal=false;}
+  if(!['tasks','sessions','devbus','limits'].includes(tab))return;
+  if(currentTab!==tab){stopLimitsView();stopDevbusView();devbusTerminal=false;}
   currentTab=tab;if(tab!=='sessions')clearHistoryScrollSlack();
-  for(const name of ['tasks','sessions','devbus']){$('tab-'+name).setAttribute('aria-selected',String(tab===name));$(name+'-panel').hidden=tab!==name;}
+  for(const name of ['tasks','sessions','devbus','limits']){$('tab-'+name).setAttribute('aria-selected',String(tab===name));$(name+'-panel').hidden=tab!==name;}
   syncCurrentSessionControls();syncNavigation();
   if(tab==='tasks'){stopPolling();if(load&&!taskLoaded)refresh();}
   else if(tab==='sessions'){if(load&&!projectNames.length)loadProjects();else if(load&&!selectedProject)loadSessionList(0,false);startPolling();}
+  else if(tab==='limits'){stopPolling();if($('notice').textContent==='Здесь появятся вопросы и результаты ваших задач.')notice('');syncLimitsView();}
   else{stopPolling();if(devbusAdmitted)syncDevbusView();else admitDevbusView();}
+}
+// INV-WLIM-14..16: this snapshot belongs to one visible tab/auth admission.
+const limitsView={generation:0,timer:null,flight:null,data:null,received:0,authReady:false};
+function limitsVisible(){return Boolean(pageActive()&&csrf&&limitsView.authReady&&currentTab==='limits'&&document.visibilityState==='visible'&&!$('workspace').hidden);}
+function stopLimitsView(clear=false){
+  limitsView.generation++;
+  if(limitsView.timer!==null)pageClearTimer(limitsView.timer);
+  limitsView.timer=null;
+  limitsView.flight?.controller.abort();limitsView.flight=null;
+  if(clear){limitsView.authReady=false;limitsView.data=null;limitsView.received=0;$('limits-cards').replaceChildren();$('limits-status').textContent='';}
+}
+function validLimitsOverview(data){
+  const number=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0;
+  const optional=value=>value===null||number(value);
+  const timestamp=value=>value===null||number(value)&&value<=253402300799;
+  return Boolean(data&&data.schema===1&&number(data.server_now)&&data.coverage?.scope==='llm_native_only'&&typeof data.coverage.partial==='boolean'&&Array.isArray(data.sources)&&data.sources.length<=16&&data.sources.every(source=>
+    source&&source.node_id==='llm'&&['codex','claude'].includes(source.provider)&&['ok','stale','unavailable'].includes(source.status)&&
+    ['native_reported','unknown'].includes(source.identity)&&(source.account_id===null||typeof source.account_id==='string'&&/^[0-9a-f]{64}$/.test(source.account_id))&&
+    timestamp(source.captured_at)&&optional(source.age_seconds)&&(source.plan===null||['Free','Plus','Pro','Team','Business','Enterprise','unknown'].includes(source.plan))&&
+    [null,'source_unavailable','identity_unavailable','context_changed','unsupported'].includes(source.error)&&
+    (source.status==='unavailable'?source.account_id===null&&source.identity==='unknown':source.account_id!==null&&source.identity==='native_reported')&&
+    Array.isArray(source.windows)&&source.windows.length<=16&&(source.status!=='unavailable'||!source.windows.length)&&source.windows.every(window=>
+      window&&typeof window.bucket==='string'&&/^[A-Za-z0-9_-]{1,64}$/.test(window.bucket)&&[window.bucket+':primary',window.bucket+':secondary'].includes(window.id)&&
+      (window.duration_minutes===null||Number.isInteger(window.duration_minutes)&&window.duration_minutes>=1&&window.duration_minutes<=525600)&&
+      (window.remaining_percent===null||number(window.remaining_percent)&&window.remaining_percent<=100)&&timestamp(window.resets_at)&&timestamp(window.window_started_at)&&
+      [null,'derived_reset_and_duration'].includes(window.anchor))));
+}
+function limitsClock(){return limitsView.data.server_now+Math.max(0,performance.now()-limitsView.received)/1000;}
+function limitsDate(value){return new Date(value*1000).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'});}
+function limitsWait(seconds){const minutes=Math.max(1,Math.ceil(seconds/60));return minutes>=1440?Math.floor(minutes/1440)+' дн '+Math.floor(minutes%1440/60)+' ч':minutes>=60?Math.floor(minutes/60)+' ч '+minutes%60+' мин':minutes+' мин';}
+function limitsTimeline(window,now){
+  const elapsed=Math.max(0,now-window.window_started_at)/86400,normal=Math.min(7,elapsed),double=Math.min(7,elapsed*2);
+  const timeline=node('div',undefined,'lm-timeline');
+  const legend=node('div',undefined,'lm-legend');legend.append(node('span','Ориентир ×2','lm-primary'),node('span','Обычный ×1'));timeline.append(legend);
+  const track=node('div',undefined,'lm-track');
+  for(const [label,value,cls] of [['Обычный ×1',normal,'lm-normal'],['Ориентир ×2',double,'lm-double']]){
+    const marker=node('span',undefined,'lm-marker '+cls);marker.setAttribute('role','meter');marker.setAttribute('aria-label',label);
+    marker.setAttribute('aria-valuemin','0');marker.setAttribute('aria-valuemax','7');marker.setAttribute('aria-valuenow',String(value));
+    marker.setAttribute('aria-valuetext',value.toFixed(2)+' из 7 дней');marker.style.left=value/7*100+'%';track.append(marker);
+  }
+  timeline.append(track);
+  const scale=node('div',undefined,'lm-scale');for(let day=0;day<=7;day++){const label=node('span',day===7?'7 дней':String(day));label.style.left=day/7*100+'%';scale.append(label);}timeline.append(scale);
+  timeline.append(node('p','Начало расчётное: из сброса и длительности API.','lm-muted'));
+  if(double>=7)timeline.append(node('p','Ориентир достиг границы','lm-boundary'));
+  return timeline;
+}
+function renderLimits(){
+  if(!limitsVisible()||!limitsView.data)return;
+  const data=limitsView.data,now=limitsClock(),cards=$('limits-cards');cards.replaceChildren();
+  for(const source of data.sources){
+    const unavailable=source.status==='unavailable';
+    const age=source.captured_at===null?null:Math.max(0,now-source.captured_at);
+    const stale=!unavailable&&(source.status==='stale'||age===null||age>=180);
+    const card=node('article',undefined,'lm-card'+(stale?' lm-stale':'')+(unavailable?' lm-unavailable':''));
+    const heading=node('div',undefined,'lm-card-heading'),identity=node('div');
+    identity.append(node('h3',source.provider==='codex'?'Codex':'Claude'),node('span',source.node_id.toUpperCase()+(source.plan?' · '+source.plan:''),'lm-muted'));
+    heading.append(identity,node('span',unavailable?'Недоступно':stale?'Устарело':'Свежий снимок','lm-status'));card.append(heading);
+    if(source.account_id){
+      card.append(node('p','Аккаунт '+source.account_id.slice(0,12),'lm-account'));
+      card.append(node('p','Codex App Server, аккаунт источника','lm-muted'));
+    }else card.append(node('p','Аккаунт неизвестен','lm-muted'));
+    if(unavailable||!source.windows.length)card.append(node('p',unavailable?'Источник недоступен · Неизвестно':'Окна недоступны · Неизвестно','lm-empty'));
+    for(const window of source.windows){
+      const expired=window.resets_at!==null&&window.resets_at<=now;
+      const remaining=expired?null:window.remaining_percent;
+      const block=node('div',undefined,'lm-window'),summary=node('div',undefined,'lm-window-heading');
+      const duration=window.duration_minutes;
+      const label=duration===10080?'Неделя · 7 дней':duration===null?'Длительность неизвестна':duration%60===0?duration/60+' ч':duration+' мин';
+      summary.append(node('span',label,'lm-window-name'),node('strong',remaining===null?'Неизвестно':Number(remaining.toFixed(1))+'%','lm-remaining'));block.append(summary);
+      block.append(node('p',window.bucket+' · остаток','lm-muted'));
+      if(remaining!==null){
+        const bar=node('div',undefined,'lm-quota'+(remaining<=10?' lm-exhausted':''));bar.setAttribute('role','progressbar');
+        bar.setAttribute('aria-label','Остаток · '+label);bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');bar.setAttribute('aria-valuenow',String(remaining));
+        const fill=node('span',undefined,'lm-quota-fill');fill.style.width=remaining+'%';bar.append(fill);block.append(bar);
+      }
+      if(remaining===0)block.append(node('p','Лимит исчерпан','lm-expired'));
+      if(expired)block.append(node('p','Окно истекло, ожидаем новые данные','lm-expired'));
+      else if(window.resets_at!==null)block.append(node('p','Сброс через '+limitsWait(window.resets_at-now),'lm-reset'));
+      if(window.resets_at!==null){const time=node('time',limitsDate(window.resets_at),'lm-muted');time.dateTime=new Date(window.resets_at*1000).toISOString();block.append(time);}
+      else block.append(node('p','Время сброса неизвестно','lm-muted'));
+      const validAnchor=source.provider==='codex'&&duration===10080&&window.anchor==='derived_reset_and_duration'&&window.window_started_at!==null&&window.resets_at!==null&&window.resets_at>now&&Math.abs(window.resets_at-duration*60-window.window_started_at)<1;
+      if(validAnchor)block.append(limitsTimeline(window,now));
+      card.append(block);
+    }
+    if(source.captured_at!==null)card.append(node('p','Получено '+limitsDate(source.captured_at)+(age!==null?' · '+Math.floor(age/60)+' мин назад':''),'lm-received'));
+    cards.append(card);
+  }
+  $('limits-coverage').textContent=(data.coverage.partial?'Часть данных LLM недоступна. ':'')+'Покрытие: только native-источники LLM. Удалённые узлы не подключены.';
+}
+async function fetchLimits(){
+  if(!limitsVisible()||limitsView.flight)return;
+  const generation=limitsView.generation,auth=chatAuthGeneration,lifecycle=pageGeneration,controller=newObservationController();
+  const flight={controller};limitsView.flight=flight;
+  const current=()=>limitsVisible()&&generation===limitsView.generation&&auth===chatAuthGeneration&&lifecycle===pageGeneration;
+  try{
+    const data=await api('/api/limits-overview',undefined,controller.signal,current);
+    if(!current())return;
+    if(!validLimitsOverview(data))throw new Error(messages.unavailable);
+    limitsView.data=data;limitsView.received=performance.now();$('limits-status').textContent='';renderLimits();
+  }catch(error){
+    if(!current())return;
+    limitsView.data=null;$('limits-cards').replaceChildren();$('limits-status').textContent='Лимиты недоступны. Ожидаем новые данные.';
+    if(error.status===403)ownerForbidden();
+  }finally{if(limitsView.flight===flight)limitsView.flight=null;}
+}
+function syncLimitsView(){
+  if(!limitsVisible()){stopLimitsView();return;}
+  if(limitsView.timer!==null)return;
+  // Re-entry discards the previous clock and does not label old cards current.
+  limitsView.data=null;limitsView.received=0;$('limits-cards').replaceChildren();$('limits-status').textContent='Загрузка лимитов…';
+  limitsView.timer=pageInterval(()=>{renderLimits();fetchLimits();},60000);
+  fetchLimits();
 }
 function setSessionStatus(text){$('session-list-status').textContent=text;}
 // Disclosure is a local UI choice; only a fresh deliberate selection consumes proof.
@@ -1622,7 +1736,7 @@ async function checkDelivery(key,id){if(!pageActive())return;if(statusChecks.has
 function applyReceipt(key,data){if(!data||!['sending','held','cancelled','queued','accepted','delivery_unknown','rejected'].includes(data.status)||!UUID_RE.test(data.message_id||''))return;const id=data.message_id,map=ensureReceipts(key),existing=map.get(id),attempt=latestAttempts.get(key);const outgoing=historyData.get(key)?.outgoing.get(id);if(data.status==='queued'&&outgoing?.queueAbsent)return;if(['held','cancelled'].includes(existing?.status)&&data.status!=='accepted')return;const terminal=existing&&['accepted','rejected'].includes(existing.status)?existing:attempt&&attempt.id===id&&['accepted','rejected'].includes(attempt.status)?{status:attempt.status,turn_id:existing&&existing.turn_id||null}:null;if(terminal){if(outgoing)outgoing.status=terminal.status;map.set(id,terminal);if(attempt&&attempt.id===id)attempt.status=terminal.status;syncLocalOutgoingStatuses(key);return;}if(data.status==='sending'&&existing&&existing.status==='delivery_unknown')return;const record={status:data.status,turn_id:data.turn_id||null,...(data.queued_submission_id?{queued_submission_id:data.queued_submission_id}:{})};if(outgoing&&data.queued_submission_id)outgoing.queued_submission_id=data.queued_submission_id;if(existing?.checkError&&data.status==='delivery_unknown')record.checkError=existing.checkError;map.set(id,record);if(outgoing&&outgoing!==attempt)outgoing.status=record.status;if(attempt&&attempt.id===id){if(data.status==='accepted'&&attempt.status!=='accepted'&&attempt.text!==null)attempt.acceptedUntil=Date.now()+5000;attempt.status=data.status;if(!record.checkError)delete attempt.localError;}syncLocalOutgoingStatuses(key);}
 async function submitMessage(event){if(!pageActive()){event.preventDefault();notice('Панель восстанавливается');return;}event.preventDefault();if(!selectedSession||!selectedProject)return;const project=selectedProject,sid=selectedSession.sid,key=chatKey(project,sid),generation=selectionGeneration,auth=chatAuthGeneration,text=$('chat-draft').value;if(!text.trim()){$('send-status').textContent='Напишите сообщение перед отправкой.';return;}if(sendsInFlight.has(key))return;if(hasUnknown(key)){const attempt=latestAttempts.get(key);$('send-status').textContent=attempt&&attempt.text===text?'Для этой попытки уже сохранён ID. Проверьте доставку вручную.':'Сначала проверьте неизвестную доставку. Новый текст пока не отправлен.';renderReceipts(key);return;}const state=modelDraft(key);if(queueMode(key)&&state.modelId){$('send-status').textContent='Очередь использует настройки сессии при запуске. Для выбранной модели выберите режим «Сразу»; черновик сохранён.';return;}if(!explicitModelReady(key)){$('send-status').textContent='Выберите поддерживаемый уровень размышления или обновите каталог; черновик сохранён.';syncCurrentSessionControls();return;}const selection=state.modelId?Object.freeze({catalog_id:state.catalog.catalog_id,model_id:state.modelId,effort:state.effort}):null;let attempt=latestAttempts.get(key);if(!attempt||attempt.text!==text||['queued','held','cancelled','accepted','rejected'].includes(attempt.status)){attempt={mode:queueMode(key)?'queue':'direct',id:crypto.randomUUID(),text,status:'sending',selection,selectionLabel:state.label,context:Object.freeze({project,sid,generation,auth})};latestAttempts.set(key,attempt);normalizeHistoryState(key).outgoing.set(attempt.id,attempt);ensureReceipts(key).set(attempt.id,{status:'sending',turn_id:null});}else if(attempt.status==='delivery_unknown'){$('send-status').textContent='Проверьте доставку вручную; повторная отправка отключена.';return;}else{attempt.status='sending';}
   sendsInFlight.add(key);renderHistory(key);syncCurrentSessionControls();$('send-status').textContent='Отправляем сообщение…';renderReceipts(key);if(scrollScopeMatches(project,sid,generation))scrollToDocumentBottom();try{let result;try{result=await api(attempt.mode==='queue'?'/api/session-queue':'/api/session-send',{project,sid,message_id:attempt.id,text:attempt.text,...(attempt.selection?{selection:attempt.selection}:{})});}catch(err){if(err.stale)return;if(!csrf||chatAuthGeneration!==auth)return;if(err.data&&['queued','accepted','rejected','delivery_unknown'].includes(err.data.status))result=err.data;else if(['invalid_request','forbidden','unauthorized','stale'].includes(err.code)){attempt.status='rejected';if(attempt.selection&&err.code==='stale'){state.stale=true;state.message='Каталог моделей устарел. Обновите список моделей; выбор и черновик сохранены.';}attempt.localError=err.message+' Черновик сохранён; отправка не повторялась.';ensureReceipts(key).delete(attempt.id);if(activeSelection(project,sid,generation)){renderHistory(key);$('send-status').textContent=attempt.localError;}return;}else{result={status:'delivery_unknown',message_id:attempt.id,turn_id:null};}}if(!csrf||chatAuthGeneration!==auth)return;if(!result.message_id)result.message_id=attempt.id;applyReceipt(key,result);if(!ensureReceipts(key).has(attempt.id))applyReceipt(key,{status:'delivery_unknown',message_id:attempt.id,turn_id:null});attempt.status=ensureReceipts(key).get(attempt.id).status;if(['queued','accepted'].includes(attempt.status)&&drafts.get(key)===text){drafts.delete(key);if(activeSelection(project,sid,generation)&&$('chat-draft').value===text)$('chat-draft').value='';}if(activeSelection(project,sid,generation)){renderHistory(key);renderCurrentSendStatus();renderReceipts(key);}}finally{if(chatAuthGeneration===auth){sendsInFlight.delete(key);syncLocalOutgoingStatuses(key);}syncCurrentSessionControls();}}
-function historyChange(){if(lifecycleV2){if(document.visibilityState==='hidden')closePageGate();return;}if(document.visibilityState==='hidden'){stopNavigation();stopPolling();stopDevbusView();devbusAdmitted=false;}else if(currentTab==='devbus'){admitDevbusView();}else{syncCurrentSessionControls();syncNavigation(true);startPolling();loadQueue(true);if(liveTransport)liveJSON(liveTransport).then(result=>{if(result)acceptLiveLease(liveTransport,result.data,result.started);}).catch(()=>{});}}
+function historyChange(){if(document.visibilityState==='hidden')stopLimitsView();else if(currentTab==='limits')syncLimitsView();if(lifecycleV2){if(document.visibilityState==='hidden')closePageGate();return;}if(document.visibilityState==='hidden'){stopNavigation();stopPolling();stopDevbusView();devbusAdmitted=false;}else if(currentTab==='devbus'){admitDevbusView();}else{syncCurrentSessionControls();syncNavigation(true);startPolling();loadQueue(true);if(liveTransport)liveJSON(liveTransport).then(result=>{if(result)acceptLiveLease(liveTransport,result.data,result.started);}).catch(()=>{});}}
 function historyPinActive(){return Boolean(historyScrollSlack&&pinnedHistoryScope&&selectedSession&&pinnedHistoryScope.project===selectedProject&&pinnedHistoryScope.sid===selectedSession.sid&&pinnedHistoryScope.generation===selectionGeneration);}
 function noteHistoryScrollIntent(event){
   const reader=pageReaderScope&&scrollScopeMatches(pageReaderScope.project,pageReaderScope.sid,pageReaderScope.generation);
@@ -1643,12 +1757,13 @@ function notePageReaderReturn(){if(pageReaderScope&&scrollScopeMatches(pageReade
 function noteHistoryScrollPosition(){const reader=pageReaderScope&&scrollScopeMatches(pageReaderScope.project,pageReaderScope.sid,pageReaderScope.generation);const scrollbar=historyScrollbarStartY!==null&&window.scrollY>historyScrollbarStartY;if(historyPinActive()&&scrollbar)historyScrollIntent=true;if(reader&&window.scrollY>0&&documentMaxScroll()-window.scrollY<=80&&(scrollbar||pageReaderScope.returnEnd===navigationEpoch||pageReaderScope.returnUntil>=Date.now()&&window.scrollY>pageReaderScope.returnY))scrollToDocumentBottom();}
 function endHistoryScrollbarDrag(){historyScrollbarStartY=null;}
 
-$('login-form').addEventListener('submit',async event=>{event.preventDefault();if(!pageActive()||busy)return;busy=true;const b=event.target.querySelector('button');b.disabled=true;notice('Входим…');try{const data=await api('/api/login',{username:$('username').value,password:$('password').value,totp:$('login-totp').value});csrf=data.csrf;devbusAdmitted=true;devbusTerminal=false;liveAndroidAuthGeneration=-1;$('password').value='';$('login-totp').value='';$('login').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;const link=parseDeepLink();if(link){showTab('sessions',false);await loadProjects();}else{showTab('tasks',false);updateUrl();await refresh();}}catch(err){if(err.stale)return;notice(err.message);}finally{busy=false;b.disabled=false;}});
+$('login-form').addEventListener('submit',async event=>{event.preventDefault();if(!pageActive()||busy)return;stopLimitsView(true);busy=true;const b=event.target.querySelector('button');b.disabled=true;notice('Входим…');try{const data=await api('/api/login',{username:$('username').value,password:$('password').value,totp:$('login-totp').value});csrf=data.csrf;limitsView.authReady=true;devbusAdmitted=true;devbusTerminal=false;liveAndroidAuthGeneration=-1;$('password').value='';$('login-totp').value='';$('login').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;const link=parseDeepLink();if(link){showTab('sessions',false);await loadProjects();}else{showTab('tasks',false);updateUrl();await refresh();}}catch(err){if(err.stale)return;notice(err.message);}finally{busy=false;b.disabled=false;}});
 $('refresh').addEventListener('click',refresh);
-$('logout').addEventListener('click',async()=>{if(!pageActive())return;const native=androidAuth();if(native&&typeof native.requestLogout==='function'){if(lifecycleV2)closePageGate();stopPolling();stopDevbusView();devbusAdmitted=false;androidResumeGeneration++;native.requestLogout();return;}stopPolling();stopDevbusView();devbusAdmitted=false;try{await api('/api/logout',{});signedOut();drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();sessionRows=[];$('cards').replaceChildren();$('session-list').replaceChildren();clearHistoryView();updateUrl();notice('Вы вышли из Control.');}catch(err){if(err.stale)return;notice(err.message);}});
+$('logout').addEventListener('click',async()=>{if(!pageActive())return;stopLimitsView(true);const native=androidAuth();if(native&&typeof native.requestLogout==='function'){if(lifecycleV2)closePageGate();stopPolling();stopDevbusView();devbusAdmitted=false;androidResumeGeneration++;native.requestLogout();return;}stopPolling();stopDevbusView();devbusAdmitted=false;try{await api('/api/logout',{});signedOut();drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();sessionRows=[];$('cards').replaceChildren();$('session-list').replaceChildren();clearHistoryView();updateUrl();notice('Вы вышли из Control.');}catch(err){if(err.stale)return;notice(err.message);}});
 $('tab-tasks').addEventListener('click',()=>showTab('tasks'));
 $('tab-sessions').addEventListener('click',()=>showTab('sessions'));
 $('tab-devbus').addEventListener('click',()=>showTab('devbus'));
+$('tab-limits').addEventListener('click',()=>showTab('limits'));
 $('project-sort').addEventListener('change',()=>{projectSort=$('project-sort').value==='activity'?'activity':'count';try{localStorage.setItem('project-sort',projectSort);}catch(_){}renderProjects();});
 $('projects-refresh').addEventListener('click',loadProjects);
 $('sessions-more').addEventListener('click',()=>{if(sessionsHaveMore)loadSessionList(sessionPage+1,true);});
@@ -1682,8 +1797,8 @@ $('chat-effort').addEventListener('change',()=>{const key=currentSessionKey();if
 $('models-refresh').addEventListener('click',()=>{const key=currentSessionKey();if(key&&!sendsInFlight.has(key)&&!hasUnknown(key))loadModelCatalog();});
 $('chat-draft').addEventListener('input',()=>{if(selectedSession){const key=chatKey(selectedProject,selectedSession.sid);drafts.set(key,$('chat-draft').value);syncCurrentSessionControls();if(hasUnknown(key))$('send-status').textContent='Есть отправка с неизвестным статусом. Сначала проверьте её вручную.';}});
 document.addEventListener('visibilitychange',historyChange);
-window.addEventListener('pagehide',()=>{stopNavigation();if(lifecycleV2){closePageGate();return;}stopPolling();stopDevbusView();devbusAdmitted=false;});
-window.addEventListener('pageshow',event=>{if(event.persisted)historyChange();});
+window.addEventListener('pagehide',()=>{stopLimitsView();stopNavigation();if(lifecycleV2){closePageGate();return;}stopPolling();stopDevbusView();devbusAdmitted=false;});
+window.addEventListener('pageshow',event=>{if(event.persisted)historyChange();else if(currentTab==='limits')syncLimitsView();});
 document.addEventListener('wheel',noteHistoryScrollIntent,{passive:true});
 document.addEventListener('touchstart',noteHistoryScrollIntent,{passive:true});
 document.addEventListener('touchmove',noteHistoryScrollIntent,{passive:true});
@@ -1693,17 +1808,18 @@ document.addEventListener('pointerup',endHistoryScrollbarDrag,{passive:true});
 document.addEventListener('pointercancel',endHistoryScrollbarDrag,{passive:true});
 window.addEventListener('scroll',noteHistoryScrollPosition,{passive:true});
 
-async function restoreSession(){if(!pageActive()||busy)return;stopDevbusView();devbusAdmitted=false;busy=true;const retry=$('session-retry');retry.hidden=true;retry.disabled=true;$('session-loading').hidden=false;$('login').hidden=true;$('workspace').hidden=true;$('logout').hidden=true;notice('Восстанавливаем сессию…');try{const data=await api('/api/session');if(typeof data.csrf!=='string'||!data.csrf)throw new Error(messages.unavailable);csrf=data.csrf;devbusAdmitted=true;devbusTerminal=false;$('session-loading').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;notice('');const link=parseDeepLink();if(link){showTab('sessions',false);await loadProjects();}else{showTab('tasks',false);updateUrl();await refresh();}}catch(err){if(err.stale)return;if(err.status===401){if(!androidAuth())signedOut();notice('');}else{notice(err.message+' Повторите восстановление сессии.');retry.hidden=false;}}finally{busy=false;retry.disabled=false;}}
+async function restoreSession(){if(!pageActive()||busy)return;stopDevbusView();devbusAdmitted=false;busy=true;const retry=$('session-retry');retry.hidden=true;retry.disabled=true;$('session-loading').hidden=false;$('login').hidden=true;$('workspace').hidden=true;$('logout').hidden=true;notice('Восстанавливаем сессию…');try{const data=await api('/api/session');if(typeof data.csrf!=='string'||!data.csrf)throw new Error(messages.unavailable);csrf=data.csrf;limitsView.authReady=true;devbusAdmitted=true;devbusTerminal=false;$('session-loading').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;notice('');const link=parseDeepLink();if(link){showTab('sessions',false);await loadProjects();}else{showTab('tasks',false);updateUrl();await refresh();}}catch(err){if(err.stale)return;if(err.status===401){if(!androidAuth())signedOut();notice('');}else{notice(err.message+' Повторите восстановление сессии.');retry.hidden=false;}}finally{busy=false;retry.disabled=false;}}
 window.aiControlAndroidResume=async function(command){
   if(command!==undefined)return resumeV2(command);if(lifecycleV2)return false;
-  stopDevbusView();devbusAdmitted=false;
+  stopLimitsView();stopDevbusView();devbusAdmitted=false;
   const generation=++androidResumeGeneration;
   try{const data=await api('/api/session',undefined,undefined,()=>generation===androidResumeGeneration);
     if(generation!==androidResumeGeneration||typeof data.csrf!=='string'||!data.csrf)return false;
-    csrf=data.csrf;devbusAdmitted=true;devbusTerminal=false;liveAndroidAuthGeneration=-1;
+    csrf=data.csrf;limitsView.authReady=true;devbusAdmitted=true;devbusTerminal=false;liveAndroidAuthGeneration=-1;
     $('session-loading').hidden=true;$('login').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;notice('');
     syncNavigation(true);
-    if(currentTab==='devbus')syncDevbusView();
+    if(currentTab==='limits')syncLimitsView();
+    else if(currentTab==='devbus')syncDevbusView();
     else if(currentTab==='sessions'){startPolling();if(selectedSession)await loadHistory(false);else if(!projectNames.length)await loadProjects();}
     else await refresh();
     return true;
