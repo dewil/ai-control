@@ -35,3 +35,7 @@ Metadata reads последовательные, каждый<=250мс;6с — �
 Обезличенная unavailable authority-строка сохраняет только pin_id для открепления, остальные поля по фиксированному DTO. last_activity=null, поэтому она сортируется в общей unknown-группе в конце с прежним стабильным порядком.
 
 Сервер не сохраняет cache активности: новая timeout/error строка имеет null last_activity даже после прежнего успеха. Только browser при transportfailure всего запроса может оставить предыдущий целый ответ, помечая его статус устаревшим после15с. Успешный новый ответ, включая строку unknown/unavailable, заменяет прежние поля, без per-row слияния старой активности. Если native object получен и identity доказана, malformed status и malformed updatedAt деградируют независимо; потеря authority после чтения обнуляет всё.
+
+### Совместимость HTTP при выпуске
+
+SessionChat/ownerwire producer отдаётschema2, pins_result принимает1/2. HTTP GET/api/session-pins безquery возвращает validated schema1 projection (только старые7полей), чтобы уже открытаяr20страница продолжалаработать. НоваяUI вызывает /api/session-pins?activity=1 и получаетvalidatedschema2; если synthetic/legacy backend вернул1, оно остаётся допустимымunknown. Разрешёнединственныйoptionalqueryactivity=1; любоеиное/повторноезначение/поле422 черезowner/sameoriginguard, доnativecall. Сначала проверитьполныйproducerDTO, потомlegacyprojection; нельзяотфильтроватьmalformedprivateextrasтак, чтобысчитатьответвалидным. Principal/wire/op/pin-storeне меняются. Browserвexisting5scycleпростоиспользуетновыйquery, безновоготаймера.
