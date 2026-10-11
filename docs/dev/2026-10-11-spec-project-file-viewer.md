@@ -6,7 +6,7 @@ Markdown-ссылки на серверные файлы интерпретир�
 
 ## INV-WFILE01 — источник полномочий
 
-GET /api/project-file принимает ровно project,path; line передаётся только UI и не влияет на filesystem lookup. Route требует действующий principal=owner и существующий same-origin GET guard; anonymous401, nonowner403, чужой Origin403, лишние/повторные queryfields422. Backend получает project-root только из существующего доверенного alias→canonical root resolver SessionChat._root, не из запроса. File API не вызывает thread/resume, turn/start/steer, provider API и не запускает команды. Список разрешённых проектов проверяется тем же resolver; чтение из неизвестного проекта запрещено. Не требуется загружать историю или менять native-сессию.
+GET /api/project-file принимает ровно project,path; line передаётся только UI и не влияет на filesystem lookup. Route требует действующий principal=owner и существующий same-origin GET guard; anonymous401, nonowner403, чужой Origin403, лишние/повторные queryfields422. Backend получает project-root только из существующего доверенного alias→canonical root resolver SessionChat._root, не из запроса. File API не вызывает thread/resume, turn/start/steer, provider API и не запускает команды по ссылке или содержимому файла. Существующие ограниченные read-only probes доверенного project resolver допускаются без изменений; новый subprocess/SSH/вендорный вызов для чтения файла не вводится. Список разрешённых проектов проверяется тем же resolver; чтение из неизвестного проекта запрещено. Не требуется загружать историю или менять native-сессию.
 
 ## INV-WFILE02 — файловая граница
 
