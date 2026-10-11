@@ -151,3 +151,19 @@ model_context(), call_in_generation(... transport_generation,context_generation,
 timeout) уже публичный. Nativeверсияберётсяизcontext.native_version.
 HTTP LocalBackend/SocketBackend limits_overview() безаргументов. Ошибки
 underlyingbackendзаHTTP-boundaryнепередаютсякакrawdetail.
+
+## Frozen ответы test-writer
+
+Если rateLimitsByLimitId отсутствует/null/пустой, используется единственный
+rateLimits snapshot; его valid limitId или fallback 'codex'. При непустой map
+legacy snapshot не дублируется. Plan lowercase free/plus/pro/team/business/
+enterprise/unknown отображается Free/Plus/Pro/Team/Business/Enterprise/unknown;
+прочие значения null. Source.plan известен только если все известные планы
+выбранных buckets совпадают, иначе null. Нет выбранных планов — null.
+SessionChat.model_clock — epoch clock для server_now/captured_at/TTL/age;
+реальный time.monotonic — deadline native IO. HTTP invalid backend — безопасный
+5xx без raw details (не фиксируется иной конкретный code, чем существующий API).
+Маркеры имеют role=meter, accessible names «Обычный ×1», «Ориентир ×2»,
+aria-valuemin=0, aria-valuemax=7, aria-valuenow — clipped elapsed days/×2days.
+Они расположены на одной общей шкале, положение их центра соответствует
+value/7 от начала трека. Видимые подписи совпадают; шкала остаётся 7 дней.
