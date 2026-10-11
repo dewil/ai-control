@@ -948,7 +948,7 @@ function stopLimitsView(clear=false){
   limitsView.flight?.controller.abort();limitsView.flight=null;
   if(clear){limitsView.authReady=false;limitsView.data=null;limitsView.received=0;$('limits-cards').replaceChildren();$('limits-status').textContent='';}
 }
-function validLimitsOverview(data){
+function validNativeLimitsOverview(data){
   const number=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0;
   const optional=value=>value===null||number(value);
   const timestamp=value=>value===null||number(value)&&value<=253402300799;
@@ -963,6 +963,56 @@ function validLimitsOverview(data){
       (window.duration_minutes===null||Number.isInteger(window.duration_minutes)&&window.duration_minutes>=1&&window.duration_minutes<=525600)&&
       (window.remaining_percent===null||number(window.remaining_percent)&&window.remaining_percent<=100)&&timestamp(window.resets_at)&&timestamp(window.window_started_at)&&
       [null,'derived_reset_and_duration'].includes(window.anchor))));
+}
+// INV-WLIM-20/24: schema1 remains valid; cached data has its own closed DTO boundary.
+function validLimitsOverview(data){
+  if(data?.schema===1)return validNativeLimitsOverview(data);
+  const exact=(value,keys)=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
+  const finite=(value,min,max)=>typeof value==='number'&&Number.isFinite(value)&&value>=min&&value<=max;
+  const optional=(value,min,max)=>value===null||finite(value,min,max);
+  const timestamp=value=>optional(value,0,253402300799);
+  const sourceKeys=['node_id','provider','kind','identity','account_ref','origin','status','reason','observed_at','observation_basis','age_seconds','max_age_seconds','windows','prepaid','last_known'];
+  const windowKeys=['id','bucket','duration_minutes','remaining_percent','resets_at','window_started_at','anchor'];
+  const prepaidKeys=['currency','balance','scale','scale_at','spend_day','spend_week','burn_per_day','forecast_days'];
+  if(!exact(data,['schema','server_now','native','cached_sources'])||data.schema!==2||!finite(data.server_now,0,253402300799)||!validNativeLimitsOverview(data.native)||data.native.server_now!==data.server_now||!Array.isArray(data.cached_sources)||data.cached_sources.length>32)return false;
+  const identities=new Set();
+  return data.cached_sources.every(source=>{
+    if(!exact(source,sourceKeys)||!['ok','stale','unavailable'].includes(source.status)||![null,'missing_source','source_error','invalid_snapshot','unknown_identity','reset_pending'].includes(source.reason)||
+      !timestamp(source.observed_at)||source.observed_at>data.server_now||!optional(source.age_seconds,0,253402300799)||source.max_age_seconds!==2700||
+      !['snapshot_tick','provider_capture','unknown'].includes(source.observation_basis)||!Array.isArray(source.windows)||source.windows.length>8)return false;
+    const bot=source.node_id==='llm',alp=source.node_id==='alp';
+    if(bot){
+      if(!['kimi','openrouter','yandex'].includes(source.provider)||source.origin!=='bot_cache'||source.identity!=='unbound'||source.account_ref!==null||source.kind!==(source.provider==='kimi'?'quota':'prepaid'))return false;
+    }else if(alp){
+      if(!['codex','claude'].includes(source.provider)||source.origin!=='alp_export'||source.kind!=='quota'||
+        !(source.identity==='collector_mapped'&&typeof source.account_ref==='string'&&/^[0-9a-f]{64}$/.test(source.account_ref)||source.identity==='unknown'&&source.account_ref===null&&source.status==='unavailable'))return false;
+    }else return false;
+    const identity=JSON.stringify([source.node_id,source.provider,source.account_ref]);
+    if(identities.has(identity))return false;identities.add(identity);
+    if(source.observed_at===null){if(source.age_seconds!==null||source.observation_basis!=='unknown'||source.status!=='unavailable')return false;}
+    else if(source.age_seconds===null||Math.abs(source.age_seconds-(data.server_now-source.observed_at))>0.001||source.observation_basis!==(source.kind==='prepaid'?'provider_capture':'snapshot_tick'))return false;
+    if(source.status!=='unavailable'&&(source.reason!==null||source.observed_at===null)||source.status==='ok'&&source.age_seconds>=2700)return false;
+    if(source.status==='unavailable'&&(source.windows.length||source.prepaid!==null))return false;
+    if(source.kind==='quota'){
+      if(source.prepaid!==null||source.last_known!==null)return false;
+      const buckets=bot?['five_hour','seven_day','month_total','month_code']:source.provider==='claude'?['five_hour','seven_day','scoped_sonnet','scoped_opus','scoped_fable']:['primary','secondary'];
+      const seen=new Set();
+      return source.windows.every(window=>{
+        if(!exact(window,windowKeys)||!(buckets.includes(window.bucket)||alp&&/^window_[1-8]$/.test(window.bucket))||window.id!==source.provider+':'+window.bucket||seen.has(window.id)||
+          !(window.duration_minutes===null||finite(window.duration_minutes,1,525600))||!optional(window.remaining_percent,0,100)||!timestamp(window.resets_at)||!timestamp(window.window_started_at)||
+          ![null,'derived_reset_and_duration'].includes(window.anchor))return false;
+        seen.add(window.id);
+        if(bot&&window.duration_minutes!==({five_hour:300,seven_day:10080,month_total:null,month_code:null})[window.bucket])return false;
+        return window.anchor===null||window.duration_minutes!==null&&window.resets_at!==null&&window.window_started_at!==null&&Math.abs(window.resets_at-window.duration_minutes*60-window.window_started_at)<1;
+      });
+    }
+    if(source.windows.length)return false;
+    const currency=source.provider==='openrouter'?'USD':'RUB',prepaid=source.prepaid,last=source.last_known;
+    if(prepaid!==null&&(!exact(prepaid,prepaidKeys)||prepaid.currency!==currency||!finite(prepaid.balance,-1e12,1e12)||!(prepaid.scale===null||finite(prepaid.scale,Number.MIN_VALUE,1e12))||!timestamp(prepaid.scale_at)||prepaid.scale_at>data.server_now||
+      !['spend_day','spend_week','burn_per_day'].every(key=>optional(prepaid[key],0,1e12))||!optional(prepaid.forecast_days,0,1e9)))return false;
+    if(source.status!=='unavailable'&&prepaid===null)return false;
+    return last===null||source.status==='unavailable'&&exact(last,['currency','balance','observed_at'])&&last.currency===currency&&finite(last.balance,-1e12,1e12)&&finite(last.observed_at,0,data.server_now);
+  });
 }
 function limitsClock(){return limitsView.data.server_now+Math.max(0,performance.now()-limitsView.received)/1000;}
 function limitsDate(value){return new Date(value*1000).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'});}
@@ -984,53 +1034,95 @@ function limitsTimeline(window,now,bar){
   if(double>=7)timeline.append(node('p','Ориентир достиг границы','lm-boundary'));
   return timeline;
 }
+function limitsProgress(spent,label,exhausted=false){
+  const bar=node('div',undefined,'lm-quota'+(exhausted?' lm-exhausted':''));bar.setAttribute('role','progressbar');
+  bar.setAttribute('aria-label',label);bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');bar.setAttribute('aria-valuenow',String(spent));
+  const fill=node('span',undefined,'lm-quota-fill');fill.style.width=spent+'%';bar.append(fill);return bar;
+}
+function limitsQuotaWindows(card,source,now){
+  for(const window of source.windows){
+    const expired=window.resets_at!==null&&window.resets_at<=now;
+    const remaining=expired?null:window.remaining_percent;
+    const spent=remaining===null?null:100-remaining;
+    const block=node('div',undefined,'lm-window'),summary=node('div',undefined,'lm-window-heading');
+    const duration=window.duration_minutes;
+    const labels={five_hour:'5 часов',seven_day:'Неделя · 7 дней',month_total:'Месяц · всего',month_code:'Месяц · код',scoped_sonnet:'Sonnet',scoped_opus:'Opus',scoped_fable:'Fable',primary:'Основное окно',secondary:'Дополнительное окно'};
+    const period=duration===10080?'Неделя · 7 дней':duration===null?'Длительность неизвестна':duration%60===0?duration/60+' ч':Number(duration.toFixed(2))+' мин';
+    const label=source.kind&&labels[window.bucket]?labels[window.bucket]+' · '+period:period;
+    summary.append(node('span',label,'lm-window-name'),node('strong',spent===null?'Неизвестно':Number(spent.toFixed(1))+'%','lm-spent'));block.append(summary);
+    block.append(node('p','Израсходовано'+(source.kind?'':' · '+window.bucket),'lm-muted'));
+    if(remaining!==null)block.append(node('p','Остаток '+Number(remaining.toFixed(1))+'%','lm-muted'));
+    let bar=null;
+    if(remaining!==null){
+      bar=limitsProgress(spent,'Израсходовано · '+label,remaining<=10);
+    }
+    // INV-WLIM-17/18: spent fill and elapsed markers share one scale, independently.
+    const validAnchor=source.provider==='codex'&&duration===10080&&window.anchor==='derived_reset_and_duration'&&window.window_started_at!==null&&window.resets_at!==null&&window.resets_at>now&&Math.abs(window.resets_at-duration*60-window.window_started_at)<1;
+    if(validAnchor)block.append(limitsTimeline(window,now,bar));
+    else if(bar)block.append(bar);
+    if(remaining===0)block.append(node('p','Лимит исчерпан','lm-expired'));
+    if(expired)block.append(node('p','Окно истекло, ожидаем новые данные','lm-expired'));
+    else if(window.resets_at!==null)block.append(node('p','Сброс через '+limitsWait(window.resets_at-now),'lm-reset'));
+    if(window.resets_at!==null){const time=node('time',limitsDate(window.resets_at),'lm-muted');time.dateTime=new Date(window.resets_at*1000).toISOString();block.append(time);}
+    else block.append(node('p','Время сброса неизвестно','lm-muted'));
+    card.append(block);
+  }
+}
+function limitsMoney(value,currency){return new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2}).format(value)+' '+currency;}
+function limitsPrepaid(card,source){
+  const value=source.prepaid;
+  if(value){
+    const block=node('div',undefined,'lm-window');
+    block.append(node('p',source.provider==='yandex'?'Баланс Yandex Cloud':'Баланс OpenRouter','lm-muted'),node('strong',limitsMoney(value.balance,value.currency),'lm-spent'));
+    if(value.balance<0)block.append(node('p','Отрицательный баланс','lm-expired'));
+    if(value.scale!==null){
+      const spent=Math.max(0,Math.min(100,(value.scale-value.balance)/value.scale*100));
+      block.append(limitsProgress(spent,'Израсходовано от последнего пополнения',value.balance<=0));
+      block.append(node('p','Израсходовано от последнего пополнения '+Number(spent.toFixed(1))+'%','lm-muted'));
+      if(value.scale_at!==null)block.append(node('p','База расчёта '+limitsDate(value.scale_at),'lm-muted'));
+    }else block.append(node('p','База пополнения неизвестна','lm-muted'));
+    for(const [key,label] of [['spend_day','Расход за день'],['spend_week','Расход за неделю']]){
+      if(value[key]!==null)block.append(node('p',label+' '+limitsMoney(value[key],value.currency),'lm-muted'));
+    }
+    if(value.burn_per_day!==null)block.append(node('p','Средний расход в сутки '+limitsMoney(value.burn_per_day,value.currency),'lm-muted'));
+    block.append(node('p',value.forecast_days===null?'Оценка: недостаточно истории':'Оценка: хватит на '+new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2}).format(value.forecast_days)+' дн','lm-muted'));
+    card.append(block);
+  }
+  if(source.last_known){
+    const last=source.last_known;
+    card.append(node('p','Последний известный баланс (устаревшие данные): '+limitsMoney(last.balance,last.currency)+' · '+limitsDate(last.observed_at),'lm-empty'));
+  }
+}
 function renderLimits(){
   if(!limitsVisible()||!limitsView.data)return;
-  const data=limitsView.data,now=limitsClock(),cards=$('limits-cards');cards.replaceChildren();
-  for(const source of data.sources){
+  const data=limitsView.data,native=data.schema===2?data.native:data,now=limitsClock(),cards=$('limits-cards');cards.replaceChildren();
+  for(const source of [...native.sources,...(data.schema===2?data.cached_sources:[])]){
+    const cached=Boolean(source.kind),observed=cached?source.observed_at:source.captured_at;
     const unavailable=source.status==='unavailable';
-    const age=source.captured_at===null?null:Math.max(0,now-source.captured_at);
-    const stale=!unavailable&&(source.status==='stale'||age===null||age>=180);
+    const age=observed===null?null:Math.max(0,now-observed);
+    const stale=!unavailable&&(source.status==='stale'||age===null||age>=(cached?source.max_age_seconds:180));
     const card=node('article',undefined,'lm-card'+(stale?' lm-stale':'')+(unavailable?' lm-unavailable':''));
     const heading=node('div',undefined,'lm-card-heading'),identity=node('div');
-    identity.append(node('h3',source.provider==='codex'?'Codex':'Claude'),node('span',source.node_id.toUpperCase()+(source.plan?' · '+source.plan:''),'lm-muted'));
+    const providerNames={codex:'Codex',claude:'Claude',kimi:'Kimi',openrouter:'OpenRouter',yandex:'YandexGPT'};
+    identity.append(node('h3',providerNames[source.provider]),node('span',source.node_id.toUpperCase()+(source.plan?' · '+source.plan:''),'lm-muted'));
     heading.append(identity,node('span',unavailable?'Недоступно':stale?'Устарело':'Свежий снимок','lm-status'));card.append(heading);
-    if(source.account_id){
+    if(cached){
+      card.append(node('p',source.origin==='bot_cache'?'Кеш бота · аккаунт не указан':'Экспорт ALP · аккаунт '+(source.account_ref?source.account_ref.slice(0,12):'неизвестен')+' · время начала сбора','lm-muted'));
+      if(source.origin==='bot_cache')card.append(node('p','Аккаунт источника не указан','lm-muted'));
+    }else if(source.account_id){
       card.append(node('p','Аккаунт '+source.account_id.slice(0,12),'lm-account'));
       card.append(node('p','Codex App Server, аккаунт источника','lm-muted'));
     }else card.append(node('p','Аккаунт неизвестен','lm-muted'));
-    if(unavailable||!source.windows.length)card.append(node('p',unavailable?'Источник недоступен · Неизвестно':'Окна недоступны · Неизвестно','lm-empty'));
-    for(const window of source.windows){
-      const expired=window.resets_at!==null&&window.resets_at<=now;
-      const remaining=expired?null:window.remaining_percent;
-      const spent=remaining===null?null:100-remaining;
-      const block=node('div',undefined,'lm-window'),summary=node('div',undefined,'lm-window-heading');
-      const duration=window.duration_minutes;
-      const label=duration===10080?'Неделя · 7 дней':duration===null?'Длительность неизвестна':duration%60===0?duration/60+' ч':duration+' мин';
-      summary.append(node('span',label,'lm-window-name'),node('strong',spent===null?'Неизвестно':Number(spent.toFixed(1))+'%','lm-spent'));block.append(summary);
-      block.append(node('p','Израсходовано · '+window.bucket,'lm-muted'));
-      if(remaining!==null)block.append(node('p','Остаток '+Number(remaining.toFixed(1))+'%','lm-muted'));
-      let bar=null;
-      if(remaining!==null){
-        bar=node('div',undefined,'lm-quota'+(remaining<=10?' lm-exhausted':''));bar.setAttribute('role','progressbar');
-        bar.setAttribute('aria-label','Израсходовано · '+label);bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');bar.setAttribute('aria-valuenow',String(spent));
-        const fill=node('span',undefined,'lm-quota-fill');fill.style.width=spent+'%';bar.append(fill);
-      }
-      // INV-WLIM-17/18: spent fill and elapsed markers share one scale, independently.
-      const validAnchor=source.provider==='codex'&&duration===10080&&window.anchor==='derived_reset_and_duration'&&window.window_started_at!==null&&window.resets_at!==null&&window.resets_at>now&&Math.abs(window.resets_at-duration*60-window.window_started_at)<1;
-      if(validAnchor)block.append(limitsTimeline(window,now,bar));
-      else if(bar)block.append(bar);
-      if(remaining===0)block.append(node('p','Лимит исчерпан','lm-expired'));
-      if(expired)block.append(node('p','Окно истекло, ожидаем новые данные','lm-expired'));
-      else if(window.resets_at!==null)block.append(node('p','Сброс через '+limitsWait(window.resets_at-now),'lm-reset'));
-      if(window.resets_at!==null){const time=node('time',limitsDate(window.resets_at),'lm-muted');time.dateTime=new Date(window.resets_at*1000).toISOString();block.append(time);}
-      else block.append(node('p','Время сброса неизвестно','lm-muted'));
-      card.append(block);
+    if(unavailable||source.kind!=='prepaid'&&!source.windows.length){
+      const reasons={missing_source:'Источник не подключён',source_error:'Нет данных: ошибка источника',invalid_snapshot:'Снимок недоступен',unknown_identity:'Аккаунт неизвестен',reset_pending:'Ожидаем новое окно'};
+      card.append(node('p',unavailable?(cached?(reasons[source.reason]||'Источник недоступен')+' · Неизвестно':'Источник недоступен · Неизвестно'):'Окна недоступны · Неизвестно','lm-empty'));
     }
-    if(source.captured_at!==null)card.append(node('p','Получено '+limitsDate(source.captured_at)+(age!==null?' · '+Math.floor(age/60)+' мин назад':''),'lm-received'));
+    if(source.kind==='prepaid')limitsPrepaid(card,source);
+    else limitsQuotaWindows(card,source,now);
+    if(observed!==null)card.append(node('p',(cached?'Наблюдение ':'Получено ')+limitsDate(observed)+(age!==null?' · '+Math.floor(age/60)+' мин назад':''),'lm-received'));
     cards.append(card);
   }
-  $('limits-coverage').textContent=(data.coverage.partial?'Часть данных LLM недоступна. ':'')+'Покрытие: только native-источники LLM. Удалённые узлы не подключены.';
+  $('limits-coverage').textContent=(native.coverage.partial?'Часть native-данных LLM недоступна. ':'')+(data.schema===2?'Источники показаны отдельно: native LLM, кеш бота и экспорт ALP.':'Покрытие: только native-источники LLM. Удалённые узлы не подключены.');
 }
 async function fetchLimits(){
   if(!limitsVisible()||limitsView.flight)return;

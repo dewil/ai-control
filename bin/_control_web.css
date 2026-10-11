@@ -99,6 +99,8 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 /* Fresh, scoped limits cards; ALP public tokens/cards were visual references only. */
 #limits-panel{--lm-surface:#191d25;--lm-edge:#353c49;--lm-ink:#f4f5f7;--lm-muted:#adb5c4;--lm-green:#63d7b3;--lm-amber:#ffd086;margin-top:16px;padding:16px;background:#10131a;border-color:var(--lm-edge);border-radius:12px;color:var(--lm-ink);min-width:0}
 #limits-panel .lm-heading,#limits-panel .lm-card-heading,#limits-panel .lm-window-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+#limits-panel .lm-card-heading>div{min-width:0}
+#limits-panel .lm-window-heading{flex-wrap:wrap}
 #limits-panel .lm-heading{align-items:flex-start;margin-bottom:12px;flex-wrap:wrap}
 #limits-panel h2{font-size:19px;margin:0 0 3px}#limits-panel h3{font-size:18px;margin:0;line-height:1.35}
 #limits-panel p{margin:4px 0;overflow-wrap:anywhere}
