@@ -83,8 +83,16 @@ observed_at=snapshot.captured_at, observation_basis=snapshot_tick.
 Иной Kimi status => source_error, без выдуманного fresh usage.
 OpenRouter/Yandex statusok: observed_at=section.captured_at,
 observation_basis=provider_capture; currency задаётся adapter USD/RUB,
-не произвольной строкой. observed_at<=envelope.received_at<=server_now;
-age=server_now-observed_at, age>=2700 => stale. Для Kimi same age rule.
+не произвольной строкой. envelope.received_at<=server_now и observed_at<=server_now.
+Бот сохраняет envelope.received_at с точностью до целой UTC-секунды,
+а provider captured_at может содержать микросекунды: допускается
+observed_at < floor(envelope.received_at)+1, включая ту же UTC-секунду
+после received_at. При целочисленном received_at это строго <received_at+1;
+наблюдение ровно в следующую секунду отклоняется. observed_at сохраняется
+с исходной точностью, age=server_now-observed_at; age>=2700 => stale.
+Допуск не разрешает будущее относительно server_now и не относится к ALP:
+там observed_at<=exported_at остаётся строгим. Snapshot captured_at<=received_at
+проверяется как прежде. Для Kimi same age rule.
 Невалидный observed => unavailable без current windows/prepaid.
 Nodata/error => current prepaid=null, last_known из last_balance/last_at
 только если валидны и last_at<=server_now. Отсутствующая section => missing_source.
