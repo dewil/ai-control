@@ -873,7 +873,9 @@ def limits_result(value):
                     raise ValueError
             elif (source['identity'] != 'native_reported' or type(source['account_id']) is not str
                     or re.fullmatch('[0-9a-f]{64}', source['account_id']) is None
-                    or source['captured_at'] is None or source['age_seconds'] is None or source['error'] is not None):
+                    or source['captured_at'] is None or source['age_seconds'] is None or source['error'] is not None
+                    or source['captured_at'] > value['server_now']
+                    or source['age_seconds'] != value['server_now'] - source['captured_at']):
                 raise ValueError
             ids, buckets = set(), set()
             for window in source['windows']:

@@ -952,8 +952,12 @@ class SessionChat:
     def _limits_serve(self, source, partial=False):
         now = self._limits_clock()
         source = copy.deepcopy(source)
+        # A clock rollback cannot turn a future capture into a fresh age-zero
+        # observation, including a rollback after the cache admission check.
+        if source['captured_at'] is not None and source['captured_at'] > now:
+            source = self._limits_unavailable()
         if source['captured_at'] is not None:
-            source['age_seconds'] = max(0, now - source['captured_at'])
+            source['age_seconds'] = now - source['captured_at']
             source['status'] = 'stale' if source['age_seconds'] >= 180 else 'ok'
         for window in source['windows']:
             reset, duration = window['resets_at'], window['duration_minutes']
@@ -1005,7 +1009,7 @@ class SessionChat:
             if current != cached['context']:
                 self._limits_cache = None
                 return self._limits_serve(self._limits_unavailable(error='context_changed'))
-            if self._limits_clock() - cached['source']['captured_at'] < 60:
+            if 0 <= self._limits_clock() - cached['source']['captured_at'] < 60:
                 return self._limits_serve(cached['source'], cached['partial'])
         self._limits_cache = None
         prepare, call = getattr(self.rpc, 'prepare_context', None), getattr(self.rpc, 'call_in_generation', None)
