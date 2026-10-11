@@ -29,3 +29,19 @@ use independent synthetic values to distinguish sources and account order.
 No route fulfillment, validator bypass, or imported TestCase duplication.
 
 Cost receipt: unknown; ledger owner remains root.
+
+## Continuous-clock oracle correction
+
+The original schema1 marker assertion used exact integer equality. Read-only
+reproduction against the implementation fixture showed `1.0000000046303978`
+instead of `1`, from the existing continuous monotonic clock. Both ×1 and ×2
+markers now independently retain the existing dashboard's bounded `.002` day
+tolerance; expected values remain `1` and `2`. No grouping, conservation,
+ordering, metrics, or geometry checks were relaxed.
+
+The corrected schema1 scenario passes against the implementation fixture
+(1 test, 2.095s). The same corrected scenario still fails on `c1fa87f` at the
+missing «Локальные» h2 assertion (1 test, 6.826s; 0 ERROR). Recheck log:
+`/var/tmp/control-web-limits-groups-baseline-recheck.log`. The corrected test
+module was loaded from the independent worktree with the implementation's
+public fixture imports; no file in the implementation worktree was modified.

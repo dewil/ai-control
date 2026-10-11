@@ -134,7 +134,10 @@ class LimitsGroupsBrowserBlind(unittest.TestCase):
         for label, elapsed in ((harness.NORMAL, 1), (harness.DOUBLE, 2)):
             meter = codex.get_by_role('meter', name=label, exact=True)
             expect(meter).to_be_visible()
-            self.assertEqual(float(meter.get_attribute('aria-valuenow')), elapsed)
+            # Native markers advance continuously with the server's monotonic
+            # clock; retain the existing dashboard tolerance for both rates.
+            self.assertAlmostEqual(float(meter.get_attribute('aria-valuenow')),
+                                   elapsed, delta=.002)
         self.assertRegex(claude.inner_text(), r'(?i)недоступ|не подключ')
 
     def test_schema2_empty_cached_list_hides_cloud_and_alp_sections(self):
