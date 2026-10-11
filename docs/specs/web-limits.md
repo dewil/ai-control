@@ -34,3 +34,15 @@ Traceability: tests/test_control_web_limits_dashboard_red.py (10..13,16),
 tests/test_control_web_limits_dashboard_browser_red.py (11,14..16).
 Pure helper tests and INV01..04 remain unchanged. Native runtime uses existing
 installed sessions/broker/web files, with no deployment-scope expansion.
+
+
+## Расход и общая шкала (11.10.2026)
+- INV-WLIM-17: основное число и progressbar — расход=100−remaining_percent;
+  остаток вторичен. Unknown/expired не становятся расходом0/100.
+- INV-WLIM-18: для недельного Codex заполнение расхода и маркеры×1/×2
+  расположены на общей шкале0–100%=7дней. Время и расход независимы;
+  без якоря остаётся полоса расхода без выдуманных временных маркеров.
+Семантика переиспользует ai-agent-limits-digest _bar/_elapsed_percent:
+расход и прошедшее время движутся слева направо; Telegram glyph renderer
+не переносится в HTML. Это текущий снимок, не история измерений.
+Трассировка: tests/test_control_web_limits_spend_overlay_browser_red.py.

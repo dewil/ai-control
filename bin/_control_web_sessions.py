@@ -22,7 +22,8 @@ from _codex_rc import CodexSessions, PROJECT_RE, canonical
 HISTORY_LIMIT = 96 * 1024
 RECEIPT_LIMIT = 10000
 NAMESPACE_ENTRY_LIMIT = 10002
-SUPPORTED_NATIVE_VERSIONS = ('0.160.0', '0.161.0')
+SUPPORTED_NATIVE_VERSIONS = ('0.160.0', '0.161.0', '0.162.1')
+QUEUE_NATIVE_VERSIONS = ('0.161.0', '0.162.1')
 LIMITS_NATIVE_VERSIONS = ('0.161.0', '0.162.1')
 READ_METHODS = frozenset({'thread/list', 'thread/read', 'thread/turns/list', 'thread/items/list', 'thread/loaded/list'})
 VERSION_TOKEN = r'[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(?:-[A-Za-z0-9][A-Za-z0-9.-]{0,31})?'
@@ -2541,7 +2542,7 @@ class SessionChat:
         reason = self._catalog_reason(context)
         if reason == 'unverified_context':
             _need(False)
-        if reason or context['native_version'] != '0.161.0' or not callable(getattr(self.rpc, 'call_in_generation', None)):
+        if reason or context['native_version'] not in QUEUE_NATIVE_VERSIONS or not callable(getattr(self.rpc, 'call_in_generation', None)):
             return root, thread, None
         thread = self._queue_proof(project, root, sid, context)
         return root, thread, context
@@ -2921,7 +2922,7 @@ class SessionChat:
         else:
             record.update(status='delivery_unknown', reason=None)
             try:
-                _need(context['native_version'] == '0.161.0', 'unsupported_queue')
+                _need(context['native_version'] in QUEUE_NATIVE_VERSIONS, 'unsupported_queue')
                 listing, texts = self._queue_listing(project, root, sid, context)
                 rows = [row for row in listing['rows'] if row['message_id'] == record['message_id']]
                 if rows:
@@ -3239,7 +3240,7 @@ class InteractiveRPC:
         if method == 'initialize' or method in READ_METHODS:
             return True
         if method.startswith('thread/queue/') or method == 'turn/steer':
-            return self._native_version == '0.161.0'
+            return self._native_version in QUEUE_NATIVE_VERSIONS
         return self._native_version in SUPPORTED_NATIVE_VERSIONS
 
     def _request(self, ws, generation, method, params, deadline, *, context_generation=None):

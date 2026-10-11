@@ -15,7 +15,7 @@ import tempfile
 import threading
 import time
 import unittest
-from control_browser_helpers import choose_project
+from control_browser_helpers import choose_project, project_is_selected
 from test_control_web_chat_width_browser import private_json, totp, PASSWORD, SECRET, SID
 from test_control_web_compact_chat_browser import OTHER
 
@@ -205,9 +205,13 @@ class WebUXBlindBrowser(unittest.TestCase):
                 self.session.click();self.page.get_by_text('Fixture readable message 23',exact=True).wait_for()
                 self.assertIn(label,self.local().inner_text())
                 self.assertEqual(len(self.calls('send')),prior+1,'Unknown/rejected receipt caused automatic resend')
-                # New context for next outcome; no stale local text persistence.
-                self.page.reload();self.page.get_by_role('button',name='Сессии',exact=True).or_(self.page.get_by_role('tab',name='Сессии',exact=True)).click()
-                choose_project(self.page,'demo');self.session.wait_for()
+                # Reload restores the deep-linked scope and clears local outgoing text.
+                # Wait for that restoration; reselecting its project races the cloud collapse.
+                self.page.reload();self.session.wait_for()
+                self.page.get_by_text('Fixture readable message 23',exact=True).wait_for()
+                self.assertTrue(project_is_selected(self.page,'demo'))
+                self.assertEqual(self.session.get_attribute('aria-pressed'),'true')
+                self.assertEqual(self.local().count(),0,'Reload retained stale local outgoing text')
 
 if __name__=='__main__':
     if len(sys.argv)>1 and sys.argv[1]=='--serve':serve(Path(sys.argv[2]),Path(sys.argv[3]))
