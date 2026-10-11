@@ -10,6 +10,7 @@ function pageTimeout(callback,delay){if(!pageActive())return null;const generati
 function pageInterval(callback,delay){if(!pageActive())return null;const generation=pageGeneration;const timer=window.setInterval(()=>{if(pageActive()&&generation===pageGeneration)callback();},delay);pageTimers.add(timer);return timer;}
 function pageClearTimer(timer){window.clearTimeout(timer);window.clearInterval(timer);pageTimers.delete(timer);}
 function closePageGate(){
+  closeProjectFile();
   pageState='suspended';pageGeneration++;androidResumeGeneration++;taskLoaded=false;
   stopLimitsView();stopNavigation();closeQueueTransferDialog();stopPolling();stopDevbusView();devbusAdmitted=false;
   for(const flight of historyFlights.values())if(!observationControllers.has(flight.controller))observationControllers.set(flight.controller,0);historyFlights.clear();
@@ -95,7 +96,54 @@ function markdownHref(raw){
   if(!absolute&&(/^[^/?#]*:/.test(raw)||/^[^/?#]*:/.test(decoded)))return null;
   try{const url=new URL(raw,location.href);if(!['http:','https:'].includes(url.protocol)||url.username||url.password||(!absolute&&url.origin!==location.origin))return null;return url.href;}catch(_){return null;}
 }
-function markdownHasRawHtml(text){
+function markdownFile(raw){
+  const angle=raw.startsWith('<')&&raw.endsWith('>');
+  if(angle)raw=raw.slice(1,-1);
+  if(!raw||(!angle&&/\s/.test(raw))||/[<>"']/.test(raw))return null;
+  let path;try{path=decodeURIComponent(raw);}catch(_){return null;}
+  if(/[\u0000-\u001f\u007f-\u009f\\]/.test(path)||path.startsWith('//'))return null;
+  const fileURI=/^file:\/\/\//i.test(path);
+  if(fileURI)path=path.slice(7);
+  if(!path||path.startsWith('//'))return null;
+  let line=null;const match=/(?:#L|:)([0-9]+)$/.exec(path);
+  if(match){line=Number(match[1]);if(!Number.isSafeInteger(line)||line<1||line>1000000)return null;path=path.slice(0,match.index);}
+  if(!fileURI&&/^[^/?#]*:/.test(path))return null;
+  if(!path||path.length>4096||/[?#]/.test(path)||path.split('/').includes('..'))return null;
+  if(/^\/(?:api|download)(?:\/|$)/.test(path)||/^\/(?:login|logout)(?:\/|$)/.test(path))return null;
+  const extension=/\.(?:md|txt|log|json|yaml|yml|py|js|ts|tsx|jsx|css|html|sh|toml|ini|sql|c|cpp|h|rs|go|java|kt)$/i.test(path);
+  if(fileURI&&!path.startsWith('/'))return null;
+  if(fileURI||path.startsWith('./')||extension||path.startsWith('/')&&(line||path.split('/').filter(Boolean).length>=2))return {path,line};
+  return null;
+}
+let projectFileFlight=null;
+function closeProjectFile(){
+  const flight=projectFileFlight;projectFileFlight=null;
+  if(flight)flight.controller.abort();
+  const dialog=$('project-file-dialog');if(dialog.open)dialog.close();
+  $('project-file-name').textContent='Файл';$('project-file-status').textContent='';$('project-file-text').replaceChildren();
+}
+function projectFileCurrent(flight){return projectFileFlight===flight&&flight.auth===chatAuthGeneration&&activeSelection(flight.project,flight.sid,flight.selection)&&document.visibilityState==='visible';}
+async function openProjectFile(file,scope){
+  if(scope.auth!==chatAuthGeneration||!activeSelection(scope.project,scope.sid,scope.selection)||document.visibilityState!=='visible')return;
+  closeProjectFile();
+  const flight={...scope,controller:newObservationController()};projectFileFlight=flight;
+  const dialog=$('project-file-dialog'),status=$('project-file-status'),pre=$('project-file-text');
+  status.textContent='Загрузка файла…';dialog.showModal();$('project-file-close').focus({preventScroll:true});
+  try{
+    const data=await api('/api/project-file?'+new URLSearchParams({project:scope.project,path:file.path}),undefined,flight.controller.signal,()=>projectFileCurrent(flight));
+    if(!projectFileCurrent(flight))return;
+    if(!exactFields(data,['name','text','truncated'])||typeof data.name!=='string'||typeof data.text!=='string'||typeof data.truncated!=='boolean'||new TextEncoder().encode(data.text).length>48*1024)throw new Error(messages.unavailable);
+    $('project-file-name').textContent=data.name;status.textContent=data.truncated?'Показаны первые 48 КБ файла.':'';
+    const lines=data.text.replace(/\r\n?/g,'\n').split('\n');
+    if(file.line&&file.line<=lines.length){
+      const mark=node('mark',lines[file.line-1]);mark.setAttribute('aria-current','location');
+      pre.append(document.createTextNode(lines.slice(0,file.line-1).join('\n')+(file.line>1?'\n':'')),mark,document.createTextNode(file.line<lines.length?'\n'+lines.slice(file.line).join('\n'):''));
+      pre.scrollTop=mark.getBoundingClientRect().top-pre.getBoundingClientRect().top+pre.scrollTop-pre.clientHeight/2;
+    }else{pre.textContent=data.text;if(file.line)status.textContent+=(status.textContent?' ':'')+'Строка недоступна в показанном тексте.';}
+  }catch(error){if(projectFileCurrent(flight))status.textContent=error.code==='unsupported_type'?'Этот тип файла не поддерживается.':error.code==='invalid_request'?'Некорректная ссылка на файл.':'Файл недоступен.';}
+}
+function markdownHasRawHtml(text,fileContext=null){
+  if(fileContext)text=text.replace(/\]\((<[^>]+>)\)/g,(whole,raw)=>markdownFile(raw)?'](file)':whole);
   for(let i=0;i<text.length;i++){
     if(text[i]==='`'){
       if(text[i+1]==='`'){while(text[i+1]==='`')i++;continue;}
@@ -105,11 +153,11 @@ function markdownHasRawHtml(text){
   }
   return false;
 }
-function markdownInline(parent,text,depth=0,budget={left:text.length*24+1}){
+function markdownInline(parent,text,depth=0,budget={left:text.length*24+1},fileContext=null){
   // Conservative subset fallback: an entire prose block with raw HTML stays
   // literal, including attributes, body markers, comments and quoted '>' chars.
   // Single-backtick code is skipped by detection, and ordinary '<3' is prose.
-  if(markdownHasRawHtml(text)){parent.append(document.createTextNode(text));return;}
+  if(markdownHasRawHtml(text,fileContext)){parent.append(document.createTextNode(text));return;}
   if(depth>=8){parent.append(document.createTextNode(text));return;}
   let plain='',i=0;
   const flush=()=>{if(plain){parent.append(document.createTextNode(plain));plain='';}};
@@ -129,14 +177,14 @@ function markdownInline(parent,text,depth=0,budget={left:text.length*24+1}){
     }
     if(ch==='['&&text[i-1]!=='!'){
       const labelEnd=find('](',i+1);const end=labelEnd<0?-1:find(')',labelEnd+2);
-      if(end>=0){const href=markdownHref(text.slice(labelEnd+2,end));if(href){flush();const a=node('a');a.href=href;a.target='_blank';a.rel='noopener noreferrer';markdownInline(a,text.slice(i+1,labelEnd),depth+1,budget);parent.append(a);}else plain+=text.slice(i,end+1);i=end+1;continue;}
+      if(end>=0){const raw=text.slice(labelEnd+2,end),file=fileContext&&markdownFile(raw),href=file?null:markdownHref(raw);if(file||href){flush();const a=node('a');if(file){a.href='#';a.addEventListener('click',event=>{event.preventDefault();openProjectFile(file,fileContext);});}else{a.href=href;a.target='_blank';a.rel='noopener noreferrer';}markdownInline(a,text.slice(i+1,labelEnd),depth+1,budget,fileContext);parent.append(a);}else plain+=text.slice(i,end+1);i=end+1;continue;}
     }
     if(ch==='*'||ch==='_'){
       const strong=text[i+1]===ch;const marker=strong?ch+ch:ch;
       // Intraword underscores and longer marker runs are unsupported literals.
       if((ch==='_'&&i>0&&/[\p{L}\p{N}]/u.test(text[i-1]))||text[i+marker.length]===ch){plain+=marker;i+=marker.length;continue;}
       const end=find(marker,i+marker.length);
-      if(end>i+marker.length&&!/\s/.test(text[i+marker.length])&&!/\s/.test(text[end-1])){flush();const el=node(strong?'strong':'em');markdownInline(el,text.slice(i+marker.length,end),depth+1,budget);parent.append(el);i=end+marker.length;continue;}
+      if(end>i+marker.length&&!/\s/.test(text[i+marker.length])&&!/\s/.test(text[end-1])){flush();const el=node(strong?'strong':'em');markdownInline(el,text.slice(i+marker.length,end),depth+1,budget,fileContext);parent.append(el);i=end+marker.length;continue;}
     }
     plain+=ch;i++;
   }
@@ -154,13 +202,13 @@ function markdownTableHeader(line,separator){
   const head=markdownCells(line),rule=markdownCells(separator);
   return head&&rule&&head.length===rule.length&&rule.every(cell=>/^:?-{3,}:?$/.test(cell))?head:null;
 }
-function renderMarkdown(text){
+function renderMarkdown(text,fileContext=null){
   const box=node('div',undefined,'content markdown');
   // The backend caps messages at 8000 characters. Unexpected larger input stays
   // readable without invoking the parser; the scan budget also bounds bad spans.
   if(text.length>8000){box.textContent=text;return box;}
   const lines=text.replace(/\r\n?/g,'\n').split('\n');const budget={left:text.length*24+1};
-  const inline=(el,value)=>{markdownInline(el,value,0,budget);return el;};
+  const inline=(el,value)=>{markdownInline(el,value,0,budget,fileContext);return el;};
   for(let i=0;i<lines.length;){
     const line=lines[i];if(!line.trim()){i++;continue;}
     const fence=/^ {0,3}(`{3,}|~{3,})([^`]*)$/.exec(line);
@@ -172,7 +220,7 @@ function renderMarkdown(text){
       const language=fence[2].trim();if(language)box.append(node('span',language,'code-language'));
       const pre=node('pre');pre.append(node('code',lines.slice(i+1,end).join('\n')+(end>i+1?'\n':'')));box.append(pre);i=end+1;continue;
     }
-    if(markdownHasRawHtml(line)){
+    if(markdownHasRawHtml(line,fileContext)){
       const literal=[line];i++;while(i<lines.length&&lines[i].trim())literal.push(lines[i++]);
       box.append(node('p',literal.join('\n')));continue;
     }
@@ -199,7 +247,7 @@ function renderMarkdown(text){
 function notice(text){$('notice').textContent=text;}
 let androidResumeGeneration=0;
 function androidAuth(){return window.AndroidAuth&&typeof window.AndroidAuth.requestAuth==='function'?window.AndroidAuth:null;}
-function requestNativeAuth(notify=true){stopLimitsView(true);if(lifecycleV2)closePageGate();const native=androidAuth();stopPolling();stopDevbusView();devbusAdmitted=false;androidResumeGeneration++;if(native&&notify)native.requestAuth();return Boolean(native);}
+function requestNativeAuth(notify=true){closeProjectFile();stopLimitsView(true);if(lifecycleV2)closePageGate();const native=androidAuth();stopPolling();stopDevbusView();devbusAdmitted=false;androidResumeGeneration++;if(native&&notify)native.requestAuth();return Boolean(native);}
 function ownerForbidden(){const notify=liveAndroidAuthGeneration!==chatAuthGeneration;liveAndroidAuthGeneration=chatAuthGeneration;requestNativeAuth(notify);notice('Войдите снова для обновления данных.');}
 function authExpired(){if(!requestNativeAuth())signedOut();}
 async function api(path,body,signal,isCurrent=()=>true,admission=false){
@@ -217,7 +265,7 @@ async function api(path,body,signal,isCurrent=()=>true,admission=false){
     return data;
   }finally{if(controller){const remaining=(observationControllers.get(controller)||0)-1;if(remaining>0)observationControllers.set(controller,remaining);else observationControllers.delete(controller);if(bridge)signal.removeEventListener('abort',abort);}}
 }
-function signedOut(){stopLimitsView(true);stopNavigation();resetParticipation();pinView.items=[];pinView.version++;$('pin-list').replaceChildren();closeQueueTransferDialog();stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();queueViews.clear();if(acceptedStatusTimer!==null){pageClearTimer(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
+function signedOut(){closeProjectFile();stopLimitsView(true);stopNavigation();resetParticipation();pinView.items=[];pinView.version++;$('pin-list').replaceChildren();closeQueueTransferDialog();stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();queueViews.clear();if(acceptedStatusTimer!==null){pageClearTimer(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
 function field(parent,key,label,kind='textarea'){const wrap=node('label',label);const input=node(kind);input.maxLength=16000;input.value=drafts.get(key)||'';input.addEventListener('input',()=>drafts.set(key,input.value));wrap.append(input);parent.append(wrap);return input;}
 function button(parent,label,action,cls){const b=node('button',label,cls);b.type='button';b.addEventListener('click',action);parent.append(b);return b;}
 async function mutate(card,path,body){if(!pageActive())return;const lifecycle=pageGeneration,auth=chatAuthGeneration;if(busy)return;busy=true;const controls=[...document.querySelectorAll('#tasks-panel button')];controls.forEach(b=>b.disabled=true);const status=card.querySelector('.message');status.textContent='Сохраняем…';try{const data=await api(path,body);if(lifecycle!==pageGeneration||!pageActive())return;status.textContent=data.status==='already'?'Решение уже было принято.':'Решение принято.';await refresh();}catch(err){if(err.stale||lifecycle!==pageGeneration||!pageActive())return;status.textContent=err.message;if(err.code==='saved_pending'){await refresh();notice(err.message);}}finally{busy=false;if(pageActive()&&auth===chatAuthGeneration){if(lifecycle===pageGeneration)controls.forEach(b=>b.disabled=false);else{taskLoaded=false;if(currentTab==='tasks')refresh();}}}}
@@ -930,7 +978,7 @@ async function loadModelCatalog(){if(!pageActive())return;
 function syncCurrentSessionControls(force=false){if(!pageActive()&&!force)return;const key=currentSessionKey();const historyBusy=Boolean(key&&historyFlights.has(key));const state=key&&historyData.get(key);const hasOlder=Boolean(state&&(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error)));renderModelControls();renderQueueControls(key);$('pin-current').disabled=!activeSelection()||pinView.busy;$('chat-send').disabled=!pageActive()||!csrf||currentTab!=='sessions'||!key||Boolean(selectedSession?.created&&!state?.initialized&&!state?.confirmedOrigin)||sendsInFlight.has(key)||hasUnknown(key)||!explicitModelReady(key)||Boolean(key&&queueView(key).capabilities?.operations.send.supported===false);$('chat-refresh').disabled=!key||historyBusy;$('history-older').disabled=!key||historyBusy||!hasOlder;$('history-retry').hidden=!(state&&state.historyError);$('history-retry').disabled=!key||historyBusy;renderCurrentSendStatus();syncRenameControls();syncCreateControls();}
 function showTab(tab,load=true){if(!pageActive())return;
   if(!['tasks','sessions','devbus','limits'].includes(tab))return;
-  if(currentTab!==tab){stopLimitsView();stopDevbusView();devbusTerminal=false;}
+  if(currentTab!==tab){closeProjectFile();stopLimitsView();stopDevbusView();devbusTerminal=false;}
   currentTab=tab;if(tab!=='sessions')clearHistoryScrollSlack();
   for(const name of ['tasks','sessions','devbus','limits']){$('tab-'+name).setAttribute('aria-selected',String(tab===name));$(name+'-panel').hidden=tab!==name;}
   syncCurrentSessionControls();syncNavigation();
@@ -1252,10 +1300,10 @@ function renderProjects(){
   if(window.scrollY!==y)window.scrollTo(0,y);
   renderProjectDetails();syncCreateControls();syncMessageAges();
 }
-function clearUnavailableProject(){projectsSelectionProof=null;setProjectsExpanded(true);stopPolling();selectionGeneration++;initialScrollTarget=null;selectedProject='';selectedSession=null;sessionRows=[];sessionPage=0;sessionsHaveMore=false;clearHistoryView();$('session-list').replaceChildren();$('sessions-more').hidden=true;updateUrl();syncCurrentSessionControls();renderProjects();}
+function clearUnavailableProject(){closeProjectFile();projectsSelectionProof=null;setProjectsExpanded(true);stopPolling();selectionGeneration++;initialScrollTarget=null;selectedProject='';selectedSession=null;sessionRows=[];sessionPage=0;sessionsHaveMore=false;clearHistoryView();$('session-list').replaceChildren();$('sessions-more').hidden=true;updateUrl();syncCurrentSessionControls();renderProjects();}
 function projectChanged(name){if(!pageActive())return;
   if(!availableProjects.has(name))return;
-  projectsSelectionProof=null;setProjectsExpanded(true);
+  closeProjectFile();projectsSelectionProof=null;setProjectsExpanded(true);
   selectedProject=name;sessionPage=0;sessionRows=[];selectedSession=null;selectionGeneration++;initialScrollTarget=null;clearHistoryView();$('session-list').replaceChildren();$('sessions-more').hidden=true;updateUrl();stopPolling();renderProjects();loadSessionList(0,false);
 }
 async function loadProjects(){if(!pageActive())return;
@@ -1339,7 +1387,7 @@ function chatError(err){if(err&&err.code==='stale')return 'Сессия уста
 function clearHistoryScrollSlack(){historyScrollSlack=0;pinnedHistoryScope=null;historyScrollIntent=false;historyTouchY=null;historyScrollbarStartY=null;if(historyScrollSpacer){historyScrollSpacer.remove();historyScrollSpacer=null;}}
 function setHistoryScrollSlack(height){const bounded=Math.max(0,Math.min(window.innerHeight,Math.ceil(height)));historyScrollSlack=bounded;if(!bounded){clearHistoryScrollSlack();return;}if(!historyScrollSpacer){historyScrollSpacer=node('li',undefined,'history-scroll-slack');historyScrollSpacer.setAttribute('aria-hidden','true');historyScrollSpacer.append(document.createElementNS('http://www.w3.org/2000/svg','svg'));}const svg=historyScrollSpacer.firstElementChild;svg.setAttribute('width','0');svg.setAttribute('height',String(bounded));svg.setAttribute('focusable','false');const list=$('chat-items');if(historyScrollSpacer.parentNode!==list)list.append(historyScrollSpacer);}
 function clearHistoryView(){stopMessageAges();clearHistoryScrollSlack();historyData.delete(chatKey(selectedProject,selectedSession&&selectedSession.sid||''));$('chat-panel').hidden=true;$('history-new').hidden=true;$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-status').textContent='';$('history-retry').hidden=true;$('send-status').textContent='';$('history-truncated').hidden=true;$('native-attention').hidden=true;$('chat-draft').value='';}
-function openChat(row){if(!pageActive())return;closeQueueTransferDialog();if(!row||!UUID_RE.test(row.sid))return;const proven=selectedSession?.sid===row.sid&&selectedSession.proven===true;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;projectsSelectionProof=proven?null:selectionGeneration;selectedSession={proven,created:row.configuredCreated===true,sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;$('history-new').hidden=true;if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();loadHistory(false);loadModelCatalog();loadQueue(true);loadCapabilities();loadSessionQuestions(true);loadQueueStartSupport(true);startPolling();}
+function openChat(row){if(!pageActive())return;closeProjectFile();closeQueueTransferDialog();if(!row||!UUID_RE.test(row.sid))return;const proven=selectedSession?.sid===row.sid&&selectedSession.proven===true;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;projectsSelectionProof=proven?null:selectionGeneration;selectedSession={proven,created:row.configuredCreated===true,sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;$('history-new').hidden=true;if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();loadHistory(false);loadModelCatalog();loadQueue(true);loadCapabilities();loadSessionQuestions(true);loadQueueStartSupport(true);startPolling();}
 // INV-WSESS-37: immutable in-memory operations survive dialog closure, never retry POST.
 function exactFields(value,keys){return Boolean(value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key)));}
 function createState(project){if(!creates.has(project))creates.set(project,{operation:null,status:'draft',inFlight:false,loading:false,available:false,message:'',generation:0,auth:chatAuthGeneration});return creates.get(project);}
@@ -1784,7 +1832,7 @@ function historyArticle(entry,existing,force){
     }
     article.dataset.turnId=entry.turnId;article.dataset.itemId=item.id;
     const heading=node('div',undefined,'message-heading');heading.append(node('h3',item.role==='user'?'Вы':'Codex'),messageTime(item));
-    const children=[heading,renderMarkdown(item.text)];
+    const children=[heading,renderMarkdown(item.text,{project:selectedProject,sid:selectedSession?.sid,selection:selectionGeneration,auth:chatAuthGeneration})];
     if(entry.local)children.push(node('span',localOutgoingStatus(item.outgoing_status),'meta outgoing-status'));
     if(item.truncated===true)children.push(node('span','Сообщение сокращено','meta'));
     article.replaceChildren(...children);article.historyItem=item;
@@ -1845,7 +1893,7 @@ async function checkDelivery(key,id){if(!pageActive())return;if(statusChecks.has
 function applyReceipt(key,data){if(!data||!['sending','held','cancelled','queued','accepted','delivery_unknown','rejected'].includes(data.status)||!UUID_RE.test(data.message_id||''))return;const id=data.message_id,map=ensureReceipts(key),existing=map.get(id),attempt=latestAttempts.get(key);const outgoing=historyData.get(key)?.outgoing.get(id);if(data.status==='queued'&&outgoing?.queueAbsent)return;if(['held','cancelled'].includes(existing?.status)&&data.status!=='accepted')return;const terminal=existing&&['accepted','rejected'].includes(existing.status)?existing:attempt&&attempt.id===id&&['accepted','rejected'].includes(attempt.status)?{status:attempt.status,turn_id:existing&&existing.turn_id||null}:null;if(terminal){if(outgoing)outgoing.status=terminal.status;map.set(id,terminal);if(attempt&&attempt.id===id)attempt.status=terminal.status;syncLocalOutgoingStatuses(key);return;}if(data.status==='sending'&&existing&&existing.status==='delivery_unknown')return;const record={status:data.status,turn_id:data.turn_id||null,...(data.queued_submission_id?{queued_submission_id:data.queued_submission_id}:{})};if(outgoing&&data.queued_submission_id)outgoing.queued_submission_id=data.queued_submission_id;if(existing?.checkError&&data.status==='delivery_unknown')record.checkError=existing.checkError;map.set(id,record);if(outgoing&&outgoing!==attempt)outgoing.status=record.status;if(attempt&&attempt.id===id){if(data.status==='accepted'&&attempt.status!=='accepted'&&attempt.text!==null)attempt.acceptedUntil=Date.now()+5000;attempt.status=data.status;if(!record.checkError)delete attempt.localError;}syncLocalOutgoingStatuses(key);}
 async function submitMessage(event){if(!pageActive()){event.preventDefault();notice('Панель восстанавливается');return;}event.preventDefault();if(!selectedSession||!selectedProject)return;const project=selectedProject,sid=selectedSession.sid,key=chatKey(project,sid),generation=selectionGeneration,auth=chatAuthGeneration,text=$('chat-draft').value;if(!text.trim()){$('send-status').textContent='Напишите сообщение перед отправкой.';return;}if(sendsInFlight.has(key))return;if(hasUnknown(key)){const attempt=latestAttempts.get(key);$('send-status').textContent=attempt&&attempt.text===text?'Для этой попытки уже сохранён ID. Проверьте доставку вручную.':'Сначала проверьте неизвестную доставку. Новый текст пока не отправлен.';renderReceipts(key);return;}const state=modelDraft(key);if(queueMode(key)&&state.modelId){$('send-status').textContent='Очередь использует настройки сессии при запуске. Для выбранной модели выберите режим «Сразу»; черновик сохранён.';return;}if(!explicitModelReady(key)){$('send-status').textContent='Выберите поддерживаемый уровень размышления или обновите каталог; черновик сохранён.';syncCurrentSessionControls();return;}const selection=state.modelId?Object.freeze({catalog_id:state.catalog.catalog_id,model_id:state.modelId,effort:state.effort}):null;let attempt=latestAttempts.get(key);if(!attempt||attempt.text!==text||['queued','held','cancelled','accepted','rejected'].includes(attempt.status)){attempt={mode:queueMode(key)?'queue':'direct',id:crypto.randomUUID(),text,status:'sending',selection,selectionLabel:state.label,context:Object.freeze({project,sid,generation,auth})};latestAttempts.set(key,attempt);normalizeHistoryState(key).outgoing.set(attempt.id,attempt);ensureReceipts(key).set(attempt.id,{status:'sending',turn_id:null});}else if(attempt.status==='delivery_unknown'){$('send-status').textContent='Проверьте доставку вручную; повторная отправка отключена.';return;}else{attempt.status='sending';}
   sendsInFlight.add(key);renderHistory(key);syncCurrentSessionControls();$('send-status').textContent='Отправляем сообщение…';renderReceipts(key);if(scrollScopeMatches(project,sid,generation))scrollToDocumentBottom();try{let result;try{result=await api(attempt.mode==='queue'?'/api/session-queue':'/api/session-send',{project,sid,message_id:attempt.id,text:attempt.text,...(attempt.selection?{selection:attempt.selection}:{})});}catch(err){if(err.stale)return;if(!csrf||chatAuthGeneration!==auth)return;if(err.data&&['queued','accepted','rejected','delivery_unknown'].includes(err.data.status))result=err.data;else if(['invalid_request','forbidden','unauthorized','stale'].includes(err.code)){attempt.status='rejected';if(attempt.selection&&err.code==='stale'){state.stale=true;state.message='Каталог моделей устарел. Обновите список моделей; выбор и черновик сохранены.';}attempt.localError=err.message+' Черновик сохранён; отправка не повторялась.';ensureReceipts(key).delete(attempt.id);if(activeSelection(project,sid,generation)){renderHistory(key);$('send-status').textContent=attempt.localError;}return;}else{result={status:'delivery_unknown',message_id:attempt.id,turn_id:null};}}if(!csrf||chatAuthGeneration!==auth)return;if(!result.message_id)result.message_id=attempt.id;applyReceipt(key,result);if(!ensureReceipts(key).has(attempt.id))applyReceipt(key,{status:'delivery_unknown',message_id:attempt.id,turn_id:null});attempt.status=ensureReceipts(key).get(attempt.id).status;if(['queued','accepted'].includes(attempt.status)&&drafts.get(key)===text){drafts.delete(key);if(activeSelection(project,sid,generation)&&$('chat-draft').value===text)$('chat-draft').value='';}if(activeSelection(project,sid,generation)){renderHistory(key);renderCurrentSendStatus();renderReceipts(key);}}finally{if(chatAuthGeneration===auth){sendsInFlight.delete(key);syncLocalOutgoingStatuses(key);}syncCurrentSessionControls();}}
-function historyChange(){if(document.visibilityState==='hidden')stopLimitsView();else if(currentTab==='limits')syncLimitsView();if(lifecycleV2){if(document.visibilityState==='hidden')closePageGate();return;}if(document.visibilityState==='hidden'){stopNavigation();stopPolling();stopDevbusView();devbusAdmitted=false;}else if(currentTab==='devbus'){admitDevbusView();}else{syncCurrentSessionControls();syncNavigation(true);startPolling();loadQueue(true);if(liveTransport)liveJSON(liveTransport).then(result=>{if(result)acceptLiveLease(liveTransport,result.data,result.started);}).catch(()=>{});}}
+function historyChange(){if(document.visibilityState==='hidden')closeProjectFile();if(document.visibilityState==='hidden')stopLimitsView();else if(currentTab==='limits')syncLimitsView();if(lifecycleV2){if(document.visibilityState==='hidden')closePageGate();return;}if(document.visibilityState==='hidden'){stopNavigation();stopPolling();stopDevbusView();devbusAdmitted=false;}else if(currentTab==='devbus'){admitDevbusView();}else{syncCurrentSessionControls();syncNavigation(true);startPolling();loadQueue(true);if(liveTransport)liveJSON(liveTransport).then(result=>{if(result)acceptLiveLease(liveTransport,result.data,result.started);}).catch(()=>{});}}
 function historyPinActive(){return Boolean(historyScrollSlack&&pinnedHistoryScope&&selectedSession&&pinnedHistoryScope.project===selectedProject&&pinnedHistoryScope.sid===selectedSession.sid&&pinnedHistoryScope.generation===selectionGeneration);}
 function noteHistoryScrollIntent(event){
   const reader=pageReaderScope&&scrollScopeMatches(pageReaderScope.project,pageReaderScope.sid,pageReaderScope.generation);
@@ -1894,6 +1942,8 @@ $('rename-title').addEventListener('paste',event=>{const raw=event.clipboardData
 $('rename-dialog').addEventListener('cancel',event=>{event.preventDefault();closeRenameDialog();});
 $('rename-check').addEventListener('click',checkRename);
 $('rename-current-check').addEventListener('click',checkRename);
+$('project-file-close').addEventListener('click',closeProjectFile);
+$('project-file-dialog').addEventListener('cancel',event=>{event.preventDefault();closeProjectFile();});
 $('create-open').addEventListener('click',openCreateDialog);
 $('create-form').addEventListener('submit',submitCreate);
 $('create-cancel').addEventListener('click',closeCreateDialog);
@@ -1906,7 +1956,7 @@ $('chat-effort').addEventListener('change',()=>{const key=currentSessionKey();if
 $('models-refresh').addEventListener('click',()=>{const key=currentSessionKey();if(key&&!sendsInFlight.has(key)&&!hasUnknown(key))loadModelCatalog();});
 $('chat-draft').addEventListener('input',()=>{if(selectedSession){const key=chatKey(selectedProject,selectedSession.sid);drafts.set(key,$('chat-draft').value);syncCurrentSessionControls();if(hasUnknown(key))$('send-status').textContent='Есть отправка с неизвестным статусом. Сначала проверьте её вручную.';}});
 document.addEventListener('visibilitychange',historyChange);
-window.addEventListener('pagehide',()=>{stopLimitsView();stopNavigation();if(lifecycleV2){closePageGate();return;}stopPolling();stopDevbusView();devbusAdmitted=false;});
+window.addEventListener('pagehide',()=>{closeProjectFile();stopLimitsView();stopNavigation();if(lifecycleV2){closePageGate();return;}stopPolling();stopDevbusView();devbusAdmitted=false;});
 window.addEventListener('pageshow',event=>{if(event.persisted)historyChange();else if(currentTab==='limits')syncLimitsView();});
 document.addEventListener('wheel',noteHistoryScrollIntent,{passive:true});
 document.addEventListener('touchstart',noteHistoryScrollIntent,{passive:true});

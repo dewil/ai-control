@@ -647,9 +647,14 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
     def chat_cursor(value):
         return value is None or (type(value) is str and 0 < len(value) <= 4096)
 
-    def chat_result(call, sending=False, preserve_forbidden=False):
+    def chat_result(call, sending=False, preserve_forbidden=False, project_file=False):
         try:
             result = call()
+            if project_file:
+                from _control_web_broker import project_file_result
+                result = project_file_result(result)
+                code = result.get('error')
+                return error(code, {'invalid_request': 422, 'unsupported_type': 415}.get(code, 404)) if code else JSONResponse(result)
             if type(result) is not dict:
                 return error('unavailable', 503)
             code = result.get('error')
@@ -702,7 +707,7 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
             data['page'] = int(data['page'])
         return data
 
-    async def chat_read(request, required, optional, call, preserve_forbidden=False, owner=False):
+    async def chat_read(request, required, optional, call, preserve_forbidden=False, owner=False, project_file=False):
         current, failure = session(request)
         if failure:
             return failure
@@ -713,7 +718,17 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
         data = chat_query(request, required, optional)
         if data is None:
             return error('invalid_request', 422)
-        return await run_in_threadpool(chat_result, lambda: call(data), preserve_forbidden=preserve_forbidden)
+        if project_file:
+            from _control_web_sessions import valid_project_file_path
+            if not valid_project_file_path(data['path']):
+                return error('invalid_request', 422)
+        return await run_in_threadpool(chat_result, lambda: call(data), preserve_forbidden=preserve_forbidden, project_file=project_file)
+
+    @app.get('/api/project-file')
+    async def project_file(request: Request):
+        return await chat_read(request, ('project', 'path'), (),
+                               lambda data: backend.project_file(data['project'], data['path']),
+                               owner=True, project_file=True)
 
     @app.get('/api/session-projects')
     async def session_projects(request: Request):

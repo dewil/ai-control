@@ -134,3 +134,10 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 @media(max-width:700px){#limits-panel .lm-cards{grid-template-columns:minmax(0,1fr)}#limits-panel{padding:12px}#limits-panel .lm-card{padding:12px}}
 @media(max-width:480px){.tabs:has(#tab-limits){display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}.tabs:has(#tab-limits) button{min-width:44px;min-height:44px;padding:9px 4px;font-size:14px}}
 @media(forced-colors:active){#limits-panel .lm-quota{border:1px solid CanvasText}#limits-panel .lm-quota-fill{background:Highlight;forced-color-adjust:none}#limits-panel .lm-track{background:Canvas;forced-color-adjust:none}#limits-panel .lm-marker{border-color:CanvasText;background:Canvas;forced-color-adjust:none}#limits-panel .lm-double{background:Highlight}}
+
+#project-file-dialog{box-sizing:border-box;width:min(900px,calc(100vw - 24px));max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);padding:16px;overflow:hidden}
+.project-file-heading{display:flex;align-items:center;gap:12px;justify-content:space-between}
+#project-file-name{min-width:0;overflow-wrap:anywhere;margin:0}
+#project-file-close{flex-shrink:0}
+#project-file-text{box-sizing:border-box;max-width:100%;max-height:65dvh;overflow:auto;white-space:pre;margin-bottom:0;tab-size:4}
+#project-file-text mark{display:inline-block;min-width:1ch;background:#ffdc73;color:#171717}
