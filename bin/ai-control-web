@@ -70,6 +70,7 @@ def read_auth(value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
+    commands.add_parser('sync-limits-alp', help='Fetch the fixed safe ALP export into the private owner cache')
     enrollment = commands.add_parser('init-auth', help='enrollment to private local file; no secret stdout')
     enrollment.add_argument('--output', required=True)
     enrollment.add_argument('--origin', required=True)
@@ -89,9 +90,16 @@ def main():
     broker.add_argument('--allowed-uid', type=int, required=True)
     broker.add_argument('--codex-socket', help='Existing shared App Server Unix socket')
     broker.add_argument('--session-receipts', default=str(Path.home() / '.local/state/ai-control-web/session-receipts'))
+    broker.add_argument('--limits-digest-cache', default=str(Path.home() / '.ai-control/limits/last.json'))
+    broker.add_argument('--limits-alp-cache', default=str(Path.home() / '.local/state/ai-control/limits/alp.json'))
     args = parser.parse_args()
     os.umask(0o077)
-    if args.command == 'init-auth':
+    if args.command == 'sync-limits-alp':
+        from _control_web_broker import sync_alp_limits
+        result = sync_alp_limits(str(Path.home() / '.local/state/ai-control/limits/alp.json'))
+        print(json.dumps(result, separators=(',', ':')))
+        sys.exit(0 if result['status'] == 'updated' else 1)
+    elif args.command == 'init-auth':
         from _control_web import hash_password, create_app, valid_username
         if not valid_username(args.username):
             raise ValueError('invalid authentication configuration')
@@ -133,7 +141,7 @@ def main():
         uvicorn.run(app, host=args.host, port=args.port, workers=1, reload=False, proxy_headers=False,
                     timeout_graceful_shutdown=0, access_log=False, log_level='warning')
     else:
-        from _control_web_broker import DevbusRuntime, RegistryBackend, serve_broker
+        from _control_web_broker import CachedLimitsReader, DevbusRuntime, RegistryBackend, serve_broker
         from _control_web_sessions import InteractiveRPC, SessionChat
         from _codex_rc import socket_path
         rpc = InteractiveRPC(args.codex_socket if args.codex_socket is not None else socket_path())
@@ -155,7 +163,8 @@ def main():
         try:
             devbus.start()
             serve_broker(args.socket, RegistryBackend(args.registry, args.bin_dir, sessions=sessions,
-                         configured_creator=creator, devbus=devbus), args.allowed_uid, stop_event=stopped)
+                         configured_creator=creator, devbus=devbus,
+                         cached_limits_reader=CachedLimitsReader(args.limits_digest_cache, args.limits_alp_cache)), args.allowed_uid, stop_event=stopped)
         finally:
             try:
                 devbus.stop()

@@ -9,6 +9,8 @@ import math
 import os
 from pathlib import Path
 import re
+import selectors
+import shlex
 import socket
 import stat
 import struct
@@ -837,12 +839,574 @@ def _queue_boundary(request, value):
     return value
 
 
+def _limits_number(item, low=0, high=None, nullable=False):
+    return (item is None and nullable or type(item) in (int, float)
+            and math.isfinite(item) and item >= low and (high is None or item <= high))
+
+
+def _cache_timestamp(value):
+    # This export contract accepts UTC, never local wall time or other offsets.
+    if type(value) is not str or not value.endswith(('Z', '+00:00')):
+        return None
+    seconds = _timestamp(value)[1]
+    return seconds if _limits_number(seconds, high=253402300799) else None
+
+
+def _cached_source(provider, node='llm', reason='missing_source'):
+    return dict(node_id=node, provider=provider,
+                kind='prepaid' if provider in ('openrouter', 'yandex') else 'quota',
+                identity='unbound' if node == 'llm' else 'unknown', account_ref=None,
+                origin='bot_cache' if node == 'llm' else 'alp_export',
+                status='unavailable', reason=reason, observed_at=None,
+                observation_basis='unknown', age_seconds=None, max_age_seconds=2700,
+                windows=[], prepaid=None, last_known=None)
+
+
+def _cached_window(provider, bucket, remaining, reset, duration, now):
+    reset = _cache_timestamp(reset)
+    remaining = remaining if _limits_number(remaining, high=100) else None
+    if reset is not None and reset <= now:
+        remaining = None
+    started = reset - duration * 60 if reset is not None and reset > now and duration is not None else None
+    if started is not None and started < 0:
+        started = None
+    return dict(id=provider + ':' + bucket, bucket=bucket, duration_minutes=duration,
+                remaining_percent=remaining, resets_at=reset, window_started_at=started,
+                anchor='derived_reset_and_duration' if started is not None else None)
+
+
+# The same closed stdlib decoder runs before remote stdout and local persistence.
+# Its only executable input is this constant; transport data is always JSON.
+_ALP_EXPORT_PROTOCOL = r'''
+import json, math, uuid
+from datetime import datetime
+
+def timestamp(value):
+    if type(value) is not str or len(value) > 100 or not value.endswith(('Z', '+00:00')):
+        raise ValueError('invalid export')
+    parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    result = parsed.timestamp()
+    if parsed.tzinfo is None or not math.isfinite(result) or not 0 <= result <= 253402300799:
+        raise ValueError('invalid export')
+    return result
+
+def number(value, low, high):
+    return type(value) in (int, float) and math.isfinite(value) and low <= value <= high
+
+def pairs(items):
+    result = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError('invalid export')
+        result[key] = value
+    return result
+
+def floating(raw):
+    value = float(raw)
+    if not math.isfinite(value):
+        raise ValueError('invalid export')
+    return value
+
+def nonfinite(_value):
+    raise ValueError('invalid export')
+
+def decode(data, now=None):
+    if type(data) is not bytes or len(data) > 131072:
+        raise ValueError('invalid export')
+    value = json.loads(data, object_pairs_hook=pairs, parse_float=floating, parse_constant=nonfinite)
+    fields = {'schema_version', 'node_id', 'exported_at', 'accounts'}
+    if (type(value) is not dict or set(value) not in (fields, fields | {'freshness'})
+            or type(value['schema_version']) is not int or value['schema_version'] != 1
+            or value['node_id'] != 'alp' or type(value['accounts']) is not list or len(value['accounts']) > 16):
+        raise ValueError('invalid export')
+    exported = timestamp(value['exported_at'])
+    if now is not None and exported > now:
+        raise ValueError('invalid export')
+    if 'freshness' in value:
+        item = value['freshness']
+        if (type(item) is not dict or set(item) != {'max_age_seconds', 'future_skew_seconds'}
+                or type(item['max_age_seconds']) is not int or not 1 <= item['max_age_seconds'] <= 86400
+                or type(item['future_skew_seconds']) is not int or not 0 <= item['future_skew_seconds'] <= 300):
+            raise ValueError('invalid export')
+    seen = set()
+    for account in value['accounts']:
+        if (type(account) is not dict or set(account) != {'account_ref', 'provider', 'status', 'observed_at',
+                'observed_at_semantics', 'windows'} or account['provider'] not in ('codex', 'claude')
+                or account['status'] not in ('ok', 'stale', 'unknown', 'reset_pending', 'missing', 'future')
+                or account['observed_at_semantics'] != 'tick_start' or type(account['account_ref']) is not str
+                or type(account['windows']) is not list or len(account['windows']) > 8):
+            raise ValueError('invalid export')
+        ref = uuid.UUID(account['account_ref'])
+        key = (account['provider'], account['account_ref'])
+        if str(ref) != account['account_ref'] or ref.version != 4 or ref.variant != uuid.RFC_4122 or key in seen:
+            raise ValueError('invalid export')
+        seen.add(key)
+        if account['observed_at'] is None:
+            if account['status'] not in ('unknown', 'missing'):
+                raise ValueError('invalid export')
+        else:
+            # Causality/future observations are isolated by the cache reader.
+            timestamp(account['observed_at'])
+        slots = ({'primary_window', 'secondary_window'} if account['provider'] == 'codex' else
+                 {'five_hour', 'seven_day', 'scoped:sonnet', 'scoped:opus', 'scoped:fable'})
+        used_slots = set()
+        for window in account['windows']:
+            if (type(window) is not dict or set(window) != {'slot', 'used_percent', 'reset', 'duration_seconds'}
+                    or window['slot'] not in slots or window['slot'] in used_slots
+                    or window['used_percent'] is not None and not number(window['used_percent'], 0, 100)
+                    or window['duration_seconds'] is not None and not number(window['duration_seconds'], 60, 31536000)):
+                raise ValueError('invalid export')
+            used_slots.add(window['slot'])
+            if window['reset'] is not None:
+                timestamp(window['reset'])
+    return value
+'''
+_ALP_EXPORT_NAMESPACE = {'__name__': 'alp_export_protocol'}
+exec(_ALP_EXPORT_PROTOCOL, _ALP_EXPORT_NAMESPACE)
+
+_ALP_EXPORT_REMOTE = _ALP_EXPORT_PROTOCOL + r'''
+import os, stat, sys
+try:
+    fd = os.open('/var/lib/alp-limits-export/limits-v1.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or before.st_mode & stat.S_IWOTH or before.st_size > 131072):
+            raise ValueError('invalid export')
+        data = bytearray()
+        while len(data) <= 131072:
+            block = os.read(fd, min(65536, 131073 - len(data)))
+            if not block:
+                break
+            data.extend(block)
+        after = os.fstat(fd)
+        if (len(data) != before.st_size or (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+            raise ValueError('invalid export')
+    finally:
+        os.close(fd)
+    value = decode(bytes(data))
+    output = json.dumps(value, allow_nan=False, separators=(',', ':')).encode()
+    if len(output) > 131072:
+        raise ValueError('invalid export')
+except Exception:
+    sys.exit(1)
+sys.stdout.buffer.write(output)
+'''
+
+
+def _alp_sync_transport(argv, *, timeout=8, max_bytes=131072):
+    """Bound the child deadline and stdout without ever exposing stderr."""
+    deadline = time.monotonic() + timeout
+    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, shell=False)
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            data = bytearray()
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise ValueError('sync failed')
+                block = os.read(process.stdout.fileno(), min(65536, max_bytes + 1 - len(data)))
+                if not block:
+                    break
+                data.extend(block)
+                if len(data) > max_bytes:
+                    raise ValueError('sync failed')
+            if process.wait(timeout=max(0, deadline - time.monotonic())) != 0:
+                raise ValueError('sync failed')
+            return bytes(data)
+    finally:
+        try:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=1)
+        finally:
+            process.stdout.close()
+
+
+def _alp_sync_parent(destination):
+    """Walk directory descriptors so no component may redirect the write."""
+    path = Path(os.path.abspath(destination))
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for component in path.parent.parts[1:]:
+            try:
+                next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                os.mkdir(component, mode=0o700, dir_fd=fd)
+                next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        info = os.fstat(fd)
+        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise ValueError('sync failed')
+        return fd, path.name
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _alp_sync_leaf(parent, name):
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    except FileNotFoundError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != 0o600):
+            raise ValueError('sync failed')
+        return info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns
+    finally:
+        os.close(fd)
+
+
+def sync_alp_limits(destination, *, runner=None, clock=time.time):
+    """Explicit owner delivery worker; never called by a cache read or HTTP."""
+    parent, temporary = None, None
+    try:
+        # Literal Python command and fixed SSH configuration; no payload interpolation.
+        argv = ['ssh', '-T']
+        for option in ('BatchMode=yes', 'StrictHostKeyChecking=yes', 'ForwardAgent=no',
+                       'ClearAllForwardings=yes', 'RequestTTY=no', 'ControlMaster=no',
+                       'ControlPath=none', 'ForwardX11=no', 'ConnectTimeout=5'):
+            argv.extend(('-o', option))
+        argv.extend(('alp-ai-dev-1-dwl', 'python3 -c ' + shlex.quote(_ALP_EXPORT_REMOTE)))
+        data = (runner or _alp_sync_transport)(argv, timeout=8, max_bytes=131072)
+        value = _ALP_EXPORT_NAMESPACE['decode'](data, clock())
+        output = json.dumps(value, allow_nan=False, separators=(',', ':')).encode()
+        if len(output) > 131072:
+            raise ValueError('sync failed')
+        parent, name = _alp_sync_parent(destination)
+        previous = _alp_sync_leaf(parent, name)
+        candidate = '.alp-limits-' + uuid.uuid4().hex
+        fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+        temporary = candidate
+        with os.fdopen(fd, 'wb') as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(output)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if _alp_sync_leaf(parent, name) != previous:
+            raise ValueError('sync failed')
+        os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+        temporary = None
+        os.fsync(parent)
+        return dict(status='updated', accounts=len(value['accounts']))
+    except Exception:
+        return dict(status='unavailable', reason='sync_failed')
+    finally:
+        if parent is not None:
+            try:
+                if temporary is not None:
+                    os.unlink(temporary, dir_fd=parent)
+            except OSError:
+                pass
+            finally:
+                os.close(parent)
+
+
+class CachedLimitsReader:
+    """Read the two owner-selected files without collecting provider data."""
+    def __init__(self, digest_path, alp_path=None, *, clock=time.time):
+        self.digest_path = digest_path
+        self.alp_path = alp_path
+        self.clock = clock
+
+    @staticmethod
+    def _read(path, private=False):
+        if path is None:
+            raise FileNotFoundError
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            before = os.fstat(fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
+                    or before.st_nlink != 1 or before.st_size > 1024 * 1024
+                    or before.st_mode & stat.S_IWOTH
+                    or private and stat.S_IMODE(before.st_mode) != 0o600):
+                raise ValueError('invalid snapshot')
+            data = bytearray()
+            while len(data) <= 1024 * 1024:
+                block = os.read(fd, min(65536, 1024 * 1024 + 1 - len(data)))
+                if not block:
+                    break
+                data.extend(block)
+            after = os.fstat(fd)
+            if (len(data) > 1024 * 1024 or len(data) != before.st_size
+                    or (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                    != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+                raise ValueError('invalid snapshot')
+        finally:
+            os.close(fd)
+        def pairs(items):
+            result = {}
+            for key, item in items:
+                if key in result:
+                    raise ValueError('duplicate field')
+                result[key] = item
+            return result
+        def constant(_value):
+            raise ValueError('nonfinite number')
+        def floating(raw):
+            result = float(raw)
+            if not math.isfinite(result):
+                raise ValueError('nonfinite number')
+            return result
+        value = json.loads(data, object_pairs_hook=pairs, parse_constant=constant, parse_float=floating)
+        if type(value) is not dict:
+            raise ValueError('invalid snapshot')
+        return value
+
+    @staticmethod
+    def _observe(source, observed, basis, now, received=None):
+        if observed is None or observed > now or received is not None and observed > received:
+            source['reason'] = 'invalid_snapshot'
+            return False
+        source.update(observed_at=observed, observation_basis=basis,
+                      age_seconds=now - observed,
+                      status='stale' if now - observed >= 2700 else 'ok', reason=None)
+        return True
+
+    def _bot(self, now):
+        sources = [_cached_source(provider) for provider in ('kimi', 'openrouter', 'yandex')]
+        value = self._read(self.digest_path)
+        received = _cache_timestamp(value.get('received_at'))
+        snapshot = value.get('snapshot')
+        captured = _cache_timestamp(snapshot.get('captured_at')) if type(snapshot) is dict else None
+        if received is None or captured is None or captured > received or received > now:
+            raise ValueError('invalid snapshot')
+        for source in sources:
+            provider = source['provider']
+            section = snapshot.get(provider)
+            if section is None:
+                continue
+            if type(section) is not dict:
+                source['reason'] = 'invalid_snapshot'
+                continue
+            if section.get('status') != 'ok':
+                source['reason'] = 'source_error'
+                if source['kind'] == 'prepaid':
+                    last_at = _cache_timestamp(section.get('last_at'))
+                    balance = section.get('last_balance')
+                    if last_at is not None and last_at <= now and _limits_number(balance, -1e12, 1e12):
+                        source['last_known'] = dict(currency='USD' if provider == 'openrouter' else 'RUB',
+                                                    balance=balance, observed_at=last_at)
+                continue
+            observed = captured if provider == 'kimi' else _cache_timestamp(section.get('captured_at'))
+            if not self._observe(source, observed, 'snapshot_tick' if provider == 'kimi' else 'provider_capture', now, received):
+                continue
+            if provider == 'kimi':
+                for bucket, duration in (('five_hour', 300), ('seven_day', 10080), ('month_total', None), ('month_code', None)):
+                    window = section.get(bucket)
+                    window = window if type(window) is dict else {}
+                    source['windows'].append(_cached_window(provider, bucket, window.get('remaining'),
+                                                            window.get('resets_at'), duration, now))
+            else:
+                balance = section.get('balance')
+                if not _limits_number(balance, -1e12, 1e12):
+                    source.update(status='unavailable', reason='invalid_snapshot')
+                    continue
+                prepaid = dict(currency='USD' if provider == 'openrouter' else 'RUB', balance=balance)
+                for key in ('scale', 'spend_day', 'spend_week', 'burn_per_day', 'forecast_days'):
+                    metric = section.get(key)
+                    prepaid[key] = metric if (_limits_number(metric, high=1e9 if key == 'forecast_days' else 1e12)
+                                              and (key != 'scale' or metric > 0)) else None
+                scale_at = _cache_timestamp(section.get('scale_at'))
+                prepaid['scale_at'] = scale_at if scale_at is not None and scale_at <= now else None
+                source['prepaid'] = prepaid
+        return sources
+
+    def _alp(self, now):
+        value = self._read(self.alp_path, private=True)
+        exported = _cache_timestamp(value.get('exported_at'))
+        if (set(value) not in ({'schema_version', 'node_id', 'exported_at', 'accounts'},
+                               {'schema_version', 'node_id', 'exported_at', 'accounts', 'freshness'})
+                or type(value['schema_version']) is not int or value['schema_version'] != 1
+                or value['node_id'] != 'alp' or exported is None or exported > now
+                or type(value['accounts']) is not list or len(value['accounts']) > 16):
+            raise ValueError('invalid snapshot')
+        if 'freshness' in value:
+            freshness = value['freshness']
+            if (type(freshness) is not dict or set(freshness) != {'max_age_seconds', 'future_skew_seconds'}
+                    or type(freshness['max_age_seconds']) is not int or not 1 <= freshness['max_age_seconds'] <= 86400
+                    or type(freshness['future_skew_seconds']) is not int or not 0 <= freshness['future_skew_seconds'] <= 300):
+                raise ValueError('invalid snapshot')
+        sources, seen = [], set()
+        for account in value['accounts']:
+            if (type(account) is not dict or set(account) != {'account_ref', 'provider', 'status',
+                    'observed_at', 'observed_at_semantics', 'windows'}
+                    or account['provider'] not in ('codex', 'claude')
+                    or account['status'] not in ('ok', 'stale', 'unknown', 'reset_pending', 'missing', 'future')
+                    or account['observed_at_semantics'] != 'tick_start'
+                    or type(account['account_ref']) is not str
+                    or type(account['windows']) is not list or len(account['windows']) > 8):
+                raise ValueError('invalid snapshot')
+            provider, ref = account['provider'], account['account_ref']
+            parsed = uuid.UUID(ref)
+            if str(parsed) != ref or parsed.version != 4 or parsed.variant != uuid.RFC_4122 or (provider, ref) in seen:
+                raise ValueError('invalid snapshot')
+            seen.add((provider, ref))
+            source = _cached_source(provider, 'alp')
+            source.update(identity='collector_mapped', account_ref=hashlib.sha256(
+                ('alp-limits-account:' + provider + ':' + ref).encode()).hexdigest())
+            observed = _cache_timestamp(account['observed_at'])
+            if observed is not None and observed > exported:
+                source['reason'] = 'invalid_snapshot'
+            elif account['observed_at'] is None and account['status'] in ('missing', 'unknown'):
+                source['reason'] = 'missing_source' if account['status'] == 'missing' else 'source_error'
+            elif self._observe(source, observed, 'snapshot_tick', now):
+                if account['status'] in ('unknown', 'reset_pending', 'missing', 'future'):
+                    source.update(status='unavailable', reason={'unknown': 'source_error', 'reset_pending': 'reset_pending',
+                                  'missing': 'missing_source', 'future': 'invalid_snapshot'}[account['status']])
+                elif account['status'] == 'stale':
+                    source['status'] = 'stale'
+            windows, slots = [], set()
+            known = ({'primary_window': 'primary', 'secondary_window': 'secondary'} if provider == 'codex' else
+                     {slot: slot.replace(':', '_') for slot in ('five_hour', 'seven_day', 'scoped:sonnet', 'scoped:opus', 'scoped:fable')})
+            for index, window in enumerate(account['windows']):
+                if (type(window) is not dict or set(window) != {'slot', 'used_percent', 'reset', 'duration_seconds'}
+                        or type(window['slot']) is not str or len(window['slot']) > 128 or window['slot'] in slots):
+                    raise ValueError('invalid snapshot')
+                slots.add(window['slot'])
+                used = window['used_percent']
+                remaining = 100 - used if _limits_number(used, high=100) else None
+                duration = window['duration_seconds']
+                duration = duration / 60 if _limits_number(duration, low=60, high=31536000) else None
+                windows.append(_cached_window(provider, known.get(window['slot'], 'window_' + str(index + 1)),
+                                              remaining, window['reset'], duration, now))
+            if source['status'] != 'unavailable':
+                source['windows'] = windows
+            sources.append(source)
+        # Retain explicit disconnected providers even when only one is exported.
+        sources.extend(_cached_source(provider, 'alp') for provider in ('codex', 'claude')
+                       if not any(source['provider'] == provider for source in sources))
+        return sources
+
+    def snapshot(self, server_now):
+        sources = []
+        for read, node, providers in ((self._bot, 'llm', ('kimi', 'openrouter', 'yandex')),
+                                      (self._alp, 'alp', ('codex', 'claude'))):
+            try:
+                sources.extend(read(server_now))
+            except Exception as error:
+                reason = 'missing_source' if isinstance(error, FileNotFoundError) else 'invalid_snapshot'
+                sources.extend(_cached_source(provider, node, reason) for provider in providers)
+        return sources
+
+
+def _cached_limits_valid(sources, now):
+    fields = set(_cached_source('kimi'))
+    window_fields = {'id', 'bucket', 'duration_minutes', 'remaining_percent', 'resets_at', 'window_started_at', 'anchor'}
+    seen = set()
+    if type(sources) is not list or len(sources) > 32:
+        return False
+    for source in sources:
+        if (type(source) is not dict or set(source) != fields
+                or source['node_id'] not in ('llm', 'alp')
+                or source['provider'] not in ('kimi', 'openrouter', 'yandex', 'codex', 'claude')
+                or source['kind'] != ('prepaid' if source['provider'] in ('openrouter', 'yandex') else 'quota')
+                or source['identity'] not in ('unbound', 'collector_mapped', 'unknown')
+                or source['origin'] != ('bot_cache' if source['node_id'] == 'llm' else 'alp_export')
+                or (source['node_id'] == 'llm') != (source['provider'] in ('kimi', 'openrouter', 'yandex'))
+                or source['account_ref'] is not None and (type(source['account_ref']) is not str
+                    or re.fullmatch('[0-9a-f]{64}', source['account_ref']) is None)
+                or source['identity'] == 'collector_mapped' and source['account_ref'] is None
+                or source['identity'] != 'collector_mapped' and source['account_ref'] is not None
+                or source['node_id'] == 'llm' and source['identity'] != 'unbound'
+                or source['node_id'] == 'alp' and source['identity'] == 'unbound'
+                or source['status'] not in ('ok', 'stale', 'unavailable')
+                or source['reason'] not in (None, 'missing_source', 'source_error', 'invalid_snapshot', 'unknown_identity', 'reset_pending')
+                or source['max_age_seconds'] != 2700 or type(source['max_age_seconds']) is not int
+                or not _limits_number(source['observed_at'], high=now, nullable=True)
+                or not _limits_number(source['age_seconds'], nullable=True)
+                or source['observation_basis'] not in ('snapshot_tick', 'provider_capture', 'unknown')
+                or type(source['windows']) is not list or len(source['windows']) > 8):
+            return False
+        key = (source['node_id'], source['provider'], source['account_ref'])
+        if key in seen:
+            return False
+        seen.add(key)
+        if source['observed_at'] is None:
+            if source['age_seconds'] is not None or source['observation_basis'] != 'unknown':
+                return False
+        elif source['age_seconds'] != now - source['observed_at'] or source['observation_basis'] == 'unknown':
+            return False
+        if source['status'] == 'unavailable':
+            if source['reason'] is None or source['windows'] or source['prepaid'] is not None:
+                return False
+        elif (source['reason'] is not None or source['observed_at'] is None
+              or source['identity'] == 'unknown' or source['status'] == 'ok' and source['age_seconds'] >= 2700):
+            return False
+        if (source['observed_at'] is not None and source['observation_basis'] != (
+                'provider_capture' if source['kind'] == 'prepaid' else 'snapshot_tick')):
+            return False
+        allowed_buckets = ({'five_hour', 'seven_day', 'month_total', 'month_code'} if source['provider'] == 'kimi' else
+                           {'primary', 'secondary'} if source['provider'] == 'codex' else
+                           {'five_hour', 'seven_day', 'scoped_sonnet', 'scoped_opus', 'scoped_fable'})
+        buckets = set()
+        for window in source['windows']:
+            if (type(window) is not dict or set(window) != window_fields
+                    or type(window['bucket']) is not str
+                    or window['bucket'] not in allowed_buckets and (source['node_id'] != 'alp'
+                        or re.fullmatch(r'window_[1-8]', window['bucket']) is None)
+                    or window['bucket'] in buckets or window['id'] != source['provider'] + ':' + window['bucket']
+                    or not _limits_number(window['duration_minutes'], high=525600, nullable=True)
+                    or window['duration_minutes'] is not None and window['duration_minutes'] < 1
+                    or not _limits_number(window['remaining_percent'], high=100, nullable=True)
+                    or not _limits_number(window['resets_at'], high=253402300799, nullable=True)
+                    or not _limits_number(window['window_started_at'], nullable=True)
+                    or window['anchor'] not in (None, 'derived_reset_and_duration')):
+                return False
+            buckets.add(window['bucket'])
+            if window['anchor'] is None:
+                if window['window_started_at'] is not None:
+                    return False
+            elif (window['duration_minutes'] is None or window['resets_at'] is None or window['resets_at'] <= now
+                  or window['window_started_at'] != window['resets_at'] - window['duration_minutes'] * 60):
+                return False
+            if window['resets_at'] is not None and window['resets_at'] <= now and window['remaining_percent'] is not None:
+                return False
+        prepaid, historical = source['prepaid'], source['last_known']
+        if source['kind'] == 'quota':
+            if prepaid is not None or historical is not None:
+                return False
+        else:
+            if source['windows'] or source['status'] != 'unavailable' and prepaid is None:
+                return False
+            currency = 'USD' if source['provider'] == 'openrouter' else 'RUB'
+            if prepaid is not None:
+                if (type(prepaid) is not dict or set(prepaid) != {'currency', 'balance', 'scale', 'scale_at',
+                        'spend_day', 'spend_week', 'burn_per_day', 'forecast_days'}
+                        or prepaid['currency'] != currency or not _limits_number(prepaid['balance'], -1e12, 1e12)
+                        or not _limits_number(prepaid['scale_at'], high=now, nullable=True)):
+                    return False
+                for metric in ('scale', 'spend_day', 'spend_week', 'burn_per_day', 'forecast_days'):
+                    if (not _limits_number(prepaid[metric], high=1e9 if metric == 'forecast_days' else 1e12, nullable=True)
+                            or metric == 'scale' and prepaid[metric] is not None and prepaid[metric] <= 0):
+                        return False
+            if historical is not None and (source['status'] != 'unavailable' or type(historical) is not dict
+                    or set(historical) != {'currency', 'balance', 'observed_at'} or historical['currency'] != currency
+                    or not _limits_number(historical['balance'], -1e12, 1e12)
+                    or not _limits_number(historical['observed_at'], high=now)):
+                return False
+    return True
+
+
 def limits_result(value):
     """Validate every public leaf before crossing either owner boundary."""
-    def number(item, low=0, high=None, nullable=False):
-        return (item is None and nullable or type(item) in (int, float)
-                and math.isfinite(item) and item >= low and (high is None or item <= high))
+    number = _limits_number
     try:
+        if type(value) is dict and type(value.get('schema')) is int and value['schema'] == 2:
+            if (set(value) != {'schema', 'server_now', 'native', 'cached_sources'}
+                    or not number(value['server_now'])
+                    or type(value['native']) is not dict or value['native'].get('schema') != 1
+                    or limits_result(value['native']) == {'error': 'unavailable'}
+                    or value['native']['server_now'] != value['server_now']
+                    or not _cached_limits_valid(value['cached_sources'], value['server_now'])):
+                raise ValueError
+            return copy.deepcopy(value)
         if (type(value) is not dict or set(value) != {'schema', 'server_now', 'coverage', 'sources'}
                 or type(value['schema']) is not int or value['schema'] != 1
                 or not number(value['server_now']) or type(value['coverage']) is not dict
@@ -1230,7 +1794,7 @@ def _field(doc, key, default=''):
 
 
 class RegistryBackend:
-    def __init__(self, registry, bin_dir, runner=None, sessions=None, configured_creator=None, *, devbus=None, task_attention_source=None):
+    def __init__(self, registry, bin_dir, runner=None, sessions=None, configured_creator=None, *, devbus=None, task_attention_source=None, cached_limits_reader=None):
         self.registry = os.path.abspath(registry)
         self.bin_dir = os.path.abspath(bin_dir)
         self.runner = runner or subprocess.run
@@ -1238,6 +1802,7 @@ class RegistryBackend:
         self.configured_creator = configured_creator
         self.devbus = devbus
         self.task_attention_source = task_attention_source
+        self.cached_limits_reader = cached_limits_reader
 
     def devbus_overview(self, task=None, agent=None):
         if not all(value is None or valid_id(value) for value in (task, agent)):
@@ -1326,7 +1891,25 @@ class RegistryBackend:
             return {'error': 'unavailable'}
 
     def limits_overview(self):
-        return self._session(dict(op='limits_overview'))
+        native = self._session(dict(op='limits_overview'))
+        if self.cached_limits_reader is None:
+            return native
+        if native.get('schema') != 1:
+            now = time.time()
+            native = dict(schema=1, server_now=now, coverage=dict(scope='llm_native_only', partial=True),
+                          sources=[dict(node_id='llm', provider=provider, account_id=None, identity='unknown',
+                                        status='unavailable', captured_at=None, age_seconds=None, plan=None,
+                                        windows=[], error='source_unavailable') for provider in ('codex', 'claude')])
+        now = native['server_now']
+        try:
+            cached = self.cached_limits_reader.snapshot(now)
+            if not _cached_limits_valid(cached, now):
+                raise ValueError('invalid snapshot')
+        except Exception:
+            cached = [_cached_source(provider, node, 'source_error')
+                      for node, providers in (('llm', ('kimi', 'openrouter', 'yandex')), ('alp', ('codex', 'claude')))
+                      for provider in providers]
+        return limits_result(dict(schema=2, server_now=now, native=native, cached_sources=cached))
 
     def participation_overview(self):
         return self._session(dict(op='participation_overview'))

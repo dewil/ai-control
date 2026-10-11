@@ -1,0 +1,11 @@
+# Source template only. Installation does not authorize activation.
+[Unit]
+Description=Refresh the owner ALP limits cache every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=ai-control-alp-limits-sync.service
+
+[Install]
+WantedBy=timers.target

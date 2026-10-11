@@ -82,3 +82,30 @@ schema/fixture проверки. Unknown native version остаётся явн�
 нельзя включать кнопку отдельно от backend. Approval/callback lifecycle
 остаётся прежним; этот выпуск не добавляет ответы на разрешения.
 APK пересобирать не требуется; после установки обновить страницу/WebView.
+
+
+## r17: existing bot sources and prepared ALP integration
+«Лимиты и балансы» сохраняют nativeCodex и показывают Kimi из существующего
+кеша бота, OpenRouterUSD и общий billingbalanceYandexCloudRUB. Кеш бота не
+имеетaccountbinding; UIявно указываетэто. Yandex nodata показывает только
+последнийизвестныйбаланс/время, не текущий. Источник и возраст обязательны;
+никакого дополнительного vendorAPI probe по открытию панели.
+
+Owner broker uses --limits-digest-cache (default HOME/.ai-control/limits/last.json)
+and --limits-alp-cache (default HOME/.local/state/ai-control/limits/alp.json).
+These operator paths are not API parameters. Schema1 still works; production
+composition schema2 nests native unchanged. Producer freshness metadata never
+extends consumer2700s or future0. Collector retries/auth repair are separate.
+
+ALP missing export is explicitly unavailable. Prepared owner command:
+/opt/ai-control-web/venv/bin/python /opt/ai-control-web/bin/ai-control-web sync-limits-alp
+Only fixed SSH alias/safe export; no source auth/state read. Run ONLY after
+owner-approved publication of /var/lib/alp-limits-export/limits-v1.json.
+Source templates systemd/ai-control-alp-limits-sync.service.tmpl/.timer.tmpl
+are not installed/enabled by the web deploy. Owner may install them into
+~/.config/systemd/user after verified publication/smoke, daemon-reload then
+explicitly enable timer. This gate is operator authority, not an untrusted
+JSONflag. If unavailable, command returns sanitized JSON and leaves lastgood
+cache unchanged; no account switch/session restart. Do not use synthetic
+fixtures in the production cache or claim ALPdata before real acceptance.
+APK remains0.1.7/code8; refresh browser/WebView after web deployment.
