@@ -39,3 +39,7 @@ HTTP через существующий api wrapper. Закрытие, новы
 Независимый RED до реализации: public method/backendroot boundary, authenticated HTTP/closed broker DTO, реальные клики ссылки/line/space/URL negative/XSS/lifecycle/mobile в браузере. Writer один на существующих runtime-файлах; новые runtime leaves не добавляются. Haiku DESIGN и SOURCE, полный CI точного SHA, signed22 deployment и installed/auth/native checks.
 
 Не входит: внешние корни, SSH-чтение на других узлах, PDF/office/image preview, запись/редактирование/загрузка файлов, новые роли пользователей, изменение native/vendor auth. Эти ограничения показываются понятной ошибкой, не404 сайта.
+
+### Публичные seams для независимых тестов
+
+SessionChat.project_file(project,path) возвращает DTO либо существующий RPCRejected(error). RegistryBackend.project_file и SocketBackend.project_file имеют ту же positional сигнатуру. Broker op=project_file, поля ровно op/project/path. project_file_result(value) проверяет/проецирует закрытый DTO и typed error на границе broker/HTTP. GET имеет только project/path. Ошибки следуют существующим форматам error/detail. Эти имена фиксируют injection contract, не механизм реализации.
