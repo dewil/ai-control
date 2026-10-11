@@ -132,6 +132,40 @@ class CachedReaderRED(unittest.TestCase):
         self.write(self.digest,bot); item=self.pick(self.snapshot(),'openrouter')
         self.assertEqual((item['status'],item['reason'],item['prepaid']),('unavailable','invalid_snapshot',None))
 
+    def test_bot_truncated_delivery_allows_only_same_second_without_rounding_capture(self):
+        # INV-WLIM-22: bot delivery truncates seconds; provider capture retains fractions.
+        for fraction in (.125,.999999):
+            with self.subTest(case='same_second',fraction=fraction):
+                observed=s.NOW-10+fraction
+                bot=s.bot(); bot['received_at']=s.stamp(s.NOW-10)
+                bot['snapshot']['captured_at']=s.stamp(s.NOW-20)
+                bot['snapshot']['yandex']['captured_at']=s.stamp(s.NOW-20)
+                bot['snapshot']['openrouter']['captured_at']=s.stamp(observed)
+                self.write(self.digest,bot); item=self.pick(self.snapshot(),'openrouter')
+                self.assertEqual((item['status'],item['reason']),('ok',None))
+                self.assertEqual(item['observed_at'],observed,'Preserve fractional provider capture')
+                self.assertEqual(item['age_seconds'],s.NOW-observed)
+                self.assertEqual(item['prepaid']['balance'],9.25)
+        for received,observed in ((s.NOW-10,s.NOW-9),(s.NOW-10,s.NOW-8.75),
+                                  (s.NOW,s.NOW+.125)):
+            with self.subTest(case='reject',received=received,observed=observed):
+                bot=s.bot(); bot['received_at']=s.stamp(received)
+                bot['snapshot']['captured_at']=s.stamp(s.NOW-20)
+                bot['snapshot']['yandex']['captured_at']=s.stamp(s.NOW-20)
+                bot['snapshot']['openrouter']['captured_at']=s.stamp(observed)
+                self.write(self.digest,bot); value=self.snapshot()
+                item=self.pick(value,'openrouter')
+                self.assertEqual((item['status'],item['reason'],item['prepaid']),
+                                 ('unavailable','invalid_snapshot',None))
+                self.assertEqual(self.pick(value,'kimi')['status'],'ok')
+        # INV-WLIM-23: the bot precision allowance does not apply to ALP exports.
+        export=s.alp(s.alp_account(observed_at=s.stamp(s.NOW-9.75)))
+        export['exported_at']=s.stamp(s.NOW-10)
+        self.write(self.digest,s.bot()); self.write(self.alp,export)
+        item=self.pick(self.snapshot(True),'codex','alp')
+        self.assertEqual((item['status'],item['reason'],item['windows']),
+                         ('unavailable','invalid_snapshot',[]))
+
     def test_kimi_error_unknown_percent_and_reset_expiry_never_invent_zero(self):
         # INV-WLIM-22
         for remaining in (True,-1,101,'75',None):

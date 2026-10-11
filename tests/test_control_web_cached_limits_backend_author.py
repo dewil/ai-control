@@ -125,6 +125,33 @@ class CachedLimitsAuthorTests(unittest.TestCase):
         self.assertEqual(len(healthy), 4)
         self.assertTrue(all(item['status'] == 'ok' for item in healthy))
 
+    def test_bot_received_second_truncation_preserves_observed_precision_and_causality(self):
+        # INV-WLIM-22: delivery has whole seconds; provider capture has microseconds.
+        received = s.NOW - 5
+        for offset, now, accepted in ((.445654, s.NOW, True), (.999999, s.NOW, True),
+                                      (1, s.NOW, False), (.445654, received, False)):
+            with self.subTest(offset=offset, now=now):
+                value = s.bot()
+                value['received_at'] = s.stamp(received)
+                observed = received + offset
+                value['snapshot']['openrouter']['captured_at'] = s.stamp(observed)
+                self.write(self.digest, value)
+                item = next(row for row in self.reader.snapshot(now) if row['provider'] == 'openrouter')
+                if accepted:
+                    self.assertEqual((item['status'], item['observed_at'], item['age_seconds']),
+                                     ('ok', observed, now - observed))
+                    self.assertEqual(item['prepaid']['balance'], 9.25)
+                else:
+                    self.assertEqual((item['status'], item['reason'], item['prepaid']),
+                                     ('unavailable', 'invalid_snapshot', None))
+        account = s.alp_account(observed_at=s.stamp(received + .445654))
+        exported = s.alp(account)
+        exported['exported_at'] = s.stamp(received)
+        self.write(self.alp, exported)
+        item = next(row for row in self.reader.snapshot(s.NOW) if row['node_id'] == 'alp' and row['provider'] == 'codex')
+        self.assertEqual((item['status'], item['reason'], item['observed_at'], item['windows']),
+                         ('unavailable', 'invalid_snapshot', None, []))
+
     def test_cli_exposes_cache_paths_only_on_owner_broker_subcommand(self):
         # INV-WLIM-21: HTTP/web callers cannot choose owner file paths.
         cli = Path(__file__).resolve().parents[1] / 'bin' / 'ai-control-web'

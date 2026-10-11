@@ -1161,7 +1161,9 @@ class CachedLimitsReader:
 
     @staticmethod
     def _observe(source, observed, basis, now, received=None):
-        if observed is None or observed > now or received is not None and observed > received:
+        # Bot delivery truncates received_at to seconds; keep capture precision.
+        if (observed is None or observed > now
+                or received is not None and observed >= math.floor(received) + 1):
             source['reason'] = 'invalid_snapshot'
             return False
         source.update(observed_at=observed, observation_basis=basis,
