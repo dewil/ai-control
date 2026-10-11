@@ -1683,11 +1683,12 @@ class SessionChat:
             _need(row is not None and selection['effort'] in row['efforts'], 'invalid_request')
             return dict(selection, wire_model=entry['wire_models'][selection['model_id']])
 
-    def _send_fenced(self, method, params, context):
+    def _send_fenced(self, method, params, context, timeout=None):
         _need(self._catalog_context() == context, 'stale')
         result = self.rpc.call_in_generation(method, params,
                     transport_generation=context['transport_generation'],
-                    context_generation=context['context_generation'], timeout=self._remaining())
+                    context_generation=context['context_generation'],
+                    timeout=min(self._remaining(), timeout) if timeout is not None else self._remaining())
         self._remaining()
         _need(self._catalog_context() == context, 'stale')
         _need(type(result) is dict)
@@ -2556,10 +2557,14 @@ class SessionChat:
     def pins(self, principal):
         with self.pin_store.locked(self._local.deadline) as base:
             saved, _ = self.pin_store.load(base, principal, self._local.deadline)
-        rows = []
+        unknown = dict(status='unknown', waits=[], last_activity=None, observed_at=None,
+                       activity_state='unavailable')
+        def unavailable(row):
+            return dict(pin_id=row['pin_id'], project=None, sid=None, title='Недоступная сессия',
+                        vendor=None, available=False, metadata_state='unavailable', **unknown)
+        rows, contexts = [], []
         for row in saved['items']:
-            public = dict(pin_id=row['pin_id'], project=None, sid=None, title='Недоступная сессия',
-                          vendor=None, available=False, metadata_state='unavailable')
+            public, context = unavailable(row), None
             try:
                 self._capture_read_context()
                 context = self._catalog_context()
@@ -2569,14 +2574,57 @@ class SessionChat:
                     public.update(project=row['project'], sid=row['sid'], title=row['title'],
                                   vendor='codex', available=True, metadata_state='saved')
             except Exception:pass
-            rows.append(public)
-        # Re-filter current project/context even when another row's read failed.
-        for row, public in zip(saved['items'], rows):
+            rows.append(public);contexts.append(context)
+        # INV-WPIN01: bounded metadata only; no resume or history reads.
+        deadline = time.monotonic() + 6
+        for index, (row, public, context) in enumerate(zip(saved['items'], rows, contexts)):
             if not public['available']:continue
-            try:allowed = self._root(row['project']) == row['root'] and self._catalog_context()['context_id'] == row['context_id']
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:break
+            try:
+                _need(self._root(row['project']) == row['root'], 'stale')
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:break
+                result = self._send_fenced('thread/read', {'threadId': row['sid'], 'includeTurns': False},
+                                           context, timeout=min(.250, remaining))
+                thread = result.get('thread')
+                _need(type(thread) is dict)
+                if (thread.get('id') != row['sid'] or type(thread.get('cwd')) is not str
+                        or not os.path.isabs(thread['cwd']) or canonical(thread['cwd']) != row['root']):
+                    rows[index] = unavailable(row)
+                    continue
+                observed = time.time()
+                status = thread.get('status')
+                if (type(status) is dict and status.get('type') in ('active', 'idle', 'notLoaded', 'systemError')
+                        and (status['type'] != 'active' and 'activeFlags' not in status
+                             or type(status.get('activeFlags')) is list
+                             and all(type(flag) is str for flag in status['activeFlags']))):
+                    public['status'] = status['type']
+                    if status['type'] == 'active':
+                        public['waits'] = [label for flag, label in
+                            (('waitingOnApproval', 'approval'), ('waitingOnUserInput', 'question'))
+                            if flag in status['activeFlags']]
+                updated = thread.get('updatedAt')
+                if (type(updated) in (int, float) and 0 <= updated <= min(253402300799, observed)
+                        and math.isfinite(updated)):
+                    public['last_activity'] = updated
+                public.update(observed_at=observed, activity_state='fresh')
+            except Exception:pass
+        # Re-filter every result after all reads, including generation changes.
+        for index, (row, public, context) in enumerate(zip(saved['items'], rows, contexts)):
+            if not public['available']:continue
+            try:allowed = self._root(row['project']) == row['root'] and self._catalog_context() == context
             except Exception:allowed = False
-            if not allowed:public.update(project=None, sid=None, title='Недоступная сессия', vendor=None, available=False, metadata_state='unavailable')
-        return dict(schema=1, items=rows)
+            if not allowed:rows[index] = unavailable(row)
+        # A late generation change invalidates earlier rows in the same batch too.
+        try:current_context = self._catalog_context()
+        except Exception:current_context = None
+        for index, (row, public, context) in enumerate(zip(saved['items'], rows, contexts)):
+            if public['available'] and current_context != context:rows[index] = unavailable(row)
+        # Only a fully anonymized list can survive a changed captured context.
+        # Any available row keeps the decorator's final global generation fence.
+        if not any(public['available'] for public in rows):self._local.read_context = None
+        return dict(schema=2, server_now=time.time(), items=rows)
 
     @_operation
     def pin(self, principal, project, sid):
