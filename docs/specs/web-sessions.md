@@ -227,5 +227,13 @@ Dialog показывает literal text и строку, не исполняе�
 
 Трассируемость: tests/test_control_web_project_file_backend_red.py и tests/test_control_web_project_file_browser_red.py. Подробности docs/dev/2026-10-11-spec-project-file-viewer.md.
 
-## INV-WPIN01/02/03 — активность закреплений
-Read-only native metadata, строгий schema2 с legacy schema1, последняя активность updatedAt и компактная стабильная сортировка. Подробности docs/dev/2026-10-11-spec-pinned-activity.md.
+## INV-WPIN01 — read-only активность закреплений
+Только fenced thread/read без history/resume/turn, максимум24metadatareads,250мс/call и6сmetadataфаза. Principal/root/context повторно проверяются; не меняет pin store.
+
+## INV-WPIN02 — источник статуса и времени
+Schema2 строго проецирует native status/knownwaits и updatedAt; неизвестное не подменяется временем запроса. Ownerwire/validator принимает1/2; HTTPdefault отдаёт validatedlegacy1, новаяUI запрашивает ?activity=1.
+
+## INV-WPIN03 — сортировка и отображение
+UI стабильно сортирует копию items по последней активности, known вышеunknown; compactstatus/time, Moscowtooltip, serverclock-relativeage,15сstale rule. Переиспользуется5сforegroundцикл; focus/readeranchor сохранены.
+
+Трассируемость: tests/test_control_web_pinned_activity_{module,http_broker,browser}_blind.py. Подробности docs/dev/2026-10-11-spec-pinned-activity.md.
