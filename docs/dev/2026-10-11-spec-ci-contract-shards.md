@@ -63,3 +63,14 @@ successдляпустогозапуска. Aggregateдоверяетштатно
 непроверяемымартефактам. Empty/missing--aggregateargument обязательноnonzero,
 какcancelled/skipped/unknown. Rule no-network/gitmutation/vendorCLI относится
 только--list/collection/selection, нетестовымподпроцессам.
+
+## Frozen CLI/workflow shape
+--list JSON exact topfields total_test_count,inventory_hash,shards. shards4
+rows indices0..3 exactfields index,test_count,test_ids,modules,inventory_hash.
+modules sorteduniqueactualclassmodules; test_ids originalselectedcaseorder
+includingduplicateIDs. test_count=len(test_ids). Hash lowerhexSHA256UTF8 of
+json.dumps(sorted(test_ids),ensure_ascii=False,separators=(',',':'));
+top hash alloriginalIDs sameencoding. topcount sumshardcounts.
+Matrixjobkey contract_groups; matrix.group exact web_0,web_1,web_2,web_3,
+android_publication,provider,deployment_install. Finalcontractsneedscontract_groups.
+Collectionimportstdout redirectedstderr so --list stdoutonlyJSON.
