@@ -1076,6 +1076,7 @@ function limitsPrepaid(card,source){
     block.append(node('p',source.provider==='yandex'?'Баланс Yandex Cloud':'Баланс OpenRouter','lm-muted'),node('strong',limitsMoney(value.balance,value.currency),'lm-spent'));
     if(value.balance<0)block.append(node('p','Отрицательный баланс','lm-expired'));
     if(value.scale!==null){
+      if(value.balance>value.scale)block.append(node('p','Баланс выше базы расхода','lm-muted'));
       const spent=Math.max(0,Math.min(100,(value.scale-value.balance)/value.scale*100));
       block.append(limitsProgress(spent,'Израсходовано от последнего пополнения',value.balance<=0));
       block.append(node('p','Израсходовано от последнего пополнения '+Number(spent.toFixed(1))+'%','lm-muted'));
