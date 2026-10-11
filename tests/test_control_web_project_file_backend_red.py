@@ -112,6 +112,29 @@ class ProjectFileFilesystemRED(unittest.TestCase):
         self.assertEqual(self.read('*.txt')['text'], 'literal glob\n')
         self.denied('docs/*.txt')
 
+    def test_absolute_configured_root_alias_preserves_inside_and_denies_hidden_or_escape(self):
+        # INV-WFILE01 INV-WFILE02: configured path alias is canonical-root authority.
+        text = 'Synthetic configured root alias\n'
+        self.write('docs/report.md', text)
+        configured = self.base / 'visible-root-alias'
+        configured.symlink_to(self.root, target_is_directory=True)
+        (self.root / 'docs' / '.hidden-report.md').symlink_to('report.md')
+        outside = self.base / 'outside-report.md'; outside.write_text(CANARY)
+        (self.root / 'docs' / 'escape.md').symlink_to(outside)
+        def project_path(project):
+            self.resolved.append(project)
+            if project != 'demo': raise ValueError(CANARY)
+            return str(configured)
+        self.chat = self.module.SessionChat(self.rpc, project_path, lambda: ['demo'],
+                                            str(self.base / 'alias-receipts'))
+        for relative, expected in (
+            ('docs/report.md', dict(name='report.md', text=text, truncated=False)),
+            ('docs/.hidden-report.md', {'error': 'file_unavailable'}),
+            ('docs/escape.md', {'error': 'file_unavailable'}),
+        ):
+            with self.subTest(relative=relative):
+                self.assertEqual(self.read(str(configured / relative)), expected)
+
     def test_unknown_project_missing_outside_and_traversal_are_generic(self):
         # INV-WFILE01 INV-WFILE02
         self.write('ok.txt'); outside = self.base / 'outside.txt'; outside.write_text(CANARY)
