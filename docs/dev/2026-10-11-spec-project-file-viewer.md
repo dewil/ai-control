@@ -42,4 +42,6 @@ HTTP через существующий api wrapper. Закрытие, новы
 
 ### Публичные seams для независимых тестов
 
-SessionChat.project_file(project,path) возвращает DTO либо существующий RPCRejected(error). RegistryBackend.project_file и SocketBackend.project_file имеют ту же positional сигнатуру. Broker op=project_file, поля ровно op/project/path. project_file_result(value) проверяет/проецирует закрытый DTO и typed error на границе broker/HTTP. GET имеет только project/path. Ошибки следуют существующим форматам error/detail. Эти имена фиксируют injection contract, не механизм реализации.
+SessionChat.project_file(project,path) возвращает DTO либо существующий envelope {error:code}, как другие @_operation методы. Внутренние исключения не являются public seam. RegistryBackend.project_file и SocketBackend.project_file имеют ту же positional сигнатуру. Broker op=project_file, поля ровно op/project/path. project_file_result(value) проверяет/проецирует закрытый DTO и typed error на границе broker/HTTP. GET имеет только project/path. Ошибки следуют существующим форматам error/detail. Эти имена фиксируют injection contract, не механизм реализации.
+
+File-specific error mapping: file_unavailable→HTTP404 с typed JSON error (единый ответ для missing/denied/race); unsupported_type→415; invalid_request→422. Существующий mapping остальных chat endpoints не меняется. Backend/validator сохраняют error-envelope {error:code}, UI показывает человеческий текст в dialog, а не навигацию на404.
