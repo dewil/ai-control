@@ -38,8 +38,9 @@ class CachedLimitsBrowserRED(unittest.TestCase):
         expect(self.panel()).to_be_visible()
 
     def card(self, provider, node='llm'):
-        # HTML contract supplies this container; each public source is a card.
-        cards = self.page.locator('#limits-cards > *').filter(
+        # INV-WLIM26 adds h2 sections around the existing h3 source articles.
+        # Select semantic cards through grouping; retain every metric assertion.
+        cards = self.page.locator('#limits-cards').get_by_role('article').filter(
             has_text=re.compile(provider, re.I))
         if node == 'alp':
             cards = cards.filter(has_text=re.compile(r'\bALP\b', re.I))
