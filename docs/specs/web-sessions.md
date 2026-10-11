@@ -203,3 +203,6 @@ Queue0.161 start и удаление native SQL row не являются одн
 Ответы на native approvals явно отложены пользователем; read-resume/attach отсутствует. Вопросы actionable только при actual current callback binding и явном user submit; локальный send не native applied. Global pool read-only, exact running proof отдельно от coarse flags; completed final_answer turn — «Ответ готов», не whole-goal completion. Callback coverage и непривязанные TASK честно partial, существующий Tasks view не объявляется новой native subscription.
 
 Pins — per authenticated web principal, stable native context/root/SID и отдельный private preference store, без native mutation или consultation unknown send receipts. Explicit queue/start — atomic native idle только выбранного native ID; durable no-replay/cross-context unknown guard, без resume/steer/delete и без history-based attribution этого action. Старый r12 queue/history DTO сохраняется, новые поля идут отдельными API.
+
+## INV-WSESS47/48 — явнаянавигация
+Ручнойtoggleпроектовпослевыбораимеетприоритетнадпозднимавтосворачиванием. TrustedEndвнеполяввода, достигшийниза, возобновляетfollowдажепризадержкеобработки; чтениестаройистории/черновиканепрыгает. Подробности docs/dev/2026-10-11-spec-limits-navigation.md.
