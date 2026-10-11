@@ -234,12 +234,21 @@ class MarkdownBrowserContract(unittest.TestCase):
         self.assertIn(raw, self.page.locator('body').inner_text())
 
     def test_dangerous_url_forms_remain_text_without_active_anchors(self):
-        targets = ['javascript:alert(1)', 'data:text/html,probe', 'vbscript:probe', 'file:///private-probe',
+        targets = ['javascript:alert(1)', 'data:text/html,probe', 'vbscript:probe',
+                   'file://remote.invalid/private-probe', 'file://user@host/private-probe',
                    '//md-untrusted.invalid/x', '\\\\md-untrusted.invalid/x', 'java&#x73;cript:alert(1)',
                    'jav&#97;script:alert(1)', 'java\tscript:alert(1)', '\x01javascript:alert(1)']
         self.render('\n\n'.join('[MD BAD ' + str(i) + '](' + target + ')' for i, target in enumerate(targets)) +
-                    '\n\n[MD injected attribute](https://example.invalid/x" onclick="window.mdProbe=4)')
+                    '\n\n[MD injected attribute](https://example.invalid/x" onclick="window.mdProbe=4)' +
+                    '\n\n[MD LOCAL FILE](file:///private-probe)')
         self.assertEqual(self.page.locator('a').filter(has_text='MD BAD').count(), 0)
+        # INV-WFILE04 intentionally reclassifies an empty-host fileURI as a
+        # protected viewer link; independent file-browser tests prove its GET/dialog.
+        local = self.page.get_by_role('link', name='MD LOCAL FILE', exact=True)
+        self.assertEqual(local.count(), 1)
+        self.assertFalse((local.get_attribute('href') or '').lower().startswith('file:'),
+                         'Local file links must never hand navigation to a native fileURI')
+        self.assertEqual(self.page.locator('a[href^="file:" i]').count(), 0)
         self.assertEqual(self.page.locator('[onclick],[onerror],[onload]').count(), 0)
         self.assertTrue(self.page.evaluate('typeof window.mdProbe === "undefined"'))
 

@@ -60,3 +60,20 @@ failures/0errors/0skips,26.935s (`/var/tmp/project-file-ui-red-url-replay.log`).
 11/11PASS,19.818s (`/var/tmp/project-file-ui-author-url-replay.log`), включая
 реальные Enter/click/line/mobile/XSS и все lifecycle assertions.
 Costreceipt снова `unknown`; root soleledgerwriter.
+
+## Миграция legacy Markdown policy
+
+На принятом source6db7bc0 исходный legacy
+`MarkdownBrowserContract.test_dangerous_url_forms_remain_text_without_active_anchors`
+классифицировал `file:///private-probe` как inert unsafe URL. Это противоречит
+принятому INV-WFILE04: empty-host fileURI теперь становится защищенной
+viewer-ссылкой. Неправленное legacy ожидание воспроизведено:1test/1FAIL,
+`1 != 0` activeanchor,2.547s (`/var/tmp/project-file-markdown-old-contract.log`).
+
+Legacy тест теперь отдельно проверяет active localviewer link и отсутствие
+native `file:` href. Все прежние остальные unsafe формы сохранены; добавлены
+fileURI с remotehost и credentials, которые должны оставаться inert.
+Положительный GET/dialog сценарий остается в независимом file-browser suite.
+После миграции: targetedlegacy1/1PASS,2.646s
+(`/var/tmp/project-file-markdown-new-contract.log`). Runtime не менялся;
+тела runtime не читались. Costreceipt `unknown`; root soleledgerwriter.
