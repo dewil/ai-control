@@ -701,6 +701,8 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
             return None
         if 'cursor' in data and not chat_cursor(data['cursor']):
             return None
+        if 'activity' in data and data['activity'] != '1':
+            return None
         if 'page' in data:
             if not re.fullmatch(r'[0-9]{1,32}', data['page']):
                 return None
@@ -1011,7 +1013,13 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
     @app.get('/api/session-pins')
     async def session_pins(request: Request):
         from _control_web_broker import pins_result
-        return await chat_read(request, (), (), lambda _: pins_result(backend.session_pins('owner')), preserve_forbidden=True, owner=True)
+        def read(data):
+            result = pins_result(backend.session_pins('owner'))
+            if not data and result.get('schema') == 2:
+                fields = ('pin_id', 'project', 'sid', 'title', 'vendor', 'available', 'metadata_state')
+                return dict(schema=1, items=[{key: row[key] for key in fields} for row in result['items']])
+            return result
+        return await chat_read(request, (), ('activity',), read, preserve_forbidden=True, owner=True)
 
     @app.get('/api/session-queue-start')
     async def session_queue_start_support(request: Request):

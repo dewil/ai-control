@@ -687,7 +687,7 @@ async function loadPins(force=false){
   const current=()=>navigationVisible()&&auth===chatAuthGeneration&&lifecycle===pageGeneration&&epoch===navigationEpoch&&version===pinView.version;
   pinView.flight=flight;pinView.last=performance.now();
   const controller=newObservationController(),timer=pageTimeout(()=>controller.abort(),15000);
-  try{const data=await api('/api/session-pins',undefined,controller.signal,current);if(!current())return;
+  try{const data=await api('/api/session-pins?activity=1',undefined,controller.signal,current);if(!current())return;
     if(!validPins(data))throw new Error(messages.unavailable);
     pinView.items=data.items;pinView.serverNow=data.schema===2?data.server_now:null;pinView.received=performance.now();renderPins();$('pin-status').textContent='';
   }catch(error){if(!error.stale&&current()){if(error.status===401||error.status===403){stopNavigation();if(error.status===403)ownerForbidden();}renderPins();$('pin-status').textContent='Закреплённые сессии пока недоступны.';}}
