@@ -837,7 +837,78 @@ def _queue_boundary(request, value):
     return value
 
 
+def limits_result(value):
+    """Validate every public leaf before crossing either owner boundary."""
+    def number(item, low=0, high=None, nullable=False):
+        return (item is None and nullable or type(item) in (int, float)
+                and math.isfinite(item) and item >= low and (high is None or item <= high))
+    try:
+        if (type(value) is not dict or set(value) != {'schema', 'server_now', 'coverage', 'sources'}
+                or type(value['schema']) is not int or value['schema'] != 1
+                or not number(value['server_now']) or type(value['coverage']) is not dict
+                or set(value['coverage']) != {'scope', 'partial'}
+                or value['coverage']['scope'] != 'llm_native_only'
+                or type(value['coverage']['partial']) is not bool
+                or type(value['sources']) is not list or len(value['sources']) != 2):
+            raise ValueError
+        providers = set()
+        for source in value['sources']:
+            if (type(source) is not dict or set(source) != {'node_id', 'provider', 'account_id',
+                    'identity', 'status', 'captured_at', 'age_seconds', 'plan', 'windows', 'error'}
+                    or source['node_id'] != 'llm' or source['provider'] not in ('codex', 'claude')
+                    or source['provider'] in providers or source['identity'] not in ('native_reported', 'unknown')
+                    or source['status'] not in ('ok', 'stale', 'unavailable')
+                    or not number(source['captured_at'], nullable=True)
+                    or not number(source['age_seconds'], nullable=True)
+                    or source['plan'] not in (None, 'Free', 'Plus', 'Pro', 'Team', 'Business', 'Enterprise', 'unknown')
+                    or source['error'] not in (None, 'source_unavailable', 'identity_unavailable', 'context_changed', 'unsupported')
+                    or type(source['windows']) is not list or len(source['windows']) > 16):
+                raise ValueError
+            providers.add(source['provider'])
+            if source['status'] == 'unavailable':
+                if (source['identity'] != 'unknown' or source['account_id'] is not None
+                        or source['windows'] or source['captured_at'] is not None
+                        or source['age_seconds'] is not None or source['plan'] is not None
+                        or source['error'] is None):
+                    raise ValueError
+            elif (source['identity'] != 'native_reported' or type(source['account_id']) is not str
+                    or re.fullmatch('[0-9a-f]{64}', source['account_id']) is None
+                    or source['captured_at'] is None or source['age_seconds'] is None or source['error'] is not None):
+                raise ValueError
+            ids, buckets = set(), set()
+            for window in source['windows']:
+                if (type(window) is not dict or set(window) != {'id', 'bucket', 'duration_minutes',
+                        'remaining_percent', 'resets_at', 'window_started_at', 'anchor'}
+                        or type(window['bucket']) is not str
+                        or re.fullmatch(r'[A-Za-z0-9_-]{1,64}', window['bucket']) is None
+                        or window['id'] not in (window['bucket'] + ':primary', window['bucket'] + ':secondary')
+                        or window['id'] in ids
+                        or window['duration_minutes'] is not None and (type(window['duration_minutes']) is not int
+                            or not 1 <= window['duration_minutes'] <= 525600)
+                        or not number(window['remaining_percent'], high=100, nullable=True)
+                        or not number(window['resets_at'], high=253402300799, nullable=True)
+                        or not number(window['window_started_at'], nullable=True)
+                        or window['anchor'] not in (None, 'derived_reset_and_duration')):
+                    raise ValueError
+                ids.add(window['id']); buckets.add(window['bucket'])
+                if window['anchor'] is None:
+                    if window['window_started_at'] is not None:
+                        raise ValueError
+                elif (window['duration_minutes'] is None or window['resets_at'] is None
+                        or window['resets_at'] <= value['server_now']
+                        or window['window_started_at'] != window['resets_at'] - window['duration_minutes'] * 60):
+                    raise ValueError
+                if window['resets_at'] is not None and window['resets_at'] <= value['server_now'] and window['remaining_percent'] is not None:
+                    raise ValueError
+            if len(buckets) > 8:
+                raise ValueError
+        return copy.deepcopy(value)
+    except (ValueError, TypeError, KeyError, OverflowError):
+        return {'error': 'unavailable'}
+
+
 SESSION_FIELDS = {
+    'limits_overview': {'op'},
     'participation_overview': {'op'},
     'session_questions': {'op', 'project', 'sid'},
     'session_question_answer': {'op', 'project', 'sid', 'epoch', 'interaction_id', 'action_id', 'answers'},
@@ -1197,6 +1268,8 @@ class RegistryBackend:
             return {'error': 'unavailable'}
         try:
             op = request['op']
+            if op == 'limits_overview':
+                return limits_result(self.sessions.limits_overview())
             if op == 'participation_overview':
                 result = self.sessions.participation_overview()
                 result = participation_result(result, op)
@@ -1249,6 +1322,9 @@ class RegistryBackend:
             return _queue_boundary(request, result) if type(result) is dict else {'error': 'unavailable'}
         except Exception:
             return {'error': 'unavailable'}
+
+    def limits_overview(self):
+        return self._session(dict(op='limits_overview'))
 
     def participation_overview(self):
         return self._session(dict(op='participation_overview'))
@@ -1556,7 +1632,11 @@ def _receive(conn, deadline=None):
     if rest:
         raise ValueError('multiple requests')
     duplicates = []
+    limits_operation = False
     def pairs(items):
+        nonlocal limits_operation
+        if any(key == 'op' and value == 'limits_overview' for key, value in items):
+            limits_operation = True
         result = {}
         for key, value in items:
             if key in result:
@@ -1565,7 +1645,7 @@ def _receive(conn, deadline=None):
         return result
     result = json.loads(line, object_pairs_hook=pairs)
     if duplicates:
-        error = ValueError('duplicate field');error.invalid_queue = type(result) is dict and result.get('op') in QUEUE_OPS | NAV_OPS | PART_OPS
+        error = ValueError('duplicate field');error.invalid_queue = type(result) is dict and (result.get('op') in QUEUE_OPS | NAV_OPS | PART_OPS | {'limits_overview'} or limits_operation)
         raise error
     return result
 
@@ -1619,6 +1699,7 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = backend.answer(request['agent'], request['qid'], request['decision'], request['text'])
                     elif op == 'verdict':
                         result = backend.verdict(request['agent'], request['generation'], request['decision'], request['comment'])
+                    elif op == 'limits_overview':result = limits_result(backend.limits_overview())
                     elif op == 'participation_overview':result = backend.participation_overview()
                     elif op == 'session_questions':result = backend.session_questions(request['project'], request['sid'])
                     elif op == 'session_question_answer':result = backend.session_question_answer(request['project'],request['sid'],request['epoch'],request['interaction_id'],request['action_id'],request['answers'])
@@ -1710,7 +1791,7 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = {'error': 'unsupported'}
                     elif (set(request) != fields[request['op']] and not (
                             request['op'] in ('session_send', 'session_enqueue') and set(request) == fields[request['op']] | {'selection'})):
-                        result = {'error': 'unavailable' if live or bus else 'invalid_request' if request['op'] in QUEUE_OPS | NAV_OPS | PART_OPS | {'session_project_summary'} else 'invalid_or_stale'}
+                        result = {'error': 'unavailable' if live or bus else 'invalid_request' if request['op'] in QUEUE_OPS | NAV_OPS | PART_OPS | {'session_project_summary', 'limits_overview'} else 'invalid_or_stale'}
                     elif request['op'] in NAV_OPS and request.get('principal', 'owner') != 'owner':
                         result = {'error': 'forbidden'}
                     elif request['op'] in SESSION_FIELDS and not _valid_session(request):
@@ -1779,7 +1860,7 @@ class SocketBackend:
             if len(wire) > LIMIT:
                 return {'error': 'invalid_or_stale'}
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-                deadline = time.monotonic() + timeout if request.get('op') in ('session_live_snapshot', 'devbus_overview') else None
+                deadline = time.monotonic() + timeout if request.get('op') in ('session_live_snapshot', 'devbus_overview', 'limits_overview') else None
                 conn.settimeout(timeout)
                 conn.connect(self.socket_path)
                 if deadline is not None:
@@ -1809,6 +1890,9 @@ class SocketBackend:
         if request['op'] == 'session_history':
             return history_result(result)
         return _queue_boundary(request, result)
+
+    def limits_overview(self):
+        return limits_result(self._call(dict(op='limits_overview'), timeout=5))
 
     def participation_overview(self):
         return self._session(dict(op='participation_overview'))

@@ -23,6 +23,7 @@ HISTORY_LIMIT = 96 * 1024
 RECEIPT_LIMIT = 10000
 NAMESPACE_ENTRY_LIMIT = 10002
 SUPPORTED_NATIVE_VERSIONS = ('0.160.0', '0.161.0')
+LIMITS_NATIVE_VERSIONS = ('0.161.0', '0.162.1')
 READ_METHODS = frozenset({'thread/list', 'thread/read', 'thread/turns/list', 'thread/items/list', 'thread/loaded/list'})
 VERSION_TOKEN = r'[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(?:-[A-Za-z0-9][A-Za-z0-9.-]{0,31})?'
 
@@ -864,6 +865,11 @@ class SessionChat:
         self._model_clock = model_clock or time.monotonic
         self._model_lock = threading.Lock()
         self._model_cache = OrderedDict()
+        self._limits_clock = model_clock or time.time
+        self._limits_lock = threading.Lock()
+        self._limits_cache = None
+        self._limits_revision = 0
+        self._limits_last = None
         self._history_observation = None
         self._participation = _Participation()
         self._part_source_lock = threading.Lock()
@@ -882,6 +888,163 @@ class SessionChat:
                 rpc._participation_stop = self.close
             if callable(previous_stop):
                 previous_stop()
+
+    @staticmethod
+    def _limits_unavailable(provider='codex', error='source_unavailable'):
+        return dict(node_id='llm', provider=provider, account_id=None, identity='unknown',
+                    status='unavailable', captured_at=None, age_seconds=None, plan=None,
+                    windows=[], error=error)
+
+    @staticmethod
+    def _limits_project(response):
+        # The raw account ID stays private; credits and unknown fields are never
+        # retained. Only this bounded projection enters the last-observed cache.
+        account = response.get('accountId') if type(response) is dict else None
+        if (type(account) is not str or not 0 < len(account) <= 256
+                or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in account)):
+            return None
+        buckets = response.get('rateLimitsByLimitId')
+        partial = False
+        if buckets is None or buckets == {}:
+            snapshot = response.get('rateLimits')
+            bucket = snapshot.get('limitId') if type(snapshot) is dict else None
+            if type(bucket) is not str or re.fullmatch(r'[A-Za-z0-9_-]{1,64}', bucket) is None:
+                bucket = 'codex'
+            buckets = {bucket: snapshot}
+        if type(buckets) is not dict:
+            buckets, partial = {}, True
+        windows, plans, selected = [], set(), 0
+        allowed_plans = {name.lower(): name for name in
+                         ('Free', 'Plus', 'Pro', 'Team', 'Business', 'Enterprise', 'unknown')}
+        for bucket, snapshot in buckets.items():
+            if (type(bucket) is not str or re.fullmatch(r'[A-Za-z0-9_-]{1,64}', bucket) is None
+                    or type(snapshot) is not dict or selected >= 8):
+                partial = True
+                continue
+            selected += 1
+            plan = snapshot.get('planType')
+            if type(plan) is str and plan in allowed_plans:
+                plans.add(allowed_plans[plan])
+            for slot in ('primary', 'secondary'):
+                window = snapshot.get(slot)
+                if window is None:
+                    continue
+                if type(window) is not dict:
+                    partial = True
+                    continue
+                used, duration, reset = (window.get(key) for key in
+                                         ('usedPercent', 'windowDurationMins', 'resetsAt'))
+                remaining = (100 - used if type(used) in (int, float)
+                             and 0 <= used <= 100 and math.isfinite(used) else None)
+                duration = duration if type(duration) is int and 1 <= duration <= 525600 else None
+                reset = (reset if type(reset) in (int, float) and 0 <= reset <= 253402300799
+                         and math.isfinite(reset) else None)
+                windows.append(dict(id=bucket + ':' + slot, bucket=bucket,
+                    duration_minutes=duration, remaining_percent=remaining, resets_at=reset,
+                    window_started_at=None, anchor=None))
+        source = dict(node_id='llm', provider='codex',
+                      account_id=hashlib.sha256(('codex-account:' + account).encode('utf-8')).hexdigest(),
+                      identity='native_reported', status='ok', captured_at=None,
+                      age_seconds=None, plan=next(iter(plans)) if len(plans) == 1 else None,
+                      windows=windows, error=None)
+        return account, source, partial
+
+    def _limits_serve(self, source, partial=False):
+        now = self._limits_clock()
+        source = copy.deepcopy(source)
+        if source['captured_at'] is not None:
+            source['age_seconds'] = max(0, now - source['captured_at'])
+            source['status'] = 'stale' if source['age_seconds'] >= 180 else 'ok'
+        for window in source['windows']:
+            reset, duration = window['resets_at'], window['duration_minutes']
+            window['window_started_at'], window['anchor'] = None, None
+            if reset is not None and reset <= now:
+                window['remaining_percent'] = None
+            elif reset is not None and duration is not None and reset - duration * 60 >= 0:
+                window['window_started_at'] = reset - duration * 60
+                window['anchor'] = 'derived_reset_and_duration'
+        return dict(schema=1, server_now=now, coverage=dict(scope='llm_native_only', partial=partial),
+                    sources=[source, self._limits_unavailable('claude', 'unsupported')])
+
+    def limits_overview(self):
+        # One deadline includes lock admission, startup and one read-only retry.
+        # Overlapping failures share their flight just as successful reads do.
+        revision = self._limits_revision
+        deadline = time.monotonic() + 4
+        if not self._limits_lock.acquire(timeout=4):
+            return self._limits_serve(self._limits_unavailable())
+        try:
+            if revision != self._limits_revision and self._limits_last is not None:
+                last = self._limits_last
+                if self._model_context() != last['context']:
+                    return self._limits_serve(self._limits_unavailable(error='context_changed'))
+                result = self._limits_serve(last['source'], last['partial'])
+                if self._model_context() != last['context']:
+                    return self._limits_serve(self._limits_unavailable(error='context_changed'))
+                return result
+            result = self._limits_read(deadline)
+            current = copy.deepcopy(self._model_context())
+            if result['sources'][0]['status'] != 'unavailable' and (
+                    self._limits_cache is None or self._limits_cache['context'] != current):
+                self._limits_cache = None
+                result = self._limits_serve(self._limits_unavailable(error='context_changed'))
+            self._limits_last = dict(context=current,
+                                    source=copy.deepcopy(result['sources'][0]),
+                                    partial=result['coverage']['partial'])
+            self._limits_revision += 1
+            return result
+        except Exception:
+            return self._limits_serve(self._limits_unavailable())
+        finally:
+            self._limits_lock.release()
+
+    def _limits_read(self, deadline):
+        current = copy.deepcopy(self._model_context())
+        cached = self._limits_cache
+        if cached is not None:
+            if current != cached['context']:
+                self._limits_cache = None
+                return self._limits_serve(self._limits_unavailable(error='context_changed'))
+            if self._limits_clock() - cached['source']['captured_at'] < 60:
+                return self._limits_serve(cached['source'], cached['partial'])
+        self._limits_cache = None
+        prepare, call = getattr(self.rpc, 'prepare_context', None), getattr(self.rpc, 'call_in_generation', None)
+        if not callable(prepare) or not callable(call):
+            return self._limits_serve(self._limits_unavailable())
+        for attempt in range(2):
+            context = None
+            try:
+                remaining = deadline - time.monotonic()
+                _need(remaining > 0)
+                context = copy.deepcopy(prepare(timeout=remaining))
+                if (type(context) is not dict or type(context.get('native_version')) is not str
+                        or context['native_version'] not in LIMITS_NATIVE_VERSIONS):
+                    return self._limits_serve(self._limits_unavailable(error='unsupported'))
+                _need(self._read_context_reason(context) is None)
+                _need(self._model_context() == context)
+                remaining = deadline - time.monotonic()
+                _need(remaining > 0)
+                response = call('account/rateLimits/read', {'excludeResetCreditDetails': True},
+                    transport_generation=context['transport_generation'],
+                    context_generation=context['context_generation'], timeout=remaining)
+                captured = self._limits_clock()
+                _need(time.monotonic() < deadline)
+                _need(self._model_context() == context)
+                projection = self._limits_project(response)
+                if projection is None:
+                    return self._limits_serve(self._limits_unavailable(error='identity_unavailable'))
+                account, source, partial = projection
+                _need(time.monotonic() < deadline)
+                source['captured_at'] = captured
+                _need(self._model_context() == context)
+                self._limits_cache = dict(context=context, account_id=account, source=source, partial=partial)
+                return self._limits_serve(source, partial)
+            except Exception:
+                changed = context is not None and self._model_context() != context
+                if changed and attempt == 0 and time.monotonic() < deadline:
+                    continue
+                return self._limits_serve(self._limits_unavailable(
+                    error='context_changed' if changed else 'source_unavailable'))
 
     def _part_start(self):
         # Lazy owner lifetime: a GET admits one worker, never performs its IO.
@@ -2973,7 +3136,7 @@ class SessionChat:
 
 class InteractiveRPC:
     """One receiver; only captured, one-shot user-question responses are allowed."""
-    METHODS = {'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/items/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set', 'thread/start', 'thread/loaded/list', 'thread/queue/list', 'thread/queue/add', 'thread/queue/delete', 'turn/steer', 'thread/queue/start'}
+    METHODS = {'account/rateLimits/read', 'initialize', 'thread/read', 'thread/list', 'thread/turns/list', 'thread/items/list', 'thread/resume', 'turn/start', 'model/list', 'thread/name/set', 'thread/start', 'thread/loaded/list', 'thread/queue/list', 'thread/queue/add', 'thread/queue/delete', 'turn/steer', 'thread/queue/start'}
 
     def __init__(self, socket_path, timeout=25):
         if type(socket_path) is not str or type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 55:
@@ -3067,6 +3230,8 @@ class InteractiveRPC:
             self._fail(ws, generation)
 
     def _method_allowed(self, method):
+        if method == 'account/rateLimits/read':
+            return self._native_version in LIMITS_NATIVE_VERSIONS
         if method == 'initialize' or method in READ_METHODS:
             return True
         if method.startswith('thread/queue/') or method == 'turn/steer':
