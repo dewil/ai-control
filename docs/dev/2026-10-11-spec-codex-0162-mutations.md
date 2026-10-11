@@ -75,7 +75,7 @@ experimental каталог) фиксирует canonical JSON SHA256 по ка�
 | experimental | v2/ThreadQueueStartParams.json | d92f1e985c183fa3f261bbfa004416f0f572a225a53e5de1744682e154cce936 | d92f1e985c183fa3f261bbfa004416f0f572a225a53e5de1744682e154cce936 | True |
 | experimental | v2/ThreadQueueStartResponse.json | 3d3be55566922398cbf6f75bb1a3398a5d4dbff9f95d1aa05ffac1c6861ffd53 | 2ba030d038079d8fb6178c552a47c458c9755f27b09e77af38a20eaf2447445b | False |
 
-Таблица допуска: ordinary0.160.0/0.161.0/0.162.1; queue0.161.0/0.162.1.
+Таблица допуска: ordinary0.160.0/0.161.0/0.162.1; queue0.161.0;0.162.1 допускается только после отдельного runtime smoke.
 Иные версии запрещают mutation без wire/receipt. Capability должна
 согласовываться с transport/catalog; наличие версии в таблице не заменяет
 per-session proof/наблюдение, существующее not_observed сохраняется.
@@ -85,3 +85,37 @@ Native smoke создаёт НОВУЮ явно тестовую сессию в
 существующие рабочие чаты или менять аккаунт/авторизацию. Используется
 текущий авторизованный контекст без чтения credentials; отдельный login
 ради теста не выполняется. Fixture может быть архивирована после проверки.
+
+
+Результат ручной сверки changed contracts: TurnStartParams добавляет только
+optional nullable parentTurnId/rootTurnId; ThreadResumeParams меняет лишь
+неиспользуемые Control history definitions. TurnStart/ThreadResume/ThreadRead/
+ThreadStart и experimental ThreadQueueStartResponse добавляют partial_answer,
+optional reviewTarget/errorType, subAgentActivity model/reasoningEffort и
+Turn.rootTurnId. Existing decoder допускает эти дополнительные поля,
+partial_answer не объявляется final_answer. Удалённых/новых required полей
+в используемом контракте нет. Queue/start params, queue list/add/delete и
+turn/steer params/responses неизменны. Именно эта сверка (не байтовое
+равенство всех bundles) является основанием admission0.162.1.
+Runtime atomic-idle свойство queue/start проверяется отдельно на своей
+тестовой сессии; если проверить не удалось, acceptance остаётся незакрытой.
+
+До создания smoke fixture обязателен уже поддержанный owner/context/peer
+снимок0.162.1; unsupported/drift =>abort без thread/start. После smoke
+проверить неизменность owner/peer/context и отсутствие auth операций.
+Ни создание fixture, ни запрос ALP AI не разрешают менять credential store.
+
+
+Уточнение сверки: слово «неизменны» относится к queue/start PARAMS и
+params/responses queue list/add/delete, turn/steer. Queue/start RESPONSE
+ИЗМЕНЁН совместимыми optional additions, как указано выше. Из этого
+не выводится byte equality. Изменённые TurnStartParams parentTurnId/rootTurnId
+optional явно рассмотрены в предыдущем абзаце; это основание ordinary send.
+
+Область test fixture задаёт отдельный приватный cwd, новая sid и уникальный
+nonce. Это не отдельный vendor login: использование существующей подписки
+для ограниченного приёмочного теста разрешено текущей задачей. После создания
+проверить peer/context equality ещё раз, drift=>никаких последующих write.
+Архивирование своей idle fixture обязательно при сохранённом контексте;
+если fixture active/drift — без насильственного interrupt чужих сессий,
+сохранить sid/состояние как явный cleanup blocker, acceptance не закрывать.
