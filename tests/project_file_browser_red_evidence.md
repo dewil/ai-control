@@ -45,3 +45,18 @@ assertions XSS/geometry/line/lifecycle станут исполнимы посл�
 Полный синтетический журнал: `/var/tmp/project-file-ui-red.log`.
 
 Task: CONTROL-WEB-LOCAL-FILE-LINKS. Costreceipt: `unknown`; ledger пишет root.
+
+## Поправка URL oracle
+
+После выбора session существующая панель может иметь URL deeplink с
+`?project=demo&sid=...`. Требование viewer — сохранить этот точный URL;
+первоначальная проверка `origin + '/'` ошибочно ожидала сброс deeplink.
+Oracle теперь сохраняет `page.url` непосредственно перед file-click и
+сравнивает точное значение после открытия. Runtime не читался и не менялся.
+
+Replay с исправленным oracle: baseline2787ac6 —11методов/17assertion
+failures/0errors/0skips,26.935s (`/var/tmp/project-file-ui-red-url-replay.log`).
+Через `CONTROL_LIVE_SSE_QA_REPO=/var/tmp/ai-control-project-file-viewer-impl`:
+11/11PASS,19.818s (`/var/tmp/project-file-ui-author-url-replay.log`), включая
+реальные Enter/click/line/mobile/XSS и все lifecycle assertions.
+Costreceipt снова `unknown`; root soleledgerwriter.

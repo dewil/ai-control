@@ -153,6 +153,7 @@ class ProjectFileBrowserRED(unittest.TestCase):
             with self.subTest(destination=destination):
                 self.render('[FILE LINK](' + destination + ')')
                 before = len(self.gets())
+                selected_url = self.page.url
                 dialog = self.activate(keyboard=index % 2 == 1)
                 expect(dialog.get_by_text('FILE CONTENT', exact=True)).to_be_visible()
                 self.assertIn('test.md', dialog.inner_text(), 'Viewer must show the file name')
@@ -162,7 +163,8 @@ class ProjectFileBrowserRED(unittest.TestCase):
                 self.assertCountEqual(parse_qsl(urlsplit(request.url).query),
                                       [('project', 'demo'), ('path', expected_path)])
                 self.assertEqual(self.backend.file_calls[-1], ('demo', expected_path))
-                self.assertEqual(self.page.url, self.fixture.origin + '/')
+                self.assertEqual(self.page.url, selected_url,
+                                 'File viewer must preserve the exact selected chat URL')
                 self.close()
 
     def test_reserved_site_http_and_unsafe_destinations_keep_markdown_policy(self):
