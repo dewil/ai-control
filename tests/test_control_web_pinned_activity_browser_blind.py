@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import re
 import unittest
 from zoneinfo import ZoneInfo
+from urllib.parse import urlsplit,parse_qs
 from playwright.sync_api import expect
 from control_browser_helpers import project_is_selected
 import live_sse_blind_support as live
@@ -11,6 +12,9 @@ import native_queue_blind_support as q
 import navigation_start_blind_support as nav
 import pinned_activity_blind_support as a
 import test_control_web_navigation_start_browser_blind as old
+
+
+PINS_ROUTE=re.compile(r'/api/session-pins(?:\?.*)?$')
 
 
 class PinnedActivityBrowserBlind(unittest.TestCase):
@@ -24,16 +28,17 @@ class PinnedActivityBrowserBlind(unittest.TestCase):
     visible=old.NavigationStartBrowserBlind.visible
     navposts=old.NavigationStartBrowserBlind.navposts
     def setUp(self):
-        old.NavigationStartBrowserBlind.setUp(self);self.value=a.dto();self.pins_transport_failure=False;self.pin_gets=0
+        old.NavigationStartBrowserBlind.setUp(self);self.value=a.dto();self.pins_transport_failure=False;self.pin_gets=0;self.pin_queries=[]
         def respond(route):
-            self.pin_gets+=1
+            self.pin_gets+=1;self.pin_queries.append(parse_qs(urlsplit(route.request.url).query,keep_blank_values=True))
             if self.pins_transport_failure:route.abort('failed')
             else:route.fulfill(status=200,json=deepcopy(self.value))
-        self.page.route('**/api/session-pins',respond)
+        self.page.route(PINS_ROUTE,respond)
     def row(self,title='Pinned synthetic A'):
         return self.pin_block().get_by_text(title,exact=True).locator('xpath=ancestor::*[.//button][1]')
     def refresh(self):
         before=self.pin_gets;self.visible();self.until(lambda:self.pin_gets>before);self.page.wait_for_timeout(80)
+        self.assertTrue(all(query=={'activity':['1']} for query in self.pin_queries),'New UI must explicitly negotiate activity=1')
     def order(self,titles):
         text=self.pin_block().inner_text();positions=[text.index(title) for title in titles]
         self.assertEqual(positions,sorted(positions),'INV-WPIN03 wrong activity order or unstable tie/unknown ordering')
@@ -127,13 +132,15 @@ class PinnedActivityBrowserBlind(unittest.TestCase):
                 self.assertLessEqual(self.page.evaluate('document.documentElement.scrollWidth'),width+1)
     def test_existing_foreground_cycle_refreshes_without_background_RPC_and_logout_clears_late_snapshot(self):
         # INV-WPIN03
-        self.page.clock.install();self.select();expect(self.row()).to_be_visible();before=self.pin_gets
+        self.page.clock.install();self.select();self.assertTrue(self.pin_queries,'Public pins request was not observed')
+        self.assertTrue(all(query=={'activity':['1']} for query in self.pin_queries),'New UI must request exactly activity=1')
+        expect(self.row()).to_be_visible();before=self.pin_gets
         self.value=a.dto([a.item(title='Foreground refreshed',status='active')]);self.page.clock.fast_forward(5100)
         self.until(lambda:self.pin_gets>before);expect(self.row('Foreground refreshed')).to_be_visible()
         self.hidden();self.until(lambda:self.fixture.transport.closed>=1);before=len(self.requests)
         self.page.clock.fast_forward(65000);self.page.wait_for_timeout(100);self.assertEqual(len(self.requests),before,'New background RPC or extra poll timer')
         self.visible();expect(self.row('Foreground refreshed')).to_be_visible()
-        held=[];self.page.unroute('**/api/session-pins');self.page.route('**/api/session-pins',lambda route:held.append(route));self.visible();self.until(lambda:len(held)>=1)
+        held=[];self.page.unroute(PINS_ROUTE);self.page.route(PINS_ROUTE,lambda route:held.append(route));self.visible();self.until(lambda:len(held)>=1)
         self.page.get_by_role('button',name=re.compile('Выйти|Выход',re.I)).click()
         held[0].fulfill(status=200,json=a.dto([a.item(title='Late private pin')]))
         self.page.wait_for_timeout(100);expect(self.page.get_by_text('Late private pin',exact=True)).to_have_count(0)

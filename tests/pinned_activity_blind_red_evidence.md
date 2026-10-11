@@ -36,3 +36,11 @@ Only actual conflicts found in `tests/test_control_web_navigation_start_module_b
 3. Line72: entire successive `pins()` answers are compared for a capacity refusal. New server_now/observed_at are volatile, and live metadata can legitimately change independently of pin capacity. Assert unchanged persisted pin bytes and pin IDs/order instead; retain the capacity error and corruption assertions.
 
 No literal existing “pins must never thread/read” assertion was found in this frozen tree. Legacy schema1 wire/HTTP/browser fixtures remain intentionally unchanged: consumers must continue accepting them. No runtime implementation or old tests are changed by this commit.
+
+## HTTP negotiation amendment: independent RED before runtime
+
+Accepted amended spec/source base: `5ef7c7a`, fresh worktree `/var/tmp/ai-control-pinned-activity-red-negotiation`. No future implementation was inspected. Existing schema2 HTTP positive/negative tests now request `?activity=1`. Three additional bounded HTTP methods check the default schema2→exact schema1 projection (available, authority-unavailable and empty), full producer validation before stripping activity fields/private extras, and query/owner/same-origin guards before any backend call. Only optional `activity=1` is accepted; empty/wrong/case-variant/duplicate/extra fields get422. A valid legacy schema1 producer remains acceptable with the new query.
+
+Browser fixture routing now matches optional query strings and spies query parameters. The frontend must explicitly request exactly `activity=1`; the original seven public DOM/lifecycle scenarios remain. Wire producer and broker tests stay unchanged; old schema1 fixtures and legacy tests were not edited.
+
+Amended baseline result: **21 methods,43 assertion failures including subtests,0 errors,0 skips,38.817 seconds**. Log `/var/tmp/pinned-activity-negotiation-red.log`. Semantic failures include422 for the required valid query (including a legacy producer),503 for the required default schema2 projection, and the existing UI's missing `activity=1` request. No missing route match or fixture/setup failure occurred. Cost receipt remains `unknown`, ledger root-owned.

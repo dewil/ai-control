@@ -35,18 +35,57 @@ class PinnedActivityHTTPBlind(unittest.TestCase):
         self.login()
         for good in [a.dto(),a.dto([a.unknown(available=False)]),dict(schema=1,items=[nav.pin_item()])]:
             with self.subTest(schema=good['schema']):
-                self.backend.pin_value=good;response=self.client.get('/api/session-pins')
+                self.backend.pin_value=good;response=self.client.get('/api/session-pins?activity=1')
                 self.assertEqual(response.status_code,200,response.text);self.assertEqual(response.json(),good)
                 self.assertIn('no-store',response.headers.get('cache-control',''))
         self.assertEqual(self.backend.calls,[('pins','owner')]*3)
     def test_schema2_rejects_private_extra_invalid_numbers_flags_and_unknown_fields(self):
         # INV-WPIN02
-        self.login();self.backend.pin_value=a.dto();positive=self.client.get('/api/session-pins')
+        self.login();self.backend.pin_value=a.dto();positive=self.client.get('/api/session-pins?activity=1')
         self.assertEqual(positive.status_code,200,'Must reach the schema2 validator before testing rejected shapes')
+        for value in invalid_values():
+            with self.subTest(value=repr(value)):
+                self.backend.pin_value=value;response=self.client.get('/api/session-pins?activity=1')
+                self.assertGreaterEqual(response.status_code,400);self.assertNotIn('/private/synthetic',response.text)
+
+
+    def test_default_schema2_producer_projects_validated_legacy_seven_fields(self):
+        # INV-WPIN02: already loaded r20 clients require the exact old envelope.
+        self.login()
+        for rows in [[a.item()], [a.unknown(available=False)], []]:
+            with self.subTest(rows=rows):
+                self.backend.pin_value=a.dto(rows)
+                expected=dict(schema=1,items=[{key:row[key] for key in nav.pin_item()} for row in rows])
+                response=self.client.get('/api/session-pins')
+                self.assertEqual(response.status_code,200,response.text);self.assertEqual(response.json(),expected)
+                self.assertIn('no-store',response.headers.get('cache-control',''))
+        self.assertEqual(self.backend.calls,[('pins','owner')]*3)
+    def test_default_projection_validates_entire_producer_before_stripping_fields(self):
+        # INV-WPIN02: private extras and malformed activity cannot be laundered.
+        self.login();self.backend.pin_value=a.dto()
+        self.assertEqual(self.client.get('/api/session-pins').status_code,200,'Valid schema2 producer must project before negative controls')
         for value in invalid_values():
             with self.subTest(value=repr(value)):
                 self.backend.pin_value=value;response=self.client.get('/api/session-pins')
                 self.assertGreaterEqual(response.status_code,400);self.assertNotIn('/private/synthetic',response.text)
+    def test_only_optional_activity1_query_owner_origin_guards_before_backend(self):
+        # INV-WPIN02: negotiation changes no owner/principal authority boundary.
+        bad=['?activity=', '?activity=0', '?activity=2', '?activity=true', '?activity=01',
+             '?activity=1&activity=1', '?activity=1&activity=0', '?activity=1&principal=owner',
+             '?activity=1&project=demo', '?Activity=1', '?activity=1&foo=bar']
+        for suffix in ['', '?activity=1', bad[0]]:
+            self.assertEqual(self.client.get('/api/session-pins'+suffix).status_code,401)
+        self.assertEqual(self.backend.calls,[]);self.login()
+        for suffix in ['?activity=1',bad[0]]:
+            self.assertEqual(self.client.get('/api/session-pins'+suffix,headers={'Origin':'https://evil.example.test'}).status_code,403)
+        for suffix in bad:
+            with self.subTest(query=suffix):
+                self.assertEqual(self.client.get('/api/session-pins'+suffix).status_code,422)
+        self.assertEqual(self.backend.calls,[])
+        self.backend.pin_value=dict(schema=1,items=[nav.pin_item()])
+        response=self.client.get('/api/session-pins?activity=1')
+        self.assertEqual(response.status_code,200,'New query must accept a validated legacy producer')
+        self.assertEqual(response.json(),self.backend.pin_value);self.assertEqual(self.backend.calls,[('pins','owner')])
 
 
 class PinnedActivityBrokerBlind(unittest.TestCase):
