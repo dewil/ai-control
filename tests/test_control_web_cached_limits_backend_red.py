@@ -50,7 +50,9 @@ class CachedReaderRED(unittest.TestCase):
             self.assertEqual(set(item), s.SOURCE_KEYS)
             self.assertEqual(item['max_age_seconds'], 2700)
             keys.append((item['node_id'], item['provider'], item['account_ref']))
-            for window in item['windows']: self.assertEqual(set(window), native.WINDOW_KEYS)
+            for window in item['windows']:
+                self.assertEqual(set(window), native.WINDOW_KEYS)
+                self.assertEqual(window['id'],item['provider']+':'+window['bucket'])
             if item['prepaid'] is not None: self.assertEqual(set(item['prepaid']), s.PREPAID_KEYS)
         self.assertEqual(len(keys), len(set(keys)))
         text = json.dumps(value, allow_nan=False)
@@ -342,6 +344,8 @@ class CachedOwnerValidatorRED(unittest.TestCase):
             lambda v:v['cached_sources'].append(deepcopy(v['cached_sources'][0])),
             lambda v:v.update(cached_sources=[s.source(account_ref=f'{i:064x}',identity='collector_mapped') for i in range(33)]),
             lambda v:v['cached_sources'][1]['windows'][0].update(label=s.PRIVATE),
+            lambda v:v['cached_sources'][1]['windows'][0].update(id='five_hour'),
+            lambda v:v['cached_sources'][1]['windows'][0].update(id='codex:five_hour'),
             lambda v:v['cached_sources'][1].update(windows=v['cached_sources'][1]['windows']*9)]
         for index, mutate in enumerate(mutations):
             with self.subTest(case=index):

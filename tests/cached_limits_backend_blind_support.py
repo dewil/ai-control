@@ -58,7 +58,7 @@ def source(provider='openrouter', **extra):
                  spend_week=2, burn_per_day=.25, forecast_days=37), last_known=None)
     if provider == 'kimi':
         value.update(kind='quota', prepaid=None, observation_basis='snapshot_tick',
-                     windows=[dict(id='five_hour', bucket='five_hour', duration_minutes=300,
+                     windows=[dict(id='kimi:five_hour', bucket='five_hour', duration_minutes=300,
                      remaining_percent=75, resets_at=NOW+3600,
                      window_started_at=NOW+3600-18000, anchor='derived_reset_and_duration')])
     value.update(extra)
