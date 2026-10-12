@@ -110,15 +110,17 @@ class CachedLimitsBrowserRED(unittest.TestCase):
         self.spent(self.card('OpenRouter'), [25])
         self.spent(self.card('Kimi'), [0, 25, 60, 100])
 
-    def test_kimi_four_spent_windows_stay_readable_at_320_and_360_without_codex_markers(self):
-        # INV-WLIM-22 INV-WLIM-24: month totals do not invent duration or anchors.
+    def test_kimi_four_spent_windows_and_two_normal_markers_stay_readable_at_320_and_360(self):
+        # INV-WLIM-22 INV-WLIM-24: month totals do not invent duration or anchors;
+        # only the five-hour and seven-day windows get normal markers.
         self.open_value(v2.overview())
         for width in (320, 360):
             with self.subTest(width=width):
                 self.page.set_viewport_size(dict(width=width, height=900))
                 kimi = self.card('Kimi')
                 self.spent(kimi, [0, 25, 60, 100])
-                self.no_markers(kimi)
+                expect(kimi.get_by_role('meter')).to_have_count(2)
+                expect(kimi.get_by_role('meter', name=harness.DOUBLE, exact=True)).to_have_count(0)
                 for remaining in (100, 75, 40, 0):
                     self.assertRegex(kimi.inner_text(), rf'(?<!\d){remaining}\s*%')
                 self.assert_marker_values(1)
@@ -226,7 +228,7 @@ class CachedLimitsBrowserRED(unittest.TestCase):
                     self.assertNotRegex(card.inner_text(), r'(?im)^\s*(?:текущий\s+)?баланс\s*[:·]?\s*12[.,]34')
                     self.assertNotRegex(card.inner_text(), r'(?<!\d)0\s*%')
 
-    def test_alp_mapped_accounts_have_tick_provenance_and_codex_only_weekly_markers(self):
+    def test_alp_mapped_accounts_have_normal_markers_and_codex_weekly_double_only(self):
         # INV-WLIM-20 INV-WLIM-24: synthetic export proves rendering, not live acceptance.
         self.open_value(v2.overview([v2.alp('claude'), v2.alp('codex')]))
         for provider in ('Claude', 'Codex'):
@@ -236,12 +238,17 @@ class CachedLimitsBrowserRED(unittest.TestCase):
             self.assertRegex(card.inner_text(), r'(?i)время начала сбора')
             self.assertRegex(card.inner_text(), r'b{8,64}')
             self.assertNotRegex(card.inner_text(), r'(?i)native.reported|подтвержд[её]н.*native')
-        self.no_markers(self.card('Claude', 'alp'))
+        claude = self.card('Claude', 'alp')
+        claude_markers = claude.get_by_role('meter')
+        expect(claude_markers).to_have_count(1)
+        expect(claude.get_by_role('meter', name=harness.DOUBLE, exact=True)).to_have_count(0)
         alp = self.card('Codex', 'alp')
         for label, expected in ((harness.NORMAL, 1), (harness.DOUBLE, 2)):
             meter = alp.get_by_role('meter', name=label, exact=True)
             expect(meter).to_be_visible()
             self.assertAlmostEqual(float(meter.get_attribute('aria-valuenow')), expected, delta=.002)
+        expect(alp.get_by_role('meter', name=harness.NORMAL, exact=True)).to_have_count(1)
+        expect(alp.get_by_role('meter', name=harness.DOUBLE, exact=True)).to_have_count(1)
         self.spent(self.card('Codex'), [25])
 
     def test_v2_foreground_age_uses_server_clock_and_stales_while_refresh_is_pending(self):

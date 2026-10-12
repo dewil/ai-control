@@ -48,6 +48,21 @@ class AllWindowMarkersBlind(unittest.TestCase):
         self.assertTrue(any(x in description for x in ('прош', 'elapsed', 'мин', 'час', 'дн', 'minute', 'hour', 'day')),
                         'Accessible marker description must state elapsed time/window duration')
 
+    def assert_marker_on_spend_track(self, marker):
+        geometry = marker.evaluate('''marker => {
+          const row = marker.closest('.lm-window');
+          const bar = row && row.querySelector('[role="progressbar"]');
+          if (!row || !bar) return null;
+          const m = marker.getBoundingClientRect(), b = bar.getBoundingClientRect();
+          return {marker: m.left + m.width/2, left: b.left, width: b.width,
+                  value: Number(marker.getAttribute('aria-valuenow')),
+                  maximum: Number(marker.getAttribute('aria-valuemax'))};
+        }''')
+        self.assertIsNotNone(geometry, 'Elapsed marker and spent bar must share a quota-window track')
+        expected = geometry['left'] + geometry['width'] * geometry['value'] / geometry['maximum']
+        self.assertAlmostEqual(geometry['marker'], expected, delta=3,
+                               msg='Marker pixel position must match its normalized elapsed fraction')
+
     def synthetic_response(self, value):
         # Use only for schema-shaped negative/expired fixtures the backend
         # rejects before the display boundary; ordinary cases use open_value.
@@ -81,6 +96,8 @@ class AllWindowMarkersBlind(unittest.TestCase):
         self.assert_marker(meters.nth(0), 20)
         self.assert_marker(meters.nth(1), 100 / 7)
         self.assertEqual([float(bar.get_attribute('aria-valuenow')) for bar in bars.all()], [0, 25, 60, 100])
+        for marker in meters.all():
+            self.assert_marker_on_spend_track(marker)
         for width in (320, 360):
             self.page.set_viewport_size(dict(width=width, height=900))
             self.assertLessEqual(self.page.evaluate('document.documentElement.scrollWidth'), width + 1)
@@ -112,6 +129,24 @@ class AllWindowMarkersBlind(unittest.TestCase):
         expect(bars).to_have_count(2)
         self.assertEqual(float(bars.nth(0).get_attribute('aria-valuenow')), 40)
         self.assertEqual(float(bars.nth(1).get_attribute('aria-valuenow')), 40)
+
+    def test_native_codex_nonweekly_has_one_normal_marker_and_unknown_spend_keeps_time(self):
+        # Use the exact public V1 fixture with a valid short-window duration.
+        self.open_value(native.overview(elapsed=120 * 60, remaining=75, duration=300))
+        card = self.card('Codex')
+        expect(card.get_by_role('progressbar')).to_have_count(1)
+        markers = card.get_by_role('meter')
+        expect(markers).to_have_count(1)
+        self.assert_marker(markers.first, 40)
+        self.assert_marker_on_spend_track(markers.first)
+        expect(card.get_by_text(DOUBLE, exact=True)).to_have_count(0)
+
+        self.open_value(native.overview(elapsed=120 * 60, remaining=None, duration=300))
+        card = self.card('Codex')
+        expect(card.get_by_role('progressbar')).to_have_count(0)
+        markers = card.get_by_role('meter')
+        expect(markers).to_have_count(1)
+        self.assert_marker(markers.first, 40)
 
     def test_elapsed_marker_moves_at_start_middle_and_just_before_reset_without_changing_spend(self):
         duration = 7 * native.DAY
