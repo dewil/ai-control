@@ -126,6 +126,7 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 #limits-panel .lm-legend{display:flex;justify-content:space-between;gap:8px;font-size:12px;flex-wrap:wrap;color:var(--lm-muted)}
 #limits-panel .lm-legend span:before{content:'●';margin-right:5px}#limits-panel .lm-legend .lm-primary:before{content:'◆'}#limits-panel .lm-primary{font-weight:600;color:var(--lm-amber)}
 #limits-panel .lm-track{position:relative;height:20px;margin:8px 7px 0;background:#303846;border-radius:4px}
+#limits-panel .lm-timeline-compact{margin-top:4px}#limits-panel .lm-timeline-compact .lm-track{margin-top:4px}
 #limits-panel .lm-track .lm-quota{height:100%;margin:0}
 #limits-panel .lm-marker{display:block;position:absolute;width:12px;height:12px;transform:translateX(-50%);border:2px solid var(--lm-ink);background:var(--lm-surface)}
 #limits-panel .lm-normal{top:1px;border-radius:50%;z-index:1}#limits-panel .lm-double{top:7px;width:14px;height:14px;background:var(--lm-amber);border-color:var(--lm-amber);clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}
@@ -145,3 +146,32 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 #project-file-close{flex-shrink:0}
 #project-file-text{box-sizing:border-box;max-width:100%;max-height:65dvh;overflow:auto;white-space:pre;margin-bottom:0;tab-size:4}
 #project-file-text mark{display:inline-block;min-width:1ch;background:#ffdc73;color:#171717}
+
+/* INV-CUI-01..04: compact normal-flow overview/navigation with stable anchors. */
+#participation-overview{margin-bottom:8px;padding:6px 8px;overflow-anchor:none}
+#participation-overview>summary{min-height:44px;padding:4px 6px}
+#participation-list{min-width:0;overflow-anchor:none}
+#participation-list>h3{font-size:14px;line-height:1.25;margin:4px 0}
+.participation-other{margin:4px 0 6px;overflow-anchor:none}
+.participation-other>summary{min-height:44px;padding:4px 6px}
+.participation-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px 8px;margin:4px 0;padding:4px 6px;overflow-anchor:none}
+.participation-row-content{display:flex;align-items:center;flex:1 1 180px;flex-wrap:wrap;gap:2px 8px;min-width:0}
+.participation-row-heading{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 8px;min-width:0}
+.participation-project,.participation-title{min-width:0;overflow-wrap:anywhere}
+.participation-title{display:inline;margin:0}
+.participation-row p.participation-badges{display:flex;align-items:center;flex-wrap:wrap;gap:3px;margin:0}
+.participation-badges .participation-badge{padding:1px 5px;font-size:11px;line-height:1.2}
+.participation-actions{display:flex;align-items:center;flex:0 0 auto;flex-wrap:wrap;gap:4px;max-width:100%}
+.participation-actions>button{flex:0 0 auto;min-width:44px;min-height:44px;padding:4px 7px;font-size:12px;line-height:1.2;white-space:nowrap}
+.session-navigation{padding:8px}
+.session-list{gap:4px;margin:8px 0}
+.session-choice{padding:6px 8px}
+.project-cloud{gap:4px;margin-top:4px}
+.project-tile{padding:3px 4px;gap:2px;font-size:13px}
+.chat-heading h2{margin:4px 0}
+.chat-navigation{gap:4px}
+.chat-items{gap:8px;margin:8px 0}
+.chat-message{margin:4px 0;padding:8px 10px}
+#chat-panel{margin-top:8px}
+.toolbar{margin-bottom:6px}
+@media(max-width:600px){.participation-row{align-items:flex-start}.participation-row-content{flex-basis:100%}.participation-actions{align-self:flex-start}}
