@@ -20,3 +20,6 @@ CONTROL-WEB-LIMITS-INTEGRATION → WLIM28..29 → independent browser RED → sa
 
 ## Не входит
 Auth/account switching, native approvals ответы, NATS manager, Android APK, backend schema/collector changes, дизайн с нуля, token pricing changes. DeepSeek допускается только для мелких bounded задач, не единственный gate reviewer.
+
+## DESIGN уточнения
+DESIGN_PASS независимой6.1medium. Duration означает существующий duration_minutes, timestamps seconds; tolerance согласованности <1s. Только существующий подтверждённый anchor=derived_reset_and_duration разрешает временной маркер; anchor:null сохраняет unknown, даже если incidental fields позволяют догадку. Closed DTO producers уже вычисляют start из reset+duration; новые поля/семантику backend не вводим. На expired окне маркер может показывать достигнутую границу100%, сохраняя expired label и отсутствие fresh quota. При удалении scroll anchor fallback на сохранившийся сосед/container; пользовательский scroll всегда важнее старогоcapture.
