@@ -84,9 +84,11 @@ def event_bytes(**changes):
     return canonical(event)
 
 
-def fake_stat(real, *, owner=1000, mode=0o100600, nlink=1, inode=None):
+def fake_stat(real, *, owner=1000, mode=None, nlink=None, inode=None):
     fields = {name: getattr(real, name) for name in dir(real) if name.startswith("st_")}
-    fields.update(st_uid=owner, st_mode=mode, st_nlink=nlink)
+    fields["st_uid"] = owner
+    if mode is not None: fields["st_mode"] = mode
+    if nlink is not None: fields["st_nlink"] = nlink
     if inode is not None:
         fields["st_ino"] = inode
     return SimpleNamespace(**fields)
@@ -181,6 +183,7 @@ class FakeJetStream:
         self.stream_info_seen = asyncio.Event()
         self.source_consumer_created_override = None
         self.source_stream_created_override = None
+        self.epoch_mismatch_seen = asyncio.Event()
         self.subscription = None
         self.consumer_info_calls = 0
         self.consumer_info_seen = asyncio.Event()
@@ -210,6 +213,8 @@ class FakeJetStream:
         self.consumer_info_seen.set()
         created = (self.source_consumer_created_override or
                    self.config["source"]["consumer_created"])
+        if created != self.config["source"]["consumer_created"]:
+            self.epoch_mismatch_seen.set()
         return SimpleNamespace(
             created=created, name=consumer, stream_name=stream,
             config=SimpleNamespace(
@@ -224,6 +229,8 @@ class FakeJetStream:
             num_pending=0, num_ack_pending=0)
 
     async def pull_subscribe_bind(self, consumer=None, stream=None, **kwargs):
+        if consumer is None:
+            consumer = kwargs.pop("name", None)
         self.calls.append(("bind", consumer, stream, kwargs))
         self.subscription = FakePullSubscription(self.message)
         self.bound.set()
@@ -448,13 +455,14 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(callable(self.run_bridge), "PUBLIC-SEAM PREREQUISITE: run_bridge absent")
         self.temp = tempfile.TemporaryDirectory(prefix="sidecar-bridge-run-")
         self.addCleanup(self.temp.cleanup)
-        self.status_path = Path(self.temp.name) / "bridge-status.json"
+        self.status_path = Path(self.temp.name) / "devbus-bridge.json"
 
     async def asyncTearDown(self):
         self.temp.cleanup()
 
     def harness(self, **kwargs):
         cfg = bridge_config()
+        kwargs.setdefault("message", FakeMessage())
         factory = FakeNatsFactory(cfg, **kwargs)
         return cfg, factory
 
@@ -563,6 +571,7 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
                     await self.stop_task(task)
 
     async def wait_until_processed(self, task, factory):
+        await self.wait_source_fetch(factory)
         later_fetch = asyncio.create_task(factory.source_js.subscription.next_fetch.wait())
         done, pending = await asyncio.wait({task, later_fetch}, timeout=1,
                                            return_when=asyncio.FIRST_COMPLETED)
@@ -578,6 +587,7 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
                 cfg, factory = self.harness(**options)
                 task = await self.start(cfg, factory)
                 try:
+                    await self.wait_source_fetch(factory)
                     await asyncio.wait_for(factory.destination_js.publish_completed.wait(), 1)
                     self.assertFalse(factory.message.acked.is_set())
                 finally:
@@ -588,11 +598,12 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
         factory = None
         def change_source_epoch():
             factory.source_js.source_consumer_created_override = "2026-10-12T00:09:00.000000Z"
-        factory = FakeNatsFactory(cfg, after_publish=change_source_epoch)
+        factory = FakeNatsFactory(cfg, message=FakeMessage(), after_publish=change_source_epoch)
         task = await self.start(cfg, factory)
         try:
+            await self.wait_source_fetch(factory)
             await asyncio.wait_for(factory.destination_js.published.wait(), 1)
-            await self.wait_until_processed(task, factory)
+            await asyncio.wait_for(factory.source_js.epoch_mismatch_seen.wait(), 1)
             self.assertFalse(factory.message.acked.is_set(), "generation mismatch must fence ACK")
         finally:
             await self.stop_task(task)
@@ -684,7 +695,7 @@ class ExistingObserverEphemeralBlind(unittest.IsolatedAsyncioTestCase):
         broker = importlib.import_module("_control_web_broker")
         web = importlib.import_module("_control_web_devbus")
         with tempfile.TemporaryDirectory(prefix="sidecar-owner-status-") as directory:
-            fixture = Path(directory) / "bridge-status.json"
+            fixture = Path(directory) / "devbus-bridge.json"
             observed = datetime.now(timezone.utc)
             class Observer:
                 def __init__(self, projection, connect): self.projection = projection
