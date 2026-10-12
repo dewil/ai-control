@@ -27,7 +27,8 @@ import live_sse_blind_support as live
 from test_control_web_session_chat_contract import feature
 
 ROOT = Path(__file__).resolve().parents[1]
-REMOTE = '/var/lib/alp-limits-export/limits-v1.json'
+REMOTE = '/home/dwl/.local/state/ai-control/limits-export/limits-v1.json'
+LEGACY_REMOTE = '/var/lib/alp-limits-export/limits-v1.json'
 FAILURE = {'status': 'unavailable', 'reason': 'sync_failed'}
 
 
@@ -64,39 +65,114 @@ class AlpLimitsSyncRED(unittest.TestCase):
         with patch.object(socket, 'create_connection', side_effect=AssertionError('network forbidden')):
             return sync(str(destination or self.destination), runner=runner or transport, clock=lambda: s.NOW)
 
-    def remote(self, command, payload, *, mode=0o600):
+    def remote(self, command, payload, *, mode=0o600, parent_mode=0o700,
+               nss_uid=4242, real_uid=None, effective_uid=None,
+               parent_uid=None, file_owner=None, file_nlink=1,
+               parent_type='directory', file_type='regular', race=None):
         """Execute captured stdlib program with its sole input redirected locally.
 
         Never executes the shell command itself. Extracts its fixed Python
-        program, then the launcher rejects opens except the synthetic export
-        and records flags. Supports -c and a literal stdin heredoc.
+        program, then the launcher maps either the old or new literal path to
+        one synthetic file. No repository/runtime source is executed outside
+        that captured program and no remote input is read.
         """
         source = self.base / 'synthetic-remote.json'
         source.write_bytes(payload)
         source.chmod(mode)
         events = self.base / 'remote-open-events.json'
+        metadata = self.base / 'remote-metadata.json'
         launchers = self.base / 'remote-bin'
         launchers.mkdir(exist_ok=True, mode=0o700)
-        launcher = '''import atexit, builtins, io, json, os, stat, sys, datetime, uuid, math, time
+        parent = 4242 if parent_uid is None else parent_uid
+        owner = nss_uid if file_owner is None else file_owner
+        real = nss_uid if real_uid is None else real_uid
+        effective = nss_uid if effective_uid is None else effective_uid
+        launcher = '''import atexit, builtins, io, json, os, stat, sys, datetime, uuid, math, time, pwd, types, errno
 time.time=lambda:float(os.environ['SYNTHETIC_NOW'])
 original_os_open, original_open, original_io_open = os.open, builtins.open, io.open
-events=[]
+original_stat, original_lstat, original_fstat, original_close = os.stat, os.lstat, os.fstat, os.close
+events=[]; open_paths=[]; metadata_paths=[]; nss_names=[]; uid_calls=[]; opened={}; fstat_counts={}
+expected=json.loads(os.environ['EXPECTED_EXPORTS'])
+parent_paths={os.path.dirname(path) for path in expected}
 def checked_path(path):
-    if os.fspath(path) != os.environ['EXPECTED_EXPORT']:
-        raise PermissionError('unexpected source path')
-    return os.environ['SYNTHETIC_EXPORT']
+    value=os.fspath(path)
+    if value in expected: return 'file', os.environ['SYNTHETIC_EXPORT']
+    if value in parent_paths: return 'parent', os.environ['SYNTHETIC_PARENT']
+    raise PermissionError('unexpected synthetic receiver path')
+def type_mode(kind):
+    names={'regular':stat.S_IFREG,'directory':stat.S_IFDIR,'symlink':stat.S_IFLNK,'fifo':stat.S_IFIFO}
+    return names[kind]
+def fake_info(kind, *, path_check=False, follow=True, fd_check=False):
+    if kind=='parent':
+        ftype=os.environ['PARENT_TYPE']
+        if ftype=='symlink' and follow: ftype='directory'
+        mode=type_mode(ftype) | int(os.environ['PARENT_MODE'],8)
+        uid=int(os.environ['PARENT_UID']); nlink=1; size=0; ino=4201
+    else:
+        ftype=os.environ['FILE_TYPE']
+        if ftype=='symlink' and follow: ftype='regular'
+        mode=type_mode(ftype) | int(os.environ['FILE_MODE'],8)
+        uid=int(os.environ['FILE_OWNER']); nlink=int(os.environ['FILE_NLINK'])
+        size=original_stat(os.environ['SYNTHETIC_EXPORT']).st_size; ino=4301
+        if os.environ.get('RACE')=='path_swap' and path_check and not follow: ino=4302
+        if fd_check:
+            count=fstat_counts.get(ino,0)+1; fstat_counts[ino]=count
+            if os.environ.get('RACE')=='fstat_after' and count>1: ino=4302
+    return os.stat_result((mode,ino,1,nlink,uid,int(os.environ['NSS_GID']),size,1_700_000_000,1_700_000_000,1_700_000_000))
+def safe_stat(path, *args, **kwargs):
+    kind, _=checked_path(path); metadata_paths.append(('stat',os.fspath(path)))
+    return fake_info(kind, path_check=True, follow=kwargs.get('follow_symlinks',True))
+def safe_lstat(path, *args, **kwargs):
+    kind, _=checked_path(path); metadata_paths.append(('lstat',os.fspath(path)))
+    return fake_info(kind, path_check=True, follow=False)
+def safe_fstat(fd):
+    if fd not in opened: return original_fstat(fd)
+    metadata_paths.append(('fstat',opened[fd]))
+    return fake_info(opened[fd], fd_check=True)
+def safe_close(fd):
+    opened.pop(fd,None)
+    return original_close(fd)
 def safe_os_open(path, flags, *args, **kwargs):
     events.append(flags)
-    return original_os_open(checked_path(path), flags, *args, **kwargs)
+    kind, target=checked_path(path); open_paths.append((os.fspath(path),flags))
+    if ((kind=='parent' and os.environ['PARENT_TYPE']=='symlink') or
+            (kind=='file' and os.environ['FILE_TYPE']=='symlink')):
+        raise OSError(errno.ELOOP,'synthetic symlink rejected')
+    if kind=='parent' and os.environ['PARENT_TYPE']!='directory':
+        raise OSError(errno.ENOTDIR,'synthetic parent is not a directory')
+    fd=original_os_open(target, flags, *args, **kwargs); opened[fd]=kind; return fd
 def safe_open(path, *args, **kwargs):
-    return original_open(checked_path(path), *args, **kwargs)
+    kind, target=checked_path(path)
+    if ((kind=='parent' and os.environ['PARENT_TYPE']=='symlink') or
+            (kind=='file' and os.environ['FILE_TYPE']=='symlink')):
+        raise OSError(errno.ELOOP,'synthetic symlink rejected')
+    value=original_open(target, *args, **kwargs); opened[value.fileno()]=kind; return value
 def safe_io_open(path, *args, **kwargs):
-    return original_io_open(checked_path(path), *args, **kwargs)
+    kind, target=checked_path(path)
+    if ((kind=='parent' and os.environ['PARENT_TYPE']=='symlink') or
+            (kind=='file' and os.environ['FILE_TYPE']=='symlink')):
+        raise OSError(errno.ELOOP,'synthetic symlink rejected')
+    value=original_io_open(target, *args, **kwargs); opened[value.fileno()]=kind; return value
+def safe_getpwnam(name):
+    nss_names.append(name)
+    if name!='dwl': raise KeyError(name)
+    return types.SimpleNamespace(pw_name='dwl',pw_uid=int(os.environ['NSS_UID']),pw_gid=int(os.environ['NSS_GID']))
+def safe_getuid():
+    uid_calls.append('getuid')
+    return int(os.environ['REAL_UID'])
+def safe_geteuid():
+    uid_calls.append('geteuid')
+    return int(os.environ['EFFECTIVE_UID'])
 def save_events():
     with original_open(os.environ['OPEN_EVENTS'], 'w') as stream:
         json.dump(events, stream)
+    with original_open(os.environ['REMOTE_METADATA'], 'w') as stream:
+        json.dump({'open_paths':open_paths,'metadata_paths':metadata_paths,'nss_names':nss_names,'uid_calls':uid_calls},stream)
 atexit.register(save_events)
 os.open, builtins.open, io.open = safe_os_open, safe_open, safe_io_open
+os.stat, os.lstat, os.fstat, os.close = safe_stat, safe_lstat, safe_fstat, safe_close
+os.getuid=safe_getuid; os.geteuid=safe_geteuid
+pwd.getpwnam=safe_getpwnam
 if '-c' in sys.argv:
     program=sys.argv[sys.argv.index('-c')+1]
 elif len(sys.argv)==1 or '-' in sys.argv:
@@ -121,10 +197,85 @@ exec(compile(program, '<synthetic-remote-program>', 'exec'), {'__name__':'__main
             arguments, stdin = words[1:], None
         result = subprocess.run([sys.executable, str(launchers/'python3'), *arguments],
                                 input=stdin, capture_output=True, timeout=4,
-                                env={'PATH': str(launchers), 'EXPECTED_EXPORT': REMOTE,
-                                     'SYNTHETIC_EXPORT': str(source), 'OPEN_EVENTS': str(events),
-                                     'SYNTHETIC_NOW': str(s.NOW)})
+                                env={'PATH': str(launchers), 'EXPECTED_EXPORTS': json.dumps([REMOTE, LEGACY_REMOTE]),
+                                     'SYNTHETIC_EXPORT': str(source), 'SYNTHETIC_PARENT': str(self.base),
+                                     'OPEN_EVENTS': str(events), 'REMOTE_METADATA': str(metadata),
+                                     'SYNTHETIC_NOW': str(s.NOW), 'NSS_UID': str(nss_uid),
+                                     'NSS_GID': str(nss_uid), 'REAL_UID': str(real),
+                                     'EFFECTIVE_UID': str(effective), 'PARENT_UID': str(parent),
+                                     'FILE_OWNER': str(owner), 'PARENT_MODE': oct(parent_mode),
+                                     'FILE_MODE': oct(mode), 'FILE_NLINK': str(file_nlink),
+                                     'PARENT_TYPE': parent_type, 'FILE_TYPE': file_type,
+                                     'RACE': race or ''})
+        self.last_remote_metadata = json.loads(metadata.read_text()) if metadata.exists() else {}
         return result, json.loads(events.read_text()) if events.exists() else []
+
+    def captured_program(self):
+        self.assertEqual(self.sync(), {'status': 'updated', 'accounts': 1})
+        argv, _, _ = self.calls[-1]
+        alias = argv.index('alp-ai-dev-1-dwl')
+        return ' '.join(argv[alias+1:])
+
+    def test_inv_wlim27_embeds_only_the_new_fixed_export_path(self):
+        # INV-WLIM-27: an old private snapshot path is never a fallback.
+        command = self.captured_program()
+        self.assertIn(REMOTE, command)
+        self.assertNotIn(LEGACY_REMOTE, command)
+
+    def test_inv_wlim27_accepts_only_nss_dwl_identity_and_private_parent_file(self):
+        # This is the all-valid synthetic receiver fixture, including NSS and UID proof.
+        command = self.captured_program()
+        result, opens = self.remote(command, encoded(s.alp()), nss_uid=4242)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout), s.alp())
+        meta = self.last_remote_metadata
+        self.assertEqual(meta['nss_names'], ['dwl'])
+        self.assertEqual(set(meta['uid_calls']), {'getuid', 'geteuid'})
+        file_paths = [path for path, _ in meta['open_paths'] if path in (REMOTE, LEGACY_REMOTE)]
+        self.assertTrue(file_paths, 'fixed export file must be opened')
+        parent_paths = {str(Path(path).parent) for path in (REMOTE, LEGACY_REMOTE)}
+        checked_parents = {path for _, path in meta['metadata_paths']} | {
+            path for path, _ in meta['open_paths']
+        }
+        self.assertTrue(parent_paths & checked_parents,
+                        'owner must inspect/open the fixed parent directory itself')
+        self.assertTrue(all(flags & os.O_NOFOLLOW and flags & os.O_NONBLOCK
+                            for path, flags in meta['open_paths'] if path in (REMOTE, LEGACY_REMOTE)))
+        self.assertTrue(opens)
+
+    def test_inv_wlim27_unsafe_nss_parent_file_and_race_preserve_existing_cache(self):
+        # Each rejection uses the captured program but accepts either literal path in the
+        # fixture harness; path migration is asserted separately above.
+        cases = [
+            ('real uid differs from NSS', {'real_uid': 4243}, None),
+            ('effective uid differs from NSS', {'effective_uid': 4243}, None),
+            ('parent mode', {'parent_mode': 0o755}, None),
+            ('parent owner', {'parent_uid': 4243}, None),
+            ('parent symlink', {'parent_type': 'symlink'}, None),
+            ('file mode', {'mode': 0o640}, None),
+            ('file owner', {'file_owner': 4243}, None),
+            ('file symlink', {'file_type': 'symlink'}, None),
+            ('nonregular file', {'file_type': 'fifo'}, None),
+            ('hardlink', {'file_nlink': 2}, None),
+            ('identity race', {'race': 'path_swap'}, None),
+            ('oversized file', {}, b' ' * 131073),
+        ]
+        for label, fixture, payload in cases:
+            with self.subTest(case=label):
+                old = self.prior()
+                attempted = []
+                def runner(argv, *, timeout=8, max_bytes=131072):
+                    alias = argv.index('alp-ai-dev-1-dwl')
+                    command = ' '.join(argv[alias+1:])
+                    result, _ = self.remote(command, encoded(s.alp()) if payload is None else payload,
+                                            **fixture)
+                    attempted.append(result)
+                    return result.stdout
+                self.assertEqual(self.sync(runner=runner), FAILURE)
+                self.assertEqual(self.destination.read_bytes(), old)
+                self.assertEqual(len(attempted), 1)
+                self.assertEqual(attempted[0].stdout, b'', 'unsafe metadata must not emit quota DTO')
+                self.assertNotIn(s.PRIVATE.encode(), attempted[0].stderr)
 
     def test_fixed_transport_and_remote_whitelist_rejects_private_payload_before_stdout(self):
         # INV-WLIM-25: inspect the actual emitted command, never runtime bodies.
@@ -141,13 +292,17 @@ exec(compile(program, '<synthetic-remote-program>', 'exec'), {'__name__':'__main
         self.assertFalse(any(option in ' '.join(argv) for option in (
             'StrictHostKeyChecking=no', 'ForwardAgent=yes', 'ProxyCommand=', 'LocalCommand=')))
         command = ' '.join(argv[alias+1:])
-        self.assertIn(REMOTE, command)
+        self.assertTrue(REMOTE in command or LEGACY_REMOTE in command,
+                        'captured program must mention the fixed export path')
         self.assertNotIn(s.PRIVATE, command)
         good, opens = self.remote(command, encoded(s.alp()))
         self.assertEqual(good.returncode, 0, 'fixed remote program must accept the safe synthetic DTO')
         self.assertEqual(json.loads(good.stdout), s.alp())
-        self.assertTrue(opens, 'fixed export must be opened through nofollow/nonblocking descriptor')
-        self.assertTrue(all(flags & os.O_NOFOLLOW and flags & os.O_NONBLOCK for flags in opens))
+        self.assertTrue(opens, 'fixed export must be opened through a bounded descriptor')
+        file_flags = [flags for path, flags in self.last_remote_metadata.get('open_paths', [])
+                      if path in (REMOTE, LEGACY_REMOTE)]
+        self.assertTrue(file_flags, 'the synthetic export path must be opened')
+        self.assertTrue(all(flags & os.O_NOFOLLOW and flags & os.O_NONBLOCK for flags in file_flags))
         # A structurally safe account clock error belongs to reader isolation.
         for observed in (s.NOW-30, s.NOW+1):
             value = s.alp(s.alp_account(observed_at=s.stamp(s.NOW-60)),
