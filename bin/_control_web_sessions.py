@@ -26,6 +26,7 @@ NAMESPACE_ENTRY_LIMIT = 10002
 SUPPORTED_NATIVE_VERSIONS = ('0.160.0', '0.161.0', '0.162.1')
 QUEUE_NATIVE_VERSIONS = ('0.161.0', '0.162.1')
 LIMITS_NATIVE_VERSIONS = ('0.161.0', '0.162.1')
+PART_NATIVE_VERSIONS = ('0.161.0', '0.162.1')
 READ_METHODS = frozenset({'thread/list', 'thread/read', 'thread/turns/list', 'thread/items/list', 'thread/loaded/list'})
 VERSION_TOKEN = r'[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(?:-[A-Za-z0-9][A-Za-z0-9.-]{0,31})?'
 
@@ -767,7 +768,7 @@ class _Participation:
     def observe(self, value, context, size):
         with self.lock:
             self.reset(context)
-            if context is None or context.get('native_version') != '0.161.0':
+            if context is None or context.get('native_version') not in PART_NATIVE_VERSIONS:
                 return
             method, params = value.get('method'), value.get('params')
             if type(params) is not dict:
@@ -1124,7 +1125,7 @@ class SessionChat:
             self._part_refresh_at = now
             self._local.deadline = min(self._local.deadline, now + 5)
             context = self._capture_read_context()
-            _need(context is not None and context['native_version'] == '0.161.0')
+            _need(context is not None and context['native_version'] in PART_NATIVE_VERSIONS)
             _need(self._part_context() == context, 'stale')
             def read(method, params):
                 _need(not self._part_stop.is_set())
@@ -1358,7 +1359,7 @@ class SessionChat:
                 consume_closed()
                 return outcome()
         try:
-            _need(context is not None and context['native_version'] == '0.161.0')
+            _need(context is not None and context['native_version'] in PART_NATIVE_VERSIONS)
             self._capture_read_context(context)
             self._proof(root, sid)
             turns = self._rpc('thread/turns/list', dict(threadId=sid, itemsView='notLoaded', sortDirection='desc', limit=4))

@@ -132,3 +132,6 @@ API: owner GET /api/project-file, query ровно project/path. Успех {nam
 
 ## r22 — приоритет участия
 Обзор вкладки Сессии располагает ожидающие вопросы/разрешения и ответы перед работающими. Наблюдаемые счётчики не обещают полного покрытия; partial/stale показываются явно. Ответы на разрешения по-прежнему только в Codex. Release scope: UI JS/CSS/footer, ALP/NATS setup не активируется этим пакетом.
+
+## r23 — PART admission0.162.1
+Общий пул и связанные пользовательские вопросы допускают reviewedCodex0.162.1 теми же schema/authorityguards, что0.161.0.0.160/futurePARTзакрыты. Nativeauth/APPSERVERнеперезапускаются. Послеdeploy проверять ownerpoolпослеworkerwarmup, не выдаватьпервыйlazyemptyответзаполнуюприёмку.
