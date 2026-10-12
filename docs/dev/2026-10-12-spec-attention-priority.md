@@ -17,3 +17,8 @@ INV-APRI04: пустой свежий полный ответ явно пока�
 
 ## Проверки
 Независимые browser RED для mixed priority incl nonblocking actionablequestion, single render, distinct badges+targets, counters, stale/partial/empty и disclosure refresh; mobile320/390 no horizontal overflow. Source review Haiku, полный exact CI, signed22 deploy и owner read-only acceptance.
+
+## Уточнение после DESIGN12.10
+Классификация выполняется последовательно по INV-APRI01, первый подходящий пункт побеждает. N — только число строк итоговой waiting-группы; M — сумма чисел строк итоговых confirmed и active групп, исключая waiting и ready; K — только число строк итоговой ready-группы. Работающая строка с вопросом попадает только в N, что не стирает её running badge. Это счётчики групп обзора, не одновременных всех свойств. При partial или health≠fresh числа предваряются «Наблюдается:» и status явно сообщает «Полнота не подтверждена»; нули остаются числами наблюдённых строк, не утверждением отсутствия ожиданий. При zero rows message «Нет сессий для отображения» допустим только fresh/complete; иначе «Список сессий не подтверждён».
+
+Бейджи — не интерактивные элементы. В строке с одновременно question и result.ready обе метки видимы; существующие отдельные кнопки «Открыть вопрос» связаны только с конкретным interaction_id, «Открыть результат» — только с result.turn_id/item_id. «Открыть сессию» остаётся отдельной кнопкой. Никакого неоднозначного общего «Ответить»/нового target inference.
