@@ -24,9 +24,47 @@ SENTINEL = 'WIDTH_SENTINEL'
 
 
 def private_json(path, value):
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, 'w') as handle:
-        json.dump(value, handle, ensure_ascii=False)
+    # Readers use ready.json existence as the publication boundary. Never
+    # expose a created-but-empty file or a truncated control/receipt snapshot.
+    path = Path(path)
+    fd, temporary = tempfile.mkstemp(prefix='.' + path.name + '-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as handle:
+            json.dump(value, handle, ensure_ascii=False)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+class PrivateJsonPublicationContract(unittest.TestCase):
+    def test_ready_path_is_absent_until_complete_json_is_written(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'ready.json'
+            original_dump = json.dump
+            def observe(value, handle, **kwargs):
+                self.assertFalse(path.exists())
+                return original_dump(value, handle, **kwargs)
+            with patch.object(json, 'dump', side_effect=observe):
+                private_json(path, {'url': 'http://127.0.0.1:1'})
+            self.assertEqual(json.loads(path.read_text()), {'url': 'http://127.0.0.1:1'})
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_existing_snapshot_remains_complete_until_replacement(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'control.json'
+            private_json(path, {'old': True})
+            original_dump = json.dump
+            def observe(value, handle, **kwargs):
+                current = path.read_text()
+                self.assertTrue(current, 'Existing snapshot must not be truncated before publication')
+                self.assertEqual(json.loads(current), {'old': True})
+                return original_dump(value, handle, **kwargs)
+            with patch.object(json, 'dump', side_effect=observe):
+                private_json(path, {'new': True})
+            self.assertEqual(json.loads(path.read_text()), {'new': True})
 
 
 def totp():
