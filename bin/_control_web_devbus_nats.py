@@ -458,9 +458,14 @@ def _write_bridge_status(record):
         except FileNotFoundError: pass
 
 
+async def _bridge_quiet_error(_error):
+    """Discard client callback details; bridge health is reported through bounded status."""
+    return None
+
+
 async def _bridge_connect(factory, url, auth):
     options = {'servers': [url], 'connect_timeout': 5, 'max_reconnect_attempts': 0,
-               'allow_reconnect': False}
+               'allow_reconnect': False, 'error_cb': _bridge_quiet_error}
     if auth is not None:
         if auth['mode'] == 'token': options['token'] = auth['token']
         elif auth['mode'] == 'creds': options['user_credentials'] = auth['creds']
