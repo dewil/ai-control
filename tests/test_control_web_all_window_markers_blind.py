@@ -148,7 +148,9 @@ class AllWindowMarkersBlind(unittest.TestCase):
         value = v2.overview()
         value['cached_sources'][0]['windows'][0]['resets_at'] += 60
         self.synthetic_response(value)
-        expect(self.card('Kimi').get_by_role('meter')).to_have_count(1)
+        # The closed backend contract rejects this contradictory derived
+        # anchor pair. The UI must not turn the rejected payload into markers.
+        expect(self.panel().get_by_role('meter')).to_have_count(0)
 
     def test_stale_snapshot_keeps_its_stale_label_and_is_not_called_fresh(self):
         value = v2.overview()
