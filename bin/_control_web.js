@@ -598,20 +598,37 @@ function renderParticipation(){
   const scope=partView.overview,data=scope.data;if(!data||!navigationVisible()||data.epoch!==partView.epoch)return;
   const signature=JSON.stringify([data.epoch,data.rows,data.coverage,data.health]);if(signature===scope.rendered)return;scope.rendered=signature;
   const decision=activeSelection()?captureHistoryScroll(selectedProject,selectedSession.sid,selectionGeneration,false):null;
-  const list=$('participation-list'),fragment=document.createDocumentFragment(),groups=[['confirmed','Сейчас работают'],['active','Активна по Codex'],['waiting','Требуют внимания'],['result','Результаты']];
-  const group=row=>row.running==='confirmed'?'confirmed':row.activity==='active'&&!row.waits.length?'active':row.waits.length?'waiting':'result';
-  for(const [id,title]of groups){const rows=data.rows.filter(row=>group(row)===id);if(!rows.length)continue;fragment.append(node('h3',title));for(const row of rows){
+  const list=$('participation-list'),fragment=document.createDocumentFragment();
+  const groups=[['waiting','Требуют внимания'],['ready','Ответы готовы'],['confirmed','Сейчас работают'],['active','Активны по Codex'],['other','Прочие состояния']];
+  const openQuestionStates=['actionable','native_only','responding','sent','delivery_unknown'];
+  const group=row=>row.waits.includes('approval')||row.waits.includes('question')||row.questions.some(question=>openQuestionStates.includes(question.state))?'waiting':row.result?.ready?'ready':row.running==='confirmed'?'confirmed':row.activity==='active'?'active':'other';
+  const grouped=new Map(groups.map(([id])=>[id,[]]));for(const row of data.rows)grouped.get(group(row)).push(row);
+  const waitingCount=grouped.get('waiting').length,readyCount=grouped.get('ready').length,workingCount=grouped.get('confirmed').length+grouped.get('active').length;
+  const staleRows=data.rows.some(row=>row.freshness.state!=='fresh');
+  const uncertain=data.coverage.partial||data.health!=='fresh'||staleRows;
+  $('participation-overview').querySelector('summary').textContent=(uncertain?'Наблюдается: ':'')+'Сессии: требуется внимание '+waitingCount+' · работают '+workingCount+' · ответы '+readyCount;
+  for(const [id,title]of groups){const rows=grouped.get(id);if(!rows.length)continue;fragment.append(node('h3',title));for(const row of rows){
     const article=node('article',undefined,'participation-row');article.append(node('strong',row.label));
-    const labels=[];if(row.running==='confirmed')labels.push('Работа подтверждена');else if(row.activity==='active')labels.push('Активна по Codex');
-    if(row.waits.includes('approval'))labels.push('Подтвердите в Codex');if(row.waits.includes('question'))labels.push('Есть вопрос');
-    if(row.result?.ready)labels.push('Ответ готов');else if(row.result?.status==='failed')labels.push('Ход завершился с ошибкой');else if(row.result?.status==='interrupted')labels.push('Ход прерван');
-    if(row.freshness.state!=='fresh')labels.push('Сведения устарели');article.append(node('p',labels.join(' · '),'meta'));
+    const labels=[];const hasQuestion=row.waits.includes('question')||row.questions.some(question=>openQuestionStates.includes(question.state));
+    if(hasQuestion)labels.push(['Вопрос','question']);
+    if(row.waits.includes('approval'))labels.push(['Разрешение в Codex · подтвердите в Codex','approval']);
+    if(row.result?.ready)labels.push(['Ответ готов','ready']);
+    if(row.running==='confirmed')labels.push(['Работа подтверждена','work']);else if(row.activity==='active')labels.push(['Активна по Codex','active']);
+    if(row.result?.status==='failed')labels.push(['Ход завершился с ошибкой','status']);else if(row.result?.status==='interrupted')labels.push(['Ход прерван','status']);
+    if(row.freshness.state==='stale')labels.push(['Сведения устарели','status']);else if(row.freshness.state==='unavailable')labels.push(['Сведения недоступны','status']);
+    const badges=node('p',undefined,'meta participation-badges');for(const [label,kind]of labels)badges.append(node('span',label,'participation-badge participation-badge-'+kind));article.append(badges);
     const open=node('button','Открыть сессию','secondary');open.type='button';open.addEventListener('click',()=>openParticipationTarget(row,null));article.append(open);
     for(const question of row.questions){const button=node('button','Открыть вопрос','secondary');button.type='button';button.addEventListener('click',()=>openParticipationTarget(row,{interaction:question.interaction_id}));article.append(button);}
     if(row.result?.ready){const button=node('button','Открыть результат','secondary');button.type='button';button.addEventListener('click',()=>openParticipationTarget(row,{turn:row.result.turn_id,item:row.result.item_id}));article.append(button);}
     fragment.append(article);
   }}
-  list.replaceChildren(fragment);$('participation-status').textContent=data.coverage.partial?'Показана часть сессий; native callbacks наблюдаются не полностью.':'';
+  const status=[];if(data.health==='stale')status.push('Состояние обзора устарело.');else if(data.health==='unavailable')status.push('Наблюдение недоступно.');
+  if(data.coverage.partial||data.health!=='fresh')status.push('Полнота не подтверждена.');else status.push('Полнота покрытия подтверждена.');
+  if(staleRows)status.push('Некоторые сведения о сессиях устарели.');
+  const reasonLabels={limit:'Достигнут предел выборки.',deadline:'Превышено время наблюдения.',native_callbacks_partial:'Часть native callbacks недоступна.',source_unavailable:'Источник недоступен.',unsupported:'Источник не поддерживается.',binding_incomplete:'Не все привязки подтверждены.'};
+  if(data.coverage.partial)for(const reason of data.coverage.reasons){const label=reasonLabels[reason];if(label&&!status.includes(label))status.push(label);}
+  if(!data.rows.length)fragment.append(node('p',uncertain?'Список сессий не подтверждён':'Нет сессий для отображения','meta'));
+  list.replaceChildren(fragment);$('participation-status').textContent=status.join(' ');
   if(decision)restoreHistoryScroll(decision,selectedProject,selectedSession.sid,selectionGeneration);
 }
 async function openParticipationTarget(row,target){
