@@ -64,14 +64,16 @@ class SessionOverviewReadNegotiationRed(WireCase):
         # INV-SOV-READ: unknown consumed shape is partial locally, not a global outage.
         self.seed_completed()
         self.native.malformed_methods.add('thread/loaded/list')
-        overview = self.overview()
-        self.assert_read_only()
+        self.overview()
         self.wait_for(lambda: 'thread/loaded/list' in self.native.methods(),
                       'Overview must attempt only its bounded loaded-session read')
+        # The worker result is observed only after it has completed; use the
+        # closed public reason vocabulary rather than leaking a method name.
+        overview = self.overview()
         self.assertIsInstance(overview, dict)
         self.assertIn('coverage', overview)
         self.assertTrue(overview['coverage']['partial'])
-        self.assertIn('thread/loaded/list', overview['coverage']['reasons'])
+        self.assertTrue(set(overview['coverage']['reasons']) & {'source_unavailable', 'unsupported'})
         history = self.chat.history('demo', SID)
         self.assertIn('turns', history, 'A malformed overview read must not disable selected history')
         self.assert_read_only()
