@@ -4,10 +4,11 @@ No live NATS server, credentials, network, or agent-bus package is used.
 """
 import asyncio
 import builtins
-from contextlib import ExitStack
+from contextlib import ExitStack, redirect_stderr
 from datetime import datetime, timedelta, timezone
 import hashlib
 import importlib
+import io
 import json
 import os
 from pathlib import Path
@@ -296,6 +297,7 @@ class FakeNatsFactory:
         self.source_consumer_created = source_consumer_created
         self.source_js = self.destination_js = None
         self.source_connected = asyncio.Event()
+        self.destination_connected = asyncio.Event()
         self.raw_requests = []
         self.raw_replies = []
         self.raw_overrides = {}
@@ -368,6 +370,7 @@ class FakeNatsFactory:
                                publish_error=self.publish_error,
                                after_publish=self.after_publish)
             self.destination_js = js
+            self.destination_connected.set()
         else:
             raise AssertionError("factory received an endpoint outside validated config")
         connection = FakeConnection(role, js, kwargs,
@@ -702,6 +705,28 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn("user_credentials", destination_call)
                 finally:
                     await self.stop_task(task)
+
+    async def test_bridge_connections_use_quiet_sdk_error_callbacks(self):
+        # INV-SIDE01: connection errors are handled locally without raw SDK logging.
+        cfg, factory = self.harness()
+        factory.message = None
+        task = await self.start(cfg, factory)
+        stderr = io.StringIO()
+        try:
+            await asyncio.wait_for(factory.source_connected.wait(), 1)
+            await asyncio.wait_for(factory.destination_connected.wait(), 1)
+            self.assertEqual(len(factory.calls), 2)
+            callbacks = [call.get("error_cb") for call in factory.calls]
+            self.assertTrue(all(callable(callback) and asyncio.iscoroutinefunction(callback)
+                                for callback in callbacks),
+                            "both origin and OBS NATS clients must override nats-py default logging")
+            error = RuntimeError("synthetic-private-error")
+            with self.assertNoLogs("nats.aio.client", level="ERROR"), redirect_stderr(stderr):
+                for callback in callbacks:
+                    await callback(error)
+            self.assertNotIn(str(error), stderr.getvalue())
+        finally:
+            await self.stop_task(task)
 
     async def test_cancellation_closes_both_clients_without_invented_ack(self):
         cfg, factory = self.harness()
