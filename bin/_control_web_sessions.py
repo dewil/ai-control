@@ -1163,8 +1163,19 @@ class SessionChat:
                         items = read('thread/items/list', dict(threadId=sid, turnId=latest['id'], sortDirection='desc', limit=32))
                         _need(type(items.get('data')) is list and len(items['data']) <= 32
                               and valid_cursor(items.get('nextCursor')))
-                        latest['items'] = list(reversed([entry['item'] for entry in items['data']
-                            if type(entry) is dict and entry.get('turnId') == latest['id'] and type(entry.get('item')) is dict]))
+                        item_ids, consumed_items = set(), []
+                        for entry in items['data']:
+                            _need(type(entry) is dict and entry.get('turnId') == latest['id']
+                                  and type(entry.get('item')) is dict)
+                            item = entry['item']
+                            item_id, item_type = item.get('id'), item.get('type')
+                            _need(_identity(item_id) and item_id not in item_ids and type(item_type) is str)
+                            item_ids.add(item_id)
+                            if item_type == 'agentMessage':
+                                _need(type(item.get('text')) is str
+                                      and (item.get('phase') is None or type(item.get('phase')) is str))
+                            consumed_items.append(item)
+                        latest['items'] = list(reversed(consumed_items))
                         if items.get('nextCursor') is not None:
                             latest['items'] = []
                             reasons.append('limit')
