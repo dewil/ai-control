@@ -330,9 +330,22 @@ class ProjectFileBrokerRED(unittest.TestCase):
             except Exception as error: self.errors.append(type(error).__name__)
         self.worker = threading.Thread(target=run, daemon=True); self.worker.start()
         self.addCleanup(self.shutdown)
-        deadline = time.monotonic()+2
-        while not Path(self.path).exists() and not self.errors and time.monotonic()<deadline: time.sleep(.01)
-        self.assertEqual(self.errors, []); self.assertTrue(Path(self.path).exists())
+        deadline = time.monotonic()+2; ready = False
+        while not self.errors and time.monotonic()<deadline:
+            if Path(self.path).exists():
+                # bind() publishes the pathname before listen(); verify that the
+                # socket accepts connections before the first request is sent.
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                    try:
+                        probe.connect(self.path)
+                    except ConnectionRefusedError:
+                        pass
+                    else:
+                        ready = True
+                        break
+            time.sleep(.01)
+        self.assertEqual(self.errors, [])
+        self.assertTrue(ready, 'broker socket did not become connectable before startup deadline')
 
     def shutdown(self):
         self.stop.set()
