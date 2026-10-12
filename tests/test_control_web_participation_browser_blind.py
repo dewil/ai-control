@@ -7,7 +7,6 @@ from urllib.parse import urlsplit,parse_qs
 import unittest
 from unittest.mock import patch
 from playwright.sync_api import sync_playwright
-from control_browser_helpers import choose_project
 import live_sse_blind_support as live
 import participation_blind_support as s
 import test_control_web_participation_http_broker_blind as h
@@ -46,11 +45,30 @@ class ParticipationBrowserBlind(unittest.TestCase):
             if predicate():return
             self.page.wait_for_timeout(20)
         self.assertTrue(predicate(),message)
+
+    def open_navigator(self,*,navigate=False):
+        if navigate:self.page.goto(self.fixture.origin)
+        tab=self.page.get_by_role('tab',name='Сессии',exact=True)
+        if tab.get_attribute('aria-selected')!='true':tab.click()
+        existing=self.page.get_by_role('dialog',name='Сессии',exact=True)
+        if existing.count() and existing.is_visible():return existing
+        trigger=self.page.get_by_role('button',name=re.compile(r'^(?:Открыть список сессий|Сессии · внимание \d+)$'))
+        trigger.click()
+        drawer=self.page.get_by_role('dialog',name='Сессии',exact=True)
+        self.until(lambda:drawer.is_visible(),'Unified session navigator did not open')
+        self.until(lambda:drawer.get_by_role('combobox',name='Проект',exact=True).count()==1,
+            'Project filter must be present in the session navigator')
+        return drawer
+
+    def session_list(self,drawer):
+        return drawer.get_by_role('list',name='Сессии',exact=True)
+
     def select(self):
-        self.page.goto(self.fixture.origin)
-        self.page.get_by_role('button',name='Сессии',exact=True).or_(self.page.get_by_role('tab',name='Сессии',exact=True)).click()
-        choose_project(self.page,'demo')
-        self.page.get_by_role('button',name='LIVE synthetic A',exact=False).click()
+        # These chat-state tests use the accepted public project/sid deep link;
+        # the neighboring APRI tests cover explicit navigator row selection.
+        self.page.goto(self.fixture.origin+'/?project=demo&sid='+s.SID)
+        self.until(lambda:self.page.get_by_role('dialog',name='Сессии',exact=True).count()==0,
+            'Selecting a chat must leave the mobile session drawer closed')
         self.until(lambda:self.page.get_by_text('LIVE original synthetic text',exact=True).count()==1,
             'Existing synthetic chat must open before participation assertions')
     def participation_ready(self):
@@ -60,6 +78,8 @@ class ParticipationBrowserBlind(unittest.TestCase):
         self.participation_ready()
         self.until(lambda:self.page.get_by_text(PROMPT,exact=True).is_visible(),
             'Received actionable question missing from actual browser')
+        self.until(lambda:self.page.get_by_role('dialog',name='Сессии',exact=True).count()==0,
+            'Mobile navigator must not reopen over a selected chat during participation refresh')
     def choice(self):
         radio=self.page.get_by_role('radio',name='Exact option A',exact=False)
         if radio.count():return radio
@@ -80,10 +100,14 @@ class ParticipationBrowserBlind(unittest.TestCase):
         # INV-PART-01
         self.backend.selected=s.questions_dto([])
         self.backend.overview['rows'][0].update(waits=['approval'],questions=[])
-        self.select();self.participation_ready()
-        self.until(lambda:self.page.get_by_text('Подтвердите в Codex',exact=False).count()>0,
-            'Approval read-only fallback absent')
-        self.assertEqual(self.page.get_by_role('button',name=re.compile('^(Разрешить|Отклонить|Approve|Deny)$',re.I)).count(),0)
+        drawer=self.open_navigator(navigate=True)
+        self.until(lambda:any(call[0]=='overview' for call in self.backend.part_calls),
+            'All-session navigator must observe the current overview')
+        approval=self.session_list(drawer).get_by_role('listitem').filter(has_text='LIVE synthetic A')
+        self.assertIn('Разрешение в Codex',approval.inner_text())
+        approval.get_by_role('button',name='Действия',exact=True).click()
+        menu=approval.get_by_role('menu')
+        self.assertEqual(menu.get_by_role('menuitem',name=re.compile('^(Разрешить|Отклонить|Approve|Deny)$',re.I)).count(),0)
         self.assertEqual([r for r in self.requests if r[0]=='POST'],[])
 
     def test_INV_PART_04_exact_option_one_submit_honest_sent_no_automatic_retry(self):
@@ -159,8 +183,12 @@ class ParticipationBrowserBlind(unittest.TestCase):
             if parse_qs(urlsplit(value.request.url).query).get('sid')==[s.SID]:held.append(value)
             else:value.continue_()
         self.page.route('**/api/session-questions?*',route)
-        self.select();self.until(lambda:len(held)==1,'Selected chat question read missing (semantic RED)')
-        self.page.get_by_role('button',name='LIVE synthetic B',exact=False).click()
+        self.select()
+        self.until(lambda:self.page.get_by_text('LIVE original synthetic text',exact=True).count()==1)
+        self.until(lambda:len(held)==1,'Selected chat question read missing (semantic RED)')
+        self.page.goto(self.fixture.origin+'/?project=demo&sid='+live.OTHER)
+        self.until(lambda:self.page.get_by_text('LIVE synthetic B',exact=False).count()>0,
+            'Explicit project/sid navigation must select the second synthetic chat')
         old=s.questions_dto();old['questions'][0]['questions'][0]['question']='Forbidden old chat question'
         held[0].fulfill(status=200,json=old);self.page.wait_for_timeout(100)
         self.assertEqual(self.page.get_by_text('Forbidden old chat question',exact=True).count(),0)
@@ -170,8 +198,10 @@ class ParticipationBrowserBlind(unittest.TestCase):
         # INV-PART-05 INV-PART-07
         held=[];self.backend.selected['epoch']='c'*32
         self.page.route('**/api/participation-overview',lambda route:held.append(route))
-        self.select();self.until(lambda:len(held)==1,'Overview read missing (semantic RED)')
-        self.until(lambda:self.page.get_by_text(PROMPT,exact=True).count()==1,'New questions epoch not admitted')
+        self.page.goto(self.fixture.origin+'/?project=demo&sid='+s.SID)
+        self.until(lambda:len(held)==1,'Overview observation must remain delayed')
+        self.until(lambda:self.page.get_by_text(PROMPT,exact=True).count()==1,
+            'The new selected-chat question epoch must be usable while overview is delayed')
         old=s.overview_dto();old['rows'][0]['label']='Forbidden old source epoch row'
         held[0].fulfill(status=200,json=old);self.page.wait_for_timeout(100)
         self.assertEqual(self.page.get_by_text('Forbidden old source epoch row',exact=False).count(),0)
@@ -182,9 +212,12 @@ class ParticipationBrowserBlind(unittest.TestCase):
         held=[];self.backend.overview['epoch']='c'*32
         self.backend.overview['rows'][0]['label']='Current epoch pool marker'
         self.page.route('**/api/session-questions?*',lambda route:held.append(route))
-        self.select();self.until(lambda:len(held)==1,'Question read missing (semantic RED)')
-        self.until(lambda:self.page.get_by_text('Current epoch pool marker',exact=False).count()>0,
-            'New owner overview epoch not admitted')
+        self.page.goto(self.fixture.origin+'/?project=demo&sid='+s.SID)
+        self.until(lambda:len(held)==1,'Question read missing for the exact selected session')
+        self.until(lambda:self.page.get_by_text('LIVE original synthetic text',exact=True).count()==1,
+            'Public deep link must open the exact selected session while questions are delayed')
+        self.assertTrue(any(call[0]=='overview' for call in self.backend.part_calls),
+            'Current owner overview epoch was read before the selected-chat question response')
         old=s.questions_dto();old['questions'][0]['questions'][0]['question']='Forbidden old source question'
         held[0].fulfill(status=200,json=old);self.page.wait_for_timeout(100)
         self.assertEqual(self.page.get_by_text('Forbidden old source question',exact=True).count(),0)
