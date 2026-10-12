@@ -66,6 +66,32 @@ def _timestamp(value):
         return None, None
 
 
+def decode_event(data, subject, sequence, *, require_created_at=False):
+    """Decode the exact event contract shared by observer and bridge."""
+    if type(data) is not bytes or len(data) > 131072 or type(sequence) is not int or sequence <= 0:
+        raise ValueError('invalid event')
+    obj = json.loads(data, object_pairs_hook=_pairs,
+                     parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+    stack = [(obj, 0)]
+    while stack:
+        value, depth = stack.pop()
+        if depth > 32 or (type(value) is float and not math.isfinite(value)):
+            raise ValueError('invalid event')
+        if isinstance(value, (dict, list)):
+            stack.extend((v, depth+1) for v in (value.values() if isinstance(value, dict) else value))
+    required = {'message_id', 'task_id', 'correlation_id', 'source', 'target', 'kind', 'payload'}
+    if (type(obj) is not dict or set(obj) not in (required, required | {'created_at'})
+            or (require_created_at and 'created_at' not in obj)
+            or any(not valid_id(obj.get(k)) for k in ('message_id', 'task_id', 'correlation_id', 'source', 'target'))):
+        raise ValueError('invalid event')
+    if (type(obj.get('kind')) is not str or obj['kind'] not in _STATES | {'registration', 'heartbeat'}
+            or type(obj.get('payload')) is not dict
+            or subject != 'devbus.events.' + obj['source']):
+        raise ValueError('invalid event')
+    if require_created_at and _timestamp(obj.get('created_at'))[0] is None:
+        raise ValueError('invalid event')
+    return obj
+
 _PEM_BEGIN = re.compile(r'-----BEGIN ((?:[A-Z]{1,16} ){0,4}PRIVATE KEY)-----')
 _ASSIGNMENT = re.compile(r"(?i)\b(token|password|api_key|secret|authorization)(?:\\*[\"'])?\s*[:=]\s*")
 
@@ -212,23 +238,8 @@ class Projection:
     def ingest(self, data, subject, sequence):
         self._purge()
         try:
-            if type(data) is not bytes or len(data) > 131072 or type(sequence) is not int or sequence <= 0:
-                raise ValueError()
-            obj = json.loads(data, object_pairs_hook=_pairs, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
-            # Bound nesting even when the JSON parser can accept it.
-            stack = [(obj, 0)]
-            while stack:
-                value, depth = stack.pop()
-                if depth > 32 or (type(value) is float and not math.isfinite(value)):
-                    raise ValueError()
-                if isinstance(value, (dict, list)):
-                    stack.extend((v, depth+1) for v in (value.values() if isinstance(value, dict) else value))
-            required = {'message_id', 'task_id', 'correlation_id', 'source', 'target', 'kind', 'payload'}
-            if type(obj) is not dict or set(obj) not in (required, required | {'created_at'}) or any(not valid_id(obj.get(k)) for k in ('message_id', 'task_id', 'correlation_id', 'source', 'target')):
-                raise ValueError()
-            kind = obj.get('kind')
-            if type(kind) is not str or kind not in _STATES | {'registration', 'heartbeat'} or type(obj.get('payload')) is not dict or subject != 'devbus.events.' + obj['source']:
-                raise ValueError()
+            obj = decode_event(data, subject, sequence)
+            kind = obj['kind']
         except (ValueError, TypeError, RecursionError, UnicodeError):
             self.issue('invalid_event')
             return False
