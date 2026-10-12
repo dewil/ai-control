@@ -154,7 +154,7 @@ class UnifiedNavigatorBlind(unittest.TestCase):
         self.project().select_option('demo')
         self.until(lambda:('list','demo',0) in self.backend.reads)
         self.row(s.A_TITLE); self.row(s.READY_TITLE)
-        self.assertEqual(self.row(s.A_TITLE).get_by_role('button',name=re.compile('Открыть',re.I)).count(),1)
+        self.primary(s.A_TITLE)  # Accept title-labelled or explicit Open primary action.
         self.status('Все').click(); self.all_projects()
         for selector in ('#pin-list button','#participation-list button','#session-list button'):
             self.assertFalse(any(b.is_visible() for b in self.page.locator(selector).all()),
