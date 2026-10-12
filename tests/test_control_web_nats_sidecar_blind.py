@@ -562,13 +562,19 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
         for payload, subject in cases:
             with self.subTest(subject=subject, size=len(payload)):
                 cfg, factory = self.harness(message=FakeMessage(subject=subject, data=payload))
-                task = await self.start(cfg, factory)
-                try:
-                    await self.wait_until_processed(task, factory)
-                    self.assertFalse(factory.message.acked.is_set())
-                    self.assertFalse(any(call[0] == "publish" for call in factory.destination_js.calls))
-                finally:
-                    await self.stop_task(task)
+                invalid_seen = asyncio.Event()
+                write_status = self.module._write_bridge_status
+                def capture_status(record):
+                    write_status(record)
+                    if record.get("reason") == "invalid_event": invalid_seen.set()
+                with patch.object(self.module, "_write_bridge_status", capture_status):
+                    task = await self.start(cfg, factory)
+                    try:
+                        await asyncio.wait_for(invalid_seen.wait(), 1)
+                        self.assertFalse(factory.message.acked.is_set())
+                        self.assertFalse(any(call[0] == "publish" for call in factory.destination_js.calls))
+                    finally:
+                        await self.stop_task(task)
 
     async def wait_until_processed(self, task, factory):
         await self.wait_source_fetch(factory)
@@ -643,6 +649,107 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(connection.closed for connection in factory.connections))
         self.assertEqual(factory.source_js.calls[-1][0], "bind")
 
+    async def test_sdk_datetime_epochs_are_normalized_against_config_strings(self):
+        """Exercise the real NATS SDK response dataclasses, including UTC datetimes."""
+        try:
+            from nats.js.api import (AckPolicy, ConsumerConfig, ConsumerInfo,
+                                     DeliverPolicy, RetentionPolicy, StorageType,
+                                     StreamConfig, StreamInfo, StreamState)
+        except ModuleNotFoundError:
+            self.skipTest("optional nats-py dependency is not installed")
+
+        source_epoch = datetime.fromisoformat(BRIDGE_CREATED.replace("Z", "+00:00"))
+        consumer_epoch = datetime.fromisoformat(CONSUMER_CREATED.replace("Z", "+00:00"))
+        stream_info = StreamInfo(
+            config=StreamConfig(subjects=["devbus.commands.*", "devbus.events.*"],
+                                retention=RetentionPolicy.LIMITS, storage=StorageType.FILE,
+                                max_age=86400, max_bytes=104857600, max_msg_size=131072),
+            state=StreamState(messages=0, bytes=0, first_seq=1, last_seq=0, consumer_count=0))
+        # NATS SDK versions expose the API's created timestamp as a datetime;
+        # pinned older dataclasses omit it from their constructor, so attach
+        # the decoded server field to the actual SDK response object.
+        stream_info.created = source_epoch
+        consumer_info = ConsumerInfo(
+            name="control_observer_bridge", stream_name="DEVBUS_V1",
+            config=ConsumerConfig(name="control_observer_bridge",
+                                 durable_name="control_observer_bridge",
+                                 filter_subject="devbus.events.>",
+                                 ack_policy=AckPolicy.EXPLICIT,
+                                 deliver_policy=DeliverPolicy.ALL,
+                                 max_ack_pending=32, ack_wait=30, max_deliver=-1))
+        consumer_info.created = consumer_epoch
+
+        class SDKJetStream:
+            async def stream_info(self, _name): return stream_info
+            async def consumer_info(self, _stream, _consumer): return consumer_info
+
+        js = SDKJetStream()
+        await self.module._bridge_stream_info(js, "DEVBUS_V1", BRIDGE_CREATED, source=True)
+        await self.module._bridge_consumer_info(js, bridge_config()["source"])
+
+    async def test_bridge_health_heartbeat_and_owner_overlay_preserve_obs_state(self):
+        bridge = importlib.import_module("_control_web_devbus_nats")
+        clock = {"mono": 100.0, "now": datetime(2026, 10, 12, tzinfo=timezone.utc)}
+        class ControlledDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                value = clock["now"]
+                return value.astimezone(tz) if tz is not None else value.replace(tzinfo=None)
+        cfg, factory = self.harness()
+        # The destination client is built asynchronously by run_bridge; advance
+        # the fake wall/monotonic clocks inside its publish callback, before the
+        # bridge records the successful source ACK and health update.
+        def advance_clock():
+            clock["mono"] += 6
+            clock["now"] += timedelta(seconds=6)
+        factory.after_publish = advance_clock
+        original_datetime, original_time = bridge.datetime, bridge.time
+        self.module.datetime = ControlledDateTime
+        # Replace only this module's time reference; asyncio retains real clocks.
+        self.module.time = SimpleNamespace(monotonic=lambda: clock["mono"])
+        task = await self.start(cfg, factory)
+        try:
+            await asyncio.wait_for(factory.message.acked.wait(), 1)
+            record = json.loads(self.status_path.read_bytes())
+            self.assertEqual(record["state"], "live")
+            self.assertEqual(record["observed_at"], clock["now"].isoformat(timespec="microseconds").replace("+00:00", "Z"))
+        finally:
+            await self.stop_task(task)
+            bridge.datetime, bridge.time = original_datetime, original_time
+
+        broker = importlib.import_module("_control_web_broker")
+        with tempfile.TemporaryDirectory(prefix="sidecar-health-overlay-") as directory:
+            fixture = Path(directory) / "devbus-bridge.json"
+            now = datetime.now(timezone.utc)
+            status = {
+                "schema": 1, "state": "degraded", "observed_at": now.isoformat().replace("+00:00", "Z"),
+                "source_stream_created": BRIDGE_CREATED, "consumer_created": CONSUMER_CREATED,
+                "ack_floor": 12, "first_seq": 10, "pending": 1, "reason": "unavailable",
+            }
+            fixture.write_bytes(canonical(status)); fixture.chmod(0o600)
+            snapshot = {
+                "connection": {"state": "live", "reason": None},
+                "coverage": {"mode": "window", "first_seq": 31, "last_seq": 47,
+                             "ttl_seconds": 86400, "max_bytes": 104857600,
+                             "replay_complete": True, "truncated": False, "issues": []},
+                "schema": 1, "tasks": [], "agents": [], "events": [],
+            }
+            with redirect_status_io(fixture):
+                result = broker._apply_bridge_status(snapshot, now=now.timestamp())
+            self.assertEqual(result["connection"], {"state": "live", "reason": None})
+            self.assertEqual((result["coverage"]["first_seq"], result["coverage"]["last_seq"],
+                              result["coverage"]["ttl_seconds"], result["coverage"]["max_bytes"]),
+                             (31, 47, 86400, 104857600))
+            self.assertEqual(result["coverage"]["issues"], ["replay_incomplete"])
+            # A subsequent fresh status must continue to preserve OBS transport state.
+            status.update(state="live", observed_at=(now + timedelta(seconds=1)).isoformat().replace("+00:00", "Z"),
+                          ack_floor=13, first_seq=10, pending=0, reason=None)
+            fixture.write_bytes(canonical(status)); fixture.chmod(0o600)
+            with redirect_status_io(fixture):
+                recovered = broker._apply_bridge_status(snapshot, now=(now + timedelta(seconds=1)).timestamp())
+            self.assertEqual(recovered["connection"], {"state": "live", "reason": None})
+            self.assertEqual((recovered["coverage"]["first_seq"], recovered["coverage"]["last_seq"]), (31, 47))
+
 
 class ExistingObserverContractBlind(unittest.TestCase):
     def test_projection_keeps_created_at_optional_for_existing_event_contract(self):
@@ -691,7 +798,7 @@ class ExistingObserverEphemeralBlind(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["events"][0]["sequence"], 3)
         self.assertTrue(transport.closed)
 
-    def test_owner_projection_reads_status_fixture_marks_partial_and_rejects_stale(self):
+    def test_owner_projection_uses_bridge_issues_without_mixing_source_sequences(self):
         broker = importlib.import_module("_control_web_broker")
         web = importlib.import_module("_control_web_devbus")
         with tempfile.TemporaryDirectory(prefix="sidecar-owner-status-") as directory:
@@ -723,11 +830,13 @@ class ExistingObserverEphemeralBlind(unittest.IsolatedAsyncioTestCase):
                     try: value = runtime.snapshot()
                     finally: runtime.stop()
                 self.assertTrue(value["coverage"]["truncated"])
+                self.assertEqual(value["connection"]["state"], "live")
+                self.assertIsNone(value["coverage"]["first_seq"])
+                self.assertEqual(value["coverage"]["mode"], "unknown")
                 if reason:
-                    self.assertEqual(value["coverage"]["mode"], "partial")
                     self.assertIn(reason, value["coverage"]["issues"])
                 else:
-                    self.assertNotEqual(value["connection"]["state"], "live")
+                    self.assertNotIn("retention_gap", value["coverage"]["issues"])
 
 
 if __name__ == "__main__":
