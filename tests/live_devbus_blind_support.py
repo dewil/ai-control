@@ -22,7 +22,7 @@ ROOT = live.ROOT
 _accepted = None
 
 LIMIT = 98304
-OBSERVER_COMMIT = "723048a6b9782632697fe81feb16a4c3d22acbd7"
+OBSERVER_COMMIT = "0eb0e07b75a86df7f989a860169e22628f84d860"
 ACCEPTED_TEST_BLOBS = {
     "tests/test_control_web_devbus_red.py": "93fd300e135074cf66792f9d45c93b50c9e4b345",
     "tests/test_control_web_devbus_review_red.py": "7e19f2abb56e67440aeafe8a954defc143cf3c57",
