@@ -171,7 +171,7 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 .chat-heading h2{margin:4px 0}
 .chat-navigation{gap:4px}
 .chat-items{gap:8px;margin:8px 0}
-.chat-message{margin:4px 0;padding:8px 10px}
+.chat-message{margin-block:4px;padding:8px 10px}
 #chat-panel{margin-top:8px}
 .toolbar{margin-bottom:6px}
 @media(max-width:600px){.participation-row{align-items:flex-start}.participation-row-content{flex-basis:100%}.participation-actions{align-self:flex-start}}
