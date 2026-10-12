@@ -78,6 +78,24 @@ class SessionOverviewReadNegotiationRed(WireCase):
         self.assertIn('turns', history, 'A malformed overview read must not disable selected history')
         self.assert_read_only()
 
+    def test_history_only_in_progress_without_loaded_snapshot_is_not_confirmed(self):
+        # INV-SOV-READ: selected-history proof cannot substitute for fresh loaded-list membership.
+        self.native.status = dict(type='active', activeFlags=[])
+        self.native.turns = [dict(id=TURN, status='inProgress', items=[])]
+        self.native.malformed_methods.add('thread/loaded/list')
+        history = self.chat.history('demo', SID)
+        self.assertIn('turns', history)
+        self.overview()
+        self.wait_for(lambda: 'thread/loaded/list' in self.native.methods(),
+                      'Overview must attempt the loaded-set read before confirming current work')
+        overview = self.overview()
+        row = next((item for item in overview.get('rows', []) if item['sid'] == SID), None)
+        if row is not None:
+            self.assertNotEqual(row['running'], 'confirmed',
+                                'History status alone is not loaded-session proof')
+        self.assertTrue(overview['coverage']['partial'])
+        self.assert_read_only()
+
 
 def overview_row(index, project, sid, label, *, activity='unknown', running='unconfirmed',
                  waits=(), questions=(), result=None, freshness='fresh'):
@@ -181,7 +199,7 @@ class SessionOverviewBrowserRed(unittest.TestCase):
                      'В работе': work, 'Прочие состояния': other}
         for group, labels in expected_group_rows.items():
             with self.subTest(group=group):
-                self.assertEqual(sum(fragment.count(label) for label in labels), len(labels),
+                self.assertEqual(sum(fragments[group].count(label) for label in labels), len(labels),
                                  'Each source session belongs to exactly one visible group')
         for label in ('Needs attention', 'Résumé final · Проект Δ', 'Сессия ' + working_sid[:8],
                       'Сессия ' + stale_sid[:8], 'Unconfirmed state', 'Failed for review'):
