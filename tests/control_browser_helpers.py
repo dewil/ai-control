@@ -9,19 +9,24 @@ def session_navigator(page):
     rows = page.get_by_role('list', name='Сессии', exact=True).or_(
         page.get_by_role('listbox', name='Сессии', exact=True))
     project_filter = page.get_by_role('combobox', name='Проект', exact=True)
-    # A desktop sidebar can be visible before any rows load. Its empty list is
-    # still the navigator; do not mistake it for a closed mobile drawer.
-    if project_filter.is_visible():
+    # Viewport is the public responsive contract. Wait for that layout's
+    # semantic surface before deciding whether a drawer needs opening: during
+    # resize the old sidebar can remain visible until the media listener runs.
+    if page.evaluate("matchMedia('(min-width:1024px)').matches"):
+        expect(project_filter).to_be_visible()
         expect(rows).to_have_count(1)
+        expect(rows).to_be_visible()
         return rows
-    if not rows.is_visible():
-        dialog = page.get_by_role('dialog', name='Сессии', exact=True)
-        if not dialog.is_visible():
-            trigger = page.get_by_role('button', name=re.compile(
-                r'^(?:Открыть список сессий|Сессии(?:\s*[·•]\s*внимание\s*\d+)?)$'))
-            expect(trigger).to_be_visible()
-            trigger.click()
-        expect(dialog).to_be_visible()
+
+    dialog = page.get_by_role('dialog', name='Сессии', exact=True)
+    expect(page.get_by_role('dialog', name='Сессии', exact=True,
+                            include_hidden=True)).to_have_count(1)
+    if not dialog.is_visible():
+        trigger = page.get_by_role('button', name=re.compile(
+            r'^(?:Открыть список сессий|Сессии(?:\s*[·•]\s*внимание\s*\d+)?)$'))
+        expect(trigger).to_be_visible()
+        trigger.click()
+    expect(dialog).to_be_visible()
     expect(rows).to_have_count(1)
     expect(rows).to_be_visible()
     return rows
