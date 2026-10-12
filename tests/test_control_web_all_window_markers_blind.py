@@ -83,6 +83,33 @@ class AllWindowMarkersBlind(unittest.TestCase):
         expect(meters).to_have_count(2)
         self.assert_marker(meters.nth(0), 50)
         self.assert_marker(meters.nth(1), 100)
+        scale = card.locator('.lm-scale')
+        expect(scale).to_have_count(1)
+        track = bar.bounding_box()
+        endpoints = scale.evaluate('''scale => {
+          const text = scale.textContent || '', out = {};
+          const patterns = {start: /(^|\\s)0(?=\\s|$)/g,
+                            end: /(^|\\s)7(?=\\s*(?:дней|дн\\b))/ig};
+          const walker = document.createTreeWalker(scale, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const node = walker.currentNode, value = node.nodeValue || '';
+            for (const [name, pattern] of Object.entries(patterns)) {
+              pattern.lastIndex = 0;
+              const match = pattern.exec(value);
+              if (!match) continue;
+              const start = match.index + (match[1] ? match[1].length : 0);
+              const range = document.createRange();
+              range.setStart(node, start); range.setEnd(node, start + 1);
+              const box = range.getBoundingClientRect();
+              out[name] = {center: box.left + box.width/2};
+            }
+          }
+          return out;
+        }''')
+        self.assertIn('start', endpoints, 'Weekly scale must label its zero endpoint')
+        self.assertIn('end', endpoints, 'Weekly scale must label its seven-day endpoint')
+        self.assertAlmostEqual(endpoints['start']['center'], track['x'], delta=3)
+        self.assertAlmostEqual(endpoints['end']['center'], track['x'] + track['width'], delta=3)
         expect(card.get_by_text(NORMAL, exact=True)).to_be_visible()
         expect(card.get_by_text(DOUBLE, exact=True)).to_be_visible()
 
