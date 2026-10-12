@@ -77,3 +77,8 @@ Tests test_control_web_cached_limits_backend_red.py,
 
 SSH receiver читает только `/home/dwl/.local/state/ai-control/limits-export/limits-v1.json` на fixed alias `alp-ai-dev-1-dwl`. NSS user dwl должен совпадать с real/effective UID, конечный parent — owned directory0700 без symlink, файл — owned regular0600 без symlink/hardlink. Bounded read и проверки неизменности обязательны; отказ сохраняет старый cache без освежения квоты. DTO не содержит private identity/auth. Общий customer snapshot исключён.
 Трассируемость: tests/test_control_web_alp_limits_sync_red.py; docs/dev/2026-10-12-spec-alp-owned-receiver.md.
+
+## Временные маркеры всех quota окон12.10
+INV-WLIM-28: каждый достоверный quota window local/remote имеет normal elapsed marker на общей с расходом шкале; start выводится только из согласованных границ/duration, Codex weekly дополнительный×2 сохраняется без дублированияnormal.
+INV-WLIM-29: неизвестные/противоречивые временные границы и money без окна не получают выдуманный маркер; stale/expired явно обозначены, accessibility/mobile geometry сохранены.
+Feature docs/dev/2026-10-12-spec-compact-ui-window-markers.md; independent browser acceptance test_control_web_all_window_markers_blind.py.
