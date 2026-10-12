@@ -3,6 +3,7 @@ import unittest
 import re
 import test_control_web_ux_package_blind_red as fixture
 from playwright.sync_api import expect
+from control_browser_helpers import session_navigator
 from test_control_web_chat_width_browser import SID
 
 class WebUXAuthorRegression(unittest.TestCase):
@@ -18,13 +19,16 @@ class WebUXAuthorRegression(unittest.TestCase):
     poll=fixture.WebUXBlindBrowser.poll
 
     def test_INV43_reload_valid_and_missing_deep_link(self):
+        self.page.set_viewport_size({'width':390,'height':844})
+        session_navigator(self.page)
         self.open();self.toggle().click()
         self.page.reload();self.page.locator('#chat-panel').wait_for(state='visible')
         self.page.get_by_text('Fixture readable message 23',exact=True).wait_for()
-        self.assertEqual(self.toggle().get_attribute('aria-expanded'),'false')
+        expect(self.page.get_by_role('dialog',name='Сессии',exact=True)).not_to_be_visible()
         self.page.goto(self.url+'?project=demo&sid=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
-        self.page.get_by_text('Сессия из ссылки не найдена среди доступных сессий. Выберите другую из списка.',exact=True).wait_for()
-        self.assertEqual(self.toggle().get_attribute('aria-expanded'),'true')
+        notice='Сессия из ссылки не найдена среди доступных сессий. Выберите другую из списка.'
+        expect(self.page.get_by_role('status').filter(has_text=notice)).to_be_visible()
+        expect(self.page.get_by_role('dialog',name='Сессии',exact=True)).to_be_visible()
 
     def test_INV45_history_before_ack_never_resurrects_local(self):
         self.open();self.control(send_delay=2,canonical=True)
@@ -67,8 +71,9 @@ class WebUXAuthorRegression(unittest.TestCase):
     def test_INV45_same_scope_return_before_ack_updates_local_status(self):
         self.open();self.control(send_delay=2)
         self.send()
-        self.page.get_by_role('button',name=re.compile('^Other UX')).click()
+        session_navigator(self.page).get_by_role('button',name='Открыть сессию Other UX synthetic session',exact=True).click()
         self.page.get_by_text('Fixture readable message 23',exact=True).wait_for()
+        session_navigator(self.page)
         self.session.click();self.page.get_by_text('Fixture readable message 23',exact=True).wait_for()
         self.page.wait_for_timeout(2400)
         self.assertIn('Принято',self.local().inner_text())

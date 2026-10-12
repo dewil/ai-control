@@ -168,8 +168,8 @@ class WebUXBlindBrowser(unittest.TestCase):
 
     def test_INV43_selection_manual_reopen_poll_keyboard(self):
         self.page.set_viewport_size({'width':390,'height':844})
-        toggle=self.toggle();drawer=self.page.get_by_role('dialog',name=re.compile('Сессии',re.I))
         session_navigator(self.page)
+        toggle=self.toggle();drawer=self.page.get_by_role('dialog',name=re.compile('Сессии',re.I))
         self.assertTrue(drawer.is_visible())
         self.open();self.assertFalse(drawer.is_visible())
         self.page.locator('textarea').fill('Retained draft')

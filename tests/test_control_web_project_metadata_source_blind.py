@@ -8,6 +8,7 @@ Frozen against integrated e50985d before author correction. Real DOM, synthetic 
 import re
 import unittest
 from playwright.sync_api import expect
+from control_browser_helpers import choose_project, session_navigator
 import test_control_web_project_cloud_browser as cloud
 
 class ProjectMetadataSourceBlind(unittest.TestCase):
@@ -16,21 +17,26 @@ class ProjectMetadataSourceBlind(unittest.TestCase):
     setUp=cloud.ProjectCloudBrowserContract.setUp
     tearDown=cloud.ProjectCloudBrowserContract.tearDown
     control=cloud.ProjectCloudBrowserContract.control
+    verify_assets=cloud.ProjectCloudBrowserContract.verify_assets
+
     def test_INV42_project_activity_metadata_readable_at_supported_viewports(self):
-        project=self.page.get_by_role('button',name=re.compile(r'^high(?:\b|\s)'))
-        project.focus(); project.press('Space')
-        summary=self.page.locator('summary').filter(has_text='Сведения о проекте high')
-        summary.focus(); summary.press('Enter')
-        region=self.page.get_by_role('region',name='Сведения о проекте high',exact=True)
-        expect(region).to_be_visible()
+        # INV-USN02/04 replaces activity tiles/details with the project filter
+        # and compact per-session project/vendor metadata. Preserve readability
+        # on that public surface; do not require removed project disclosures.
+        choose_project(self.page, 'high')
         for width in (320,390,1280):
             with self.subTest(width=width):
                 self.page.set_viewport_size({'width':width,'height':900})
-                # Public keyboard/touch disclosure exposes exact activity; all visible badges remain readable too.
-                detail=region.get_by_text(re.compile(r'Последняя активность:|Сводка на')).or_(self.page.get_by_role('group',name='Проекты',exact=True).locator('time'))
-                expect(region.get_by_text(re.compile(r'Последняя активность:'))).to_be_visible()
-                observed=detail.evaluate_all('els=>els.filter(e=>e.getBoundingClientRect().width&&e.getBoundingClientRect().height&&getComputedStyle(e).visibility!=="hidden").map(e=>({text:e.textContent,font:parseFloat(getComputedStyle(e).fontSize)}))')
-                self.assertTrue(observed,'Fixture must render actual activity metadata')
-                self.assertTrue(all(row['font']>=12 for row in observed),f'INV42 metadata minimum12px violated at{width}px: {observed}')
+                listing=session_navigator(self.page)
+                row=listing.get_by_role('listitem').or_(listing.get_by_role('option')).filter(has_text='Cloud synthetic session')
+                expect(row).to_have_count(1)
+                metadata=row.get_by_text(re.compile(r'^high\s*·'))
+                expect(metadata).to_be_visible()
+                self.assertGreaterEqual(metadata.evaluate('e=>parseFloat(getComputedStyle(e).fontSize)'),12,
+                                        'Compact project/vendor metadata must remain readable')
+                project=self.page.get_by_role('combobox',name='Проект',exact=True)
+                self.assertGreaterEqual(project.evaluate('e=>parseFloat(getComputedStyle(e).fontSize)'),12,
+                                        'Project choice must remain readable')
+                self.assertLessEqual(self.page.evaluate('document.documentElement.scrollWidth'),width+1)
 
 if __name__=='__main__':unittest.main()

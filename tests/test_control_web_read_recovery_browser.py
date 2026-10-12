@@ -202,8 +202,10 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
         self.select_project('high')
         self.page.wait_for_timeout(500)
         self.assertEqual(len(calls), 2)
-        self.assertRegex(self.page.locator('body').inner_text(), '(?i)устар|stale|ошиб|не удалось')
-        self.assertTrue(self.page.get_by_role('button', name=re.compile('обнов', re.I)).count())
+        expect(self.page.get_by_role('status').filter(has_text=re.compile(
+            r'список сессий.*(?:устар|stale|ошиб|не удалось|недоступ)',re.I))).to_be_visible()
+        refresh=self.page.get_by_role('button',name='Обновить список',exact=True)
+        expect(refresh).to_be_visible();expect(refresh).to_be_enabled()
         self.quiet()
         self.assertEqual(len(calls), 2)
 

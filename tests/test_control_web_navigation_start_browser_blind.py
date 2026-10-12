@@ -1,5 +1,6 @@
 """Blind PIN08/QSTART07 browser acceptance; real local HTTP and rendered JS."""
 from copy import deepcopy
+from test_control_web_ux_package_blind_red import verify_source_assets
 import json
 import re
 from urllib.parse import urlsplit,parse_qs
@@ -267,6 +268,7 @@ class NavigationStartBrowserBlind(unittest.TestCase):
         self.page=self.context.new_page();self.page.set_default_timeout(2500);self.requests=[]
         self.page.on('request',lambda r:self.requests.append((r.method,urlsplit(r.url).path,r.post_data)))
         self.page.on('pageerror',lambda error:self.errors.append(str(error)))
+        verify_source_assets(self,self.fixture.origin)
         self.page.add_init_script('window.AndroidAuth={requestAuth:()=>{},requestLogout:()=>{}};')
         self.page.goto(self.fixture.origin)
         self.assertEqual(self.page.evaluate('aiControlAndroidLifecycleProtocol()'),2)
@@ -275,6 +277,8 @@ class NavigationStartBrowserBlind(unittest.TestCase):
         self.assertTrue(self.page.evaluate('aiControlAndroidResume({protocol:2,serial:3,phase:"activate",admissionSerial:2})'))
         self.page.get_by_role('button',name='Сессии',exact=True).or_(self.page.get_by_role('tab',name='Сессии',exact=True)).click()
         choose_project(self.page,'demo');self.page.get_by_role('button',name='LIVE synthetic A',exact=False).click()
+        expect(self.page.get_by_text('LIVE original synthetic text',exact=True)).to_be_visible()
+        self.until(lambda:self.fixture.transport.streams>=1)
         self.pins_title();self.start_button();self.page.clock.install()
         self.assertTrue(self.page.evaluate('aiControlAndroidSuspend({protocol:2,serial:4}).ok'))
         self.until(lambda:self.fixture.transport.closed>=1);before=len(self.requests)
