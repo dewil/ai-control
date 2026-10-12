@@ -2,6 +2,7 @@
 import asyncio
 from concurrent.futures import TimeoutError as FutureTimeout
 import copy
+from datetime import datetime
 import hashlib
 import importlib.util
 import json
@@ -19,6 +20,7 @@ import sys
 import threading
 import time
 import uuid
+from urllib.parse import urlsplit
 
 try:
     from _control_web_devbus import Observer, Projection, _timestamp, valid_id, valid_metadata
@@ -43,13 +45,14 @@ except ModuleNotFoundError as error:
     from _control_web_devbus_nats import NatsConfig, connect
 
 DEVBUS_CONFIG_PATH = Path('/home/dwl/.config/ai-control/devbus-observer.json')
+BRIDGE_STATUS_PATH = Path('/home/dwl/.local/state/ai-control/devbus-bridge.json')
 DEVBUS_LIMIT = 96 * 1024
 _BUS_STATES = {'accepted', 'running', 'completed', 'failed', 'needs_attention'}
 _BUS_ISSUES = {'local_eviction', 'invalid_event', 'id_conflict', 'retention_gap', 'stream_reset', 'replay_incomplete'}
 
 
 def load_devbus_config():
-    """Owner startup ingress; never consult ambient transport credentials."""
+    """Load the OBS-only schema-2 observer credentials from its fixed file."""
     disabled = NatsConfig()
     pointer = os.environ.get('CONTROL_DEVBUS_CONFIG')
     if pointer is None:
@@ -67,45 +70,116 @@ def load_devbus_config():
         if (not stat.S_ISREG(before.st_mode) or before.st_uid != 1000
                 or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1
                 or not 0 <= before.st_size <= 16384):
-            raise ValueError('invalid_config')
+            raise ValueError()
         data = bytearray()
         while len(data) < 16385:
-            block = os.read(fd, 16385 - len(data))
-            if not block:
-                break
+            block = os.read(fd, 16385-len(data))
+            if not block: break
             data.extend(block)
         after = os.fstat(fd)
         leaf = os.stat(DEVBUS_CONFIG_PATH, follow_symlinks=False)
-        fields = ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid',
-                  'st_size', 'st_mtime_ns', 'st_ctime_ns')
-        identity = lambda info: tuple(getattr(info, name) for name in fields)
-        if (identity(before) != identity(after) or identity(after) != identity(leaf)
-                or len(data) > 16384 or len(data) != before.st_size):
-            raise ValueError('invalid_config')
+        fields = ('st_dev','st_ino','st_mode','st_nlink','st_uid','st_gid','st_size','st_mtime_ns','st_ctime_ns')
+        identity = lambda item: tuple(getattr(item, name) for name in fields)
+        if identity(before) != identity(after) or identity(after) != identity(leaf) or len(data) != before.st_size or len(data) > 16384:
+            raise ValueError()
         def pairs(items):
             result = {}
             for key, value in items:
-                if key in result:
-                    raise ValueError('invalid_config')
+                if key in result: raise ValueError()
                 result[key] = value
             return result
-        def nonfinite(_):
-            raise ValueError('invalid_config')
-        value = json.loads(data.decode('utf-8'), object_pairs_hook=pairs, parse_constant=nonfinite)
-        if (type(value) is not dict or set(value) != {'CONTROL_DEVBUS_ENABLED',
-                'CONTROL_DEVBUS_STREAM', 'DEVBUS_NATS_URL', 'DEVBUS_NATS_TOKEN'}
-                or any(type(item) is not str or any(ord(c) < 32 or 127 <= ord(c) <= 159
-                    or 0xd800 <= ord(c) <= 0xdfff for c in item) for item in value.values())
-                or value['CONTROL_DEVBUS_ENABLED'] not in ('0', '1')
-                or not valid_id(value['CONTROL_DEVBUS_STREAM'])
-                or (value['CONTROL_DEVBUS_ENABLED'] == '1' and not value['DEVBUS_NATS_TOKEN'])):
-            raise ValueError('invalid_config')
-        return NatsConfig.from_env(value), None
+        value = json.loads(data.decode('utf-8'), object_pairs_hook=pairs,
+                           parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+        expected = {'schema','enabled','url','stream','stream_created','user','password'}
+        if (type(value) is not dict or set(value) != expected or type(value['schema']) is not int or value['schema'] != 2
+                or type(value['enabled']) is not bool or value['stream'] != 'OBS_EVENTS'
+                or type(value['url']) is not str or type(value['stream_created']) is not str
+                or type(value['user']) is not str or type(value['password']) is not str
+                or any(any(ord(c) < 32 or 127 <= ord(c) <= 159 or 0xd800 <= ord(c) <= 0xdfff for c in item)
+                       for item in value.values() if type(item) is str)):
+            raise ValueError()
+        parsed = urlsplit(value['url'])
+        port = parsed.port
+        epoch = datetime.fromisoformat(value['stream_created'].replace('Z','+00:00'))
+        if (parsed.scheme not in {'nats','tls'} or parsed.hostname not in {'localhost','127.0.0.1','::1'}
+                or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/')
+                or (port is not None and not 0 < port <= 65535) or epoch.tzinfo is None
+                or not value['user'] or not value['password']):
+            raise ValueError()
+        if not value['enabled']:
+            return disabled, None
+        return NatsConfig(True, value['url'], '', '', 'OBS_EVENTS', value['user'], value['password'], value['stream_created']), None
     except Exception:
         return disabled, 'invalid_config'
     finally:
         os.close(fd)
 
+
+def _apply_bridge_status(snapshot, *, now=None):
+    """Overlay bridge coverage issues without mixing its source sequences into OBS."""
+    now = time.time() if now is None else now
+    reason = 'unavailable'
+    bridge_state = 'disconnected'
+    try:
+        fd = os.open(BRIDGE_STATUS_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != 1000 or stat.S_IMODE(info.st_mode) != 0o600
+                    or info.st_nlink != 1 or info.st_size > 4096):
+                raise ValueError()
+            raw = os.read(fd, 4097)
+            after = os.fstat(fd)
+            leaf = os.stat(BRIDGE_STATUS_PATH, follow_symlinks=False)
+            identity_fields = ('st_dev','st_ino','st_mode','st_nlink','st_uid','st_gid','st_size','st_mtime_ns','st_ctime_ns')
+            identity = lambda item: tuple(getattr(item, name) for name in identity_fields)
+            if identity(info) != identity(after) or identity(after) != identity(leaf) or len(raw) != info.st_size:
+                raise ValueError()
+        finally:
+            os.close(fd)
+        def status_pairs(items):
+            value = {}
+            for key, item in items:
+                if key in value: raise ValueError()
+                value[key] = item
+            return value
+        status = json.loads(raw.decode('utf-8'), object_pairs_hook=status_pairs,
+                            parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+        fields = {'schema','state','observed_at','source_stream_created','consumer_created','ack_floor','first_seq','pending','reason'}
+        if type(status) is not dict or set(status) != fields or type(status['schema']) is not int or status['schema'] != 1:
+            raise ValueError()
+        if status['state'] not in {'starting','live','degraded','disconnected'} or status['reason'] not in (None,'invalid_config','unavailable','invalid_event','id_conflict','retention_gap'):
+            raise ValueError()
+        for key in ('ack_floor','first_seq','pending'):
+            if status[key] is not None and (type(status[key]) is not int or status[key] < 0): raise ValueError()
+        for key in ('source_stream_created','consumer_created'):
+            epoch = datetime.fromisoformat(status[key].replace('Z','+00:00'))
+            if epoch.tzinfo is None: raise ValueError()
+        observed = datetime.fromisoformat(status['observed_at'].replace('Z','+00:00')).timestamp()
+        if not math.isfinite(observed) or observed > now + 5 or now-observed > 30:
+            raise ValueError()
+        reason = status['reason']
+        bridge_state = status['state']
+    except Exception:
+        reason = 'unavailable'
+        bridge_state = 'disconnected'
+
+    coverage = snapshot.get('coverage') if type(snapshot) is dict else None
+    if type(coverage) is not dict:
+        return snapshot
+    issues = set(coverage.get('issues', []))
+    issues.add('replay_incomplete')  # The bridge begins at a recorded cutoff; history is partial.
+    if reason == 'retention_gap': issues.add('retention_gap')
+    if reason == 'invalid_event': issues.add('invalid_event')
+    if reason == 'id_conflict': issues.add('id_conflict')
+    coverage['issues'] = sorted(issues)
+    coverage['truncated'] = True
+    coverage['mode'] = 'unknown' if coverage.get('first_seq') is None else 'partial'
+    outage = (bridge_state in {'starting', 'disconnected'}
+              or bridge_state == 'degraded' and reason != 'retention_gap'
+              or reason in {'unavailable', 'invalid_config', 'invalid_event', 'id_conflict'})
+    if outage:
+        snapshot['connection'] = {'state': 'disconnected', 'reason': 'unavailable'}
+    return snapshot
 
 def _devbus_empty(state='disabled', reason=None):
     return dict(schema=1, connection=dict(state=state, reason=reason),
@@ -312,6 +386,7 @@ class DevbusRuntime:
         self._serving = False
         self._export_token = None
         self._fallback = _devbus_empty()
+        self._bridge_status_enabled = False
 
     def start(self):
         with self._lock:
@@ -320,6 +395,10 @@ class DevbusRuntime:
             self._started = True
         try:
             config, reason = self._loader()
+            self._bridge_status_enabled = (getattr(config, 'enabled', None) is True
+                and getattr(config, 'stream', None) == 'OBS_EVENTS'
+                and type(getattr(config, 'stream_created', None)) is str
+                and bool(config.stream_created))
             if reason is not None:
                 self._fallback = _devbus_empty('disconnected', 'invalid_config')
                 return
@@ -358,7 +437,7 @@ class DevbusRuntime:
         async def setup():
             if self._stopping.is_set():
                 return
-            self._projection = self._projection_factory(secrets=(config.token,) if config.token else ())
+            self._projection = self._projection_factory(secrets=tuple(secret for secret in (config.token, config.password) if secret))
             if self._stopping.is_set():
                 return
             self._observer = self._observer_factory(self._projection, lambda: self._connect_factory(config))
@@ -458,6 +537,8 @@ class DevbusRuntime:
                 if cancellation.is_set() or self._stopping.is_set() or time.monotonic() >= deadline:
                     return {'error': 'unavailable'}
                 value = bounded_devbus_snapshot(self._projection, task, agent)
+                if self._bridge_status_enabled:
+                    value = _apply_bridge_status(value)
                 return value if time.monotonic() < deadline else {'error': 'unavailable'}
             finally:
                 with self._lock:

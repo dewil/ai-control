@@ -1,0 +1,21 @@
+# Проверка изолированного NATS observer
+
+DESIGN initial/closureBLOCKED: уточненыsource vsOBSauth, retryidentityepoch/sequence/bytes, пределыinmemoryexperiment. FinalHaikugen1791791334PASS. Source +independentRED поacceptedcontract, первоначальныеfixtureпробелы исходнымtestauthor исправлены без runtimeoracle ослабления.
+
+Root/actualFILEproof нашлиSDKcreated omission, staleheartbeat/source↔OBScoverage иsecretmask/callbacklogging defects доproduction. Sourceавторисправил их, независимыеRED воспроизводятpre-fixcases. Final20blind+17config/envelopePASS на23cc720. SeparateactualNATSv2.15/nats-py2.9 FILEintegration605bcb7PASS: PubAck-beforeACKfloors, restartbridge/destinationFILE,35secidlefreshstatus,expireddupewindow+projectiondedup,malformedunacked,retentiongap. Finalquieterror_cbdelta testedbytargetedRED/green andstaticSOURCE.
+
+HaikuSOURCEgen1791796280 unambiguousPASS/no accepted-contractblocker. Nonblockingcaveat retained: lost consumerINFO afteractualACK canleavepreviousreportedfloor whiledegraded; nofalseexactlyonce/claimedredeliveryloss. ActualconsumerINFOepochpreservedviaRAWrequest becauseSDKtypedmodelsdropcreated.
+
+Hermeticity: oldfake wrote syntheticstatus tocanonicalownerpath duepatchlifetimeendingbeforetaskcancel. Originaltestauthor0636137 partlyfixed, rawexecute.returnTask stillescaped;8e7b0d fixesfinalcleanupINSIDEfixturecontext. Rootquarantinedownedsyntheticrecord with evidence; full20caseownrun afterward leftcanonicalpathABSENT, noorigin/config/executorschanged. Failed/external-attribution report corrected, not erased. Newcasesguardproductionpaths andfinishworkersbeforepathrestore.
+
+Deployment scopes separate: signed22code viaexistingnoargshelper; sidecar/userunits/credentialfiles/precreatedsourceconsumer require reviewedownerprovisioning andinstalledread-onlynegativeproof. No liveNATSenable yet; ALPquotaexport separateblockeddependency. Native/vendor/sessionauth unaffected bysource.
+
+
+CI0eb1e7 failed four assertions: fixtureUIDportability, staleacceptedbytepin,
+legacyoverlay contamination. IndependentRED98ca6c9, originalwriter5406f92,
+originaltestauthor0eb0e07: OBS-onlyoverlay, missing/stale/disconnected bridge
+reportsdisconnected oncopy; freshretentiongapkeepslive andpartial; recovery
+preservesunderlyingOBSprojection. 22sidecar+17legacyPASS, canonicalstatusABSENT.
+HaikuSOURCEdelta gen1791804543-R48qvrHhF2ubybOZ9JXO PASS. Acceptedsource0eb0e07
+pinned in later test-onlyc121a8e, exactruntimeblobs+lockchecked; manifesttestPASS.
+NewfullCIpending; nothingdeployedfromthisdelta.

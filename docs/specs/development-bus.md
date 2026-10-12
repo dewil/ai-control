@@ -51,3 +51,16 @@ INV-DEVBUS-01..09 -> tests/test_control_web_devbus*.py (теги строкам�
 FR-BUS-01..03, US-BUS-001 -> те же tests; installed критерий отдельно.
 
 INV-DEVBUS-10/11 reserved integration: ownerbrokerhosting / bounded owneronly API, contract ../dev/2026-10-08-spec-live-observability-package.md; dedicated integrationtests required, acceptedPR74aloneisnotproof.
+
+## 12.10 — отдельный контур наблюдения
+
+Перечисленные выше запреты publish/streammanagement относятся к web observer. Новая trustedbridge CLI-роль (отдельнаяслужба, безwebRPC) можеттолько читать собственныйprecreatedeventsconsumerorigin и публиковатьпроверенныеevents в отдельныйлокальныйOBSserver; никогдапубликоватьвorigin/commands. Operatorprovisioningsidecar отделён отruntime. Source$G/store/auth/executors неизменны. Спека docs/dev/2026-10-12-spec-nats-sidecar.md.
+
+- INV-SIDE01: exactprivateconfig/OBS-onlycredentials; origincredentialтолькоbridge, fixedpaths/roles/epochs, noambientfallback.
+- INV-SIDE02: sourcebind-onlyevents, destinationexpectedPubAck BEFOREactualsourceSDKACK, nodiscardunknown/malformed.
+- INV-SIDE03: runtimeepochnormalization/identity и strictv1subject/agent/createdAt; payloadIDнеauthority, deterministicdedupbyepoch/seq/bytes.
+- INV-SIDE04: boundedbatch/deadlines/backoff/status, freshheartbeatбезtraffic, genericerrors/no unboundedjournal.
+- INV-SIDE05: existingOBSprojection/sequence/transportstate сохраняются, sourcehealth overlayнаcopy, partialcutoff/retentionknowntruthfully; OBScredentialredaction.
+- INV-SIDE06: actualFILErestart/outage/retry/dedupexpiry/retentionnegativeproof доenable; нетexactly-once/OSRCEisolationclaim, native/vendorauth untouched.
+
+Trace: tests/test_control_web_nats_sidecar_blind.py и disposableFILEintegration evidence. НовыеIDs именуютпринятыеclauses, не расширяютscopeприёмки.

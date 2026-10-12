@@ -135,3 +135,6 @@ API: owner GET /api/project-file, query ровно project/path. Успех {nam
 
 ## r23 — PART admission0.162.1
 Общий пул и связанные пользовательские вопросы допускают reviewedCodex0.162.1 теми же schema/authorityguards, что0.161.0.0.160/futurePARTзакрыты. Nativeauth/APPSERVERнеперезапускаются. Послеdeploy проверять ownerpoolпослеworkerwarmup, не выдаватьпервыйlazyemptyответзаполнуюприёмку.
+
+## r24 — изолированное наблюдение NATS
+Code supports strict OBS schema2 andtrustedonewaybridge CLI. Observerconfigmissing→disabled. Sourcelegacy$G/auth/store/executors не мигрируются. Ownerprovisioningcreatesseparateloopback24222OBSsidecar+sourceevents-onlydurable andprivatefixedconfigs; SOURCE/fullCI/signedrelease alone do notenable orproveinstalledbus. Данные доcutoff/retention всегдаpartial; PubAckнеexecution иcompletedнеqualityacceptance.
