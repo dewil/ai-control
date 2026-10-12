@@ -205,6 +205,41 @@ class CompactOverviewBrowserBlind(unittest.TestCase):
         self.assertLessEqual(abs(neighbor.bounding_box()['y']-neighbor_y), 3,
                              'visible reader position did not fall back when anchor moved into collapsed Other')
 
+    def test_CUI03_all_overview_rows_removed_uses_container_or_natural_clamp(self):
+        self.page.clock.install()
+        rows = [attention.row(i+1, f'{i+10:08d}-0000-4000-8000-{i+10:012d}',
+            f'Cleared overview row {i:02d}', activity='active', running='confirmed')
+            for i in range(28)]
+        self.backend.overview['rows'] = rows
+        self.open_panel()
+        container = self.page.locator('#participation-list')
+        expect(container).to_be_visible()
+        anchor = self.page.get_by_text('Cleared overview row 17', exact=True)
+        self.place_visible_anchor(anchor)
+        before_y = container.bounding_box()['y']
+        before = self.page.evaluate('''()=>({y:scrollY,height:document.scrollingElement.scrollHeight,
+            viewport:innerHeight})''')
+
+        self.backend.overview['rows'] = []
+        self.backend.overview['coverage'] = dict(partial=False, reasons=[])
+        self.backend.overview['health'] = 'fresh'
+        self.backend.overview['revision'] += 1
+        self.backend.overview['generated_at'] += 1
+        self.page.clock.fast_forward(6000)
+        expect(self.page.get_by_text('Нет сессий для отображения', exact=True)).to_be_visible()
+        expect(container).to_be_visible()
+        after_y = container.bounding_box()['y']
+        after = self.page.evaluate('''()=>({y:scrollY,height:document.scrollingElement.scrollHeight,
+            viewport:innerHeight})''')
+
+        natural_max = max(0, after['height']-after['viewport'])
+        container_fallback = abs(after_y-before_y) <= 3
+        viewport_clamped = abs(after['y']-natural_max) <= 8
+        self.assertTrue(container_fallback or viewport_clamped,
+                        'when every visible candidate is removed, preserve the container or clamp to natural document end')
+        self.assertGreater(before['height']-after['height'], len(rows)*20,
+                           'empty overview must shrink naturally without an artificial spacer')
+
 
 class CompactPinsBrowserBlind(unittest.TestCase):
     """Pins refresh uses the existing synthetic public endpoint fixture."""
