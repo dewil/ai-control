@@ -13,6 +13,7 @@ function closePageGate(){
   closeProjectFile();
   pageState='suspended';pageGeneration++;androidResumeGeneration++;taskLoaded=false;
   stopLimitsView();stopNavigation();closeQueueTransferDialog();stopPolling();stopDevbusView();devbusAdmitted=false;
+  navigatorView.flight?.abort();navigatorView.flight=null;
   for(const flight of historyFlights.values())if(!observationControllers.has(flight.controller))observationControllers.set(flight.controller,0);historyFlights.clear();
   for(const controller of observationControllers.keys())controller.abort();observationControllers.clear();
   for(const timer of pageTimers)pageClearTimer(timer);
@@ -549,13 +550,13 @@ function renderModelControls(){
 }
 
 // INV-USN-01..08: a bounded presentation snapshot; action authority stays in validated feeds.
-const navigatorView={entries:new Map(),snapshot:[],pending:[],filter:'all',project:'',initialized:false,opened:false,request:0,flight:null,page:0,more:false,partial:false,truncated:false,legacyStatus:'',listStatus:'',listFailure:false,serial:0,openIntent:0,pinIdentity:new Map(),applyPins:false};
+const navigatorView={entries:new Map(),snapshot:[],pending:[],filter:'all',project:'',initialized:false,opened:false,request:0,flight:null,page:0,more:false,loadingPage:null,partial:false,truncated:false,legacyStatus:'',listStatus:'',listFailure:false,serial:0,openIntent:0,pinIdentity:new Map(),applyPins:false};
 const navigatorMedia=window.matchMedia('(min-width:1024px)');
 const navigatorFilters=[['all','Все'],['attention','Внимание'],['ready','Готовы'],['working','Работают'],['pins','★']];
 function resetNavigator(preservePanel=false){
   navigatorView.request++;navigatorView.openIntent++;navigatorView.flight?.abort();navigatorView.flight=null;
-  navigatorView.entries.clear();navigatorView.snapshot=[];navigatorView.pending=[];navigatorView.initialized=false;if(!preservePanel){navigatorView.project='';navigatorView.filter='all';navigatorView.opened=false;navigatorView.legacyStatus='';navigatorView.listStatus='';navigatorView.listFailure=false;}navigatorView.more=false;navigatorView.partial=false;navigatorView.pinIdentity.clear();navigatorView.truncated=false;
-  $('navigator-list')?.replaceChildren();if(!preservePanel)$('navigator-project')?.replaceChildren(new Option('Все проекты',''));if($('navigator-status'))$('navigator-status').textContent='';if($('navigator-new'))$('navigator-new').hidden=true;if(!preservePanel)closeNavigator();
+  navigatorView.entries.clear();navigatorView.snapshot=[];navigatorView.pending=[];navigatorView.initialized=false;if(!preservePanel){navigatorView.project='';navigatorView.filter='all';navigatorView.opened=false;navigatorView.legacyStatus='';navigatorView.listStatus='';navigatorView.listFailure=false;}navigatorView.more=false;navigatorView.loadingPage=null;navigatorView.partial=false;navigatorView.pinIdentity.clear();navigatorView.truncated=false;
+  $('navigator-list')?.replaceChildren();if(!preservePanel)$('navigator-project')?.replaceChildren(new Option('Все проекты',''));if($('navigator-status'))$('navigator-status').textContent='';if($('navigator-new'))$('navigator-new').hidden=true;if($('navigator-apply'))$('navigator-apply').textContent='Обновить список';if(!preservePanel)closeNavigator();
 }
 function navigatorAllowed(project){return !projectEntries.length||availableProjects.has(project);}
 function navigatorRemove(key){navigatorView.entries.delete(key);navigatorView.snapshot=navigatorView.snapshot.filter(value=>value!==key);navigatorView.pending=navigatorView.pending.filter(value=>value!==key);}
@@ -576,7 +577,7 @@ function reconcileNavigatorProjects(){
   }
   if(revoked){for(const project of creates.keys())if(!availableProjects.has(project))creates.delete(project);for(const map of [drafts,historyData,modelDrafts,renames,queueViews,receipts,latestAttempts])for(const key of map.keys())if(!availableProjects.has(key.split('\u0000')[0]))map.delete(key);navigationEpoch++;if(partView.overview.data)partView.overview.data={...partView.overview.data,rows:partView.overview.data.rows.filter(row=>availableProjects.has(row.project))};partView.target=null;}
   const select=$('navigator-project'),before=select.value;
-  if(before&&!availableProjects.has(before)){navigatorView.request++;navigatorView.flight?.abort();navigatorView.flight=null;navigatorView.listStatus='';navigatorView.listFailure=false;}
+  if(before&&!availableProjects.has(before)){navigatorView.request++;navigatorView.flight?.abort();navigatorView.flight=null;navigatorView.loadingPage=null;navigatorView.listStatus='';navigatorView.listFailure=false;}
   select.replaceChildren(new Option('Все проекты',''),...projectEntries.filter(row=>availableProjects.has(row.name)).map(row=>new Option(row.name,row.name)));
   navigatorView.project=availableProjects.has(before)?before:'';select.value=navigatorView.project;
   if(createDialogProject&&!availableProjects.has(createDialogProject))closeCreateDialog();
@@ -609,7 +610,7 @@ function navigatorEntry(key){
   const attention=Boolean(fresh&&(overview.waits.length||overview.questions.some(q=>['actionable','native_only','responding','sent','delivery_unknown'].includes(q.state))||overview.activity==='system_error'||['failed','interrupted'].includes(overview.result?.status)));
   const ready=Boolean(fresh&&!attention&&overview.result?.ready),working=Boolean(fresh&&!attention&&!ready&&overview.running==='confirmed'&&overview.activity==='active');
   const times=[pin?.last_activity,overview?.result?.completed_at].filter(value=>typeof value==='number'&&Number.isFinite(value));
-  const title=entry.pageTitle||overview?.label||pin?.title||entry.title||'Сессия '+entry.sid?.slice(0,8);
+  const title=[entry.pageTitle,overview?.label,pin?.title,entry.title].find(value=>typeof value==='string'&&value.trim())?.trim()||'Сессия '+entry.sid?.slice(0,8);
   return {...entry,title,vendor:entry.pageVendor||overview?.vendor||pin?.vendor||null,pinId:pin?.pin_id||null,overview:overview||null,pinStatus:pin?.status||null,pinWaits:pin?.waits||[],pinActivityState:pin?.activity_state,pinStale:pin?.activity_state==='fresh'&&navigatorNow()-pin.observed_at>15,fresh,attention,ready,working,activity:times.length?Math.max(...times):null,snapshot:!entry.pageTitle&&!overview&&Boolean(pin?.available),unavailable:entry.opaque===true};
 }
 function navigatorMatches(entry,filter=navigatorView.filter){return Boolean(entry&&(!navigatorView.project||entry.project===navigatorView.project)&&({all:true,attention:entry.attention,ready:entry.ready,working:entry.working,pins:Boolean(entry.pinId)})[filter]);}
@@ -652,7 +653,7 @@ function renderNavigator(entries){
   const changed=navigatorView.snapshot.some(key=>!navigatorMatches(navigatorEntry(key)));
   const uncertain=navigatorView.truncated||navigatorView.partial||!navigatorView.project||!partView.overview.data||partView.overview.data.coverage.partial||partView.overview.data.health!=='fresh';
   $('navigator-status').textContent=[navigatorView.legacyStatus,navigatorView.listStatus,pinView.busy?'Меняем закрепление…':$('pin-status').textContent,changed?'Есть изменения.':'',uncertain?'Список частичный; полнота не подтверждена.':'',navigatorView.truncated?'Достигнуто ограничение списка.':'',!navigatorView.snapshot.length?'Выберите проект или обновите список.':''].filter(Boolean).join(' ');
-  $('navigator-new').hidden=!navigatorView.pending.length;$('navigator-new').textContent='Новые: '+navigatorView.pending.length;
+  $('navigator-new').hidden=true;$('navigator-apply').textContent=navigatorView.pending.length?'Новые: '+navigatorView.pending.length:'Обновить список';
   const list=$('navigator-list'),existing=new Map([...list.children].map(row=>[row.navigatorKey,row]));
   const rows=navigatorView.snapshot.map(key=>{
     const entry=navigatorEntry(key);let row=existing.get(key);if(!row){row=node('li',undefined,'navigator-row');row.navigatorKey=key;}
@@ -685,18 +686,18 @@ function renderNavigator(entries){
 async function openNavigatorEntry(key,target=null){
   const entry=navigatorEntry(key);if(!entry||entry.unavailable)return false;
   if(target){const live=entry.overview;if(!entry.fresh||!live||target.interaction&&!live.questions.some(q=>q.interaction_id===target.interaction)||target.turn&&(!live.result?.ready||live.result.turn_id!==target.turn||live.result.item_id!==target.item))return false;}
-  if(target){await openParticipationTarget(entry.overview,target);return activeSelection(entry.project,entry.sid);}
+  if(target){await openParticipationTarget({...entry.overview,label:entry.title},target);return activeSelection(entry.project,entry.sid);}
   return openPinnedSession({available:true,project:entry.project,sid:entry.sid,title:entry.title,vendor:entry.vendor});
 }
 async function loadNavigatorProject(page=0){
   const project=navigatorView.project;if(!navigationVisible()||!project||!availableProjects.has(project))return;
   navigatorView.flight?.abort();const controller=newObservationController();navigatorView.flight=controller;
   const request=++navigatorView.request,auth=chatAuthGeneration,lifecycle=pageGeneration,current=()=>navigationVisible()&&request===navigatorView.request&&project===navigatorView.project&&auth===chatAuthGeneration&&lifecycle===pageGeneration&&availableProjects.has(project);
-  const timer=pageTimeout(()=>controller.abort(),30000);$('sessions-more').disabled=true;navigatorView.listStatus='Загружаем сессии…';navigatorView.listFailure=false;syncNavigator();
+  const timer=pageTimeout(()=>controller.abort(),30000);$('sessions-more').disabled=true;navigatorView.loadingPage=page;navigatorView.listStatus='Загружаем сессии…';navigatorView.listFailure=false;syncNavigator();
   try{const path=queryPath('/api/sessions',{project,page});let data;try{data=await api(path,undefined,controller.signal,current);}catch(error){if(error.status!==409||error.code!=='stale'||!current())throw error;data=await api(path,undefined,controller.signal,current);}
     if(!current())return;navigatorView.listStatus=Array.isArray(data.rows)&&data.rows.length?'':'В этом проекте пока нет доступных сессий.';navigatorView.listFailure=false;ingestNavigatorPage(project,Array.isArray(data.rows)?data.rows:[]);navigatorView.page=page;navigatorView.more=data.has_more===true;navigatorView.partial=navigatorView.more;$('sessions-more').hidden=!navigatorView.more;syncNavigator(true);
   }catch(error){if(current()){if(error.status===401||error.status===403){resetNavigator();if(error.status===403)ownerForbidden();}else{navigatorView.listStatus='Список сессий недоступен. Обновите список, чтобы повторить.';navigatorView.listFailure=true;syncNavigator();}}}
-  finally{pageClearTimer(timer);if(navigatorView.flight===controller)navigatorView.flight=null;if(current())$('sessions-more').disabled=false;}
+  finally{pageClearTimer(timer);if(navigatorView.flight===controller)navigatorView.flight=null;if(current()){navigatorView.loadingPage=null;$('sessions-more').disabled=false;}}
 }
 function closeNavigator(){
   const dialog=$('navigator-dialog');if(!dialog?.open)return;dialog.close();document.body.style.overflow='';if(!navigatorMedia.matches&&navigationVisible())$('navigator-open').focus({preventScroll:true});
@@ -714,14 +715,15 @@ $('navigator-open').addEventListener('click',()=>openNavigator());
 $('navigator-close').addEventListener('click',closeNavigator);
 $('navigator-dialog').addEventListener('cancel',event=>{event.preventDefault();closeNavigator();});
 $('navigator-dialog').addEventListener('click',event=>{if(event.target===$('navigator-dialog')){const box=event.target.getBoundingClientRect();if(event.clientX<box.left||event.clientX>box.right||event.clientY<box.top||event.clientY>box.bottom)closeNavigator();}});
-$('navigator-project').addEventListener('change',()=>{navigatorView.project=$('navigator-project').value;navigatorView.legacyStatus='';navigatorView.listStatus='';navigatorView.listFailure=false;navigatorView.request++;navigatorView.flight?.abort();navigatorView.more=false;$('sessions-more').hidden=true;syncNavigator(true);if(navigatorView.project)loadNavigatorProject();});
-$('navigator-apply').addEventListener('click',()=>{if(navigatorView.listFailure&&navigatorView.project)loadNavigatorProject();else syncNavigator(true);});$('navigator-new').addEventListener('click',()=>syncNavigator(true));
+$('navigator-project').addEventListener('change',()=>{navigatorView.project=$('navigator-project').value;navigatorView.legacyStatus='';navigatorView.listStatus='';navigatorView.listFailure=false;navigatorView.loadingPage=null;navigatorView.request++;navigatorView.flight?.abort();navigatorView.more=false;$('sessions-more').hidden=true;syncNavigator(true);if(navigatorView.project)loadNavigatorProject();});
+$('navigator-apply').addEventListener('click',()=>{const retry=navigatorView.listFailure&&navigatorView.project;syncNavigator(true);if(retry)loadNavigatorProject();});$('navigator-new').addEventListener('click',()=>syncNavigator(true));
 syncNavigatorLayout();
 
 function navigationVisible(){return pageActive()&&Boolean(csrf)&&currentTab==='sessions'&&document.visibilityState==='visible'&&!$('workspace').hidden;}
 function stopNavigation(){navigationEpoch++;if(partView.selected)partView.selected.rendered='';disablePartControls();for(const button of document.querySelectorAll('[data-queue-start]'))button.disabled=true;if(navigationTimer!==null){pageClearTimer(navigationTimer);navigationTimer=null;}}
 function syncNavigation(force=false){
   if(!navigationVisible()){stopNavigation();return;}
+  if(navigatorView.project&&navigatorView.loadingPage!==null&&!navigatorView.flight)loadNavigatorProject(navigatorView.loadingPage);
   if(navigationTimer===null)navigationTimer=pageInterval(()=>{loadPins();loadParticipation();loadSessionQuestions();loadQueueStartSupport();},5000);
   loadPins(force);loadParticipation(force);loadSessionQuestions(force);loadQueueStartSupport(force);
 }
@@ -1426,9 +1428,7 @@ function renderProjectDetails(){
 }
 function renderProjects(){
   $('projects-heading').textContent=selectedProject||'Проекты';
-  const cloud=$('project-cloud'),focused=document.activeElement,selected=activeSelection();
-  const project=selectedProject,sid=selectedSession?.sid,generation=selectionGeneration;
-  const decision=selected?captureHistoryScroll(project,sid,generation,false):captureViewportAnchor();
+  const cloud=$('project-cloud'),focused=document.activeElement;
   const existing=new Map([...cloud.children].map(button=>[button.dataset.project,button]));
   const aliasCompare=(a,b)=>{const x=a.name.toLowerCase(),z=b.name.toLowerCase();return x<z?-1:x>z?1:a.name<b.name?-1:a.name>b.name?1:0;};
   const activityGroup=value=>!value?3:value.last_activity===null?2:projectAge(value.last_activity)==='?'?3:value.summary_state==='fresh'?0:1;
@@ -1466,7 +1466,6 @@ function renderProjects(){
   reconcileHistoryChildren(cloud,tiles);
   if(retained.has(focused)&&!focused.disabled)focused.focus({preventScroll:true});
   renderProjectDetails();syncCreateControls();syncMessageAges();
-  if(decision)restoreHistoryScroll(decision,project,sid,generation);
 }
 function clearUnavailableProject(){closeProjectFile();projectsSelectionProof=null;setProjectsExpanded(true);stopPolling();selectionGeneration++;initialScrollTarget=null;selectedProject='';selectedSession=null;sessionRows=[];sessionPage=0;sessionsHaveMore=false;clearHistoryView();$('session-list').replaceChildren();$('sessions-more').hidden=true;updateUrl();syncCurrentSessionControls();renderProjects();}
 function projectChanged(name){if(!pageActive())return;
