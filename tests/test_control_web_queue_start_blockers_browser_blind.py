@@ -2,6 +2,7 @@
 from copy import deepcopy
 from urllib.parse import urlsplit,parse_qs
 import unittest
+from control_browser_helpers import session_navigator
 from playwright.sync_api import expect
 import live_sse_blind_support as live
 import native_queue_blind_support as q
@@ -59,6 +60,7 @@ class QueueStartBlockersBrowserBlind(unittest.TestCase):
             else:route.continue_()
         self.backend.queue_rows[live.OTHER]=[q.public_row('native-selected-row','other-client','Other session native queued text')]
         self.page.route('**/api/session-queue-start?*',hold_A);self.select();self.until(lambda:len(held)>=1)
+        session_navigator(self.page)
         self.page.get_by_role('button',name='LIVE synthetic B',exact=False).click()
         expect(self.page.get_by_text('Queue browser B history',exact=True)).to_have_count(1)
         row=self.page.get_by_text('Other session native queued text',exact=True)

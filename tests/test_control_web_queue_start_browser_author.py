@@ -1,5 +1,6 @@
 """Author current-view status/read-only interop controls for the new queue command."""
 import unittest
+from control_browser_helpers import session_navigator
 from urllib.parse import urlsplit,parse_qs
 from playwright.sync_api import expect
 import test_control_web_navigation_start_browser_blind as blind
@@ -21,8 +22,10 @@ class QueueStartBrowserAuthor(unittest.TestCase):
         check=self.page.get_by_role('button',name='Проверить статус запуска',exact=True)
         expect(check).to_be_visible()
         action=next(call[4] for call in self.backend.nav_calls if call[0]=='start')
+        session_navigator(self.page)
         self.page.get_by_role('button',name='LIVE synthetic B',exact=False).click()
         expect(self.page.get_by_text('Queue browser B history',exact=True)).to_have_count(1)
+        session_navigator(self.page)
         self.page.get_by_role('button',name='LIVE synthetic A',exact=False).click()
         expect(check).to_be_visible()
         reads=[]

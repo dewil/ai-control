@@ -174,8 +174,10 @@ class PinnedActivityBrowserBlind(unittest.TestCase):
         history=live.history('Reader synthetic first');history['turns'][0]['items']=[dict(id='reader-'+str(i),role='assistant',text='Activity reader '+str(i)+'\n'+'long line\n'*12,
             truncated=False,timestamp=1770000000+i,time_precision='item') for i in range(24)]
         self.backend.value=history;self.fixture.transport.emit(live.snapshot(2,value=history))
+        # Frozen reader: expose the newly streamed window through explicit user intent.
+        self.page.get_by_role('button',name='К последним сообщениям',exact=True).click()
         anchor=self.page.get_by_text(history['turns'][0]['items'][10]['text'],exact=True);expect(anchor).to_have_count(1)
-        title=self.pin_block().get_by_role('button',name='Pinned synthetic A',exact=True)
+        title=self.pin_block().get_by_role('button',name='Открыть сессию Pinned synthetic A',exact=True)
         title.focus();title.evaluate('e=>window.activityPinNode=e')
         anchor.evaluate("e=>{window.activityReader=e;e.scrollIntoView({block:'start'})}");before=anchor.bounding_box()['y']
         self.value['items'][1]['last_activity']=a.NOW-1;self.refresh()

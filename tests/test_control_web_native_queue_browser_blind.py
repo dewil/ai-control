@@ -1,11 +1,14 @@
 """Independent queue UI RED: actual JS, local HTTP and native EventSource."""
 from copy import deepcopy
+import hashlib
+import os
+from pathlib import Path
 import re
 import time
 from urllib.parse import urlsplit,parse_qs
 import unittest
 from playwright.sync_api import expect,sync_playwright
-from control_browser_helpers import choose_project
+from control_browser_helpers import choose_project, session_navigator
 import live_sse_blind_support as live
 import native_queue_blind_support as q
 
@@ -60,6 +63,12 @@ class NativeQueueBrowserBlind(unittest.TestCase):
         self.requests=[];self.errors=[]
         self.page.on('request',lambda r:self.requests.append((r.method,urlsplit(r.url).path,r.post_data)))
         self.page.on('pageerror',lambda e:self.errors.append(str(e)))
+        root=Path(os.environ.get('CONTROL_LIVE_SSE_QA_REPO',Path(__file__).resolve().parents[1])).resolve()
+        self.assertEqual(Path(self.fixture.web.__file__).resolve(),root/'bin/_control_web.py')
+        for path,name in (('/web.js','_control_web.js'),('/web.css','_control_web.css')):
+            response=self.page.request.get(self.fixture.origin+path)
+            self.assertEqual(response.status,200)
+            self.assertEqual(hashlib.sha256(response.body()).hexdigest(),hashlib.sha256((root/'bin'/name).read_bytes()).hexdigest())
     def tearDown(self):self.assertEqual(self.errors,[])
     def until(self,predicate,timeout=3):
         until=time.monotonic()+timeout
@@ -155,6 +164,7 @@ class NativeQueueBrowserBlind(unittest.TestCase):
             if parse_qs(urlsplit(route.request.url).query).get('sid')==[live.SID]:held.append(route)
             else:route.continue_()
         self.page.route('**/api/session-queue?*',route_queue);self.select();self.until(lambda:len(held)==1)
+        session_navigator(self.page)
         self.page.get_by_role('button',name='LIVE synthetic B',exact=False).click()
         expect(self.page.get_by_text('Queue browser B history',exact=True)).to_have_count(1)
         held[0].fulfill(status=200,json=q.queue_dto([q.public_row(text='Forbidden A queue repaint')]))

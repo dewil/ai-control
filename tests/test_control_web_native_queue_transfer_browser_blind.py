@@ -3,6 +3,7 @@ from copy import deepcopy
 import re
 from urllib.parse import urlsplit
 import unittest
+from control_browser_helpers import session_navigator
 from playwright.sync_api import expect
 import live_sse_blind_support as live
 import native_queue_blind_support as q
@@ -60,6 +61,7 @@ class NativeQueueTransferBrowserBlind(unittest.TestCase):
         self.assertEqual(set(payload),{'project','sid','queued_submission_id','action_id','snapshot_text','expected_turn_id'})
         self.assertEqual((payload['project'],payload['sid'],payload['queued_submission_id'],payload['snapshot_text'],payload['expected_turn_id']),('demo',live.SID,'mac-transfer-id',SNAPSHOT,TARGET))
         self.assertRegex(payload['action_id'],r'^[0-9a-f-]{36}$')
+        session_navigator(self.page)
         self.page.get_by_role('button',name='LIVE synthetic B',exact=False).click()
         expect(self.page.get_by_text('Queue browser B history',exact=True)).to_have_count(1)
         self.page.locator('textarea').fill('Unrelated B unsent draft')

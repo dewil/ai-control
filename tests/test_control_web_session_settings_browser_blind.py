@@ -3,6 +3,8 @@
 # canonical captions/chips and native disclosures replace the previous labels/layout.
 
 import json,re,time,unittest
+import hashlib
+from control_browser_helpers import session_navigator
 from urllib.parse import parse_qs,urlsplit
 from playwright.sync_api import expect
 import test_control_web_model_controls_browser as fixture
@@ -48,12 +50,20 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
             login.get_by_role('button',name='Сессии',exact=True).or_(login.get_by_role('tab',name='Сессии',exact=True)).wait_for(timeout=5000)
             login.close()
         fixture.ModelControlsBrowserContract.setUp(self)
+        for path,name in (('/web.js','_control_web.js'),('/web.css','_control_web.css')):
+            response=self.page.request.get(self.url+path)
+            self.assertEqual(response.status,200)
+            self.assertEqual(hashlib.sha256(response.body()).hexdigest(),hashlib.sha256((type(self).root/'bin'/name).read_bytes()).hexdigest())
     tearDown=fixture.ModelControlsBrowserContract.tearDown
     calls=fixture.ModelControlsBrowserContract.calls
     assert_controls=fixture.ModelControlsBrowserContract.assert_controls
     wait_for_option=fixture.ModelControlsBrowserContract.wait_for_option
     send_button=fixture.ModelControlsBrowserContract.send_button
     send_requests=fixture.ModelControlsBrowserContract.send_requests
+    def select_session(self,locator):
+        session_navigator(self.page)
+        locator.click()
+
     def mount(self,snapshot=None,delay_ms=0):
         self.snapshot=snapshot;self.history_error=False;self.older_error=False;self.held=[];self.hold=False
         def route(request):
@@ -65,7 +75,7 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
             if 'cursor' in query:response['session_settings']=settings('older-poison','older-poison')
             request.fulfill(json=response)
         self.page.route('**/api/session-history?*',route)
-        self.alpha_session.click();self.page.locator('textarea').wait_for(state='visible')
+        self.select_session(self.alpha_session);self.page.locator('textarea').wait_for(state='visible')
         self.line=self.page.locator('#current-model-status')
         expect(self.line).to_be_visible(timeout=1500)
         self.assert_controls()  # Explicitly reveal the accepted model-settings disclosure.
@@ -119,9 +129,9 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
         model.select_option(label='Model Alpha');effort.select_option(label='high')
         self.page.locator('textarea').fill('Synthetic pending immutable pair')
         with self.page.expect_request(lambda r:r.method=='POST' and '/api/session-send' in r.url):self.send_button().click()
-        self.known();self.beta_session.click();model,effort=self.assert_controls();self.wait_for_option('Model Beta')
+        self.known();self.select_session(self.beta_session);model,effort=self.assert_controls();self.wait_for_option('Model Beta')
         model.select_option(label='Model Beta');effort.select_option(label='medium')
-        self.alpha_session.click();self.assert_controls()
+        self.select_session(self.alpha_session);self.assert_controls()
         expect(self.page.locator('#next-model-status')).to_contain_text('Model Alpha · Размышление: high')
         body=json.loads(self.send_requests()[0].post_data)
         self.assertEqual(body['selection'],{'catalog_id':fixture.MODEL_CATALOG_ID,'model_id':'alpha-ui','effort':'high'})
@@ -129,9 +139,9 @@ class SessionSettingsBrowserBlind(unittest.TestCase):
     def test_late_selection_and_auth_generations_do_not_restore_stale_settings(self):
         self.mount(settings());self.known();self.hold=True;self.refresh()
         self.page.wait_for_timeout(50);self.assertTrue(self.held,'Latest GET held before switch')
-        self.beta_session.click();self.page.wait_for_timeout(50)
+        self.select_session(self.beta_session);self.page.wait_for_timeout(50)
         stale=list(self.held);self.held=[];self.hold=False
-        self.snapshot=settings('fresh-A','fresh-A');self.alpha_session.click();self.known('fresh-A','fresh-A')
+        self.snapshot=settings('fresh-A','fresh-A');self.select_session(self.alpha_session);self.known('fresh-A','fresh-A')
         for route in stale:route.fulfill(json=history(settings('stale-A','stale-A')))
         self.page.wait_for_timeout(100);self.known('fresh-A','fresh-A')
         self.hold=True;self.refresh();self.page.wait_for_timeout(50)
