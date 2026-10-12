@@ -201,7 +201,7 @@ class FakeJetStream:
             name = "OBS_EVENTS"
             subjects = ["devbus.events.*"]
         return SimpleNamespace(
-            created=created, config=SimpleNamespace(
+            config=SimpleNamespace(
                 name=name, subjects=subjects, storage="file", retention="limits",
                 max_age=86400, max_bytes=104857600, max_msg_size=131072,
                 duplicate_window=120),
@@ -216,7 +216,7 @@ class FakeJetStream:
         if created != self.config["source"]["consumer_created"]:
             self.epoch_mismatch_seen.set()
         return SimpleNamespace(
-            created=created, name=consumer, stream_name=stream,
+            name=consumer, stream_name=stream,
             config=SimpleNamespace(
                 durable_name=consumer, name=consumer, filter_subject="devbus.events.>",
                 filter_subjects=None, ack_policy="explicit", deliver_policy="all",
@@ -264,12 +264,18 @@ class FakeJetStream:
 
 
 class FakeConnection:
-    def __init__(self, role, js, kwargs):
+    def __init__(self, role, js, kwargs, request=None):
         self.role, self._js, self.kwargs = role, js, kwargs
+        self._request = request
         self.closed = False
 
     def jetstream(self):
         return self._js
+
+    async def request(self, subject, payload, timeout=5):
+        if self._request is None:
+            raise AssertionError("fake connection has no raw INFO response handler")
+        return await self._request(subject, payload, timeout)
 
     async def close(self):
         self.closed = True
@@ -290,6 +296,56 @@ class FakeNatsFactory:
         self.source_consumer_created = source_consumer_created
         self.source_js = self.destination_js = None
         self.source_connected = asyncio.Event()
+        self.raw_requests = []
+        self.raw_replies = []
+        self.raw_overrides = {}
+        self.raw_errors = set()
+
+    async def request(self, connection, subject, payload, timeout):
+        self.raw_requests.append((connection.role, subject, payload, timeout))
+        if subject in self.raw_errors:
+            raise RuntimeError("synthetic raw API request failure")
+        source = connection.role == "source"
+        if subject == "$JS.API.STREAM.INFO.DEVBUS_V1" and source:
+            cfg = self.config["source"]
+            created = self.source_js.source_stream_created_override or cfg["stream_created"]
+            value = {"type": "io.nats.jetstream.api.v1.stream_info_response",
+                "config": {"name": "DEVBUS_V1", "subjects": ["devbus.commands.*", "devbus.events.*"],
+                    "retention": "limits", "storage": "file", "max_age": 86400000000000,
+                    "max_bytes": 104857600, "max_msg_size": 131072},
+                "created": created,
+                "state": {"messages": 1, "bytes": 256, "first_seq": 1,
+                    "last_seq": 50, "consumer_count": 1}}
+        elif subject == "$JS.API.STREAM.INFO.OBS_EVENTS" and not source:
+            cfg = self.config["destination"]
+            value = {"type": "io.nats.jetstream.api.v1.stream_info_response",
+                "config": {"name": "OBS_EVENTS", "subjects": ["devbus.events.*"],
+                    "retention": "limits", "storage": "file", "max_age": 86400000000000,
+                    "max_bytes": 104857600, "max_msg_size": 131072},
+                "created": cfg["stream_created"],
+                "state": {"messages": 1, "bytes": 256, "first_seq": 1,
+                    "last_seq": 1, "consumer_count": 0}}
+        elif subject == "$JS.API.CONSUMER.INFO.DEVBUS_V1.control_observer_bridge" and source:
+            cfg = self.config["source"]
+            created = self.source_js.source_consumer_created_override or cfg["consumer_created"]
+            if created != cfg["consumer_created"]:
+                self.source_js.epoch_mismatch_seen.set()
+            value = {"type": "io.nats.jetstream.api.v1.consumer_info_response",
+                "name": cfg["consumer"], "stream_name": "DEVBUS_V1", "created": created,
+                "config": {"name": cfg["consumer"], "durable_name": cfg["consumer"],
+                    "filter_subject": "devbus.events.>", "ack_policy": "explicit",
+                    "deliver_policy": "all", "max_ack_pending": 32,
+                    "ack_wait": 30000000000, "max_deliver": -1,
+                    "deliver_subject": None, "deliver_group": None},
+                "ack_floor": {"stream_seq": 0, "consumer_seq": 0},
+                "delivered": {"stream_seq": 0, "consumer_seq": 0},
+                "num_pending": 0, "num_ack_pending": 0}
+        else:
+            raise AssertionError("raw API request escaped fixed stream/consumer INFO subjects")
+        raw = self.raw_overrides.get(subject)
+        data = raw if raw is not None else canonical(value)
+        self.raw_replies.append((connection.role, subject, data))
+        return SimpleNamespace(data=data)
 
     async def __call__(self, **kwargs):
         self.calls.append(kwargs.copy())
@@ -314,7 +370,9 @@ class FakeNatsFactory:
             self.destination_js = js
         else:
             raise AssertionError("factory received an endpoint outside validated config")
-        connection = FakeConnection(role, js, kwargs)
+        connection = FakeConnection(role, js, kwargs,
+            request=lambda subject, payload, timeout: self.request(
+                connection, subject, payload, timeout))
         self.connections.append(connection)
         return connection
 
@@ -656,44 +714,98 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(connection.closed for connection in factory.connections))
         self.assertEqual(factory.source_js.calls[-1][0], "bind")
 
-    async def test_sdk_datetime_epochs_are_normalized_against_config_strings(self):
-        # INV-SIDE03: accept SDK datetime epochs while matching configured UTC string epochs.
-        """Exercise the real NATS SDK response dataclasses, including UTC datetimes."""
+    async def test_raw_api_epochs_survive_sdk_models_that_drop_created(self):
+        # INV-SIDE03: retain raw API epochs while using SDK typed policy/state models.
         try:
-            from nats.js.api import (AckPolicy, ConsumerConfig, ConsumerInfo,
-                                     DeliverPolicy, RetentionPolicy, StorageType,
-                                     StreamConfig, StreamInfo, StreamState)
+            from nats.js.api import ConsumerInfo, StreamInfo
         except ModuleNotFoundError:
             self.skipTest("optional nats-py dependency is not installed")
 
-        source_epoch = datetime.fromisoformat(BRIDGE_CREATED.replace("Z", "+00:00"))
-        consumer_epoch = datetime.fromisoformat(CONSUMER_CREATED.replace("Z", "+00:00"))
-        stream_info = StreamInfo(
-            config=StreamConfig(subjects=["devbus.commands.*", "devbus.events.*"],
-                                retention=RetentionPolicy.LIMITS, storage=StorageType.FILE,
-                                max_age=86400, max_bytes=104857600, max_msg_size=131072),
-            state=StreamState(messages=0, bytes=0, first_seq=1, last_seq=0, consumer_count=0))
-        # NATS SDK versions expose the API's created timestamp as a datetime;
-        # pinned older dataclasses omit it from their constructor, so attach
-        # the decoded server field to the actual SDK response object.
-        stream_info.created = source_epoch
-        consumer_info = ConsumerInfo(
-            name="control_observer_bridge", stream_name="DEVBUS_V1",
-            config=ConsumerConfig(name="control_observer_bridge",
-                                 durable_name="control_observer_bridge",
-                                 filter_subject="devbus.events.>",
-                                 ack_policy=AckPolicy.EXPLICIT,
-                                 deliver_policy=DeliverPolicy.ALL,
-                                 max_ack_pending=32, ack_wait=30, max_deliver=-1))
-        consumer_info.created = consumer_epoch
+        async def execute(factory, *, ack_expected):
+            written = asyncio.Event()
+            records = []
+            original_write = self.module._write_bridge_status
+            def capture(record):
+                records.append(record)
+                original_write(record)
+                if record.get("state") == "degraded": written.set()
+            with redirect_status_io(self.status_path), patch.object(self.module, "_write_bridge_status", capture):
+                task = asyncio.create_task(self.run_bridge(factory.config, nats_factory=factory))
+                try:
+                    if ack_expected:
+                        await asyncio.wait_for(factory.message.acked.wait(), 1)
+                    else:
+                        await asyncio.wait_for(written.wait(), 1)
+                        self.assertFalse(factory.message.acked.is_set())
+                    return task
+                except BaseException:
+                    await self.stop_task(task)
+                    if ack_expected:
+                        raise AssertionError(f"valid raw INFO failed; status={records!r}; calls={factory.calls!r}; raw_requests={factory.raw_requests!r}")
+                    raise
 
-        class SDKJetStream:
-            async def stream_info(self, _name): return stream_info
-            async def consumer_info(self, _stream, _consumer): return consumer_info
+        # Valid raw epochs allow the one synthetic event through and ACK after PubAck.
+        cfg = bridge_config()
+        factory = FakeNatsFactory(cfg, message=FakeMessage())
+        task = await execute(factory, ack_expected=True)
+        await self.stop_task(task)
+        self.assertEqual(factory.message.calls[-1][0], "ack_sync")
+        self.assertTrue(any(call[0] == "publish" for call in factory.destination_js.calls))
+        self.assertTrue(factory.raw_requests)
+        raw_stream = next(data for role, subject, data in factory.raw_replies
+                          if role == "source" and subject == "$JS.API.STREAM.INFO.DEVBUS_V1")
+        raw_consumer = next(data for role, subject, data in factory.raw_replies
+                            if role == "source" and subject == "$JS.API.CONSUMER.INFO.DEVBUS_V1.control_observer_bridge")
+        typed_stream = StreamInfo.from_response(json.loads(raw_stream))
+        typed_consumer = ConsumerInfo.from_response(json.loads(raw_consumer))
+        self.assertFalse(hasattr(typed_stream, "created"))
+        self.assertFalse(hasattr(typed_consumer, "created"))
+        self.assertTrue(any(role == "destination" and subject == "$JS.API.STREAM.INFO.OBS_EVENTS"
+                            for role, subject, _, _ in factory.raw_requests))
+        self.assertTrue(all(payload == b"" and 0 < timeout <= 5
+                            for _, _, payload, timeout in factory.raw_requests))
 
-        js = SDKJetStream()
-        await self.module._bridge_stream_info(js, "DEVBUS_V1", BRIDGE_CREATED, source=True)
-        await self.module._bridge_consumer_info(js, bridge_config()["source"])
+        # Preserve epoch mutations after destination PubAck: origin ACK is fenced.
+        cfg = bridge_config()
+        holder = {}
+        def mutate_consumer_epoch():
+            holder["factory"].source_js.source_consumer_created_override = "2026-10-12T00:09:00.000000Z"
+        factory = FakeNatsFactory(cfg, message=FakeMessage(), after_publish=mutate_consumer_epoch)
+        holder["factory"] = factory
+        task = await execute(factory, ack_expected=False)
+        await self.stop_task(task)
+        self.assertTrue(factory.destination_js.puback_completed.is_set())
+        self.assertFalse(factory.message.acked.is_set())
+        consumer_replies = [json.loads(data) for role, subject, data in factory.raw_replies
+                            if role == "source" and subject == "$JS.API.CONSUMER.INFO.DEVBUS_V1.control_observer_bridge"]
+        self.assertTrue(any(item["created"] == "2026-10-12T00:09:00.000000Z"
+                            for item in consumer_replies), "post-PubAck INFO must observe the changed epoch")
+
+        # Missing, malformed, duplicate, and failed raw API replies fail closed before ACK.
+        for mode in ("missing_stream_epoch", "missing_consumer_epoch", "malformed_json",
+                     "duplicate_created", "request_error"):
+            with self.subTest(mode=mode):
+                cfg = bridge_config(); factory = FakeNatsFactory(cfg, message=FakeMessage())
+                stream_subject = "$JS.API.STREAM.INFO.DEVBUS_V1"
+                consumer_subject = "$JS.API.CONSUMER.INFO.DEVBUS_V1.control_observer_bridge"
+                if mode == "missing_stream_epoch":
+                    value = json.loads(raw_stream); value.pop("created")
+                    factory.raw_overrides[stream_subject] = canonical(value)
+                elif mode == "missing_consumer_epoch":
+                    value = json.loads(raw_consumer); value.pop("created")
+                    factory.raw_overrides[consumer_subject] = canonical(value)
+                elif mode == "malformed_json":
+                    factory.raw_overrides[stream_subject] = b'{"created":'
+                elif mode == "duplicate_created":
+                    needle = b'"created":"2026-10-12T00:00:00.000000Z"'
+                    factory.raw_overrides[stream_subject] = canonical(json.loads(raw_stream)).replace(
+                        needle, needle + b',"created":"2026-10-12T00:00:00.000000Z"', 1)
+                else:
+                    factory.raw_errors.add(stream_subject)
+                task = await execute(factory, ack_expected=False)
+                await self.stop_task(task)
+                self.assertFalse(factory.message.acked.is_set())
+                self.assertFalse(any(call[0] == "publish" for call in factory.destination_js.calls))
 
     async def test_bridge_health_heartbeat_and_owner_overlay_preserve_obs_state(self):
         bridge = importlib.import_module("_control_web_devbus_nats")
@@ -818,7 +930,9 @@ class ExistingObserverEphemeralBlind(unittest.IsolatedAsyncioTestCase):
                 def __init__(self, projection, connect): self.projection = projection
                 async def start(self): self.projection.connection("live")
                 async def stop(self): return None
-            config = SimpleNamespace(enabled=True, token="")
+            config = broker.NatsConfig(enabled=True, url=OBS_URL, stream="OBS_EVENTS",
+                user="control_observer", password="synthetic-status-fixture-password",
+                stream_created=OBS_CREATED)
             for age, reason in ((0, "retention_gap"), (0, None), (31, None)):
                 timestamp = observed - timedelta(seconds=age)
                 status = {
