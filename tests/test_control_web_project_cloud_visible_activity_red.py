@@ -5,6 +5,7 @@ unified authorized project filter and session list. Keep authority, selection,
 responsive geometry, and no-unrequested-history checks on the public controls.
 """
 import re
+from control_browser_helpers import session_navigator
 import unittest
 
 from playwright.sync_api import expect
@@ -48,15 +49,15 @@ class ProjectCloudVisibleActivityLayoutRed(fixture.ProjectCloudBrowserContract):
         expect(row).to_have_count(1)
         for width in (1280, 390, 360, 320):
             self.page.set_viewport_size({'width': width, 'height': 844})
-            if width < 1024 and not listing.is_visible():
-                trigger = self.page.get_by_role('button', name=re.compile(r'^Сессии(?:\s*[·•]\s*внимание\s*\d+)?$|^Открыть список сессий$', re.I))
-                expect(trigger).to_be_visible(); trigger.click()
+            # Await the responsive surface, rather than sampling the old
+            # sidebar while the media-query event is moving it into a dialog.
+            session_navigator(self.page)
             expect(listing).to_be_visible()
             self.assertLessEqual(self.page.evaluate('Math.max(document.documentElement.scrollWidth,document.body.scrollWidth)'), width + 1)
-            if row.is_visible():
-                box = row.bounding_box()
-                self.assertIsNotNone(box)
-                self.assertGreaterEqual(box['height'], 44, 'Session rows retain a touch-sized target')
+            expect(row).to_be_visible()
+            box = row.bounding_box()
+            self.assertIsNotNone(box)
+            self.assertGreaterEqual(box['height'], 44, 'Session rows retain a touch-sized target')
         self.assertFalse(any(method == 'POST' for method, url in self.network))
 
     def test_filter_remains_independent_of_open_chat_and_draft(self):
