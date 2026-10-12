@@ -66,3 +66,7 @@ generation. Partial/unavailable items read не повышает cached result �
 ready=false, running=unconfirmed, stale active относится к «Прочие состояния».
 При противоречии loaded-list и thread-status не угадывать победителя: coverage
 partial, active unconfirmed до согласованного свежего чтения.
+
+`project` в DTO остаётся идентификатором маршрута по существующему slug-контракту
+^[A-Za-z0-9_-]{1,32}$; отображается отдельно без изменения auth/routing.
+Non-ASCII проверяется в названии сессии, а не вводит Unicode/пробелы в route ID.

@@ -1125,16 +1125,19 @@ class SessionChat:
             self._part_refresh_at = now
             self._local.deadline = min(self._local.deadline, now + 5)
             context = self._capture_read_context()
-            _need(context is not None and context['native_version'] in PART_NATIVE_VERSIONS)
+            _need(context is not None)
             _need(self._part_context() == context, 'stale')
             def read(method, params):
                 _need(not self._part_stop.is_set())
                 result = self._rpc(method, params)
                 _need(not self._part_stop.is_set())
+                if method in ('thread/loaded/list', 'thread/turns/list', 'thread/items/list'):
+                    _need(set(result) == {'data', 'nextCursor'})
                 return result
             roots = self._part_roots()
             page = read('thread/loaded/list', {'limit': 256})
-            _need(type(page.get('data')) is list and all(valid_uuid(v) for v in page['data']))
+            _need(type(page.get('data')) is list and len(page['data']) <= 256
+                  and valid_cursor(page.get('nextCursor')) and all(valid_uuid(v) for v in page['data']))
             loaded = list(dict.fromkeys(page['data']))
             self._part_loaded = loaded[:1024]
             reasons = ['limit'] if page.get('nextCursor') is not None or len(loaded) > 7 else []
@@ -1148,6 +1151,7 @@ class SessionChat:
                     continue
                 turns = read('thread/turns/list', dict(threadId=sid, itemsView='notLoaded', sortDirection='desc', limit=4))
                 _need(type(turns.get('data')) is list and len(turns['data']) <= 4
+                      and valid_cursor(turns.get('nextCursor'))
                       and all(type(turn) is dict and _identity(turn.get('id'))
                               and turn.get('status') in ('inProgress','completed','failed','interrupted')
                               for turn in turns['data']))
@@ -1157,14 +1161,15 @@ class SessionChat:
                     # Completion needs a bounded raw phase witness; inProgress does not.
                     if latest['status'] == 'completed':
                         items = read('thread/items/list', dict(threadId=sid, turnId=latest['id'], sortDirection='desc', limit=32))
-                        _need(type(items.get('data')) is list and len(items['data']) <= 32)
+                        _need(type(items.get('data')) is list and len(items['data']) <= 32
+                              and valid_cursor(items.get('nextCursor')))
                         latest['items'] = list(reversed([entry['item'] for entry in items['data']
                             if type(entry) is dict and entry.get('turnId') == latest['id'] and type(entry.get('item')) is dict]))
                         if items.get('nextCursor') is not None:
                             latest['items'] = []
                             reasons.append('limit')
                 _need(self._catalog_context() == context and root in self._part_roots().values(), 'stale')
-                self._part_publish(sid, root, context, thread, latest, turns['data'])
+                self._part_publish(sid, root, context, thread, latest, turns['data'], loaded_observation=True)
 
             self._part_reasons = list(dict.fromkeys(reasons))
         except Exception:
@@ -1173,7 +1178,7 @@ class SessionChat:
         finally:
             self._part_source_lock.release()
 
-    def _part_publish(self, sid, root, context, thread, latest, turns=None):
+    def _part_publish(self, sid, root, context, thread, latest, turns=None, loaded_observation=False):
         # Retain a compact completion witness, never raw history text/tools.
         _need(not self._part_stop.is_set())
         proof = None
@@ -1197,6 +1202,7 @@ class SessionChat:
                 self._part_source[sid] = dict(root=root, context=copy.deepcopy(context),
                     thread=dict(name=name[:120] if type(name) is str else None,
                         status=dict(type=status['type'], activeFlags=flags)), latest=proof,
+                    loaded_observation=bool(loaded_observation),
                     turns={turn['id']:turn['status'] for turn in (turns or [])[:4]}, at=time.monotonic(), observed=min(253402300799, int(time.time())))
                 while len(self._part_source) > 256 or len(_json(self._part_source)) > HISTORY_LIMIT:
                     oldest = next(iter(self._part_source))
@@ -1282,17 +1288,24 @@ class SessionChat:
             sources = list(self._part_source.items())
         for sid, source in sources:
             project = next((p for p, root in roots.items() if root == source['root']), None)
-            if project is None or source['context'] != context or sid not in self._part_loaded:
+            loaded = sid in self._part_loaded
+            latest = source['latest']
+            last_known_terminal = (latest is not None and
+                (latest.get('status') in ('failed', 'interrupted') or
+                 latest.get('status') == 'completed' and latest.get('final_item') is not None))
+            if project is None or source['context'] != context or not loaded and not (last_known_terminal or not source.get('loaded_observation', False)):
                 continue
             thread, latest = source['thread'], source['latest']
             status = thread.get('status', {})
             activity = {'active':'active', 'idle':'idle', 'notLoaded':'not_loaded', 'systemError':'system_error'}.get(status.get('type'), 'unknown')
-            fresh = 0 <= time.monotonic() - source['at'] <= 15
-            questions = self._part_rows(project, sid, source['root'], context)
-            flags = status.get('activeFlags', [])
+            fresh = 0 <= time.monotonic() - source['at'] <= 15 and (loaded or not source.get('loaded_observation', False))
+            if not loaded:
+                activity = 'not_loaded'
+            questions = self._part_rows(project, sid, source['root'], context) if loaded and fresh else []
+            flags = status.get('activeFlags', []) if fresh else []
             waits = [name for flag, name in [('waitingOnApproval','approval'), ('waitingOnUserInput','question')]
                      if flag in flags or name == 'question' and any(q['state'] not in ('closed','stale') for q in questions)]
-            running = ('confirmed' if fresh and latest is not None and latest['status'] == 'inProgress'
+            running = ('confirmed' if fresh and activity == 'active' and latest is not None and latest['status'] == 'inProgress'
                 and 'approval' not in waits and not any(q['is_blocking'] is not False and q['state'] == 'actionable' for q in questions)
                 and 'waitingOnUserInput' not in flags else 'unconfirmed')
             completion = None
@@ -1304,8 +1317,11 @@ class SessionChat:
                     status=latest['status'], ready=fresh and latest['status'] == 'completed' and witness is not None, completed_at=completed)
             from _control_web_broker import redact
             label = thread.get('name')
+            label = redact(label).strip()[:120] if type(label) is str else ''
+            if not label:
+                label = 'Сессия ' + sid[:8]
             row = dict(session_key=_context_token(dict(principal='owner',context=context,root=source['root'],sid=sid)),
-                project=project, sid=sid, label=redact(label)[:120] if type(label) is str else 'Сессия', vendor='codex',
+                project=project, sid=sid, label=label, vendor='codex',
                 activity=activity, running=running, waits=waits,
                 questions=[dict(interaction_id=q['interaction_id'],state=q['state'],blocking=q['is_blocking']) for q in questions[:16]],
                 result=completion, freshness=dict(state='fresh' if fresh else 'stale', observed_at=source['observed']))
@@ -2414,7 +2430,7 @@ class SessionChat:
         _need(len(encoded_result) <= HISTORY_LIMIT)
         _need(self._root(project) == root and self._catalog_context() == native, 'stale')
         self._history_observation = (root, sid, copy.deepcopy(native))
-        if cursor is None and type(native) is dict and native.get('native_version') == '0.161.0':
+        if cursor is None and type(native) is dict:
             try:
                 self._part_publish(sid, root, native, thread, page['data'][0] if page['data'] else None, page['data'])
             except Exception:
