@@ -35,19 +35,22 @@ class AllWindowMarkersBlind(unittest.TestCase):
         expect(cards).to_have_count(1)
         return cards
 
-    def assert_marker(self, marker, value):
+    def assert_marker(self, marker, percent):
         expect(marker).to_be_visible()
         self.assertEqual(float(marker.get_attribute('aria-valuemin')), 0)
-        self.assertEqual(float(marker.get_attribute('aria-valuemax')), 100)
-        self.assertAlmostEqual(float(marker.get_attribute('aria-valuenow')), value, delta=.2)
+        maximum = float(marker.get_attribute('aria-valuemax'))
+        self.assertGreater(maximum, 0)
+        actual = float(marker.get_attribute('aria-valuenow')) / maximum * 100
+        self.assertAlmostEqual(actual, percent, delta=.2)
         description = ' '.join(filter(None, (marker.get_attribute('aria-label'),
+                                              marker.get_attribute('aria-valuetext'),
                                               marker.get_attribute('title')))).lower()
         self.assertTrue(any(x in description for x in ('прош', 'elapsed', 'мин', 'час', 'дн', 'minute', 'hour', 'day')),
                         'Accessible marker description must state elapsed time/window duration')
 
     def synthetic_response(self, value):
-        # For deliberately inconsistent but schema-shaped data, bypass the
-        # backend's unrelated semantic rejection and exercise display handling.
+        # Use only for schema-shaped negative/expired fixtures the backend
+        # rejects before the display boundary; ordinary cases use open_value.
         self.page.route('**/api/limits-overview',
                         lambda route, request: route.fulfill(status=200, json=value))
         self.page.goto(self.fixture.origin)
@@ -92,33 +95,41 @@ class AllWindowMarkersBlind(unittest.TestCase):
         native_value['sources'][1] = dict(
             node_id='llm', provider='claude', account_id=native.identity('synthetic-claude'),
             identity='native_reported', status='ok', captured_at=native.NOW, age_seconds=0,
-            plan='Pro', windows=[dict(id='claude:primary', bucket='five_hour',
+            plan='Pro', windows=[dict(id='five_hour:primary', bucket='five_hour',
                 duration_minutes=300, remaining_percent=75, resets_at=started+300*60,
                 window_started_at=started, anchor='derived_reset_and_duration')], error=None)
         alp_claude = v2.alp('claude')
         alp_claude['windows'].append(v2.window('claude', 'five_hour', 60, 300))
-        self.synthetic_response(v2.overview([alp_claude], native_value=native_value))
+        self.open_value(v2.overview([alp_claude], native_value=native_value))
         # Both native and ALP fixture origins must retain their separate rows.
         local = self.card('Claude')
         expect(local.get_by_role('progressbar')).to_have_count(1)
+        expect(local.get_by_role('meter')).to_have_count(1)
+        self.assert_marker(local.get_by_role('meter').first, 40)
         remote = self.card('Claude', node='alp')
         expect(remote.get_by_role('meter')).to_have_count(2)
-        self.assertEqual(float(remote.get_by_role('progressbar').get_attribute('aria-valuenow')), 40)
+        bars = remote.get_by_role('progressbar')
+        expect(bars).to_have_count(2)
+        self.assertEqual(float(bars.nth(0).get_attribute('aria-valuenow')), 40)
+        self.assertEqual(float(bars.nth(1).get_attribute('aria-valuenow')), 40)
 
-    def test_elapsed_marker_moves_at_start_middle_and_end_without_changing_spend(self):
-        for elapsed in (0, 3.5 * native.DAY, 7 * native.DAY):
+    def test_elapsed_marker_moves_at_start_middle_and_just_before_reset_without_changing_spend(self):
+        duration = 7 * native.DAY
+        for elapsed in (0, 3.5 * native.DAY, duration - 60):
             with self.subTest(elapsed=elapsed):
-                value = v2.overview(native_value=native.overview(
-                    elapsed=elapsed, remaining=13, duration=10080))
-                self.synthetic_response(value)
+                value = native.overview(elapsed=elapsed, remaining=13, duration=10080)
+                self.open_value(value)
                 card = self.card('Codex')
                 markers = card.get_by_role('meter')
                 expect(markers).to_have_count(2)
-                self.assert_marker(markers.nth(0), min(100, elapsed / (7 * native.DAY) * 100))
-                if elapsed < 7 * native.DAY:
-                    self.assertEqual(float(card.get_by_role('progressbar').get_attribute('aria-valuenow')), 87)
-                else:
-                    expect(card.get_by_text(re.compile('истек|expired', re.I))).to_be_visible()
+                self.assert_marker(markers.nth(0), elapsed / duration * 100)
+                self.assertEqual(float(card.get_by_role('progressbar').get_attribute('aria-valuenow')), 87)
+        expired = v2.overview(native_value=native.overview(
+            elapsed=duration + 60, remaining=13, duration=10080))
+        self.synthetic_response(expired)
+        card = self.card('Codex')
+        expect(card.get_by_role('meter')).to_have_count(0)
+        expect(card.get_by_text(re.compile('истек|expired', re.I))).to_be_visible()
 
     def test_missing_or_inconsistent_anchors_and_money_balance_do_not_fake_elapsed_time(self):
         value = v2.overview()
@@ -126,7 +137,9 @@ class AllWindowMarkersBlind(unittest.TestCase):
         window['window_started_at'] = None
         window['anchor'] = None
         self.synthetic_response(value)
-        expect(self.card('Kimi').get_by_role('meter')).to_have_count(0)
+        # The short window lacks a trusted anchor; its independent weekly
+        # window remains valid and must keep its marker.
+        expect(self.card('Kimi').get_by_role('meter')).to_have_count(1)
         self.page.unroute('**/api/limits-overview')
         self.open_value(v2.overview())
         expect(self.card('OpenRouter').get_by_role('meter')).to_have_count(0)
@@ -135,7 +148,7 @@ class AllWindowMarkersBlind(unittest.TestCase):
         value = v2.overview()
         value['cached_sources'][0]['windows'][0]['resets_at'] += 60
         self.synthetic_response(value)
-        expect(self.panel().get_by_role('meter')).to_have_count(0)
+        expect(self.card('Kimi').get_by_role('meter')).to_have_count(1)
 
     def test_stale_snapshot_keeps_its_stale_label_and_is_not_called_fresh(self):
         value = v2.overview()
