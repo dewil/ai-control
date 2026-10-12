@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import time
 import unittest
+from playwright.sync_api import expect
 
 import test_control_web_project_cloud_browser as cloud
 from test_control_web_chat_width_browser import PASSWORD, SID, totp
@@ -289,6 +290,68 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
         self.page.wait_for_timeout(250)
         self.assertEqual(len(held), 1)
         self.assertEqual(self.page.get_by_role('button', name='Обновить проекты', exact=True).count(), 0)
+
+    def controlled_start(self, query=''):
+        self.page.clock.install()
+        self.page.goto(self.url+query)
+        if not query:
+            self.page.get_by_role('button',name='Сессии',exact=True).or_(
+                self.page.get_by_role('tab',name='Сессии',exact=True)).click()
+        expect(self.project_filter()).to_be_visible()
+        self.tile('high').wait_for(state='attached')
+        self.page.wait_for_timeout(100)
+
+    def visible_navigation_error(self, text):
+        # Only the visible accessible status counts; hidden legacy copies are not an oracle.
+        return self.page.get_by_role('status').filter(has_text=re.compile(re.escape(text),re.I))
+
+    def overview_poll(self):
+        before=sum('/api/participation-overview' in url for method,url in self.network)
+        self.page.clock.fast_forward(6000)
+        deadline=time.monotonic()+2
+        while sum('/api/participation-overview' in url for method,url in self.network)<=before and time.monotonic()<deadline:
+            self.page.wait_for_timeout(20)
+        self.assertGreater(sum('/api/participation-overview' in url for method,url in self.network),before,
+                           'Ordinary overview poll must actually reach the synthetic endpoint')
+        self.page.wait_for_timeout(60)
+
+    def test_USN_global_project_error_is_visible_persists_across_poll_and_retry_clears(self):
+        self.controlled_start()
+        projects={'projects':[{'name':row['name'],**({'unavailable':True} if row['summary_state']=='unavailable' else {})}
+                              for row in summaries()['projects']]}
+        calls=self.route_sequence('session-projects',[(503,{'error':'unavailable'}),(200,projects)])
+        self.refresh()
+        error=self.visible_navigation_error('Список проектов недоступен')
+        expect(error).to_be_visible()
+        self.overview_poll(); expect(error).to_be_visible()
+        self.refresh(); self.assertEqual(len(calls),2)
+        expect(error).to_have_count(0)
+        self.quiet()
+
+    def test_USN_filtered_list_error_survives_poll_and_explicit_apply_retries(self):
+        self.controlled_start()
+        calls=self.route_sequence('sessions',[(500,{'error':'unavailable'}),(200,self.session_success())])
+        self.select_project('high')
+        error=self.visible_navigation_error('Список сессий недоступен')
+        expect(error).to_be_visible()
+        self.overview_poll(); expect(error).to_be_visible()
+        self.page.get_by_role('button',name='Обновить список',exact=True).click()
+        expect(self.session_row('Recovered synthetic session')).to_be_visible()
+        self.assertEqual(len(calls),2)
+        expect(error).to_have_count(0)
+        self.quiet()
+
+    def test_USN_missing_deeplink_error_survives_poll_and_valid_filter_intent_clears(self):
+        self.controlled_start('/?project=high&sid=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
+        error=self.visible_navigation_error('Сессия из ссылки не найдена')
+        expect(error).to_be_visible()
+        self.overview_poll(); expect(error).to_be_visible()
+        self.select_project('loww')
+        expect(self.session_row('Cloud synthetic session')).to_be_visible()
+        expect(error).to_have_count(0)
+        self.assertFalse(any('/api/session-history' in url for method,url in self.network),
+                         'Missing deeplink/recovery never invents a chat selection')
+        self.assertFalse(any(method=='POST' for method,url in self.network))
 
     def restore_synthetic_authentication(self):
         self.page.unroute('**/api/session-project-summary*')

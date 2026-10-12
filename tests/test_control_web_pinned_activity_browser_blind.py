@@ -182,9 +182,14 @@ class PinnedActivityBrowserBlind(unittest.TestCase):
         anchor.evaluate("e=>{window.activityReader=e;e.scrollIntoView({block:'start'})}");before=anchor.bounding_box()['y']
         self.value['items'][1]['last_activity']=a.NOW-1;self.refresh()
         self.order(['Pinned synthetic A','Pinned synthetic B'])
-        self.page.get_by_role('button',name='Обновить список',exact=True).click()
+        self.assertTrue(title.evaluate('e=>e===window.activityPinNode&&e===document.activeElement'),
+                        'Background refresh replaced the focused pin or stole focus')
+        apply=self.page.get_by_role('button',name='Обновить список',exact=True)
+        apply.click()
         self.order(['Pinned synthetic B','Pinned synthetic A'])
-        self.assertTrue(title.evaluate('e=>e===window.activityPinNode&&e===document.activeElement'),'Reorder replaced focused pin node')
+        self.assertTrue(title.evaluate('e=>e===window.activityPinNode'),'Explicit apply replaced pin DOM identity')
+        self.assertTrue(apply.evaluate('e=>e===document.activeElement'),
+                        'Explicit apply must preserve the user-selected control focus')
         self.assertTrue(anchor.evaluate('e=>e===window.activityReader'));self.assertLessEqual(abs(anchor.bounding_box()['y']-before),8)
         self.pin_block().get_by_text('Pinned synthetic B',exact=True).click()
         query=parse_qs(urlsplit(self.page.url).query)
