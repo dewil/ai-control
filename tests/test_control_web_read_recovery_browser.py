@@ -4,7 +4,8 @@ Design frozen from 37f76a3 normative contract, before application source reads.
 Public HTTP routes and DOM are observations; no real account/provider calls.
 """
 # Accepted INV-WSESS-47/48 (2026-10-08-spec-live-observability-package.md):
-# empty statuses collapse; unknown project chips use visible ? plus factual ARIA.
+# Summary retry/freshness semantics remain; cloud chips/count sorting are
+# superseded by INV-USN01/03. Project filter selection is independent of chat.
 
 import copy
 import json
@@ -57,6 +58,11 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
     control = cloud.ProjectCloudBrowserContract.control
     tile = cloud.ProjectCloudBrowserContract.tile
     choose_sort = cloud.ProjectCloudBrowserContract.choose_sort
+    project_filter = cloud.ProjectCloudBrowserContract.project_filter
+    select_project = cloud.ProjectCloudBrowserContract.select_project
+    selected_filter = cloud.ProjectCloudBrowserContract.selected_filter
+    open_session = cloud.ProjectCloudBrowserContract.open_session
+    verify_assets = cloud.ProjectCloudBrowserContract.verify_assets
 
     def setUp(self):
         self.control(projects=summaries()['projects'])
@@ -74,7 +80,8 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
         self.page.get_by_role('button', name='Сессии', exact=True).or_(
             self.page.get_by_role('tab', name='Сессии', exact=True)).click()
         self.page.wait_for_timeout(200)
-        self.tile('high').wait_for()
+        self.tile('high').wait_for(state='attached')
+        self.verify_assets()
         self.network.clear()
         self.page.evaluate('window.__readRecoveryIO.reads.length=0')
 
@@ -116,50 +123,38 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
         self.assertFalse(any('/api/session-history' in url for method, url in self.network),
                          'project metadata refresh must not load history')
 
-    def test_unknown_then_fresh_two_gets_whole_counts_and_sort(self):
-        calls = self.route_sequence('session-project-summary', [(200, summaries('unknown')), (200, summaries())])
+    def test_unknown_then_fresh_two_gets_without_history_or_filter_change(self):
+        calls=self.route_sequence('session-project-summary',[(200,summaries('unknown')),(200,summaries())])
+        before=self.selected_filter()
         self.refresh()
-        self.assertEqual(len(calls), 2)
-        self.assertTrue(all(method == 'GET' for method, url in calls))
-        self.assertRegex(self.tile('high').inner_text(), r'\b17\b')
-        self.assertRegex(self.tile('loww').inner_text(), r'\b99\b')
-        positions = [self.tile(name).evaluate('el=>[...document.querySelectorAll("button")].indexOf(el)')
-                     for name in ('loww', 'high')]
-        self.assertLess(positions[0], positions[1], 'fresh numeric counts must drive existing sorting')
-        self.quiet()
-        self.assertEqual(len(calls), 2, 'no third request/poll after recovery')
+        self.assertEqual(len(calls),2)
+        self.assertTrue(all(method=='GET' for method,url in calls))
+        self.assertEqual(self.selected_filter(),before)
+        self.tile('high'); self.tile('loww')
+        self.quiet(); self.assertEqual(len(calls),2,'no third request/poll after recovery')
 
     def test_unknown_then_unknown_honest_and_bounded(self):
-        calls = self.route_sequence('session-project-summary', [(200, summaries('unknown'))])
-        self.refresh()
-        self.assertEqual(len(calls), 2)
-        self.assertNotRegex(self.tile('high').inner_text(), r'\b0\b')
-        self.assertIn('?', self.tile('high').inner_text())
-        self.assertRegex(self.tile('high').get_attribute('aria-label'), '(?i)неизвест')
-        self.assertRegex(self.page.locator('body').inner_text(), '(?i)неизвест|недоступ|не удалось|ошиб')
-        self.assertTrue(self.page.get_by_role('button', name='Обновить проекты', exact=True).is_enabled())
-        self.quiet()
-        self.assertEqual(len(calls), 2)
+        calls=self.route_sequence('session-project-summary',[(200,summaries('unknown'))])
+        self.refresh(); self.assertEqual(len(calls),2)
+        self.assertNotRegex(self.tile('high').inner_text(),r'\b0\b')
+        self.assertRegex(self.page.locator('body').inner_text(),r'(?i)неизвест|недоступ|не удалось|ошиб|непол|частич')
+        self.assertTrue(self.page.get_by_role('button',name='Обновить проекты',exact=True).is_enabled())
+        self.quiet(); self.assertEqual(len(calls),2)
 
     def test_confirmed_zero_and_null_activity_do_not_retry(self):
-        body = summaries(high=0, low=4)
-        for row in body['projects']:
-            row['last_activity'] = None
-        calls = self.route_sequence('session-project-summary', [(200, body)])
-        self.refresh()
-        self.assertEqual(len(calls), 1)
-        self.assertRegex(self.tile('high').inner_text(), r'\b0\b')
-        self.quiet()
-        self.assertEqual(len(calls), 1)
+        body=summaries(high=0,low=4)
+        for row in body['projects']: row['last_activity']=None
+        calls=self.route_sequence('session-project-summary',[(200,body)])
+        self.refresh(); self.assertEqual(len(calls),1)
+        self.tile('high')  # Confirmed zero does not remove the authorized project.
+        self.quiet(); self.assertEqual(len(calls),1)
 
     def test_all_unavailable_no_retry_or_fake_counts(self):
-        body = summaries('unknown')
-        for row in body['projects']:
-            row['summary_state'] = 'unavailable'
-        calls = self.route_sequence('session-project-summary', [(200, body)])
-        self.refresh()
-        self.assertEqual(len(calls), 1)
-        self.assertNotRegex(self.tile('high').inner_text(), r'\b0\b')
+        body=summaries('unknown')
+        for row in body['projects']: row['summary_state']='unavailable'
+        calls=self.route_sequence('session-project-summary',[(200,body)])
+        self.refresh(); self.assertEqual(len(calls),1)
+        self.assertRegex(self.page.locator('body').inner_text(),r'(?i)недоступ|неизвест|непол|частич|выберите')
         self.quiet()
 
     def test_summary_error_transport_and_malformed_do_not_retry(self):
@@ -183,22 +178,27 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
         self.assertEqual(reads[0]['signal'], reads[1]['signal'], 'both attempts share original AbortController')
         self.assertEqual(evidence['timers'], 0, '30s deadline must be cleared after success')
 
+    def session_row(self,title):
+        listing=self.page.get_by_role('list',name=re.compile('Сессии',re.I)).or_(
+            self.page.get_by_role('listbox',name=re.compile('Сессии',re.I)))
+        return listing.get_by_role('listitem').or_(listing.get_by_role('option')).filter(has_text=title)
+
     def session_success(self, title='Recovered synthetic session'):
-        return {'rows': [{'sid': SID, 'title': title, 'status': 'idle'}], 'has_more': False}
+        return {'rows': [{'sid': SID, 'title': title, 'vendor': 'codex', 'status': 'idle'}], 'has_more': False}
 
     def test_session_explicit_409_stale_then_success_exact_same_get(self):
         calls = self.route_sequence('sessions', [(409, {'error': 'stale'}), (200, self.session_success())])
-        self.tile('high').click()
+        self.select_project('high')
         self.page.wait_for_timeout(300)
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[0], calls[1], 'retry must preserve exact project/page URL and GET')
-        self.page.get_by_role('button', name='Recovered synthetic session', exact=False).wait_for()
+        self.session_row('Recovered synthetic session').wait_for()
         self.quiet()
         self.assertEqual(len(calls), 2)
 
     def test_session_stale_then_stale_no_third_and_manual_refresh_visible(self):
         calls = self.route_sequence('sessions', [(409, {'error': 'stale'})])
-        self.tile('high').click()
+        self.select_project('high')
         self.page.wait_for_timeout(500)
         self.assertEqual(len(calls), 2)
         self.assertRegex(self.page.locator('body').inner_text(), '(?i)устар|stale|ошиб|не удалось')
@@ -210,17 +210,17 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
         for status, error in [(503, 'unavailable'), (409, 'unavailable'), (400, 'stale'), (500, 'stale')]:
             with self.subTest(status=status, error=error):
                 calls = self.route_sequence('sessions', [(status, {'error': error})])
-                self.tile('high').click()
+                self.select_project('high')
                 self.page.wait_for_timeout(300)
                 self.assertEqual(len(calls), 1)
                 self.page.unroute('**/api/sessions*')
-                self.tile('loww').click()
+                self.select_project('loww')
                 self.page.wait_for_timeout(100)
         self.quiet()
 
     def test_session_retry_preserves_shared_deadline_and_cleans_timer(self):
         self.route_sequence('sessions', [(409, {'error': 'stale'}), (200, self.session_success())])
-        self.tile('high').click()
+        self.select_project('high')
         self.page.wait_for_timeout(300)
         evidence = self.page.evaluate('({reads:window.__readRecoveryIO.reads,timers:window.__readRecoveryIO.timers.size})')
         reads = [r for r in evidence['reads'] if r['path'] == '/api/sessions']
@@ -239,16 +239,16 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
             else:
                 route.fulfill(status=200, json=self.session_success('CURRENT LOW SESSION'))
         self.page.route('**/api/sessions*', handler)
-        self.tile('high').click()
+        self.select_project('high')
         self.page.wait_for_timeout(100)
         self.assertEqual(len(held), 1)
-        self.tile('loww').click()
-        self.page.get_by_role('button', name='CURRENT LOW SESSION', exact=False).wait_for()
+        self.select_project('loww')
+        self.session_row('CURRENT LOW SESSION').wait_for()
         held[0].fulfill(status=409, json={'error': 'stale'})
         self.page.wait_for_timeout(250)
         self.assertEqual(sum('project=high' in url for url in calls), 1)
-        self.assertEqual(self.tile('loww').get_attribute('aria-pressed'), 'true')
-        self.assertEqual(self.page.get_by_role('button', name='CURRENT LOW SESSION', exact=False).count(), 1)
+        self.assertEqual(self.selected_filter(),'loww')
+        self.assertEqual(self.session_row('CURRENT LOW SESSION').count(), 1)
 
     def test_changed_project_during_retry_discards_old_rows(self):
         held = []
@@ -263,16 +263,16 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
             else:
                 route.fulfill(status=200, json=self.session_success('CURRENT LOW SESSION'))
         self.page.route('**/api/sessions*', handler)
-        self.tile('high').click()
+        self.select_project('high')
         self.page.wait_for_timeout(200)
         self.assertEqual(len(held), 1, 'actual retry must reach controlled second response')
-        self.tile('loww').click()
-        self.page.get_by_role('button', name='CURRENT LOW SESSION', exact=False).wait_for()
+        self.select_project('loww')
+        self.session_row('CURRENT LOW SESSION').wait_for()
         held[0].fulfill(status=200, json=self.session_success('OBSOLETE HIGH SESSION'))
         self.page.wait_for_timeout(250)
-        self.assertEqual(self.page.get_by_role('button', name='OBSOLETE HIGH SESSION', exact=False).count(), 0)
+        self.assertEqual(self.session_row('OBSOLETE HIGH SESSION').count(), 0)
         self.assertEqual(len(high_calls), 2)
-        self.assertEqual(self.tile('loww').get_attribute('aria-pressed'), 'true')
+        self.assertEqual(self.selected_filter(),'loww')
 
     def test_logout_before_unknown_summary_response_never_dispatches_retry(self):
         # Real logout invalidates the shared synthetic cookie. Restore with a
@@ -304,8 +304,8 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
         self.assertEqual(self.page.evaluate('window.__readRecoveryIO.timers.size'), 0)
 
     def test_project_refresh_does_not_replay_send_or_selected_history(self):
-        self.tile('high').click()
-        self.page.get_by_role('button', name='Cloud synthetic session', exact=False).click()
+        self.select_project('high')
+        self.open_session()
         self.page.get_by_text('CLOUD SYNTHETIC HISTORY', exact=True).wait_for()
         sends = self.route_sequence('session-send', [(503, {'error': 'unavailable'})])
         self.page.locator('textarea').fill('own synthetic message')
@@ -314,8 +314,7 @@ class ReadRecoveryBrowserContract(unittest.TestCase):
         self.assertEqual(len(sends), 1)
         self.network.clear()
         calls = self.route_sequence('session-project-summary', [(200, summaries('unknown')), (200, summaries())])
-        # INV43 closes Projects after confirmed history selection; explicit refresh requires reopening.
-        self.page.locator('#projects-toggle').click()
+        # INV-USN: project metadata refresh remains separate from selected chat.
         self.refresh()
         self.assertEqual(len(calls), 2)
         self.quiet()
