@@ -101,8 +101,10 @@ def redirect_status_io(fixture):
     fixture = Path(fixture)
     status_dir = str(Path(BRIDGE_STATUS_FILE).parent)
     real_open, real_stat, real_lstat = os.open, os.stat, os.lstat
+    real_fstat, real_close = os.fstat, os.close
     real_mkdir, real_replace, real_unlink = os.mkdir, os.replace, os.unlink
     real_chmod, real_path_open, real_builtin_open = os.chmod, Path.open, builtins.open
+    status_fds = set()
 
     for module_name in ("_control_web_devbus_nats", "_control_web_broker"):
         module = importlib.import_module(module_name)
@@ -110,14 +112,38 @@ def redirect_status_io(fixture):
             stack.enter_context(patch.object(module, "BRIDGE_STATUS_PATH", fixture))
 
     def guard(value):
-        text = os.fsdecode(value)
+        try: text = os.fsdecode(value)
+        except TypeError: return value
         if text in {BRIDGE_STATUS_FILE, status_dir} or text.startswith(status_dir + os.sep):
             raise AssertionError("test attempted IO through canonical bridge status path")
         return value
 
-    stack.enter_context(patch.object(os, "open", side_effect=lambda path, *a, **k: real_open(guard(path), *a, **k)))
-    stack.enter_context(patch.object(os, "stat", side_effect=lambda path, *a, **k: real_stat(guard(path), *a, **k)))
+    def is_fixture(value):
+        try: return Path(os.fsdecode(value)) == fixture
+        except (TypeError, ValueError): return False
+
+    def private_open(path, *args, **kwargs):
+        value = guard(path); fd = real_open(value, *args, **kwargs)
+        if is_fixture(value): status_fds.add(fd)
+        return fd
+
+    def private_stat(path, *args, **kwargs):
+        value = guard(path); result = real_stat(value, *args, **kwargs)
+        return fake_stat(result, owner=1000) if is_fixture(value) else result
+
+    def private_fstat(fd):
+        result = real_fstat(fd)
+        return fake_stat(result, owner=1000) if fd in status_fds else result
+
+    def private_close(fd):
+        try: return real_close(fd)
+        finally: status_fds.discard(fd)
+
+    stack.enter_context(patch.object(os, "open", side_effect=private_open))
+    stack.enter_context(patch.object(os, "stat", side_effect=private_stat))
     stack.enter_context(patch.object(os, "lstat", side_effect=lambda path, *a, **k: real_lstat(guard(path), *a, **k)))
+    stack.enter_context(patch.object(os, "fstat", side_effect=private_fstat))
+    stack.enter_context(patch.object(os, "close", side_effect=private_close))
     stack.enter_context(patch.object(os, "mkdir", side_effect=lambda path, *a, **k: real_mkdir(guard(path), *a, **k)))
     stack.enter_context(patch.object(os, "replace", side_effect=lambda src, dst, *a, **k: real_replace(guard(src), guard(dst), *a, **k)))
     stack.enter_context(patch.object(os, "unlink", side_effect=lambda path, *a, **k: real_unlink(guard(path), *a, **k)))
@@ -996,13 +1022,122 @@ class ExistingObserverEphemeralBlind(unittest.IsolatedAsyncioTestCase):
                     try: value = runtime.snapshot()
                     finally: runtime.stop()
                 self.assertTrue(value["coverage"]["truncated"])
-                self.assertEqual(value["connection"]["state"], "live")
+                expected_connection = "disconnected" if age > 30 else "live"
+                self.assertEqual(value["connection"]["state"], expected_connection)
                 self.assertIsNone(value["coverage"]["first_seq"])
                 self.assertEqual(value["coverage"]["mode"], "unknown")
                 if reason:
                     self.assertIn(reason, value["coverage"]["issues"])
                 else:
                     self.assertNotIn("retention_gap", value["coverage"]["issues"])
+
+    def test_legacy_devbus_projection_is_unchanged_without_obs_sidecar(self):
+        # INV-SIDE04: bridge cutoff metadata applies only to the OBS sidecar mode.
+        broker = importlib.import_module("_control_web_broker")
+        web = importlib.import_module("_control_web_devbus")
+        config = broker.NatsConfig.from_env({
+            "CONTROL_DEVBUS_ENABLED": "1", "DEVBUS_NATS_URL": "nats://127.0.0.1:4222",
+            "CONTROL_DEVBUS_STREAM": "DEVBUS",
+        })
+        class Observer:
+            def __init__(self, projection, connect): self.projection = projection
+            async def start(self):
+                self.projection.connection("live")
+                self.projection.coverage(31, 47, 86400, 104857600, replay_complete=True)
+            async def stop(self): return None
+        with tempfile.TemporaryDirectory(prefix="sidecar-legacy-status-") as directory:
+            fixture = Path(directory) / "devbus-bridge.json"
+            with redirect_status_io(fixture):
+                runtime = broker.DevbusRuntime(
+                    config_loader=lambda: (config, None), projection_factory=web.Projection,
+                    observer_factory=Observer, connect_factory=lambda _: None,
+                    dependency_probe=lambda: True)
+                runtime.start()
+                try:
+                    expected = runtime._projection.snapshot()
+                    self.assertEqual(runtime.snapshot(), expected)
+                finally:
+                    runtime.stop()
+
+    def test_obs_gap_is_partial_while_outages_disconnect_and_recover_without_mutation(self):
+        # INV-SIDE04: retention gaps stay live/partial; outages disconnect and recover.
+        broker = importlib.import_module("_control_web_broker")
+        web = importlib.import_module("_control_web_devbus")
+        config = broker.NatsConfig(enabled=True, url=OBS_URL, stream="OBS_EVENTS",
+            user="control_observer", password="synthetic-outage-fixture-password",
+            stream_created=OBS_CREATED)
+        event = {
+            "message_id": "local_obs_event", "task_id": "local_obs_task",
+            "correlation_id": "local_obs_task", "source": "agent_a", "target": "control",
+            "kind": "completed", "created_at": "2026-10-12T00:03:00+00:00",
+            "payload": {"text": "local OBS event"},
+        }
+        class Observer:
+            def __init__(self, projection, connect): self.projection = projection
+            async def start(self):
+                self.projection.connection("live")
+                self.projection.coverage(31, 47, 86400, 104857600, replay_complete=True)
+                if not self.projection.ingest(canonical(event), "devbus.events.agent_a", 31):
+                    raise AssertionError("synthetic local OBS event must be accepted")
+            async def stop(self): return None
+
+        def status(now, *, state="live", reason=None, observed=None):
+            timestamp = observed or now
+            return {
+                "schema": 1, "state": state,
+                "observed_at": timestamp.isoformat().replace("+00:00", "Z"),
+                "source_stream_created": BRIDGE_CREATED, "consumer_created": CONSUMER_CREATED,
+                "ack_floor": 12, "first_seq": 10, "pending": 0, "reason": reason,
+            }
+
+        with tempfile.TemporaryDirectory(prefix="sidecar-outage-status-") as directory:
+            fixture = Path(directory) / "devbus-bridge.json"
+            now = datetime.now(timezone.utc)
+            with redirect_status_io(fixture):
+                runtime = broker.DevbusRuntime(
+                    config_loader=lambda: (config, None), projection_factory=web.Projection,
+                    observer_factory=Observer, connect_factory=lambda _: None,
+                    dependency_probe=lambda: True)
+                runtime.start()
+                try:
+                    fixture.write_bytes(canonical(status(now, state="degraded", reason="retention_gap")))
+                    fixture.chmod(0o600)
+                    gap = runtime.snapshot()
+                    self.assertEqual(gap["connection"]["state"], "live")
+                    self.assertEqual(gap["coverage"]["mode"], "partial")
+                    self.assertIn("retention_gap", gap["coverage"]["issues"])
+                    self.assertEqual((gap["coverage"]["first_seq"], gap["coverage"]["last_seq"]), (31, 47))
+                    self.assertEqual(gap["events"][0]["message_id"], "local_obs_event")
+
+                    # Missing, stale, and explicit disconnected bridge health are outages.
+                    cases = (
+                        (None, "missing"),
+                        (status(now, observed=now - timedelta(seconds=31)), "stale"),
+                        (status(now, state="disconnected", reason="unavailable"), "disconnected"),
+                    )
+                    for value, label in cases:
+                        with self.subTest(outage=label):
+                            if value is None:
+                                fixture.unlink(missing_ok=True)
+                            else:
+                                fixture.write_bytes(canonical(value)); fixture.chmod(0o600)
+                            result = runtime.snapshot()
+                            self.assertEqual(result["connection"]["state"], "disconnected")
+                            self.assertEqual((result["coverage"]["first_seq"], result["coverage"]["last_seq"]), (31, 47))
+                            self.assertEqual(result["events"][0]["message_id"], "local_obs_event")
+                            backing = runtime._projection.snapshot()
+                            self.assertEqual(backing["connection"]["state"], "live")
+                            self.assertEqual((backing["coverage"]["first_seq"], backing["coverage"]["last_seq"]), (31, 47))
+
+                    fixture.write_bytes(canonical(status(now)))
+                    fixture.chmod(0o600)
+                    recovered = runtime.snapshot()
+                    self.assertEqual(recovered["connection"]["state"], "live")
+                    self.assertEqual((recovered["coverage"]["first_seq"], recovered["coverage"]["last_seq"]), (31, 47))
+                    self.assertEqual(recovered["events"][0]["message_id"], "local_obs_event")
+                    self.assertEqual(runtime._projection.snapshot()["connection"]["state"], "live")
+                finally:
+                    runtime.stop()
 
     def test_obs_password_is_redacted_from_owner_bounded_result(self):
         """OBS-only config secrets must enter the same existing Projection scrub path."""
