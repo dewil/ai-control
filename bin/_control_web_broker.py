@@ -118,7 +118,8 @@ def load_devbus_config():
 def _apply_bridge_status(snapshot, *, now=None):
     """Overlay bridge coverage issues without mixing its source sequences into OBS."""
     now = time.time() if now is None else now
-    reason = None
+    reason = 'unavailable'
+    bridge_state = 'disconnected'
     try:
         fd = os.open(BRIDGE_STATUS_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         try:
@@ -157,8 +158,10 @@ def _apply_bridge_status(snapshot, *, now=None):
         if not math.isfinite(observed) or observed > now + 5 or now-observed > 30:
             raise ValueError()
         reason = status['reason']
+        bridge_state = status['state']
     except Exception:
         reason = 'unavailable'
+        bridge_state = 'disconnected'
 
     coverage = snapshot.get('coverage') if type(snapshot) is dict else None
     if type(coverage) is not dict:
@@ -171,6 +174,11 @@ def _apply_bridge_status(snapshot, *, now=None):
     coverage['issues'] = sorted(issues)
     coverage['truncated'] = True
     coverage['mode'] = 'unknown' if coverage.get('first_seq') is None else 'partial'
+    outage = (bridge_state in {'starting', 'disconnected'}
+              or bridge_state == 'degraded' and reason != 'retention_gap'
+              or reason in {'unavailable', 'invalid_config', 'invalid_event', 'id_conflict'})
+    if outage:
+        snapshot['connection'] = {'state': 'disconnected', 'reason': 'unavailable'}
     return snapshot
 
 def _devbus_empty(state='disabled', reason=None):
@@ -378,6 +386,7 @@ class DevbusRuntime:
         self._serving = False
         self._export_token = None
         self._fallback = _devbus_empty()
+        self._bridge_status_enabled = False
 
     def start(self):
         with self._lock:
@@ -386,6 +395,10 @@ class DevbusRuntime:
             self._started = True
         try:
             config, reason = self._loader()
+            self._bridge_status_enabled = (getattr(config, 'enabled', None) is True
+                and getattr(config, 'stream', None) == 'OBS_EVENTS'
+                and type(getattr(config, 'stream_created', None)) is str
+                and bool(config.stream_created))
             if reason is not None:
                 self._fallback = _devbus_empty('disconnected', 'invalid_config')
                 return
@@ -524,7 +537,8 @@ class DevbusRuntime:
                 if cancellation.is_set() or self._stopping.is_set() or time.monotonic() >= deadline:
                     return {'error': 'unavailable'}
                 value = bounded_devbus_snapshot(self._projection, task, agent)
-                value = _apply_bridge_status(value)
+                if self._bridge_status_enabled:
+                    value = _apply_bridge_status(value)
                 return value if time.monotonic() < deadline else {'error': 'unavailable'}
             finally:
                 with self._lock:
