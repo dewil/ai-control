@@ -141,7 +141,7 @@ class SessionOverviewBrowserRed(unittest.TestCase):
             activity='active', running='confirmed', waits=['approval', 'question'],
             questions=[dict(interaction_id=s.HANDLE, state='actionable', blocking=True)],
             result=completed_result('priority-final'))
-        ready = overview_row(2, 'delta', s.OTHER, 'Проект Δ · Résumé final', activity='idle',
+        ready = overview_row(2, 'delta', s.OTHER, 'Résumé final · Проект Δ', activity='idle',
             result=completed_result('fresh-final'))
         working_sid = '66666666-6666-4666-8666-666666666666'
         working = overview_row(3, 'work', working_sid, '  ', activity='active',
@@ -195,7 +195,7 @@ class SessionOverviewBrowserRed(unittest.TestCase):
         sid = '55555555-5555-4555-8555-555555555555'
         label = 'Bounded session'
         def completed(*, ready, freshness):
-            return overview_row(7, 'Project Lifecycle', sid, label, activity='idle' if ready else 'not_loaded',
+            return overview_row(7, 'lifecycle', sid, label, activity='idle' if ready else 'not_loaded',
                 result=completed_result('lifecycle-final', ready=ready), freshness=freshness)
         self.set_overview_rows([completed(ready=True, freshness='fresh')])
         self.page.clock.install()
@@ -213,7 +213,7 @@ class SessionOverviewBrowserRed(unittest.TestCase):
         self.assertNotIn('lifecycle-final', self.page.locator('body').inner_text())
 
         # A fresh current inProgress replaces the old completed witness entirely.
-        self.set_overview_rows([overview_row(7, 'Project Lifecycle', sid, label,
+        self.set_overview_rows([overview_row(7, 'lifecycle', sid, label,
             activity='active', running='confirmed', freshness='fresh')], revision=3)
         self.page.clock.fast_forward(6000)
         self.until(lambda: self.page.get_by_text('В работе', exact=True).count() == 1)
@@ -221,7 +221,7 @@ class SessionOverviewBrowserRed(unittest.TestCase):
         self.assertNotIn('lifecycle-final', self.page.locator('body').inner_text())
 
         # Unload after that active observation cannot resurrect the completed result.
-        self.set_overview_rows([overview_row(7, 'Project Lifecycle', sid, label,
+        self.set_overview_rows([overview_row(7, 'lifecycle', sid, label,
             activity='not_loaded', running='unconfirmed', result=None, freshness='stale')], revision=4)
         self.page.clock.fast_forward(6000)
         self.until(lambda: self.page.get_by_text('Прочие состояния', exact=True).count() == 1)
