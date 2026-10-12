@@ -180,7 +180,7 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 #navigator-desktop,#session-navigator{min-width:0}
 #session-navigator{padding:8px;background:#1d1d20;border:1px solid #38383e;border-radius:6px;overflow-wrap:anywhere}
 #navigator-heading{font-size:16px;margin:4px 0 8px}
-#navigator-list{list-style:none;padding:0;margin:8px 0;display:grid;gap:4px;overflow-anchor:none}
+#navigator-list{min-height:1px;list-style:none;padding:0;margin:8px 0;display:grid;gap:4px;overflow-anchor:none}
 .navigator-filters,.navigator-tools{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0}
 #session-navigator button{min-height:44px;min-width:44px;max-width:100%;padding:4px 7px;font-size:12px}
 .navigator-filters button[aria-pressed=true]{border-color:#a5afff;background:#353541}

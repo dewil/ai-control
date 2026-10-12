@@ -549,24 +549,24 @@ function renderModelControls(){
 }
 
 // INV-USN-01..08: a bounded presentation snapshot; action authority stays in validated feeds.
-const navigatorView={entries:new Map(),snapshot:[],pending:[],filter:'all',project:'',initialized:false,opened:false,request:0,flight:null,page:0,more:false,partial:false,truncated:false,serial:0,openIntent:0,blocked:new Set(),pinIdentity:new Map(),applyPins:false};
+const navigatorView={entries:new Map(),snapshot:[],pending:[],filter:'all',project:'',initialized:false,opened:false,request:0,flight:null,page:0,more:false,partial:false,truncated:false,serial:0,openIntent:0,pinIdentity:new Map(),applyPins:false};
 const navigatorMedia=window.matchMedia('(min-width:1024px)');
 const navigatorFilters=[['all','Все'],['attention','Внимание'],['ready','Готовы'],['working','Работают'],['pins','★']];
-function resetNavigator(){
+function resetNavigator(preservePanel=false){
   navigatorView.request++;navigatorView.openIntent++;navigatorView.flight?.abort();navigatorView.flight=null;
-  navigatorView.entries.clear();navigatorView.snapshot=[];navigatorView.pending=[];navigatorView.initialized=false;navigatorView.project='';navigatorView.filter='all';navigatorView.opened=false;navigatorView.more=false;navigatorView.partial=false;navigatorView.blocked.clear();navigatorView.pinIdentity.clear();navigatorView.truncated=false;
-  $('navigator-list')?.replaceChildren();$('navigator-project')?.replaceChildren(new Option('Все проекты',''));if($('navigator-status'))$('navigator-status').textContent='';if($('navigator-new'))$('navigator-new').hidden=true;closeNavigator();
+  navigatorView.entries.clear();navigatorView.snapshot=[];navigatorView.pending=[];navigatorView.initialized=false;if(!preservePanel){navigatorView.project='';navigatorView.filter='all';navigatorView.opened=false;}navigatorView.more=false;navigatorView.partial=false;navigatorView.pinIdentity.clear();navigatorView.truncated=false;
+  $('navigator-list')?.replaceChildren();if(!preservePanel)$('navigator-project')?.replaceChildren(new Option('Все проекты',''));if($('navigator-status'))$('navigator-status').textContent='';if($('navigator-new'))$('navigator-new').hidden=true;if(!preservePanel)closeNavigator();
 }
 function navigatorAllowed(project){return !projectEntries.length||availableProjects.has(project);}
 function navigatorRemove(key){navigatorView.entries.delete(key);navigatorView.snapshot=navigatorView.snapshot.filter(value=>value!==key);navigatorView.pending=navigatorView.pending.filter(value=>value!==key);}
 function scrubRedactedPins(items){
-  for(const item of items){const old=navigatorView.pinIdentity.get(item.pin_id);if(!item.available&&old){const index=navigatorView.snapshot.indexOf(old);navigatorView.blocked.add(old);navigatorRemove(old);if(index>=0)navigatorView.snapshot.splice(index,0,item.pin_id);navigatorView.pinIdentity.delete(item.pin_id);}else if(item.available&&navigatorAllowed(item.project)){const key=chatKey(item.project,item.sid),index=navigatorView.snapshot.indexOf(item.pin_id);navigatorView.blocked.delete(key);navigatorView.pinIdentity.set(item.pin_id,key);navigatorRemove(item.pin_id);if(index>=0)navigatorView.snapshot.splice(index,0,key);}}
+  for(const item of items){const previous=pinView.items.find(pin=>pin.pin_id===item.pin_id&&pin.available),old=navigatorView.pinIdentity.get(item.pin_id)||(previous?chatKey(previous.project,previous.sid):null);if(!item.available&&old){const index=navigatorView.snapshot.indexOf(old);navigationEpoch++;navigatorRemove(old);if(partView.overview.data)partView.overview.data={...partView.overview.data,rows:partView.overview.data.rows.filter(row=>chatKey(row.project,row.sid)!==old)};partView.target=null;if(index>=0)navigatorView.snapshot.splice(index,0,item.pin_id);navigatorView.pinIdentity.delete(item.pin_id);}else if(item.available&&navigatorAllowed(item.project)){const key=chatKey(item.project,item.sid),index=navigatorView.snapshot.indexOf(item.pin_id);navigatorView.pinIdentity.set(item.pin_id,key);navigatorRemove(item.pin_id);if(index>=0)navigatorView.snapshot.splice(index,0,key);}}
   const ids=new Set(items.map(item=>item.pin_id));for(const id of navigatorView.pinIdentity.keys())if(!ids.has(id))navigatorView.pinIdentity.delete(id);
 }
 function reconcileNavigatorProjects(){
   let revoked=false;
   for(const [key,entry] of navigatorView.entries)if(entry.project&&!availableProjects.has(entry.project)){
-    revoked=true;navigatorView.blocked.add(key);
+    revoked=true;
     const pin=pinView.items.find(item=>item.available&&chatKey(item.project,item.sid)===key),index=navigatorView.snapshot.indexOf(key);
     navigatorRemove(key);
     if(pin){const opaque={pin_id:pin.pin_id,project:null,sid:null,title:'Недоступная сессия',vendor:null,available:false,metadata_state:'unavailable',status:'unknown',waits:[],last_activity:null,observed_at:null,activity_state:'unavailable'};
@@ -575,8 +575,8 @@ function reconcileNavigatorProjects(){
     }
   }
   if(revoked){for(const project of creates.keys())if(!availableProjects.has(project))creates.delete(project);for(const map of [drafts,historyData,modelDrafts,renames,queueViews,receipts,latestAttempts])for(const key of map.keys())if(!availableProjects.has(key.split('\u0000')[0]))map.delete(key);navigationEpoch++;if(partView.overview.data)partView.overview.data={...partView.overview.data,rows:partView.overview.data.rows.filter(row=>availableProjects.has(row.project))};partView.target=null;}
-  navigatorView.request++;navigatorView.flight?.abort();navigatorView.flight=null;
   const select=$('navigator-project'),before=select.value;
+  if(before&&!availableProjects.has(before)){navigatorView.request++;navigatorView.flight?.abort();navigatorView.flight=null;}
   select.replaceChildren(new Option('Все проекты',''),...projectEntries.filter(row=>availableProjects.has(row.name)).map(row=>new Option(row.name,row.name)));
   navigatorView.project=availableProjects.has(before)?before:'';select.value=navigatorView.project;
   if(createDialogProject&&!availableProjects.has(createDialogProject))closeCreateDialog();
@@ -584,12 +584,12 @@ function reconcileNavigatorProjects(){
 }
 function navigatorRetain(value){
   const key=value.key,existing=navigatorView.entries.get(key);
-  if(navigatorView.blocked.has(key)||value.project&&!navigatorAllowed(value.project))return;
+  if(value.project&&!navigatorAllowed(value.project))return;
   const entry={...existing,...value,received:existing?.received||++navigatorView.serial};
   const size=new TextEncoder().encode(JSON.stringify(entry)).length;
   let bytes=0;for(const [k,row]of navigatorView.entries)if(k!==key)bytes+=new TextEncoder().encode(JSON.stringify(row)).length;
   while((!existing&&navigatorView.entries.size>=256)||bytes+size>256*1024){
-    const victim=[...navigatorView.entries.values()].filter(row=>row.key!==key&&!navigatorView.snapshot.includes(row.key)&&!row.pinId&&row.key!==currentSessionKey()).sort((a,b)=>a.received-b.received||a.key.localeCompare(b.key))[0];
+    const victim=[...navigatorView.entries.values()].filter(row=>row.key!==key&&!navigatorView.snapshot.includes(row.key)&&!navigatorEntry(row.key)?.pinId&&row.key!==currentSessionKey()).sort((a,b)=>a.received-b.received||a.key.localeCompare(b.key))[0];
     if(!victim){navigatorView.truncated=true;return;}
     bytes-=new TextEncoder().encode(JSON.stringify(victim)).length;navigatorRemove(victim.key);
   }
@@ -598,23 +598,24 @@ function navigatorRetain(value){
 function ingestNavigatorPage(project,rows){
   if(!navigatorAllowed(project))return;
   for(const row of rows){if(!row||!UUID_RE.test(row.sid)||typeof row.title!=='string'&&row.title!==null)continue;
-    const key=chatKey(project,row.sid);navigatorView.blocked.delete(key);
+    const key=chatKey(project,row.sid);
     navigatorRetain({key,project,sid:row.sid,pageTitle:typeof row.title==='string'?row.title.slice(0,1000):'',pageVendor:['codex','claude'].includes(row.vendor)?row.vendor:null,pageStatus:row.status,pageNeeds:row.needs_native_attention===true});
   }
 }
 function navigatorEntry(key){
-  const entry=navigatorView.entries.get(key);if(!entry||navigatorView.blocked.has(key)||entry.project&&!navigatorAllowed(entry.project))return null;
+  const entry=navigatorView.entries.get(key);if(!entry||entry.project&&!navigatorAllowed(entry.project))return null;
   const overview=partView.overview.data?.rows.find(row=>chatKey(row.project,row.sid)===key),pin=pinView.items.find(row=>row.available?chatKey(row.project,row.sid)===key:row.pin_id===key);
   const fresh=overview&&partView.overview.data.health==='fresh'&&overview.freshness.state==='fresh';
   const attention=Boolean(fresh&&(overview.waits.length||overview.questions.some(q=>['actionable','native_only','responding','sent','delivery_unknown'].includes(q.state))||overview.activity==='system_error'||['failed','interrupted'].includes(overview.result?.status)));
   const ready=Boolean(fresh&&!attention&&overview.result?.ready),working=Boolean(fresh&&!attention&&!ready&&overview.running==='confirmed'&&overview.activity==='active');
   const times=[pin?.last_activity,overview?.result?.completed_at].filter(value=>typeof value==='number'&&Number.isFinite(value));
   const title=entry.pageTitle||overview?.label||pin?.title||entry.title||'Сессия '+entry.sid?.slice(0,8);
-  return {...entry,title,vendor:entry.pageVendor||overview?.vendor||pin?.vendor||null,pinId:pin?.pin_id||null,overview:overview||null,fresh,attention,ready,working,activity:times.length?Math.max(...times):null,snapshot:!entry.pageTitle&&!overview&&Boolean(pin?.available),unavailable:entry.opaque===true};
+  return {...entry,title,vendor:entry.pageVendor||overview?.vendor||pin?.vendor||null,pinId:pin?.pin_id||null,overview:overview||null,pinStatus:pin?.status||null,fresh,attention,ready,working,activity:times.length?Math.max(...times):null,snapshot:!entry.pageTitle&&!overview&&Boolean(pin?.available),unavailable:entry.opaque===true};
 }
 function navigatorMatches(entry,filter=navigatorView.filter){return Boolean(entry&&(!navigatorView.project||entry.project===navigatorView.project)&&({all:true,attention:entry.attention,ready:entry.ready,working:entry.working,pins:Boolean(entry.pinId)})[filter]);}
 function syncNavigator(apply=false){
   if(!navigationVisible())return;
+  if(apply||navigatorView.applyPins){navigatorView.snapshot=[];navigatorView.truncated=false;}
   const data=partView.overview.data;
   for(const row of data?.rows||[]){const key=chatKey(row.project,row.sid);navigatorRetain({key,project:row.project,sid:row.sid,title:row.label});}
   for(const pin of pinView.items){const key=pin.available?chatKey(pin.project,pin.sid):pin.pin_id;navigatorRetain(pin.available?{key,project:pin.project,sid:pin.sid,pinId:pin.pin_id,title:pin.title}:{key,opaque:true,title:'Недоступная сессия',pinId:pin.pin_id});}
@@ -634,8 +635,9 @@ function navigatorStatus(entry){
   if(entry.attention){if(row.waits.includes('approval'))return 'Разрешение в Codex';if(row.waits.includes('question')||row.questions.length)return 'Вопрос';return 'Ошибка';}
   if(entry.ready)return 'Ответ готов';if(entry.working)return 'Работает';
   if(row&&!entry.fresh)return 'Сведения устарели';
-  if(row?.activity==='active')return 'Активна по Codex';
-  return entry.pageStatus?statusLabel(entry.pageStatus):'Состояние неизвестно';
+  if(row)return ({active:'Активна по Codex',idle:'Ожидает',not_loaded:'Не загружена'})[row.activity]||'Состояние неизвестно';
+  if(entry.pageStatus)return entry.pageStatus==='idle'?'Ожидает':statusLabel(entry.pageStatus);
+  return entry.pinStatus&&entry.pinStatus!=='unknown'?'Снимок: '+(entry.pinStatus==='idle'?'Ожидает':statusLabel(entry.pinStatus)):'Состояние неизвестно';
 }
 function renderNavigator(entries){
   const filters=$('navigator-filters');
@@ -731,7 +733,7 @@ function resetParticipation(){resetNavigator();partView.epoch=null;partView.admi
 function admitPartEpoch(data,admission,previousEpoch){
   if(partView.epoch===data.epoch)return true;
   if(partView.admission!==admission||partView.epoch!==null&&!previousEpoch)return false;
-  resetNavigator();partView.epoch=data.epoch;partView.admission++;partView.target=null;partView.actions.clear();partView.overview.data=null;partView.overview.rendered='';$('participation-list').replaceChildren();
+  if(partView.epoch!==null)resetNavigator(true);partView.epoch=data.epoch;partView.admission++;partView.target=null;partView.actions.clear();partView.overview.data=null;partView.overview.rendered='';$('participation-list').replaceChildren();
   if(partView.selected){partView.selected.data=null;partView.selected.rendered='';}$('session-questions').replaceChildren();return true;
 }
 function disablePartControls(){for(const control of $('session-questions').querySelectorAll('button,input,textarea'))control.disabled=true;}
@@ -839,9 +841,9 @@ async function loadPins(force=false){
 function renderPins(){syncNavigator();}
 async function openPinnedSession(item){
   if(!navigationVisible()||!item.available)return false;
-  const auth=chatAuthGeneration,lifecycle=pageGeneration,intent=++navigatorView.openIntent;
+  const auth=chatAuthGeneration,lifecycle=pageGeneration,selection=selectionGeneration,intent=++navigatorView.openIntent;
   if(!projectNames.includes(item.project))await loadProjects();
-  if(!navigationVisible()||auth!==chatAuthGeneration||lifecycle!==pageGeneration||intent!==navigatorView.openIntent||!availableProjects.has(item.project))return false;
+  if(!navigationVisible()||auth!==chatAuthGeneration||lifecycle!==pageGeneration||intent!==navigatorView.openIntent||selection!==selectionGeneration||!availableProjects.has(item.project))return false;
   selectedProject=item.project;sessionRows=[];sessionPage=0;sessionsHaveMore=false;
   openChat({sid:item.sid,title:item.title,vendor:item.vendor});closeNavigator();return true;
 }
@@ -1549,7 +1551,7 @@ function chatError(err){if(err&&err.code==='stale')return 'Сессия уста
 function clearHistoryScrollSlack(){historyScrollSlack=0;pinnedHistoryScope=null;historyScrollIntent=false;historyTouchY=null;historyScrollbarStartY=null;if(historyScrollSpacer){historyScrollSpacer.remove();historyScrollSpacer=null;}}
 function setHistoryScrollSlack(height){const bounded=Math.max(0,Math.min(window.innerHeight,Math.ceil(height)));historyScrollSlack=bounded;if(!bounded){clearHistoryScrollSlack();return;}if(!historyScrollSpacer){historyScrollSpacer=node('li',undefined,'history-scroll-slack');historyScrollSpacer.setAttribute('aria-hidden','true');historyScrollSpacer.append(document.createElementNS('http://www.w3.org/2000/svg','svg'));}const svg=historyScrollSpacer.firstElementChild;svg.setAttribute('width','0');svg.setAttribute('height',String(bounded));svg.setAttribute('focusable','false');const list=$('chat-items');if(historyScrollSpacer.parentNode!==list)list.append(historyScrollSpacer);}
 function clearHistoryView(){stopMessageAges();clearHistoryScrollSlack();historyData.delete(chatKey(selectedProject,selectedSession&&selectedSession.sid||''));$('chat-panel').hidden=true;$('history-new').hidden=true;$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-status').textContent='';$('history-retry').hidden=true;$('send-status').textContent='';$('history-truncated').hidden=true;$('native-attention').hidden=true;$('chat-draft').value='';}
-function openChat(row){if(!pageActive())return;closeProjectFile();closeQueueTransferDialog();if(!row||!UUID_RE.test(row.sid))return;const proven=selectedSession?.sid===row.sid&&selectedSession.proven===true;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;projectsSelectionProof=proven?null:selectionGeneration;selectedSession={proven,created:row.configuredCreated===true,sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;$('history-new').hidden=true;if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();loadHistory(false);loadModelCatalog();loadQueue(true);loadCapabilities();loadSessionQuestions(true);loadQueueStartSupport(true);startPolling();}
+function openChat(row){if(!pageActive())return;closeProjectFile();closeQueueTransferDialog();if(!row||!UUID_RE.test(row.sid))return;closeNavigator();const proven=selectedSession?.sid===row.sid&&selectedSession.proven===true;pageReaderScope=null;if($('session-list-status').textContent==='Выберите сессию для переписки.')setSessionStatus('');stopPolling();clearHistoryScrollSlack();selectionGeneration++;projectsSelectionProof=proven?null:selectionGeneration;selectedSession={proven,created:row.configuredCreated===true,sid:row.sid,title:typeof row.title==='string'?row.title:'Codex',needs:row.needs_native_attention===true};initialScrollTarget={project:selectedProject,sid:row.sid,generation:selectionGeneration};$('chat-title').textContent=selectedSession.title;$('chat-panel').hidden=false;$('history-status').textContent='Загружаем переписку…';$('chat-items').replaceChildren();$('receipt-list').replaceChildren();$('history-truncated').hidden=true;$('native-attention').hidden=!selectedSession.needs;$('chat-draft').value=drafts.get(chatKey(selectedProject,row.sid))||'';updateUrl();renderSessions();renderReceipts();const state=normalizeHistoryState(chatKey(selectedProject,row.sid));state.windowIds=null;state.windowOlder=false;state.pendingLatest=false;$('history-new').hidden=true;if(state.initialized)renderHistory(chatKey(selectedProject,row.sid));if(state.historyError)$('history-status').textContent=historyErrorText(state);syncCurrentSessionControls();loadHistory(false);loadModelCatalog();loadQueue(true);loadCapabilities();loadSessionQuestions(true);loadQueueStartSupport(true);startPolling();}
 // INV-WSESS-37: immutable in-memory operations survive dialog closure, never retry POST.
 function exactFields(value,keys){return Boolean(value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key)));}
 function createState(project){if(!creates.has(project))creates.set(project,{operation:null,status:'draft',inFlight:false,loading:false,available:false,message:'',generation:0,auth:chatAuthGeneration});return creates.get(project);}
@@ -1566,6 +1568,7 @@ function syncCreateControls(){if(!pageActive())return;
 function validCreateOptions(data,project){return exactFields(data,['schema','project','options'])&&data.schema===1&&data.project===project&&Array.isArray(data.options)&&data.options.length===1&&data.options.every(row=>exactFields(row,['context_mode','provider_id','available','reason'])&&row.context_mode==='configured'&&row.provider_id==='codex'&&typeof row.available==='boolean'&&row.reason===(row.available?null:'unavailable'));}
 async function loadCreateOptions(project){
   createDialogEpoch++;createDialogProject=project||null;syncCreateControls();if(!project||!availableProjects.has(project))return;
+  const previous=creates.get(project);if(previous?.status==='accepted'&&previous.selected)creates.delete(project);
   const state=createState(project),auth=chatAuthGeneration,epoch=createDialogEpoch,lifecycle=pageGeneration;
   const current=()=>pageActive()&&lifecycle===pageGeneration&&auth===chatAuthGeneration&&createDialogProject===project&&createDialogEpoch===epoch&&availableProjects.has(project)&&$('create-dialog').open;
   state.optionsEpoch=epoch;state.loading=true;state.available=false;
@@ -1585,7 +1588,7 @@ async function openCreateDialog(){if(!pageActive()||!csrf||!availableProjects.si
   await loadCreateOptions(project);
 }
 $('create-project').addEventListener('change',()=>loadCreateOptions($('create-project').value));
-$('create-result-open').addEventListener('click',async()=>{const state=creates.get(createDialogProject),row=state?.result;if(!row||!availableProjects.has(row.project))return;closeCreateDialog();await openPinnedSession({available:true,...row});});
+$('create-result-open').addEventListener('click',async()=>{const state=creates.get(createDialogProject),row=state?.result;if(!row||!availableProjects.has(row.project))return;state.selected=true;closeCreateDialog();await openPinnedSession({available:true,...row});});
 function validCreateResult(data,operation){
   if(!data||data.operation_id!==operation.operation_id)return false;
   if(data.status==='delivery_unknown')return exactFields(data,['operation_id','status']);
@@ -1658,6 +1661,7 @@ function confirmedRename(state,data,operation,generation){
   if(!activeSelection(operation.project,operation.sid,generation))return false;
   state.status='accepted';state.message='Название сессии сохранено.';state.acceptedUntil=Date.now()+5000;
   selectedSession.title=data.title;$('chat-title').textContent=data.title;
+  const entry=navigatorView.entries.get(chatKey(operation.project,operation.sid));if(entry)navigatorRetain({...entry,pageTitle:data.title});
   sessionRows=sessionRows.map(row=>row&&row.sid===operation.sid?{...row,title:data.title}:row);renderSessions();
   projectSummaries.delete(operation.project);renderProjects();
   if(renameStatusTimer!==null)pageClearTimer(renameStatusTimer);
