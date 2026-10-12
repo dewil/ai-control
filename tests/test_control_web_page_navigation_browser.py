@@ -2,7 +2,7 @@
 # Accepted INV-WSESS-47..50 (2026-10-08-spec-live-observability-package.md):
 # canonical captions/chips and native disclosures replace the previous labels/layout.
 
-from control_browser_helpers import project_is_selected
+from control_browser_helpers import project_is_selected, session_navigator
 from control_live_legacy_fixture import LiveHistoryFixture, replay_path, observe_snapshots
 import importlib
 import json
@@ -104,11 +104,14 @@ class PageNavigationBrowserContract(unittest.TestCase):
     def buttons(self, direction):
         name = '↑ В начало' if direction == 'up' else '↓ В конец'
         buttons = self.page.get_by_role('button', name=name, exact=True, include_hidden=True)
-        self.assertEqual(buttons.count(), 2, 'INV-WSESS-14: requires top and bottom accessible ' + name + ' buttons')
-        # INV47 amendment keeps bottom navigation in the explicit compact menu.
-        for summary in buttons.last.locator('xpath=ancestor::details[not(@open)]/summary').all():
-            summary.click()
-        self.assertTrue(buttons.first.is_visible()); self.assertTrue(buttons.last.is_visible())
+        # INV-USN06 replaces the hidden legacy top pair with the existing
+        # compact action menu; navigation behavior remains available once.
+        for summary in buttons.locator('xpath=ancestor::details[not(@open)]/summary').all():
+            if summary.is_visible():
+                summary.click()
+        buttons = self.page.get_by_role('button', name=name, exact=True)
+        self.assertEqual(buttons.count(), 1, 'One visible accessible navigation action')
+        self.assertTrue(buttons.first.is_visible())
         return buttons
 
     def metrics(self):
@@ -139,16 +142,14 @@ class PageNavigationBrowserContract(unittest.TestCase):
                 self.page.set_viewport_size({'width': width, 'height': 900})
                 for direction in ('up', 'down'):
                     buttons = self.buttons(direction)
-                    positions = [buttons.nth(i).evaluate('el=>{const r=el.getBoundingClientRect();return {top:r.top+scrollY,height:r.height,width:r.width}}') for i in range(2)]
-                    self.assertLess(positions[0]['top'], positions[1]['top'])
+                    positions = [buttons.nth(i).evaluate('el=>{const r=el.getBoundingClientRect();return {top:r.top+scrollY,height:r.height,width:r.width}}') for i in range(buttons.count())]
                     first_message_y = self.page.get_by_text('LATEST message 0', exact=True).evaluate('el=>el.getBoundingClientRect().top+scrollY')
                     last_message_y = self.page.get_by_text('LATEST message 23', exact=True).evaluate('el=>el.getBoundingClientRect().bottom+scrollY')
-                    self.assertLess(positions[0]['top'], first_message_y, 'Top navigation precedes history')
-                    self.assertGreater(positions[1]['top'], last_message_y, 'Bottom navigation follows history')
+                    self.assertGreater(positions[0]['top'], last_message_y, 'Bottom navigation follows history')
                     minimum = 40 if width == 1280 else 44
                     self.assertTrue(all(p['height'] >= minimum-.5 and p['width'] >= minimum-.5 for p in positions), repr(positions))
-                    for index in (0, 1):
-                        self.activate(direction, index, 'Enter' if index == 0 else 'Space')
+                    for key in ('Enter', 'Space'):
+                        self.activate(direction, 0, key)
                 result = self.metrics(); observations.append(result)
                 self.assertLessEqual(result['overflow'], width+1, 'No horizontal document overflow')
         private_json(self.evidence / 'layout.json', observations)
@@ -160,7 +161,7 @@ class PageNavigationBrowserContract(unittest.TestCase):
         before_selection = self.session.get_attribute('aria-pressed')
         before_cookies = self.context.cookies()
         for direction in ('up', 'down'):
-            for index in (0, 1):
+            for index in (0,):
                 before = len(self.network)
                 self.activate(direction, index)
                 # INV-WSESS-53 background SSE/lease requests are independent of navigation.
@@ -178,6 +179,7 @@ class PageNavigationBrowserContract(unittest.TestCase):
     def test_INV_WSESS_15_up_cancels_delayed_initial_follow(self):
         self.page.set_viewport_size({'width': 360, 'height': 900})
         private_json(self.evidence / 'control.json', {'delay': 1.5, 'count': 24})
+        session_navigator(self.page)
         self.session.click()
         self.buttons('up').first.click()
         self.page.get_by_text('LATEST message 23', exact=True).wait_for(state='attached')
@@ -188,6 +190,7 @@ class PageNavigationBrowserContract(unittest.TestCase):
 
     def test_INV_WSESS_15_down_during_initial_load_follows_loaded_document(self):
         private_json(self.evidence / 'control.json', {'delay': 1.5, 'count': 24})
+        session_navigator(self.page)
         self.session.click()
         self.buttons('down').first.click()
         self.page.get_by_text('LATEST message 23', exact=True).wait_for(state='attached')
@@ -234,7 +237,7 @@ class PageNavigationBrowserContract(unittest.TestCase):
 
     def test_INV_WSESS_15_down_resumes_follow_on_real_new_data(self):
         self.open_history()
-        self.activate('up'); self.activate('down', 1)
+        self.activate('up'); self.activate('down')
         before_requests = len(self.history_requests())
         private_json(self.evidence / 'control.json', {'delay': 0, 'count': 28})
         self.page.get_by_text('LATEST message 27', exact=True).wait_for(state='attached', timeout=8500)

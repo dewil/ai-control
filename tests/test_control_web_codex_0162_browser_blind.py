@@ -1,3 +1,4 @@
+from control_browser_helpers import session_navigator
 """INV-COMPAT-03/04: reviewed0.162.1 composer via real synthetic HTTP API."""
 import importlib
 import json
@@ -90,6 +91,7 @@ class Codex0162BrowserBlind(unittest.TestCase):
         blocked['operations']['send'] = dict(supported=False, reason='unavailable')
         self.control(blocked)
         with self.page.expect_response(lambda response: '/api/session-capabilities?' in response.url) as refused:
+            session_navigator(self.page)  # INV-USN05: selecting closes the mobile drawer.
             self.alpha_session.click()
         self.assertEqual(refused.value.status, 200)
         self.assertEqual(refused.value.json(), blocked)
@@ -99,6 +101,7 @@ class Codex0162BrowserBlind(unittest.TestCase):
         self.assertEqual(self.send_requests(), [])
         self.control(mutations.reviewed_capabilities(), send_delay=.5, send_status='delivery_unknown')
         with self.page.expect_response(lambda response: '/api/session-capabilities?' in response.url) as received:
+            session_navigator(self.page)  # INV-USN05: selecting closes the mobile drawer.
             self.alpha_session.click()
         self.assertEqual(received.value.status, 200, 'Actual HTTP validator must recognize reviewed0.162.1')
         self.assertEqual(received.value.json(), mutations.reviewed_capabilities())
