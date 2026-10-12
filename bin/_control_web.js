@@ -599,20 +599,23 @@ function renderParticipation(){
   const signature=JSON.stringify([data.epoch,data.rows,data.coverage,data.health]);if(signature===scope.rendered)return;scope.rendered=signature;
   const decision=activeSelection()?captureHistoryScroll(selectedProject,selectedSession.sid,selectionGeneration,false):null;
   const list=$('participation-list'),fragment=document.createDocumentFragment();
-  const groups=[['waiting','Требуют внимания'],['ready','Ответы готовы'],['confirmed','Сейчас работают'],['active','Активны по Codex'],['other','Прочие состояния']];
+  const groups=[['attention','Нужно участие'],['review','Готово к проверке'],['working','В работе'],['other','Прочие состояния']];
   const openQuestionStates=['actionable','native_only','responding','sent','delivery_unknown'];
-  const group=row=>row.waits.includes('approval')||row.waits.includes('question')||row.questions.some(question=>openQuestionStates.includes(question.state))?'waiting':row.result?.ready?'ready':row.running==='confirmed'?'confirmed':row.activity==='active'?'active':'other';
+  const hasAttention=row=>row.waits.includes('approval')||row.waits.includes('question')||row.questions.some(question=>openQuestionStates.includes(question.state))||row.activity==='system_error'||['failed','interrupted'].includes(row.result?.status);
+  const staleCompletion=row=>row.freshness.state==='stale'&&row.result?.status==='completed'&&row.result.item_id!==null&&!row.result.ready;
+  const group=row=>hasAttention(row)?'attention':row.result?.ready||staleCompletion(row)?'review':row.running==='confirmed'&&row.activity==='active'?'working':'other';
   const grouped=new Map(groups.map(([id])=>[id,[]]));for(const row of data.rows)grouped.get(group(row)).push(row);
-  const waitingCount=grouped.get('waiting').length,readyCount=grouped.get('ready').length,workingCount=grouped.get('confirmed').length+grouped.get('active').length;
+  const waitingCount=grouped.get('attention').length,readyCount=grouped.get('review').filter(row=>row.result?.ready).length,workingCount=grouped.get('working').length;
   const staleRows=data.rows.some(row=>row.freshness.state!=='fresh');
   const uncertain=data.coverage.partial||data.health!=='fresh'||staleRows;
   $('participation-overview').querySelector('summary').textContent=(uncertain?'Наблюдается: ':'')+'Сессии: требуется внимание '+waitingCount+' · работают '+workingCount+' · ответы '+readyCount;
-  for(const [id,title]of groups){const rows=grouped.get(id);if(!rows.length)continue;fragment.append(node('h3',title));for(const row of rows){
-    const article=node('article',undefined,'participation-row');article.append(node('strong',row.label));
+  for(const [id,title]of groups){const rows=grouped.get(id);if(!rows.length)continue;const section=id==='other'?document.createElement('details'):null;if(section){section.className='participation-other';const summary=node('summary',title);section.append(summary);fragment.append(section);}else fragment.append(node('h3',title));const parent=section||fragment;for(const row of rows){
+    const article=node('article',undefined,'participation-row');article.append(node('strong',row.project));const sessionTitle=row.label.trim()||'Сессия '+row.sid.slice(0,8);article.append(node('span',sessionTitle,'participation-title'));
     const labels=[];const hasQuestion=row.waits.includes('question')||row.questions.some(question=>openQuestionStates.includes(question.state));
     if(hasQuestion)labels.push(['Вопрос','question']);
     if(row.waits.includes('approval'))labels.push(['Разрешение в Codex · подтвердите в Codex','approval']);
     if(row.result?.ready)labels.push(['Ответ готов','ready']);
+    if(staleCompletion(row))labels.push(['Последний известный ответ · сведения устарели','status']);
     if(row.running==='confirmed')labels.push(['Работа подтверждена','work']);else if(row.activity==='active')labels.push(['Активна по Codex','active']);
     if(row.result?.status==='failed')labels.push(['Ход завершился с ошибкой','status']);else if(row.result?.status==='interrupted')labels.push(['Ход прерван','status']);
     if(row.freshness.state==='stale')labels.push(['Сведения устарели','status']);else if(row.freshness.state==='unavailable')labels.push(['Сведения недоступны','status']);
@@ -620,7 +623,7 @@ function renderParticipation(){
     const open=node('button','Открыть сессию','secondary');open.type='button';open.addEventListener('click',()=>openParticipationTarget(row,null));article.append(open);
     for(const question of row.questions){const button=node('button','Открыть вопрос','secondary');button.type='button';button.addEventListener('click',()=>openParticipationTarget(row,{interaction:question.interaction_id}));article.append(button);}
     if(row.result?.ready){const button=node('button','Открыть результат','secondary');button.type='button';button.addEventListener('click',()=>openParticipationTarget(row,{turn:row.result.turn_id,item:row.result.item_id}));article.append(button);}
-    fragment.append(article);
+    parent.append(article);
   }}
   const status=[];if(data.health==='stale')status.push('Состояние обзора устарело.');else if(data.health==='unavailable')status.push('Наблюдение недоступно.');
   if(data.coverage.partial||data.health!=='fresh')status.push('Полнота не подтверждена.');else status.push('Полнота покрытия подтверждена.');

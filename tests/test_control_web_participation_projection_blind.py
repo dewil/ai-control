@@ -29,6 +29,11 @@ class ParticipationProjectionBlind(WireCase):
         # INV-PART-02
         self.native.status=dict(type='active',activeFlags=[])
         self.native.turns=[dict(id=TURN,status='inProgress',items=[])]
+        # Confirmation requires the public overview sampler's valid loaded-list proof;
+        # history alone only supplies selected-thread status.
+        self.overview()
+        self.wait_for(lambda:'thread/loaded/list' in self.native.methods(),
+            'Overview must request a bounded loaded-session snapshot before confirming work')
         self.prove_history();row=self.row()
         self.assertEqual(row['running'],'confirmed')
         self.assert_read_only()
@@ -54,6 +59,7 @@ class ParticipationProjectionBlind(WireCase):
         self.assert_read_only()
 
     def test_INV_PART_06_latest_completed_last_final_answer_item_is_exact_witness(self):
+        # INV-SOV-02: selected-history completion needs the exact final item.
         # INV-PART-06
         self.native.turns=[dict(id=TURN,status='completed',items=[
             dict(id='first-final',type='agentMessage',phase='final_answer',text='First answer'),

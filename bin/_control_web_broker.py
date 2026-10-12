@@ -1065,26 +1065,52 @@ _ALP_EXPORT_NAMESPACE = {'__name__': 'alp_export_protocol'}
 exec(_ALP_EXPORT_PROTOCOL, _ALP_EXPORT_NAMESPACE)
 
 _ALP_EXPORT_REMOTE = _ALP_EXPORT_PROTOCOL + r'''
-import os, stat, sys
+import os, pwd, stat, sys
+def identity(info):
+    return tuple(getattr(info, name) for name in ('st_dev','st_ino','st_mode','st_nlink',
+        'st_uid','st_gid','st_size','st_mtime_ns','st_ctime_ns'))
 try:
-    fd = os.open('/var/lib/alp-limits-export/limits-v1.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    user = pwd.getpwnam('dwl')
+    uid = user.pw_uid
+    if user.pw_name != 'dwl' or os.getuid() != uid or os.geteuid() != uid:
+        raise ValueError('invalid owner')
+    parent_path = '/home/dwl/.local/state/ai-control/limits-export'
+    path = '/home/dwl/.local/state/ai-control/limits-export/limits-v1.json'
+    parent_fd = os.open(parent_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
-        before = os.fstat(fd)
-        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
-                or before.st_mode & stat.S_IWOTH or before.st_size > 131072):
-            raise ValueError('invalid export')
-        data = bytearray()
-        while len(data) <= 131072:
-            block = os.read(fd, min(65536, 131073 - len(data)))
-            if not block:
-                break
-            data.extend(block)
-        after = os.fstat(fd)
-        if (len(data) != before.st_size or (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
-                != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
-            raise ValueError('invalid export')
+        parent_before = os.fstat(parent_fd)
+        parent_path_before = os.stat(parent_path, follow_symlinks=False)
+        if (not stat.S_ISDIR(parent_before.st_mode) or parent_before.st_uid != uid
+                or stat.S_IMODE(parent_before.st_mode) != 0o700
+                or identity(parent_before) != identity(parent_path_before)):
+            raise ValueError('invalid parent')
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            before = os.fstat(fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != uid
+                    or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1
+                    or before.st_size > 131072):
+                raise ValueError('invalid export')
+            data = bytearray()
+            while len(data) <= 131072:
+                block = os.read(fd, min(65536, 131073 - len(data)))
+                if not block:
+                    break
+                data.extend(block)
+            after = os.fstat(fd)
+            path_after = os.stat(path, follow_symlinks=False)
+            parent_after = os.fstat(parent_fd)
+            parent_path_after = os.stat(parent_path, follow_symlinks=False)
+            if (len(data) != before.st_size or identity(before) != identity(after)
+                    or identity(after) != identity(path_after)
+                    or identity(parent_before) != identity(parent_after)
+                    or identity(parent_after) != identity(parent_path_before)
+                    or identity(parent_after) != identity(parent_path_after)):
+                raise ValueError('invalid export')
+        finally:
+            os.close(fd)
     finally:
-        os.close(fd)
+        os.close(parent_fd)
     value = decode(bytes(data))
     output = json.dumps(value, allow_nan=False, separators=(',', ':')).encode()
     if len(output) > 131072:

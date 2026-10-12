@@ -72,3 +72,8 @@ Tests test_control_web_cached_limits_backend_red.py,
 
 Карточки сгруппированы: «Локальные» (LLM Codex/Claude/Kimi), «Облачные» (LLM OpenRouter/YandexGPT), «ALP» (ALP Codex/Claude). Все карточки, статусы и метрики сохраняются. Пустые группы скрыты; неизвестные сочетания отклоняются существующим закрытым валидатором.
 Трассируемость: tests/test_control_web_limits_groups_browser_blind.py; подробности docs/dev/2026-10-11-spec-limits-navigation.md.
+
+## INV-WLIM-27 — пользовательский экспорт выделенных ALP аккаунтов
+
+SSH receiver читает только `/home/dwl/.local/state/ai-control/limits-export/limits-v1.json` на fixed alias `alp-ai-dev-1-dwl`. NSS user dwl должен совпадать с real/effective UID, конечный parent — owned directory0700 без symlink, файл — owned regular0600 без symlink/hardlink. Bounded read и проверки неизменности обязательны; отказ сохраняет старый cache без освежения квоты. DTO не содержит private identity/auth. Общий customer snapshot исключён.
+Трассируемость: tests/test_control_web_alp_limits_sync_red.py; docs/dev/2026-10-12-spec-alp-owned-receiver.md.

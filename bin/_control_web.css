@@ -88,6 +88,7 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 #participation-overview{grid-column:1/-1;min-width:0;margin-bottom:12px;border:1px solid #38383e;border-radius:6px;padding:8px 10px}
 .participation-row,.participation-question{min-width:0;margin:8px 0;padding:10px;border:1px solid #38383e;border-radius:6px;overflow-wrap:anywhere}
 .participation-row p{margin:5px 0}.participation-row button{min-height:44px;min-width:44px}
+.participation-title{display:block;margin-top:4px}.participation-other{margin:8px 0 12px}.participation-other>summary{cursor:pointer;font-weight:600}
 .participation-badges{display:flex;flex-wrap:wrap;gap:5px}.participation-badge{display:inline-block;max-width:100%;padding:2px 7px;border:1px solid #555;border-radius:4px;line-height:1.4;overflow-wrap:anywhere}.participation-badge-question{border-left-width:4px}.participation-badge-approval{border-style:dashed}.participation-badge-ready{border-style:double;border-width:3px}.participation-badge-work,.participation-badge-active{border-radius:999px}.participation-badge-status{border-style:dotted}
 .participation-question fieldset{min-width:0;margin:0 0 10px;padding:8px;border:1px solid #38383e}
 .participation-option{display:flex;align-items:center;gap:10px;min-height:44px;min-width:44px;margin:5px 0;padding:8px;border:1px solid #555;border-radius:5px;box-sizing:border-box}

@@ -79,21 +79,22 @@ class Participation01621Blind(WireCase):
         self.assertEqual(set(self.native.methods()) - support.READS, set())
         self.assertEqual(self.rpc.model_context()['native_version'], '0.162.1')
 
-    def test_INV_PVER01_unsupported_01600_and_future_versions_fail_closed(self):
+    def test_INV_SOV01_valid_read_shapes_allow_overview_but_callbacks_stay_closed(self):
+        # The old INV-PVER01 version-only read deny is superseded by accepted
+        # INV-SOV-01: native_version is diagnostic for bounded read-only reads.
+        # Keep the independent callback-authority and no-mutation fences below.
         for version in ('0.160.0', '0.163.0'):
             with self.subTest(native_version=version):
                 self.reconnect_reported_version(version)
                 self.assertEqual(self.rpc.model_context()['native_version'], version)
+                row = self.wait_for(lambda: next((item for item in self.overview().get('rows', [])
+                                                  if item['sid'] == SID), None),
+                                    'A valid bounded read must not be denied by native_version', timeout=5)
+                self.assertEqual(row['freshness']['state'], 'fresh')
                 self.questions()
                 self.native.emit(support.callback())
                 self.synchronize()
-                deadline = support.time.monotonic() + 5
                 dto = self.questions()
-                while support.time.monotonic() < deadline and 'thread/loaded/list' not in self.native.methods():
-                    dto = self.questions()
-                    support.time.sleep(.05)
-                self.assertNotIn('thread/loaded/list', self.native.methods(),
-                                 'Unsupported PART version reached the background sampler')
                 self.assertFalse(any(row['state'] == 'actionable' for row in dto['questions']))
                 self.assertEqual(self.native.replies(), [])
                 self.assertEqual(set(self.native.methods()) - support.READS, set())
