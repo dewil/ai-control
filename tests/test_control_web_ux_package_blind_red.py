@@ -2,6 +2,8 @@
 
 No production asset reads, no provider/private history. INV44 is pending and absent.
 """
+import hashlib
+
 from control_live_legacy_fixture import LiveHistoryFixture, replay_path
 import importlib
 import json
@@ -15,9 +17,20 @@ import tempfile
 import threading
 import time
 import unittest
-from control_browser_helpers import choose_project, project_is_selected
+from control_browser_helpers import choose_project, project_is_selected, session_navigator
 from test_control_web_chat_width_browser import private_json, totp, PASSWORD, SECRET, SID
 from test_control_web_compact_chat_browser import OTHER
+
+
+def verify_source_assets(case, origin):
+    """Prove this fixture serves selected source bytes, without inspecting logic."""
+    root = Path(__file__).resolve().parents[1]
+    for url, name in (('/web.js', '_control_web.js'), ('/web.css', '_control_web.css')):
+        response = case.page.request.get(origin + url)
+        case.assertEqual(response.status, 200, 'Fixture asset HTTP status: ' + url)
+        case.assertEqual(hashlib.sha256(response.body()).hexdigest(),
+                         hashlib.sha256((root / 'bin' / name).read_bytes()).hexdigest(),
+                         'Fixture serves another source root: ' + url)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -108,9 +121,14 @@ class WebUXBlindBrowser(unittest.TestCase):
     def setUp(self):
         self.control();(self.evidence/'calls.jsonl').unlink(missing_ok=True)
         self.page=self.context.new_page();self.addCleanup(self.page.close)
+        verify_source_assets(self, self.url)
         self.page.set_default_timeout(4000);self.errors=[];self.page.on('pageerror',lambda e:self.errors.append(str(e)))
         self.page.goto(self.url);self.page.get_by_role('button',name='Сессии',exact=True).or_(self.page.get_by_role('tab',name='Сессии',exact=True)).click()
-        choose_project(self.page,'demo');self.session=self.page.get_by_role('button',name=re.compile('^UX synthetic session'))
+        choose_project(self.page,'demo')
+        rows=session_navigator(self.page)
+        row=rows.get_by_role('option').filter(has_text='UX synthetic session with a long readable title')
+        if row.count()==0:row=rows.get_by_role('listitem').filter(has_text='UX synthetic session with a long readable title')
+        self.session=row.get_by_role('button',name=re.compile('Открыть сессию.*UX synthetic session with a long readable title'))
         self.session.wait_for()
     def tearDown(self):self.assertEqual(self.errors,[])
     def control(self,**data):
@@ -119,10 +137,11 @@ class WebUXBlindBrowser(unittest.TestCase):
         path=self.evidence/'calls.jsonl'
         return [r for r in map(json.loads,path.read_text().splitlines()) if r['kind']==kind] if path.exists() else []
     def open(self):
+        session_navigator(self.page)
         self.session.click();self.page.get_by_text('Fixture readable message 23',exact=True).wait_for()
     def toggle(self):
-        element=self.page.locator('#projects-toggle')
-        self.assertEqual(element.count(),1,'INV43 accessible projects toggle absent')
+        element=self.page.get_by_role('button',name=re.compile(r'^(?:Открыть список сессий|Сессии(?:\s*[·•]\s*внимание\s*\d+)?)$'))
+        self.assertEqual(element.count(),1,'INV-USN05 unified session drawer trigger absent')
         return element
     def local(self):return self.page.locator('#chat-items [data-local-outgoing="true"]')
     def send(self,text='Exact synthetic outgoing text'):
@@ -148,24 +167,34 @@ class WebUXBlindBrowser(unittest.TestCase):
                 self.assertTrue(all(w>=43.5 and h>=43.5 for w,h in observation['targets']),observation)
 
     def test_INV43_selection_manual_reopen_poll_keyboard(self):
-        toggle=self.toggle();self.assertEqual(toggle.get_attribute('aria-controls'),'projects-body')
-        self.assertEqual(toggle.get_attribute('aria-expanded'),'true')
-        self.open();self.assertEqual(toggle.get_attribute('aria-expanded'),'false')
-        toggle.focus();toggle.press('Enter');self.assertEqual(toggle.get_attribute('aria-expanded'),'true')
-        self.page.locator('textarea').fill('Retained draft');self.page.locator('textarea').focus()
-        self.poll();self.assertEqual(toggle.get_attribute('aria-expanded'),'true')
+        self.page.set_viewport_size({'width':390,'height':844})
+        toggle=self.toggle();drawer=self.page.get_by_role('dialog',name=re.compile('Сессии',re.I))
+        session_navigator(self.page)
+        self.assertTrue(drawer.is_visible())
+        self.open();self.assertFalse(drawer.is_visible())
+        self.page.locator('textarea').fill('Retained draft')
+        toggle.focus();toggle.press('Enter');self.assertTrue(drawer.is_visible())
+        project=self.page.get_by_role('combobox',name='Проект',exact=True);project.focus()
+        self.poll();self.assertTrue(drawer.is_visible())
         self.assertEqual(self.page.locator('textarea').input_value(),'Retained draft')
-        self.assertTrue(self.page.locator('textarea').evaluate('e=>e===document.activeElement'))
-        toggle.focus();toggle.press('Space');self.assertEqual(toggle.get_attribute('aria-expanded'),'false')
+        self.assertTrue(project.evaluate('e=>e===document.activeElement'))
+        self.page.keyboard.press('Escape');self.assertFalse(drawer.is_visible())
 
     def test_INV43_failed_and_stale_selection(self):
-        toggle=self.toggle();self.control(history_error=True);self.session.click();self.page.wait_for_timeout(500)
-        self.assertEqual(toggle.get_attribute('aria-expanded'),'true')
-        self.control(history_delay=1);self.session.click()
-        self.page.get_by_role('button',name=re.compile('^Other UX')).click()
+        self.page.set_viewport_size({'width':390,'height':844})
+        session_navigator(self.page)
+        self.control(history_error=True);self.session.click();self.page.wait_for_timeout(500)
+        self.assertFalse(self.page.get_by_role('dialog',name=re.compile('Сессии',re.I)).is_visible())
+        self.control(history_delay=1);session_navigator(self.page)
+        self.session.click()
+        rows=session_navigator(self.page)
+        other=rows.get_by_role('option').filter(has_text='Other UX synthetic session')
+        if other.count()==0:other=rows.get_by_role('listitem').filter(has_text='Other UX synthetic session')
+        other.get_by_role('button',name=re.compile('Открыть сессию.*Other UX')).click()
         self.page.get_by_text('Fixture readable message 23',exact=True).wait_for()
-        toggle.click();self.page.wait_for_timeout(1300)
-        self.assertEqual(toggle.get_attribute('aria-expanded'),'true','Late A proof must not close manually opened B')
+        self.toggle().click();self.page.wait_for_timeout(1300)
+        self.assertTrue(self.page.get_by_role('dialog',name=re.compile('Сессии',re.I)).is_visible(),
+                        'Late A proof must not close the manually reopened session drawer')
 
     def test_INV45_delayed_ack_exact_id_lag_timer_series(self):
         self.open();self.control(send_delay=1)
@@ -199,9 +228,10 @@ class WebUXBlindBrowser(unittest.TestCase):
             with self.subTest(outcome=outcome):
                 prior=len(self.calls('send'))
                 self.open();self.control(send_delay=1,send_status=outcome);self.send()
-                self.page.get_by_role('button',name=re.compile('^Other UX')).click()
+                session_navigator(self.page).get_by_role('button',name='Открыть сессию Other UX synthetic session',exact=True).click()
                 self.page.get_by_text('Fixture readable message 23',exact=True).wait_for();self.page.wait_for_timeout(1300)
                 self.assertEqual(self.local().count(),0,'Late A ACK leaked into B')
+                session_navigator(self.page)
                 self.session.click();self.page.get_by_text('Fixture readable message 23',exact=True).wait_for()
                 self.assertIn(label,self.local().inner_text())
                 self.assertEqual(len(self.calls('send')),prior+1,'Unknown/rejected receipt caused automatic resend')
@@ -209,8 +239,8 @@ class WebUXBlindBrowser(unittest.TestCase):
                 # Wait for that restoration; reselecting its project races the cloud collapse.
                 self.page.reload();self.session.wait_for()
                 self.page.get_by_text('Fixture readable message 23',exact=True).wait_for()
-                self.assertTrue(project_is_selected(self.page,'demo'))
-                self.assertEqual(self.session.get_attribute('aria-pressed'),'true')
+                self.assertIn('demo',self.page.url, 'Reload preserves the chat project independently of the navigator filter')
+                self.assertIn('sid=',self.page.url)
                 self.assertEqual(self.local().count(),0,'Reload retained stale local outgoing text')
 
 if __name__=='__main__':

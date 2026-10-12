@@ -1,18 +1,19 @@
-"""Independent browser RED for INV-WSESS-19 visible activity and cloud layout."""
-# Accepted INV-WSESS-47..50 (2026-10-08-spec-live-observability-package.md):
-# canonical captions/chips and native disclosures replace the previous labels/layout.
+"""USN migration of legacy project-cloud browser checks; synthetic HTTP only.
 
-from datetime import datetime, timezone
+Project tiles, size sorting, and inline activity metadata are superseded by the
+unified authorized project filter and session list. Keep authority, selection,
+responsive geometry, and no-unrequested-history checks on the public controls.
+"""
 import re
-import time
 import unittest
-from zoneinfo import ZoneInfo
 
+from playwright.sync_api import expect
 import test_control_web_project_cloud_browser as fixture
 
 
 class ProjectCloudVisibleActivityLayoutRed(fixture.ProjectCloudBrowserContract):
-    # Reuse only the existing synthetic browser lifecycle and helpers.
+    # The original fixture's count-sized tile sorting cases no longer describe
+    # the product surface; these tests keep its security and layout intent.
     test_INV_WSESS_19_count_sort_numeric_bounded_size_keyboard_selection_and_widths = None
     test_INV_WSESS_19_activity_groups_ties_and_only_sort_enum_persists = None
     test_INV_WSESS_19_valid_and_unavailable_deeplinks_use_exact_project_and_sid = None
@@ -20,129 +21,57 @@ class ProjectCloudVisibleActivityLayoutRed(fixture.ProjectCloudBrowserContract):
     test_INV_WSESS_19_summary_failure_keeps_authoritative_projects_and_honest_unknown = None
     test_INV_WSESS_19_selected_project_becoming_unavailable_clears_history_and_late_response = None
 
-    def test_known_null_unknown_and_unavailable_activity_are_visible_and_truthful(self):
-        rows = fixture.project_rows()
-        now = int(time.time())
-        for row in rows:
-            if row['summary_state'] in ('fresh', 'stale'):
-                row['as_of'] = now
-        high = next(row for row in rows if row['name'] == 'high')
-        high['last_activity'] = now - 60
-        stale = next(row for row in rows if row['name'] == 'stle')
-        stale['last_activity'] = now - 3600
-        self.control(projects=rows)
-        self.page.add_init_script(f"Date.now=()=>{(now + 120) * 1000};")
-        self.page.reload()
-        self.page.get_by_role('button', name='Сессии', exact=True).or_(self.page.get_by_role('tab', name='Сессии', exact=True)).click()
-        self.page.wait_for_timeout(150)
+    def test_project_filter_keeps_unknown_distinct_from_unavailable_without_opening_history(self):
+        project = self.project_filter()
+        options = project.locator('option')
+        for name in ('loww', 'high', 'zero', 'stle', 'unkn'):
+            expect(options.filter(has_text=re.compile(r'^' + re.escape(name) + r'(?:\s|$)'))).to_have_count(1)
+        unavailable = options.filter(has_text=re.compile(r'^down(?:\s|$)'))
+        self.assertEqual(unavailable.count(), 0,
+                         'Authoritatively unavailable project is omitted from selectable filters')
+        self.assertFalse(options.filter(has_text=re.compile(r'^unkn(?:\s|$)')).is_disabled(),
+                         'Unknown activity does not imply unavailable project')
+        self.select_project('high')
+        self.assertEqual(self.selected_filter(), 'high')
+        self.assertFalse(any(call['method'] == 'history' for call in self.calls()),
+                         'Project filter cannot select a session or request its history')
 
-        high_tile = self.tile('high')
-        high_tile.focus()
-        high_tile.press('Space')
-        self.assertEqual(high_tile.get_attribute('aria-pressed'), 'true')
-        high_time = high_tile.locator('time')
-        self.assertEqual(high_time.count(), 1, 'Known activity has a semantic time element')
-        self.assertTrue(high_time.is_visible(), 'Precise activity detail appears on keyboard focus')
-        exact = datetime.fromtimestamp(now - 60, timezone.utc).astimezone(ZoneInfo('Europe/Moscow'))
-        expected_date = exact.strftime('%d.%m.%Y')
-        self.assertRegex(high_time.get_attribute('title') or '', re.escape(expected_date))
-        self.assertRegex(high_time.get_attribute('title') or '', exact.strftime('%H:%M'))
-        summary_exact = datetime.fromtimestamp(now, timezone.utc).astimezone(ZoneInfo('Europe/Moscow'))
-        self.assertRegex(high_tile.get_attribute('title') or '', re.escape(summary_exact.strftime('%d.%m.%Y')))
-        self.assertRegex(high_tile.get_attribute('title') or '', summary_exact.strftime('%H:%M'))
-        self.assertEqual(self.page.get_by_role('button', name=re.compile(r'high.*' + re.escape(expected_date), re.I)).count(), 1,
-                         'Project button accessible name includes the exact date')
-        self.assertRegex(self.tile('stle').inner_text(), '(?i)устар|stale')
-        self.assertEqual(self.tile('zero').locator('time').count(), 0, 'Confirmed null activity has no fabricated time')
-        self.assertIn('—', self.tile('zero').inner_text())
-        self.assertRegex(self.tile('zero').get_attribute('aria-label'), '(?i)нет активност|no activity')
-        unknown = self.tile('unkn').inner_text().lower()
-        unavailable = self.tile('down').inner_text().lower()
-        self.assertIn('?', unknown)
-        self.assertRegex(self.tile('unkn').get_attribute('aria-label'), '(?i)неизвест|unknown')
-        self.assertIn('недост.', unavailable)
-        self.assertRegex(self.tile('down').get_attribute('aria-label'), '(?i)недоступ|unavailable')
-        self.assertNotEqual(unknown, unavailable, 'Unknown and unavailable metadata have distinct explanations')
-        self.assertNotEqual(self.tile('unkn').get_attribute('aria-label'),
-                            self.tile('down').get_attribute('aria-label'),
-                            'Accessible explanations distinguish unknown from unavailable')
-
-        before = list(self.network)
-        self.tile('stle').hover()
-        self.tile('high').focus()
-        self.assertEqual(self.network, before, 'Activity rendering and disclosure add no network request')
-        self.assertFalse(any(call['method'] == 'history' for call in self.calls()))
-
-    def test_unavailable_project_with_cached_null_activity_never_reports_no_activity_or_stale(self):
-        # Authoritative availability takes priority over a retained known summary (SOURCE F1).
-        rows = fixture.project_rows()
-        down = next(row for row in rows if row['name'] == 'down')
-        down.update(session_count=3, last_activity=None, summary_state='stale', as_of=int(time.time()))
-        self.control(projects=rows)
-        authoritative = {'projects': [{'name': row['name'], **({'unavailable': True} if row['name'] == 'down' else {})}
-                                      for row in rows]}
-        self.page.route('**/api/session-projects', lambda route: route.fulfill(status=200, json=authoritative))
-        self.page.reload()
-        self.page.get_by_role('button', name='Сессии', exact=True).or_(self.page.get_by_role('tab', name='Сессии', exact=True)).click()
-        self.page.wait_for_timeout(200)
-        tile = self.tile('down')
-        self.assertTrue(tile.is_visible())
-        self.assertTrue(tile.is_disabled(), 'Unavailable projects remain unselectable')
-        self.assertIn('недост.', tile.inner_text())
-        self.assertIn('?', tile.inner_text())
-        self.assertNotRegex(tile.inner_text(), '(?i)устар|stale|—')
-        self.assertIn('Активность недоступна', tile.get_attribute('aria-label'))
-        self.assertNotIn('Нет активности', tile.get_attribute('aria-label'))
-        self.assertNotRegex(tile.get_attribute('title') or '', '(?i)нет активности')
-        self.assertEqual(tile.locator('time').count(), 0, 'Unavailable activity has no fabricated date')
-
-    def test_cloud_uses_wide_desktop_workspace_and_wraps_on_mobile(self):
-        self.tile('high').focus()
-        self.tile('high').press('Space')
-        group = self.tile('high').locator('xpath=ancestor::*[@role="group" and (@aria-label or @aria-labelledby)]')
-        self.assertEqual(group.count(), 1, 'Project cloud remains a labelled group')
-
+    def test_session_list_and_chat_fit_desktop_and_mobile_drawer(self):
+        self.select_project('high')
+        self.open_session()
+        expect(self.page.get_by_text('CLOUD SYNTHETIC HISTORY', exact=True)).to_be_visible()
         self.page.set_viewport_size({'width': 1280, 'height': 900})
-        group_box = group.bounding_box()
-        self.assertIsNotNone(group_box)
-        self.assertGreaterEqual(group_box['width'], 900, 'Cloud spans the available desktop workspace')
-        boxes = [self.tile(name).bounding_box() for name in ('loww', 'high', 'tiec', 'tieb', 'zero', 'stle')]
-        row_counts = {}
-        for box in boxes:
-            row = round(box['y'] / 8)
-            row_counts[row] = row_counts.get(row, 0) + 1
-        self.assertGreaterEqual(max(row_counts.values()), 2, 'At least two project buttons share a desktop row')
+        listing = self.page.get_by_role('list', name=re.compile('Сессии', re.I)).or_(
+            self.page.get_by_role('listbox', name=re.compile('Сессии', re.I)))
+        expect(listing).to_be_visible()
+        row = listing.get_by_role('listitem').or_(listing.get_by_role('option')).filter(has_text='Cloud synthetic session')
+        expect(row).to_have_count(1)
+        for width in (1280, 390, 360, 320):
+            self.page.set_viewport_size({'width': width, 'height': 844})
+            if width < 1024 and not listing.is_visible():
+                trigger = self.page.get_by_role('button', name=re.compile(r'^Сессии(?:\s*[·•]\s*внимание\s*\d+)?$|^Открыть список сессий$', re.I))
+                expect(trigger).to_be_visible(); trigger.click()
+            expect(listing).to_be_visible()
+            self.assertLessEqual(self.page.evaluate('Math.max(document.documentElement.scrollWidth,document.body.scrollWidth)'), width + 1)
+            if row.is_visible():
+                box = row.bounding_box()
+                self.assertIsNotNone(box)
+                self.assertGreaterEqual(box['height'], 44, 'Session rows retain a touch-sized target')
+        self.assertFalse(any(method == 'POST' for method, url in self.network))
 
-        session = self.page.get_by_role('button', name='Cloud synthetic session', exact=False)
-        session.wait_for(state='visible')
-        self.assertLessEqual(group_box['y'] + group_box['height'], session.bounding_box()['y'] + 2,
-                             'Project cloud sits above the session list and chat workspace')
-        session.click()
-        composer = self.page.get_by_role('textbox').last
-        composer.wait_for(state='visible')
-        self.assertTrue(composer.is_enabled(), 'Chat composer remains usable below the cloud')
-
-        self.page.set_viewport_size({'width': 390, 'height': 844})
-        # INV43 closes Projects after confirmed history selection; expose it before geometry checks.
-        self.page.locator('#projects-toggle').click()
-        self.tile('high').wait_for(state='visible')
-        self.assertLessEqual(max(self.page.evaluate('document.documentElement.scrollWidth'),
-                                 self.page.evaluate('document.body.scrollWidth')), 390,
-                             'Mobile cloud and chat do not cause horizontal page overflow')
-        mobile_boxes = [self.tile(name).bounding_box() for name in ('loww', 'high', 'tiec', 'tieb', 'zero', 'stle')]
-        self.assertTrue(all(box['x'] >= -1 and box['x'] + box['width'] <= 391 for box in mobile_boxes),
-                        'Project buttons wrap within the mobile viewport')
-        mobile_rows = {round(box['y'] / 8) for box in mobile_boxes}
-        self.assertGreater(len(mobile_rows), 1, 'Cloud wraps naturally at mobile width')
-        self.assertEqual(self.tile('high').get_attribute('aria-pressed'), 'true')
-
-
-if __name__ == '__main__':
-    import json
-    import sys
-    if len(sys.argv) == 4 and sys.argv[1] == '--serve':
-        from test_control_web_project_cloud_browser import serve
-        from pathlib import Path
-        serve(Path(sys.argv[2]), Path(sys.argv[3]))
-    else:
-        unittest.main()
+    def test_filter_remains_independent_of_open_chat_and_draft(self):
+        self.select_project('high')
+        self.open_session()
+        reader = self.page.get_by_text('CLOUD SYNTHETIC HISTORY', exact=True)
+        expect(reader).to_be_visible()
+        composer = self.page.locator('textarea')
+        composer.fill('Synthetic filter-independent draft')
+        before_url = self.page.url
+        before_history = len([call for call in self.calls() if call['method'] == 'history'])
+        self.select_project('loww')
+        self.assertEqual(self.selected_filter(), 'loww')
+        self.assertEqual(self.page.url, before_url)
+        expect(reader).to_be_visible()
+        self.assertEqual(composer.input_value(), 'Synthetic filter-independent draft')
+        self.assertEqual(len([call for call in self.calls() if call['method'] == 'history']), before_history,
+                         'Changing the project filter cannot replace the selected chat or reread its history')

@@ -1,4 +1,7 @@
 """Independent browser RED for compact stable UI and viewport preservation."""
+from pathlib import Path
+import hashlib
+
 from copy import deepcopy
 import re
 import time
@@ -14,7 +17,19 @@ import test_control_web_attention_priority_browser_blind as attention
 import test_control_web_project_cloud_browser as project_cloud
 import test_control_web_pinned_activity_browser_blind as pinned
 import pinned_activity_blind_support as pins
+from control_browser_helpers import session_navigator
 
+
+
+def verify_source_assets(case, origin):
+    """Prove this fixture serves selected source bytes, without inspecting logic."""
+    root = Path(__file__).resolve().parents[1]
+    for url, name in (('/web.js', '_control_web.js'), ('/web.css', '_control_web.css')):
+        response = case.page.request.get(origin + url)
+        case.assertEqual(response.status, 200, 'Fixture asset HTTP status: ' + url)
+        case.assertEqual(hashlib.sha256(response.body()).hexdigest(),
+                         hashlib.sha256((root / 'bin' / name).read_bytes()).hexdigest(),
+                         'Fixture serves another source root: ' + url)
 
 def with_rows(backend, rows):
     backend.overview['rows'] = rows
@@ -33,9 +48,13 @@ def item_history(count=24):
 class CompactOverviewBrowserBlind(unittest.TestCase):
     """Real Chromium geometry and public overview polling with synthetic backend."""
     setUpClass = classmethod(attention.AttentionPriorityBrowserBlind.setUpClass.__func__)
-    setUp = attention.AttentionPriorityBrowserBlind.setUp
+    def setUp(self):
+        attention.AttentionPriorityBrowserBlind.setUp(self)
+        verify_source_assets(self, self.fixture.origin)
     tearDown = attention.AttentionPriorityBrowserBlind.tearDown
     until = attention.AttentionPriorityBrowserBlind.until
+    open_navigator = attention.AttentionPriorityBrowserBlind.open_navigator
+    session_list = attention.AttentionPriorityBrowserBlind.session_list
     open_panel = attention.AttentionPriorityBrowserBlind.open_panel
 
     def place_visible_anchor(self, locator):
@@ -56,14 +75,25 @@ class CompactOverviewBrowserBlind(unittest.TestCase):
             result=dict(turn_id=part.TURN, item_id=attention.READY_ITEM,
                 status='completed', ready=True, completed_at=1800000000))]
         self.open_panel()
-        row = self.page.locator('#participation-list .participation-row').filter(has_text='Compact')
+        rows = session_navigator(self.page)
+        row = rows.get_by_role('option').filter(has_text='Compact')
+        if row.count() == 0: row = rows.get_by_role('listitem').filter(has_text='Compact')
         expect(row).to_be_visible()
-        badges = row.locator('p').inner_text()
+        badges = row.inner_text()
         self.assertIn('Вопрос', badges)
-        self.assertIn('ответ', badges.lower())
+        # Attention has priority; the ready result remains reachable in actions.
+        row.get_by_role('button', name='Действия', exact=True).click()
+        expect(self.page.get_by_role('menuitem', name=re.compile('результат|ответ', re.I)).or_(
+            self.page.get_by_role('button', name=re.compile('Открыть результат|Открыть ответ', re.I)))).to_be_visible()
+        row.get_by_role('button', name='Действия', exact=True).click()
         for width, height_limit in ((1280, 100), (360, 160)):
             with self.subTest(width=width):
                 self.page.set_viewport_size(dict(width=width, height=900))
+                if width >= 1024:
+                    expect(self.page.get_by_role('combobox',name='Проект',exact=True)).to_be_visible()
+                else:
+                    expect(self.page.get_by_role('dialog',name='Сессии',exact=True,include_hidden=True)).to_have_count(1)
+                session_navigator(self.page)
                 box = row.bounding_box()
                 self.assertIsNotNone(box)
                 self.assertLessEqual(box['height'], height_limit,
@@ -83,15 +113,18 @@ class CompactOverviewBrowserBlind(unittest.TestCase):
     def test_CUI02_unchanged_row_node_focus_and_manual_other_disclosure_survive_update(self):
         self.page.clock.install()
         self.open_panel()
-        listing = self.page.locator('#participation-list')
-        other = listing.locator('details.participation-other')
-        self.assertEqual(other.count(), 1)
-        other.evaluate('el=>el.open=true')
-        stable = listing.locator('.participation-row').filter(has_text='Priority approval and question')
-        action = stable.get_by_role('button', name='Открыть вопрос', exact=True)
+        listing = session_navigator(self.page)
+        stable = listing.get_by_role('option').filter(has_text='Priority approval and question')
+        if stable.count() == 0: stable = listing.get_by_role('listitem').filter(has_text='Priority approval and question')
+        stable.get_by_role('button', name='Действия', exact=True).click()
+        action = self.page.get_by_role('menuitem', name=re.compile('Открыть вопрос', re.I)).or_(
+            self.page.get_by_role('button', name='Открыть вопрос', exact=True)).first
         action.focus()
         stable.evaluate('e=>window.compactStableRow=e')
-        other.evaluate('e=>window.compactOtherDisclosure=e')
+        current_filter = self.page.get_by_role('button', name=re.compile('^(?:Все|Внимание|Готовы|Работают|Закреплённые)'))
+        selected_filter = current_filter.filter(has=self.page.locator('[aria-pressed="true"]'))
+        if selected_filter.count() == 0: selected_filter = current_filter.first
+        selected_filter.evaluate('e=>window.compactSelectedFilter=e')
         self.backend.overview['rows'][2]['label'] = 'Updated unrelated ready row'
         self.backend.overview['revision'] += 1
         self.backend.overview['generated_at'] += 1
@@ -101,8 +134,8 @@ class CompactOverviewBrowserBlind(unittest.TestCase):
                         'unchanged (project,sid) row DOM identity was replaced')
         self.assertTrue(action.evaluate('e=>e.isConnected && e===document.activeElement'),
                         'ordinary refresh stole focus from a row action')
-        self.assertTrue(other.evaluate('e=>e.isConnected && e===window.compactOtherDisclosure && e.open'),
-                        'manual other disclosure state was lost')
+        self.assertTrue(selected_filter.evaluate('e=>e.isConnected && e===window.compactSelectedFilter'),
+                        'explicit navigator filter DOM identity was lost')
 
     def test_CUI03_overview_insert_remove_and_removed_anchor_keep_reader_position(self):
         self.page.clock.install()
@@ -116,7 +149,8 @@ class CompactOverviewBrowserBlind(unittest.TestCase):
                               'Inserted above reader', activity='active')
         with_rows(self.backend, [added, *base])
         self.page.clock.fast_forward(6000)
-        self.until(lambda:self.page.get_by_text('Inserted above reader', exact=True).count() == 1)
+        expect(self.page.get_by_role('button', name=re.compile(r'^Новые:\s*1$'))).to_be_visible()
+        expect(self.page.get_by_text('Inserted above reader', exact=True)).to_have_count(0)
         expect(anchor).to_be_visible()
         self.assertLessEqual(abs(anchor.bounding_box()['y']-before), 3,
                              'overview insertion above the reader moved the visible anchor')
@@ -133,7 +167,8 @@ class CompactOverviewBrowserBlind(unittest.TestCase):
         remaining = [row for row in base if row['label'] != 'Overview row 17']
         with_rows(self.backend, remaining)
         self.page.clock.fast_forward(6000)
-        self.until(lambda:self.page.get_by_text('Overview row 17', exact=True).count() == 0)
+        expect(self.page.get_by_text('Overview row 17', exact=True)).to_have_count(1)
+        # Partial/background omission cannot revoke the frozen visible anchor.
         self.assertLessEqual(abs(neighbor.bounding_box()['y']-neighbor_y), 3,
                              'removing the scroll anchor did not retain the surviving neighboring row')
 
@@ -152,7 +187,8 @@ class CompactOverviewBrowserBlind(unittest.TestCase):
         user_anchor = self.page.get_by_text('Delayed row 18', exact=True)
         user_y = self.place_visible_anchor(user_anchor)
         held[0].fulfill(status=200, json=deepcopy(self.backend.overview))
-        self.until(lambda:self.page.get_by_text('Delayed inserted row', exact=True).count() == 1)
+        expect(self.page.get_by_role('button', name=re.compile(r'^Новые:\s*1$'))).to_be_visible()
+        expect(self.page.get_by_text('Delayed inserted row', exact=True)).to_have_count(0)
         expect(user_anchor).to_be_visible()
         self.assertLessEqual(abs(user_anchor.bounding_box()['y']-user_y), 3,
                              'response restored stale pre-fetch scroll after the user moved')
@@ -170,7 +206,8 @@ class CompactOverviewBrowserBlind(unittest.TestCase):
         neighbor_y = neighbor.bounding_box()['y']
         with_rows(self.backend, [row for row in base if row['label'] != 'Removal row 17'])
         self.page.clock.fast_forward(6000)
-        self.until(lambda:anchor.count() == 0)
+        expect(anchor).to_have_count(1)
+        # Absence from the overview is not authoritative access revocation.
         expect(neighbor).to_be_visible()
         self.assertLessEqual(abs(neighbor.bounding_box()['y']-neighbor_y), 3,
                              'when the anchor disappears, the surviving neighbor was not retained')
@@ -193,17 +230,11 @@ class CompactOverviewBrowserBlind(unittest.TestCase):
         moved['running'] = 'unconfirmed'
         with_rows(self.backend, changed)
         self.page.clock.fast_forward(6000)
-        self.until(lambda:self.page.locator('details.participation-other .participation-row').filter(
-            has_text='Group move row 17').count() == 1)
-
-        other = self.page.locator('details.participation-other')
-        expect(other).to_have_count(1)
-        self.assertFalse(other.evaluate('el=>el.open'), 'automatic group transition opened Other disclosure')
-        self.assertEqual(anchor.count(), 1, 'moved session remains represented in collapsed Other')
-        self.assertFalse(anchor.is_visible(), 'collapsed Other session must not be treated as a visible anchor')
+        self.until(lambda:anchor.count() == 1)
+        expect(anchor).to_be_visible()
         expect(neighbor).to_be_visible()
         self.assertLessEqual(abs(neighbor.bounding_box()['y']-neighbor_y), 3,
-                             'visible reader position did not fall back when anchor moved into collapsed Other')
+                             'visible reader position moved when a live status changed in the unified list')
 
     def test_CUI03_all_overview_rows_removed_uses_container_or_natural_clamp(self):
         self.page.clock.install()
@@ -212,7 +243,7 @@ class CompactOverviewBrowserBlind(unittest.TestCase):
             for i in range(28)]
         self.backend.overview['rows'] = rows
         self.open_panel()
-        container = self.page.locator('#participation-list')
+        container = session_navigator(self.page)
         expect(container).to_be_visible()
         anchor = self.page.get_by_text('Cleared overview row 17', exact=True)
         self.place_visible_anchor(anchor)
@@ -226,38 +257,32 @@ class CompactOverviewBrowserBlind(unittest.TestCase):
         self.backend.overview['revision'] += 1
         self.backend.overview['generated_at'] += 1
         self.page.clock.fast_forward(6000)
-        expect(self.page.get_by_text('Нет сессий для отображения', exact=True)).to_be_visible()
-        expect(container).to_be_visible()
-        after_y = container.bounding_box()['y']
-        after = self.page.evaluate('''()=>({y:scrollY,height:document.scrollingElement.scrollHeight,
-            viewport:innerHeight})''')
-
-        natural_max = max(0, after['height']-after['viewport'])
-        container_fallback = abs(after_y-before_y) <= 3
-        viewport_clamped = abs(after['y']-natural_max) <= 8
-        self.assertTrue(container_fallback or viewport_clamped,
-                        'when every visible candidate is removed, preserve the container or clamp to natural document end')
-        self.assertGreater(before['height']-after['height'], len(rows)*20,
-                           'empty overview must shrink naturally without an artificial spacer')
+        # INV-USN03: background omission keeps the frozen snapshot and scroll.
+        expect(anchor).to_be_visible()
+        self.assertEqual(container.get_by_role('listitem').count(), len(rows))
+        self.assertLessEqual(abs(container.bounding_box()['y'] - before_y), 3)
+        self.assertEqual(self.page.evaluate('document.scrollingElement.scrollHeight'), before['height'])
 
 
 class CompactPinsBrowserBlind(unittest.TestCase):
     """Pins refresh uses the existing synthetic public endpoint fixture."""
     setUpClass = classmethod(pinned.PinnedActivityBrowserBlind.setUpClass.__func__)
-    setUp = pinned.PinnedActivityBrowserBlind.setUp
+    def setUp(self):
+        pinned.PinnedActivityBrowserBlind.setUp(self)
+        verify_source_assets(self, self.fixture.origin)
     tearDown = pinned.PinnedActivityBrowserBlind.tearDown
     until = pinned.PinnedActivityBrowserBlind.until
     select = pinned.PinnedActivityBrowserBlind.select
     visible = pinned.PinnedActivityBrowserBlind.visible
     refresh = pinned.PinnedActivityBrowserBlind.refresh
-    pins_title = pinned.PinnedActivityBrowserBlind.pins_title
     pin_block = pinned.PinnedActivityBrowserBlind.pin_block
 
     def test_CUI03_pin_refresh_above_reader_respects_user_scroll_during_async_fetch(self):
-        self.select()
+        self.select(open_chat=True)
         history = item_history()
         self.backend.value = history
         self.fixture.transport.emit(live.snapshot(2, value=history))
+        self.page.get_by_role('button', name='К последним сообщениям', exact=True).click()
         anchor = self.page.get_by_text(re.compile('Activity reader 14'))
         expect(anchor).to_have_count(1)
         anchor.evaluate("e=>e.scrollIntoView({block:'center',behavior:'instant'})")
@@ -275,7 +300,8 @@ class CompactPinsBrowserBlind(unittest.TestCase):
         user_anchor.evaluate("e=>e.scrollIntoView({block:'center',behavior:'instant'})")
         user_y = user_anchor.bounding_box()['y']
         held[0].fulfill(status=200, json=deepcopy(self.value))
-        expect(self.pin_block().get_by_text('Pins refreshed above reader', exact=True)).to_be_visible()
+        # Refreshing pins while reading must not open the modal and obscure chat.
+        self.page.wait_for_timeout(150)
         self.assertLessEqual(abs(user_anchor.bounding_box()['y']-user_y), 3,
                              'pins response overrode user scroll with a stale captured position')
 
@@ -284,32 +310,25 @@ class CompactProjectSummaryBrowserBlind(unittest.TestCase):
     """Project-summary endpoint uses the existing authenticated synthetic HTTP fixture."""
     setUpClass = classmethod(project_cloud.ProjectCloudBrowserContract.setUpClass.__func__)
     stop_server = classmethod(project_cloud.ProjectCloudBrowserContract.stop_server.__func__)
-    setUp = project_cloud.ProjectCloudBrowserContract.setUp
+    def setUp(self):
+        project_cloud.ProjectCloudBrowserContract.setUp(self)
+        verify_source_assets(self, self.url)
     tearDown = project_cloud.ProjectCloudBrowserContract.tearDown
     control = project_cloud.ProjectCloudBrowserContract.control
+    verify_assets = project_cloud.ProjectCloudBrowserContract.verify_assets
     tile = project_cloud.ProjectCloudBrowserContract.tile
-    tile = project_cloud.ProjectCloudBrowserContract.tile
+    select_project = project_cloud.ProjectCloudBrowserContract.select_project
+    selected_filter = project_cloud.ProjectCloudBrowserContract.selected_filter
+    open_session = project_cloud.ProjectCloudBrowserContract.open_session
     def test_CUI03_project_summary_reflow_keeps_reader_anchor_focus_and_selection(self):
-        self.page.set_viewport_size({'width': 360, 'height': 844})
-        high = self.tile('high')
-        high.click()
-        expect(high).to_have_attribute('aria-pressed', 'true')
-        session = self.page.get_by_role('button', name='Cloud synthetic session', exact=False)
-        expect(session).to_be_visible()
-        session.click()
+        self.page.set_viewport_size({'width': 1280, 'height': 900})
+        self.select_project('high')
+        self.assertEqual(self.selected_filter(), 'high')
+        self.open_session()
         reader = self.page.get_by_text('CLOUD SYNTHETIC HISTORY', exact=True)
         expect(reader).to_be_visible()
-        # Confirmed history selection collapses the cloud by design; expose it
-        # again so refresh is a real visible user control during the scenario.
-        self.page.locator('#projects-toggle').click()
-        expect(self.tile('high')).to_be_visible()
-        loww_tile = self.tile('loww')
-        group = loww_tile.locator('xpath=ancestor::*[@role="group" and (@aria-label or @aria-labelledby)]')
-        self.assertEqual(group.count(), 1, 'expanded projects have one public labelled group')
-        group_before = group.bounding_box()
 
-        # Change an existing count and insert several long public project names
-        # into both the authoritative projects list and summary metadata.
+        # Change authorized project metadata and add known project filters.
         rows = project_cloud.project_rows()
         loww = next(row for row in rows if row['name'] == 'loww')
         loww['session_count'] = 1000000
@@ -329,8 +348,8 @@ class CompactProjectSummaryBrowserBlind(unittest.TestCase):
             self.page.wait_for_timeout(20)
         self.assertEqual(len(held), 1, 'summary refresh did not reach deferred public fixture')
 
-        # New user focus and reading position after request start must win over
-        # any state captured before the project summary refresh began.
+        # User focus and reading position after request start remain stable
+        # while the unified filter receives its updated project choices.
         composer = self.page.locator('textarea').last
         composer.fill('Synthetic project refresh draft')
         reader.evaluate("el=>el.scrollIntoView({block:'center',behavior:'instant'})")
@@ -344,36 +363,30 @@ class CompactProjectSummaryBrowserBlind(unittest.TestCase):
         held[0].fulfill(status=200, json={'projects': rows})
         self.page.unroute('**/api/session-project-summary*')
         expect(reader).to_be_visible()
-        for addition in additions:
-            expect(self.tile(addition['name'])).to_be_visible()
-        deadline = time.monotonic() + 3
-        while '1000000' not in ''.join(re.findall(r'\d', loww_tile.inner_text())) and time.monotonic() < deadline:
-            self.page.wait_for_timeout(20)
-        loww_metadata_applied = '1000000' in ''.join(re.findall(r'\d', loww_tile.inner_text()))
-        group_after = group.bounding_box()
-        cloud_height_grew = group_after['height']-group_before['height'] > 50
+        filter_control=self.page.get_by_role('combobox',name=re.compile('Проект',re.I))
+        for addition in additions: expect(filter_control.locator('option').filter(has_text=addition['name'])).to_have_count(1)
         anchor_delta = abs(reader.bounding_box()['y']-reader_y)
         composer_kept_focus = composer.evaluate('el=>el===document.activeElement')
         draft_kept = composer.input_value() == 'Synthetic project refresh draft'
-        high_still_selected = high.get_attribute('aria-pressed') == 'true'
-        no_horizontal_overflow = self.page.evaluate('Math.max(document.documentElement.scrollWidth,document.body.scrollWidth) <= 361')
-        self.tile('loww').click()
-        explicit_selection_works = self.tile('loww').get_attribute('aria-pressed') == 'true'
-        self.assertTrue(loww_metadata_applied, 'summary response did not apply the changed count to the project tile')
-        self.assertTrue(cloud_height_grew, 'added public projects did not increase the expanded cloud height')
+        high_still_selected = self.selected_filter() == 'high'
+        no_horizontal_overflow = self.page.evaluate('Math.max(document.documentElement.scrollWidth,document.body.scrollWidth) <= 1281')
+        self.select_project('loww')
+        explicit_selection_works = self.selected_filter() == 'loww'
         self.assertLessEqual(anchor_delta, 3,
                              'project-summary reflow moved the visible chat reader anchor')
         self.assertTrue(composer_kept_focus, 'project-summary refresh stole focus from the active chat composer')
         self.assertTrue(draft_kept, 'project-summary refresh changed the active chat draft')
-        self.assertTrue(high_still_selected, 'reflowing the cloud cleared the current project selection')
+        self.assertTrue(high_still_selected, 'summary refresh cleared the current project filter')
         self.assertTrue(explicit_selection_works, 'an explicit project selection stopped working after refresh')
-        self.assertTrue(no_horizontal_overflow, 'project-summary reflow caused horizontal overflow at 360px')
+        self.assertTrue(no_horizontal_overflow, 'project filter caused horizontal overflow at 360px')
 
 
 class CompactSelectedChatBrowserBlind(unittest.TestCase):
     """Overview refresh behavior while a real synthetic chat is selected."""
     setUpClass = classmethod(pinned.PinnedActivityBrowserBlind.setUpClass.__func__)
-    setUp = pinned.PinnedActivityBrowserBlind.setUp
+    def setUp(self):
+        pinned.PinnedActivityBrowserBlind.setUp(self)
+        verify_source_assets(self, self.fixture.origin)
     tearDown = pinned.PinnedActivityBrowserBlind.tearDown
     until = pinned.PinnedActivityBrowserBlind.until
     select = pinned.PinnedActivityBrowserBlind.select
@@ -389,15 +402,18 @@ class CompactSelectedChatBrowserBlind(unittest.TestCase):
             activity='active', running='confirmed')]
         self.overview_requests = 0
         self.page.route(re.compile(r'/api/participation-overview(?:\?.*)?$'), self.answer_overview)
-        self.select()
+        self.select(open_chat=True)
         self.until(lambda:self.overview_requests > 0)
         history = item_history()
         self.backend.value = history
         self.fixture.transport.emit(live.snapshot(2, value=history))
         self.anchor = self.page.get_by_text(re.compile('Activity reader 10'))
+        self.page.get_by_role('button', name='К последним сообщениям', exact=True).click()
         expect(self.anchor).to_be_visible()
-        self.participation_row = self.page.locator('#participation-list .participation-row').filter(
-            has_text='LIVE synthetic A')
+        self.page.set_viewport_size({'width':1280,'height':900})
+        rows=session_navigator(self.page)
+        self.participation_row=rows.get_by_role('option').filter(has_text='LIVE synthetic A')
+        if self.participation_row.count()==0:self.participation_row=rows.get_by_role('listitem').filter(has_text='LIVE synthetic A')
         expect(self.participation_row).to_be_visible()
 
     def publish_overview(self, rows):
@@ -423,12 +439,9 @@ class CompactSelectedChatBrowserBlind(unittest.TestCase):
         return self.page.evaluate('document.scrollingElement.scrollHeight-innerHeight-scrollY')
 
     def follow_bottom(self):
-        controls = self.page.get_by_role('button', name='↓ В конец', exact=True, include_hidden=True)
-        self.assertEqual(controls.count(), 2, 'explicit top-level and menu bottom-follow controls exist')
-        for summary in controls.last.locator('xpath=ancestor::details[not(@open)]/summary').all():
-            summary.click()
-        self.assertTrue(controls.first.is_visible())
-        controls.first.click()
+        controls = self.page.get_by_role('button', name='К последним сообщениям', exact=True)
+        self.assertEqual(controls.count(), 1, 'Unified chat exposes one explicit bottom-follow action')
+        controls.click()
         self.until(lambda:self.scroll_gap() <= 8)
 
     def test_CUI03_selected_chat_anchor_survives_overview_insert_remove_and_bottom_follow(self):
@@ -440,7 +453,8 @@ class CompactSelectedChatBrowserBlind(unittest.TestCase):
             for i in range(10)]
 
         self.publish_overview([*fillers, *initial])
-        expect(self.page.get_by_text('Chat overview insert 00', exact=True)).to_be_visible()
+        expect(self.page.get_by_role('button', name=re.compile(r'^Новые:\s*10$'))).to_be_visible()
+        expect(self.page.get_by_text('Chat overview insert 00', exact=True)).to_have_count(0)
         expect(self.anchor).to_be_visible()
         self.assertLessEqual(abs(self.anchor.bounding_box()['y']-history_y), 3,
                              'overview insertion above selected history moved its anchor')
@@ -464,7 +478,7 @@ class CompactSelectedChatBrowserBlind(unittest.TestCase):
         self.open_chat()
         self.page.locator('textarea').fill('Keep synthetic selected-chat draft')
         row = self.participation_row
-        open_chat = row.get_by_role('button', name='Открыть сессию', exact=True)
+        open_chat = row.get_by_role('button', name=re.compile('Открыть сессию.*LIVE synthetic A'))
         expect(open_chat).to_be_visible()
         open_chat.focus()
         row.evaluate('e=>window.selectedChatParticipationRow=e')
@@ -487,9 +501,7 @@ class CompactSelectedChatBrowserBlind(unittest.TestCase):
                         'moving the row from working to attention replaced its DOM node')
         self.assertTrue(open_chat.evaluate('e=>e.isConnected && e===window.selectedChatOpenAction && e===document.activeElement'),
                         'group transition replaced or blurred the common open-session action')
-        heading = row.evaluate("""el=>{let n=el.previousElementSibling;
-            while(n&&n.tagName!=='H3')n=n.previousElementSibling;return n?.textContent.trim()}""")
-        self.assertEqual(heading, 'Нужно участие', 'new question moves the selected session into attention')
+        self.assertIn('Вопрос', row.inner_text(), 'The frozen row updates its prioritized status in place')
         self.assertEqual(self.page.locator('textarea').input_value(), 'Keep synthetic selected-chat draft')
         self.assertTrue(project_is_selected(self.page, 'demo'), 'overview refresh changed the selected project')
         expect(self.page.get_by_role('heading', name='LIVE synthetic A', exact=True)).to_be_visible()
