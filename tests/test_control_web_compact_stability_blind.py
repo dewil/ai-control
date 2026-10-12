@@ -288,6 +288,7 @@ class CompactProjectSummaryBrowserBlind(unittest.TestCase):
     tearDown = project_cloud.ProjectCloudBrowserContract.tearDown
     control = project_cloud.ProjectCloudBrowserContract.control
     tile = project_cloud.ProjectCloudBrowserContract.tile
+    tile = project_cloud.ProjectCloudBrowserContract.tile
     def test_CUI03_project_summary_reflow_keeps_reader_anchor_focus_and_selection(self):
         self.page.set_viewport_size({'width': 360, 'height': 844})
         high = self.tile('high')
@@ -303,14 +304,21 @@ class CompactProjectSummaryBrowserBlind(unittest.TestCase):
         self.page.locator('#projects-toggle').click()
         expect(self.tile('high')).to_be_visible()
         loww_tile = self.tile('loww')
-        loww_before = loww_tile.bounding_box()
-        loww_before_area = loww_before['width']*loww_before['height']
+        group = loww_tile.locator('xpath=ancestor::*[@role="group" and (@aria-label or @aria-labelledby)]')
+        self.assertEqual(group.count(), 1, 'expanded projects have one public labelled group')
+        group_before = group.bounding_box()
 
-        # Change an existing project's count enough to reflow the expanded
-        # mobile cloud above the chat reader.
+        # Change an existing count and insert several long public project names
+        # into both the authoritative projects list and summary metadata.
         rows = project_cloud.project_rows()
         loww = next(row for row in rows if row['name'] == 'loww')
-        loww['session_count'] = 1000
+        loww['session_count'] = 1000000
+        additions = []
+        for index in range(6):
+            additions.append(dict(name=f'compact-growth-project-{index+1:02d}',
+                session_count=100+index, last_activity=1800000000-index,
+                summary_state='fresh', as_of=1800000000))
+        rows.extend(additions)
         held = []
         self.page.route('**/api/session-project-summary*', lambda route: held.append(route))
         self.control(projects=rows)
@@ -336,12 +344,14 @@ class CompactProjectSummaryBrowserBlind(unittest.TestCase):
         held[0].fulfill(status=200, json={'projects': rows})
         self.page.unroute('**/api/session-project-summary*')
         expect(reader).to_be_visible()
+        for addition in additions:
+            expect(self.tile(addition['name'])).to_be_visible()
         deadline = time.monotonic() + 3
-        loww_after = loww_tile.bounding_box()
-        while loww_after['width']*loww_after['height'] <= loww_before_area and time.monotonic() < deadline:
+        while '1000000' not in ''.join(re.findall(r'\d', loww_tile.inner_text())) and time.monotonic() < deadline:
             self.page.wait_for_timeout(20)
-            loww_after = loww_tile.bounding_box()
-        loww_grew = loww_after['width']*loww_after['height'] > loww_before_area
+        loww_metadata_applied = '1000000' in ''.join(re.findall(r'\d', loww_tile.inner_text()))
+        group_after = group.bounding_box()
+        cloud_height_grew = group_after['height']-group_before['height'] > 50
         anchor_delta = abs(reader.bounding_box()['y']-reader_y)
         composer_kept_focus = composer.evaluate('el=>el===document.activeElement')
         draft_kept = composer.input_value() == 'Synthetic project refresh draft'
@@ -349,7 +359,8 @@ class CompactProjectSummaryBrowserBlind(unittest.TestCase):
         no_horizontal_overflow = self.page.evaluate('Math.max(document.documentElement.scrollWidth,document.body.scrollWidth) <= 361')
         self.tile('loww').click()
         explicit_selection_works = self.tile('loww').get_attribute('aria-pressed') == 'true'
-        self.assertTrue(loww_grew, 'summary update did not reflow the changed project tile')
+        self.assertTrue(loww_metadata_applied, 'summary response did not apply the changed count to the project tile')
+        self.assertTrue(cloud_height_grew, 'added public projects did not increase the expanded cloud height')
         self.assertLessEqual(anchor_delta, 3,
                              'project-summary reflow moved the visible chat reader anchor')
         self.assertTrue(composer_kept_focus, 'project-summary refresh stole focus from the active chat composer')
