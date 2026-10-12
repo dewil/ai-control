@@ -150,7 +150,7 @@ class AllWindowMarkersBlind(unittest.TestCase):
 
     def test_elapsed_marker_moves_at_start_middle_and_just_before_reset_without_changing_spend(self):
         duration = 7 * native.DAY
-        for elapsed in (0, 3.5 * native.DAY, duration - 60):
+        for elapsed in (-60, 0, 3.5 * native.DAY, duration - 60):
             with self.subTest(elapsed=elapsed):
                 value = native.overview(elapsed=elapsed, remaining=13, duration=10080)
                 self.open_value(value)
