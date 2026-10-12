@@ -319,6 +319,7 @@ class FakeNatsFactory:
         return connection
 
 
+# INV-SIDE01: trace the accepted fixed-config and one-role/one-auth contract.
 class BridgeLoaderBlind(unittest.TestCase):
     def setUp(self):
         self.module = importlib.import_module("_control_web_devbus_nats")
@@ -377,6 +378,7 @@ class BridgeLoaderBlind(unittest.TestCase):
                 self.assertIsNone(loaded, "invalid bridge config must not load")
 
     def test_loader_rejects_wrong_mode_overflow_and_symlink_without_repair(self):
+        # INV-SIDE06: fixed private config identity checks; no replacement/reset path.
         value = self.config
         try: loaded = self.invoke(value=value, mode=0o644)
         except (ValueError, OSError): loaded = None
@@ -406,6 +408,7 @@ class BridgeLoaderBlind(unittest.TestCase):
         self.assertIsNone(loaded)
 
 
+# INV-SIDE01: OBS observer credentials are distinct from origin credentials.
 class ObserverConfigBlind(unittest.TestCase):
     def setUp(self):
         self.broker = importlib.import_module("_control_web_broker")
@@ -448,6 +451,7 @@ class ObserverConfigBlind(unittest.TestCase):
                 self.assertEqual(reason, "invalid_config")
 
 
+# INV-SIDE02/03: source bind, PubAck ordering, captured epochs, and validated copy.
 class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.module = importlib.import_module("_control_web_devbus_nats")
@@ -499,6 +503,7 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(factory.calls, [], "config validation must precede NATS connect")
 
     async def test_binds_only_precreated_source_durable_never_source_mutation(self):
+        # INV-SIDE02: bind-only origin reads; no source publish or consumer mutation.
         cfg, factory = self.harness()
         task = await self.start(cfg, factory)
         try:
@@ -513,6 +518,7 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
             await self.stop_task(task)
 
     async def test_destination_puback_precedes_ack_and_uses_exact_subject_bytes(self):
+        # INV-SIDE02: destination PubAck must precede ACK of the fetched origin message.
         cfg, factory = self.harness()
         task = await self.start(cfg, factory)
         try:
@@ -529,6 +535,7 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
             await self.stop_task(task)
 
     async def test_dedupe_id_changes_with_epoch_sequence_and_bytes_not_payload_id(self):
+        # INV-SIDE03: retry identity is the captured epoch, sequence, and exact event bytes.
         async def one(cfg, sequence, data):
             msg = FakeMessage(data=data, sequence=sequence)
             factory = FakeNatsFactory(cfg, message=msg)
@@ -650,6 +657,7 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(factory.source_js.calls[-1][0], "bind")
 
     async def test_sdk_datetime_epochs_are_normalized_against_config_strings(self):
+        # INV-SIDE03: accept SDK datetime epochs while matching configured UTC string epochs.
         """Exercise the real NATS SDK response dataclasses, including UTC datetimes."""
         try:
             from nats.js.api import (AckPolicy, ConsumerConfig, ConsumerInfo,
@@ -767,6 +775,7 @@ class ExistingObserverContractBlind(unittest.TestCase):
         self.assertEqual(snapshot["tasks"][0]["quality"], "unreviewed")
 
 
+# INV-SIDE04: bounded replay and bridge status evidence.
 class ExistingObserverEphemeralBlind(unittest.IsolatedAsyncioTestCase):
     async def test_local_observer_keeps_bounded_event_replay_and_ack_contract(self):
         module = importlib.import_module("_control_web_devbus")
@@ -799,6 +808,7 @@ class ExistingObserverEphemeralBlind(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(transport.closed)
 
     def test_owner_projection_uses_bridge_issues_without_mixing_source_sequences(self):
+        # INV-SIDE04: bounded bridge health cannot overwrite OBS-owned replay coverage.
         broker = importlib.import_module("_control_web_broker")
         web = importlib.import_module("_control_web_devbus")
         with tempfile.TemporaryDirectory(prefix="sidecar-owner-status-") as directory:
@@ -837,6 +847,39 @@ class ExistingObserverEphemeralBlind(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(reason, value["coverage"]["issues"])
                 else:
                     self.assertNotIn("retention_gap", value["coverage"]["issues"])
+
+    def test_obs_password_is_redacted_from_owner_bounded_result(self):
+        """OBS-only config secrets must enter the same existing Projection scrub path."""
+        # INV-SIDE05: own OBS projection and public result secret scrubbing.
+        broker = importlib.import_module("_control_web_broker")
+        web = importlib.import_module("_control_web_devbus")
+        config = broker.NatsConfig(enabled=True, url=OBS_URL, stream="OBS_EVENTS",
+                                   user="control_observer", password=OBS_PASSWORD,
+                                   stream_created=OBS_CREATED)
+        event = {
+            "message_id": "obs_password_scrub", "task_id": "task_scrub",
+            "correlation_id": "task_scrub", "source": "agent_a", "target": "control",
+            "kind": "completed", "created_at": "2026-10-12T00:03:00+00:00",
+            "payload": {"text": OBS_PASSWORD},
+        }
+        class Observer:
+            def __init__(self, projection, connect): self.projection = projection
+            async def start(self):
+                self.projection.connection("live")
+                self.projection.coverage(1, 1, 86400, 104857600, replay_complete=True)
+                if not self.projection.ingest(canonical(event), "devbus.events.agent_a", 1):
+                    raise AssertionError("synthetic OBS event must reach the owner projection")
+            async def stop(self): return None
+        runtime = broker.DevbusRuntime(config_loader=lambda: (config, None),
+            projection_factory=web.Projection, observer_factory=Observer,
+            connect_factory=lambda _: None, dependency_probe=lambda: True)
+        runtime.start()
+        try:
+            value = runtime.snapshot()
+        finally:
+            runtime.stop()
+        self.assertNotIn(OBS_PASSWORD, json.dumps(value, ensure_ascii=False))
+        self.assertEqual(value["tasks"][0]["result"], "***")
 
 
 if __name__ == "__main__":
