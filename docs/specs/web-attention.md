@@ -38,3 +38,6 @@ Native approvals только read-only wait, ответы отложены. Bou
 
 ## 12.10 — приоритетный обзор участия
 INV-APRI01..04: ожидающие решения и готовые ответы выше работающих; каждая строка один раз. Различимые текстовые badges, счётчики наблюдённых групп и health/partial coverage без ложного «всё спокойно». Existing nativeapprovalresponses остаются отложены. Спецификация docs/dev/2026-10-12-spec-attention-priority.md, browser tests test_control_web_attention_priority_browser_blind.py.
+
+## 12.10 — PART0.162.1 admission
+INV-PVER01..03: feature-specificPARTallowlist0.161.0/0.162.1 для sampler/callback/response, без снятияпрочихschema/root/context/once-onlyguards. Непроверенные версии закрыты. Primaryschemas и syntheticreadonly/callbackконтракты проверяются отдельно; installedrealpoolrowsне заменяются browserfixture. Спека docs/dev/2026-10-12-spec-participation-01621.md.
