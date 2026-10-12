@@ -276,7 +276,7 @@ function question(card,task,q){
 }
 function result(card,task,r){if(!r)return;const box=node('div',undefined,'question');card.append(box);box.append(node('h3','Результат работы'));box.append(node('p',r.summary,'content'));const labels={requested:r.finalized?'Ждёт вашей проверки':'Готовится к проверке',accepted:'Вы приняли результат',rejected:'Вы отклонили результат',archived:'Работа завершена'};box.append(node('span',labels[r.state]||'Решение сохранено','badge'));if(r.state!=='requested'||!r.finalized)return;box.append(node('p','Принятие подтверждает результат. Применение изменений может завершиться позже.','meta'));const comment=field(box,task.agent+':'+r.generation,'Комментарий (необязательно)');const confirmLabel=node('label',undefined,'confirm');const check=node('input');check.type='checkbox';confirmLabel.append(check,node('span','Я проверил результат и подтверждаю решение'));box.append(confirmLabel);const rejectDetails=node('div');rejectDetails.hidden=true;const totp=field(rejectDetails,task.agent+':totp','Свежий код подтверждения','input');totp.maxLength=6;totp.inputMode='numeric';totp.autocomplete='one-time-code';totp.value='';totp.addEventListener('input',()=>drafts.delete(task.agent+':totp'));box.append(rejectDetails);const actions=node('div',undefined,'actions');const send=decision=>{if(!check.checked){card.querySelector('.message').textContent='Подтвердите, что проверили результат.';check.focus();return;}if(decision==='reject'&&(!rejectDetails.hidden&&!/^[0-9]{6}$/.test(totp.value)||rejectDetails.hidden)){rejectDetails.hidden=false;card.querySelector('.message').textContent='Для отклонения нужен новый код, отличный от кода входа.';totp.focus();return;}const body={agent:task.agent,generation:r.generation,decision,comment:comment.value,confirmed:true};if(decision==='reject')body.totp=totp.value;mutate(card,'/api/verdict',body);};button(actions,'Принять результат',()=>send('accept'));button(actions,'Отклонить',()=>send('reject'),'danger');box.append(actions);}
 function priority(task){if((task.questions||[]).some(q=>q.status==='open'&&!q.answered))return 0;if(task.result&&task.result.state==='requested'&&task.result.finalized)return 1;return 2;}
-async function refresh(){if(!pageActive())return;if(!csrf)return;const lifecycle=pageGeneration,b=$('refresh');b.disabled=true;notice('Загружаем задачи…');try{const data=await api('/api/tasks');if(lifecycle!==pageGeneration||!pageActive())return;const tasks=data.tasks.slice().sort((a,b)=>priority(a)-priority(b));const fragment=document.createDocumentFragment();for(const task of tasks){const card=node('article',undefined,'card');card.append(node('h2',task.name||task.agent));card.append(node('p',task.engine==='codex'?'Codex':'Claude','meta'));card.append(node('p','','message'));if(task.unavailable){card.append(node('p','Данные задачи временно недоступны. Обновите позже.'));}else{if(task.summary)card.append(node('p',task.summary,'content'));for(const q of task.questions||[])question(card,task,q);result(card,task,task.result);}fragment.append(card);}$('cards').replaceChildren(fragment);$('count').textContent=tasks.length?'Задач: '+tasks.length:'Пока нет задач';taskLoaded=true;notice(tasks.some(t=>t.unavailable)?'Некоторые задачи недоступны. Попробуйте обновить позже.':tasks.length?'':'Здесь появятся вопросы и результаты ваших задач.');}catch(err){if(err.stale)return;notice(err.message+' Нажмите «Обновить», чтобы повторить.');}finally{if(pageActive()&&lifecycle===pageGeneration)b.disabled=false;}}
+async function refresh(){if(!pageActive())return;if(!csrf)return;const lifecycle=pageGeneration,b=$('refresh');b.disabled=true;notice('Загружаем задачи…');try{const data=await api('/api/tasks');if(lifecycle!==pageGeneration||!pageActive())return;const tasks=data.tasks.slice().sort((a,b)=>priority(a)-priority(b));const fragment=document.createDocumentFragment();for(const task of tasks){const card=node('article',undefined,'card');card.append(node('h2',task.name||task.agent));card.append(node('p',task.engine==='codex'?'Codex':'Claude','meta'));card.append(node('p','','message'));if(task.unavailable){card.append(node('p','Данные задачи временно недоступны. Обновите позже.'));}else{if(task.summary)card.append(node('p',task.summary,'content'));for(const q of task.questions||[])question(card,task,q);result(card,task,task.result);}fragment.append(card);}$('cards').replaceChildren(fragment);$('count').textContent=tasks.length?'Задач: '+tasks.length:'Пока нет задач';taskLoaded=true;notice(tasks.some(t=>t.unavailable)?'Некоторые задачи недоступны. Попробуйте обновить позже.':tasks.length||currentTab!=='tasks'?'':'Здесь появятся вопросы и результаты ваших задач.');}catch(err){if(err.stale)return;notice(err.message+' Нажмите «Обновить», чтобы повторить.');}finally{if(pageActive()&&lifecycle===pageGeneration)b.disabled=false;}}
 
 // Session chat state is memory-only. The URL can identify a project/thread, never message text.
 let selectedProject='';
@@ -610,7 +610,7 @@ function navigatorEntry(key){
   const ready=Boolean(fresh&&!attention&&overview.result?.ready),working=Boolean(fresh&&!attention&&!ready&&overview.running==='confirmed'&&overview.activity==='active');
   const times=[pin?.last_activity,overview?.result?.completed_at].filter(value=>typeof value==='number'&&Number.isFinite(value));
   const title=entry.pageTitle||overview?.label||pin?.title||entry.title||'Сессия '+entry.sid?.slice(0,8);
-  return {...entry,title,vendor:entry.pageVendor||overview?.vendor||pin?.vendor||null,pinId:pin?.pin_id||null,overview:overview||null,pinStatus:pin?.status||null,fresh,attention,ready,working,activity:times.length?Math.max(...times):null,snapshot:!entry.pageTitle&&!overview&&Boolean(pin?.available),unavailable:entry.opaque===true};
+  return {...entry,title,vendor:entry.pageVendor||overview?.vendor||pin?.vendor||null,pinId:pin?.pin_id||null,overview:overview||null,pinStatus:pin?.status||null,pinWaits:pin?.waits||[],pinActivityState:pin?.activity_state,pinStale:pin?.activity_state==='fresh'&&navigatorNow()-pin.observed_at>15,fresh,attention,ready,working,activity:times.length?Math.max(...times):null,snapshot:!entry.pageTitle&&!overview&&Boolean(pin?.available),unavailable:entry.opaque===true};
 }
 function navigatorMatches(entry,filter=navigatorView.filter){return Boolean(entry&&(!navigatorView.project||entry.project===navigatorView.project)&&({all:true,attention:entry.attention,ready:entry.ready,working:entry.working,pins:Boolean(entry.pinId)})[filter]);}
 function syncNavigator(apply=false){
@@ -629,15 +629,20 @@ function syncNavigator(apply=false){
   navigatorView.pending=matching.filter(row=>!navigatorView.snapshot.includes(row.key)).map(row=>row.key);
   renderNavigator(entries);
 }
+function navigatorNow(){return pinView.serverNow!==null?pinView.serverNow+Math.max(0,performance.now()-pinView.received)/1000:partView.overview.data?partView.overview.data.generated_at+Math.max(0,performance.now()-(partView.overview.received||performance.now()))/1000:Date.now()/1000;}
+function navigatorAge(timestamp){if(timestamp===null)return '—';const age=Math.max(0,navigatorNow()-timestamp);return age<60?'сейчас':age<3600?Math.floor(age/60)+'м':age<86400?Math.floor(age/3600)+'ч':Math.floor(age/86400)+'д';}
 function navigatorStatus(entry){
   const row=entry.overview;
   if(entry.unavailable)return 'Недоступная сессия';
-  if(entry.attention){if(row.waits.includes('approval'))return 'Разрешение в Codex';if(row.waits.includes('question')||row.questions.length)return 'Вопрос';return 'Ошибка';}
+  if(entry.attention){const labels=[];if(row.waits.includes('approval'))labels.push('Разрешение в Codex');if(row.waits.includes('question')||row.questions.some(q=>['actionable','native_only','responding','sent','delivery_unknown'].includes(q.state)))labels.push('Вопрос ?');return labels.length?labels.join(' · '):'Ошибка';}
   if(entry.ready)return 'Ответ готов';if(entry.working)return 'Работает';
   if(row&&!entry.fresh)return 'Сведения устарели';
   if(row)return ({active:'Активна по Codex',idle:'Ожидает',not_loaded:'Не загружена'})[row.activity]||'Состояние неизвестно';
   if(entry.pageStatus)return entry.pageStatus==='idle'?'Ожидает':statusLabel(entry.pageStatus);
-  return entry.pinStatus&&entry.pinStatus!=='unknown'?'Снимок: '+(entry.pinStatus==='idle'?'Ожидает':statusLabel(entry.pinStatus)):'Состояние неизвестно';
+  if(entry.pinStale)return 'Нет свежих данных';
+  if(entry.pinActivityState==='unavailable')return 'Нет данных';
+  if(entry.pinStatus==='active'&&entry.pinWaits.length)return entry.pinWaits.map(wait=>wait==='approval'?'Ожидает разрешения':'Ожидает ответа').join(' · ');
+  return entry.pinStatus&&entry.pinStatus!=='unknown'?(entry.pinStatus==='idle'?'Ожидает':entry.pinStatus==='notLoaded'?'Не загружена':statusLabel(entry.pinStatus)):'Состояние неизвестно';
 }
 function renderNavigator(entries){
   const filters=$('navigator-filters');
@@ -646,32 +651,34 @@ function renderNavigator(entries){
   $('navigator-open').textContent='Сессии · внимание '+entries.filter(row=>navigatorMatches(row,'attention')).length;
   const changed=navigatorView.snapshot.some(key=>!navigatorMatches(navigatorEntry(key)));
   const uncertain=navigatorView.truncated||navigatorView.partial||!navigatorView.project||!partView.overview.data||partView.overview.data.coverage.partial||partView.overview.data.health!=='fresh';
-  $('navigator-status').textContent=[changed?'Есть изменения.':'',uncertain?'Список частичный; полнота не подтверждена.':'',navigatorView.truncated?'Достигнуто ограничение списка.':'',!navigatorView.snapshot.length?'Выберите проект или обновите список.':''].filter(Boolean).join(' ');
+  $('navigator-status').textContent=[pinView.busy?'Меняем закрепление…':$('pin-status').textContent,changed?'Есть изменения.':'',uncertain?'Список частичный; полнота не подтверждена.':'',navigatorView.truncated?'Достигнуто ограничение списка.':'',!navigatorView.snapshot.length?'Выберите проект или обновите список.':''].filter(Boolean).join(' ');
   $('navigator-new').hidden=!navigatorView.pending.length;$('navigator-new').textContent='Новые: '+navigatorView.pending.length;
   const list=$('navigator-list'),existing=new Map([...list.children].map(row=>[row.navigatorKey,row]));
   const rows=navigatorView.snapshot.map(key=>{
     const entry=navigatorEntry(key);let row=existing.get(key);if(!row){row=node('li',undefined,'navigator-row');row.navigatorKey=key;}
-    const signature=JSON.stringify([entry.title,entry.vendor,entry.pinId,entry.activity,navigatorStatus(entry),navigatorMatches(entry),entry.snapshot,entry.overview?.questions,entry.overview?.result]);
+    const signature=JSON.stringify([entry.title,entry.vendor,entry.pinId,entry.activity,navigatorAge(entry.activity),navigatorStatus(entry),navigatorMatches(entry),entry.snapshot,entry.overview?.questions,entry.overview?.result,pinView.busy]);
     if(row.navigatorSignature===signature)return row;
-    const focused=row.contains(document.activeElement),focusLabel=focused?document.activeElement.getAttribute('aria-label'):null;
+    const focused=row.contains(document.activeElement),focusedElement=focused?document.activeElement:null,focusLabel=focused?(focusedElement.getAttribute('aria-label')||focusedElement.textContent):null,focusAction=focusedElement?.dataset.navigatorAction,oldPrimary=row.querySelector('.navigator-primary'),oldToggle=row.querySelector('.navigator-menu>button'),menuOpen=Boolean(row.menuActions&&!row.menuActions.hidden);
     row.replaceChildren();row.navigatorSignature=signature;
     const content=node('div',undefined,'navigator-content');
-    if(entry.unavailable)content.append(node('strong','Недоступная сессия'));else{const open=button(content,entry.title,()=>openNavigatorEntry(key), 'secondary navigator-primary');open.setAttribute('aria-label','Открыть сессию '+entry.title);}
+    if(entry.unavailable)content.append(node('strong','Недоступная сессия'));else{const open=oldPrimary||button(content,entry.title,()=>openNavigatorEntry(key), 'secondary navigator-primary');if(oldPrimary)content.append(open);open.textContent=entry.title;open.setAttribute('aria-label','Открыть сессию '+entry.title);}
     content.append(node('span',[entry.project,entry.vendor==='codex'?'Codex':entry.vendor==='claude'?'Claude':'Вендор неизвестен',entry.snapshot?'Сохранённое название':''].filter(Boolean).join(' · '),'meta'));
     const badges=node('div',undefined,'navigator-badges');badges.append(node('span',navigatorStatus(entry),'participation-badge '+(entry.ready?'participation-badge-ready':entry.attention?'participation-badge-question':'participation-badge-status')));
     if(entry.pinId)badges.append(node('span','★'));
-    const age=entry.activity===null?'—':projectAge(entry.activity);badges.append(node('span',age,'meta'));if(entry.activity!==null)badges.lastChild.title=projectExactTime(entry.activity)+' МСК';
+    const age=navigatorAge(entry.activity);badges.append(node('span',age,'meta'));if(entry.activity!==null){const exact=projectExactTime(entry.activity)+' МСК';badges.lastChild.title=exact;badges.lastChild.setAttribute('aria-label','Последняя активность: '+exact);}
     if(!navigatorMatches(entry))badges.append(node('span','Статус изменился','meta'));
     content.append(badges);row.append(content);
-    const menu=node('div',undefined,'navigator-menu'),toggle=button(menu,'⋯',()=>{actions.hidden=!actions.hidden;toggle.setAttribute('aria-expanded',String(!actions.hidden));},'secondary');toggle.setAttribute('aria-label','Действия');toggle.setAttribute('aria-expanded','false');
-    const actions=node('div',undefined,'navigator-actions');actions.hidden=true;actions.setAttribute('role','menu');actions.addEventListener('keydown',event=>{const controls=[...actions.querySelectorAll('button')];if(event.key==='Escape'){event.preventDefault();event.stopPropagation();actions.hidden=true;toggle.setAttribute('aria-expanded','false');toggle.focus({preventScroll:true});}else if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();const index=controls.indexOf(document.activeElement),next=event.key==='Home'?0:event.key==='End'?controls.length-1:(index+(event.key==='ArrowDown'?1:-1)+controls.length)%controls.length;controls[next]?.focus({preventScroll:true});}});
-    const action=(label,callback)=>{const b=button(actions,label,()=>{actions.hidden=true;toggle.setAttribute('aria-expanded','false');callback();},'secondary');b.setAttribute('role','menuitem');};
-    if(!entry.unavailable){if(entry.fresh)for(const q of entry.overview?.questions||[])action('Открыть вопрос',()=>openNavigatorEntry(key,{interaction:q.interaction_id}));
-      if(entry.fresh&&entry.overview?.result?.ready)action('Открыть результат',()=>openNavigatorEntry(key,{turn:entry.overview.result.turn_id,item:entry.overview.result.item_id}));
+    const menu=node('div',undefined,'navigator-menu'),toggle=oldToggle||node('button','⋯','secondary');toggle.type='button';
+    if(!oldToggle)toggle.addEventListener('click',()=>{row.menuActions.hidden=!row.menuActions.hidden;toggle.setAttribute('aria-expanded',String(!row.menuActions.hidden));});
+    menu.append(toggle);toggle.setAttribute('aria-label','Действия');toggle.setAttribute('aria-expanded',String(menuOpen));
+    const actions=node('div',undefined,'navigator-actions');row.menuActions=actions;actions.hidden=!menuOpen;actions.setAttribute('role','menu');actions.addEventListener('keydown',event=>{const controls=[...actions.querySelectorAll('button')];if(event.key==='Escape'){event.preventDefault();event.stopPropagation();actions.hidden=true;toggle.setAttribute('aria-expanded','false');toggle.focus({preventScroll:true});}else if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();const index=controls.indexOf(document.activeElement),next=event.key==='Home'?0:event.key==='End'?controls.length-1:(index+(event.key==='ArrowDown'?1:-1)+controls.length)%controls.length;controls[next]?.focus({preventScroll:true});}});
+    const action=(label,callback,identity=label)=>{const b=button(actions,label,()=>{actions.hidden=true;toggle.setAttribute('aria-expanded','false');callback();},'secondary');b.setAttribute('role','menuitem');b.dataset.navigatorAction=identity;return b;};
+    if(!entry.unavailable){if(entry.fresh)for(const q of entry.overview?.questions||[])action('Открыть вопрос',()=>openNavigatorEntry(key,{interaction:q.interaction_id}),q.interaction_id);
+      if(entry.fresh&&entry.overview?.result?.ready)action('Открыть результат',()=>openNavigatorEntry(key,{turn:entry.overview.result.turn_id,item:entry.overview.result.item_id}),JSON.stringify([entry.overview.result.turn_id,entry.overview.result.item_id]));
       action('Переименовать',async()=>{if(await openNavigatorEntry(key))openRenameDialog();});
     }
-    action(entry.pinId?'Открепить':'Закрепить',()=>{const current=navigatorEntry(key);if(current)changePin(!current.pinId,current.pinId,current);});menu.append(actions);row.append(menu);
-    if(focused){const control=[...row.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')===focusLabel);control?.focus({preventScroll:true});}
+    const pinAction=action(entry.pinId?'Открепить':'Закрепить',()=>{const current=navigatorEntry(key);if(current)changePin(!current.pinId,current.pinId,current);});pinAction.disabled=pinView.busy;menu.append(actions);row.append(menu);
+    if(focused){const control=row.contains(focusedElement)?focusedElement:[...row.querySelectorAll('button')].find(b=>focusAction?b.dataset.navigatorAction===focusAction:(b.getAttribute('aria-label')||b.textContent)===focusLabel)||toggle;control?.focus({preventScroll:true});}
     return row;
   });reconcileHistoryChildren(list,rows);
 }
@@ -747,7 +754,7 @@ async function loadPartScope(scope,selected,force){
   try{
     const data=await api(selected?queryPath('/api/session-questions',{project:scope.project,sid:scope.sid}):'/api/participation-overview',undefined,controller.signal,current);
     if(!current()||!(selected?validPartSelected(data):validPartOverview(data))||!admitPartEpoch(data,admission,scope.data?.epoch)||scope.data&&scope.data.epoch===data.epoch&&scope.data.revision>data.revision)return;
-    scope.data=data;scope.navigationEpoch=epoch;if(selected)renderPartQuestions();else renderParticipation();
+    scope.data=data;scope.received=performance.now();scope.navigationEpoch=epoch;if(selected)renderPartQuestions();else renderParticipation();
   }catch(error){if(current()){if(error.status===401||error.status===403){stopNavigation();if(error.status===403)ownerForbidden();}else if(!error.stale){if(selected){scope.rendered='';disablePartControls();}else $('participation-status').textContent='Обзор недоступен; полнота не подтверждена.';}}}
   finally{pageClearTimer(timer);if(scope.flight===flight)scope.flight=null;}
 }
@@ -1118,7 +1125,7 @@ function syncCurrentSessionControls(force=false){if(!pageActive()&&!force)return
 function showTab(tab,load=true){if(!pageActive())return;
   if(!['tasks','sessions','devbus','limits'].includes(tab))return;
   if(currentTab!==tab){closeProjectFile();stopLimitsView();stopDevbusView();devbusTerminal=false;}
-  currentTab=tab;if(tab!=='sessions')closeNavigator();if(tab!=='sessions')clearHistoryScrollSlack();
+  currentTab=tab;if(tab!=='tasks'&&$('notice').textContent==='Здесь появятся вопросы и результаты ваших задач.')notice('');if(tab!=='sessions')closeNavigator();if(tab!=='sessions')clearHistoryScrollSlack();
   for(const name of ['tasks','sessions','devbus','limits']){$('tab-'+name).setAttribute('aria-selected',String(tab===name));$(name+'-panel').hidden=tab!==name;}
   syncCurrentSessionControls();syncNavigation();
   if(tab==='tasks'){stopPolling();if(load&&!taskLoaded)refresh();}
@@ -1575,9 +1582,9 @@ async function loadCreateOptions(project){
   $('create-vendor').replaceChildren(new Option('Codex','codex'));syncCreateControls();
   const controller=newObservationController(),timer=pageTimeout(()=>controller.abort(),15000);
   try{const data=await api(queryPath('/api/session-create-options',{project}),undefined,controller.signal,current);if(!current())return;
-    if(!validCreateOptions(data,project))throw new Error();state.available=data.options[0].available;
+    if(!validCreateOptions(data,project))throw new Error();state.available=data.options[0].available;$('create-vendor').options[0].disabled=!state.available;
     if(!state.operation)state.message=state.available?'':'Создание пока недоступно.';
-  }catch(_){if(current()){state.available=false;if(!state.operation)state.message='Создание пока недоступно.';}}
+  }catch(_){if(current()){state.available=false;$('create-vendor').options[0].disabled=true;if(!state.operation)state.message='Создание пока недоступно.';}}
   finally{pageClearTimer(timer);if(current()){state.loading=false;syncCreateControls();}}
 }
 async function openCreateDialog(){if(!pageActive()||!csrf||!availableProjects.size)return;

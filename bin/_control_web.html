@@ -15,12 +15,10 @@
   <section id="sessions-panel" role="tabpanel" aria-labelledby="tab-sessions" hidden>
     <button id="navigator-open" type="button" class="secondary" aria-label="Открыть список сессий">Сессии · внимание 0</button>
     <div id="navigator-desktop"><aside id="session-navigator" aria-label="Навигация сессий">
-      <h2 id="navigator-heading">Сессии</h2>
-      <button id="navigator-close" type="button" class="secondary">Закрыть список сессий</button>
+      <div class="navigator-heading-row"><h2 id="navigator-heading">Сессии</h2><button id="navigator-close" type="button" class="secondary" aria-label="Закрыть список сессий">×</button></div>
       <div id="navigator-filters" class="navigator-filters"></div>
       <label for="navigator-project">Проект<select id="navigator-project"><option value="">Все проекты</option></select></label>
-      <div class="navigator-tools"><button id="create-open" type="button" class="secondary">Новая сессия</button><button id="projects-refresh" type="button" class="secondary">Обновить проекты</button></div>
-      <div class="navigator-tools"><button id="navigator-apply" type="button" class="secondary">Обновить список</button><button id="navigator-new" type="button" class="secondary" hidden></button></div>
+      <div class="navigator-tools"><button id="create-open" type="button" class="secondary">Новая сессия</button><button id="projects-refresh" type="button" class="secondary">Обновить проекты</button> <button id="navigator-apply" type="button" class="secondary">Обновить список</button><button id="navigator-new" type="button" class="secondary" hidden></button></div>
       <p id="navigator-status" class="meta" role="status" aria-live="polite"></p>
       <ul id="navigator-list" aria-label="Сессии"></ul>
       <button id="sessions-more" type="button" class="secondary" hidden>Ещё сессии</button>
@@ -103,6 +101,6 @@
 <pre id="project-file-text" tabindex="0" aria-label="Содержимое файла"></pre>
 </dialog>
 <!-- BUILD-INFO:START -->
-<footer id="build-info" class="build-info" data-release-id="26">ai-control · r26 · Собрано: <time datetime="2026-10-12T17:52:54+00:00">12.10.2026 20:52 МСК</time> · Ветка: feat/compact-ui-window-markers</footer>
+<footer id="build-info" class="build-info" data-release-id="27">ai-control · r27 · Собрано: <time datetime="2026-10-12T22:20:00+03:00">12.10.2026 22:20 МСК</time> · Ветка: feat/unified-session-navigator</footer>
 <!-- BUILD-INFO:END -->
 </body></html>
