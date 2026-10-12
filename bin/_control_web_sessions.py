@@ -1132,7 +1132,7 @@ class SessionChat:
                 result = self._rpc(method, params)
                 _need(not self._part_stop.is_set())
                 if method in ('thread/loaded/list', 'thread/turns/list', 'thread/items/list'):
-                    _need(set(result) == {'data', 'nextCursor'})
+                    _need(type(result) is dict and {'data', 'nextCursor'} <= set(result))
                 return result
             roots = self._part_roots()
             page = read('thread/loaded/list', {'limit': 256})

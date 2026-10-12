@@ -78,3 +78,8 @@ Read admission проверяет потребляемые поля, а не з�
 до публикации. Сбой sampler помечает его старый snapshot stale сразу, сохраняя
 last-known; независимый успешный selected-history proof может оставаться fresh.
 Это не меняет строгую форму typed callbacks и не дает новых reply permissions.
+
+Для bounded read pages `thread/loaded/list`, `thread/turns/list` и
+`thread/items/list` обязательны envelope fields `data` и `nextCursor`, а форма
+каждого потребляемого элемента валидируется полностью. Дополнительные
+непотребляемые page metadata допустимы: exact-set проверка оболочки запрещена.
