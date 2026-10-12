@@ -13,6 +13,7 @@ class OverviewNative(s.Native):
     def __init__(self, base, root):
         self.reported_user_agent = 'codex/0.161.0 (synthetic)'
         self.malformed_methods = set()
+        self.thread_item_entries_override = None
         super().__init__(base, root)
 
     def result(self, method, params):
@@ -20,6 +21,8 @@ class OverviewNative(s.Native):
             return {} if self.reported_user_agent is None else {'userAgent': self.reported_user_agent}
         if method in self.malformed_methods:
             return {'data': 'not-a-bounded-list', 'nextCursor': None}
+        if method == 'thread/items/list' and self.thread_item_entries_override is not None:
+            return {'data': deepcopy(self.thread_item_entries_override), 'nextCursor': None}
         result = super().result(method, params)
         if method == 'thread/read' and hasattr(self, 'thread_name_override'):
             result['thread']['name'] = self.thread_name_override
@@ -111,6 +114,37 @@ class SessionOverviewReadNegotiationRed(WireCase):
             self.assertNotEqual(row['running'], 'confirmed',
                                 'History status alone is not loaded-session proof')
         self.assertTrue(overview['coverage']['partial'])
+        self.assert_read_only()
+
+    def test_mixed_malformed_final_item_page_never_publishes_fresh_ready(self):
+        # INV-SOV-HISTORY: every consumed item entry needs matching turnId and unique, valid item ID.
+        self.seed_completed()
+        warm = self.wait_for(lambda: (value if (row := next((item for item in value.get('rows', [])
+            if item['sid'] == SID), None)) and row['freshness']['state'] == 'fresh' and row['result']['ready']
+            else None) if isinstance(value := self.overview(), dict) else None,
+            'A valid completed final item should warm the bounded cache', timeout=7)
+        old_item_reads = self.native.methods().count('thread/items/list')
+        self.native.thread_item_entries_override = [
+            dict(turnId=TURN, item=dict(id='current-final', type='agentMessage', phase='final_answer', text='Current valid witness')),
+            dict(turnId=s.OTHER, item=dict(id='foreign-final', type='agentMessage', phase='final_answer', text='Foreign turn')),
+            None,
+            dict(turnId=TURN, item=dict(type='agentMessage', phase='final_answer', text='Missing item ID')),
+            dict(turnId=TURN, item=dict(id='current-final', type='agentMessage', phase='final_answer', text='Duplicate item ID')),
+        ]
+        self.overview()
+        self.wait_for(lambda: self.native.methods().count('thread/items/list') > old_item_reads,
+                      'The next public poll must consume the injected mixed item page', timeout=8)
+        snapshot = self.wait_for(lambda: (value if value.get('revision', 0) > warm['revision'] or
+            value.get('health') in ('stale', 'unavailable') else None)
+            if isinstance(value := self.overview(), dict) else None,
+            'The public projection must publish the poll outcome', timeout=4)
+        row = next((item for item in snapshot['rows'] if item['sid'] == SID), None)
+        self.assertIsNotNone(row, 'The last-known completion may remain visible as stale')
+        self.assertEqual(row['result']['status'], 'completed')
+        self.assertFalse(row['result']['ready'])
+        self.assertNotEqual(row['freshness']['state'], 'fresh')
+        self.assertIn(snapshot['health'], ('stale', 'unavailable'),
+                      'A partially invalid consumed item page cannot leave a fresh ready projection')
         self.assert_read_only()
 
 
