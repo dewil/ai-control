@@ -171,7 +171,7 @@ class SessionOverviewBrowserRed(unittest.TestCase):
         self.assertIn('delta', review, 'Valid project slug is rendered separately from its title')
         expected_group_rows = {
             'Нужно участие': ['Needs attention', 'Failed for review'],
-            'Готово к проверке': ['Résumé final', 'Сессия ' + stale_sid[:8]],
+            'Готово к проверке': ['Résumé final · Проект Δ', 'Сессия ' + stale_sid[:8]],
             'В работе': ['Сессия ' + working_sid[:8]],
             'Прочие состояния': ['Unconfirmed state'],
         }
@@ -181,7 +181,7 @@ class SessionOverviewBrowserRed(unittest.TestCase):
             with self.subTest(group=group):
                 self.assertEqual(sum(fragment.count(label) for label in labels), len(labels),
                                  'Each source session belongs to exactly one visible group')
-        for label in ('Needs attention', 'Résumé final', 'Сессия ' + working_sid[:8],
+        for label in ('Needs attention', 'Résumé final · Проект Δ', 'Сессия ' + working_sid[:8],
                       'Сессия ' + stale_sid[:8], 'Unconfirmed state', 'Failed for review'):
             self.assertEqual(body.count(label), 1, 'A session row must not be duplicated across groups')
         self.assertNotIn('cached-final', body, 'Stale item IDs never become browser actions or links')
