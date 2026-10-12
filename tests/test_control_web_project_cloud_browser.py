@@ -11,6 +11,8 @@ import tempfile
 import time
 import unittest
 
+from playwright.sync_api import expect
+
 import test_control_web_compact_chat_browser as compact
 from test_control_web_compact_chat_browser import OTHER
 from test_control_web_chat_width_browser import private_json, totp, PASSWORD, SECRET, SID
@@ -135,7 +137,7 @@ class ProjectCloudBrowserContract(unittest.TestCase):
     def tile(self, name):
         # INV-WSESS-43: a confirmed deep link collapses projects; selected state remains inspectable.
         button = self.page.get_by_role('button', name=re.compile(r'^' + name + r'(?:\b|\s)'), include_hidden=True)
-        self.assertEqual(button.count(), 1, 'INV-WSESS-19 requires actual project cloud button ' + name)
+        expect(button).to_have_count(1, timeout=3000)
         return button
 
     def order(self):

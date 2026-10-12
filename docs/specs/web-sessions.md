@@ -259,3 +259,10 @@ UI стабильно сортирует копию items по последне�
 tests/test_control_web_participation_projection_blind.py и существующие wire/source
 fences. Спека docs/dev/2026-10-12-spec-session-overview-stability.md; installed
 acceptance до поставки обязательна, текущий текст не утверждает ее выполнение.
+
+## Компактность и стабильность автоматических обновлений12.10
+INV-CUI-01: компактные читаемые строки обзора сохраняют приоритеты и доступные действия, без горизонтального overflow на мобильном.
+INV-CUI-02: session(project,sid) сохраняет DOM identity/focus/ручное раскрытие при обновлении, неизменный порядок не перестраивается.
+INV-CUI-03: автоматические обновления выше reader сохраняют видимый anchor либо явное bottom-follow, пользовательский scroll и навигация имеют приоритет, компенсация не удваивает browser anchoring.
+INV-CUI-04: уплотнение существующих navigation/project/chat controls сохраняет информацию и touch targets, без новой UI зависимости/state store.
+Feature docs/dev/2026-10-12-spec-compact-ui-window-markers.md; independent browser acceptance test_control_web_compact_stability_blind.py.
