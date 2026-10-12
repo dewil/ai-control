@@ -99,9 +99,12 @@ def load_devbus_config():
                        for item in value.values() if type(item) is str)):
             raise ValueError()
         parsed = urlsplit(value['url'])
-        if (parsed.scheme != 'nats' or parsed.hostname not in {'localhost','127.0.0.1','::1'}
+        port = parsed.port
+        epoch = datetime.fromisoformat(value['stream_created'].replace('Z','+00:00'))
+        if (parsed.scheme not in {'nats','tls'} or parsed.hostname not in {'localhost','127.0.0.1','::1'}
                 or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/')
-                or not value['user'] or not value['password'] or not value['stream_created']):
+                or (port is not None and not 0 < port <= 65535) or epoch.tzinfo is None
+                or not value['user'] or not value['password']):
             raise ValueError()
         if not value['enabled']:
             return disabled, None
@@ -112,9 +115,10 @@ def load_devbus_config():
         os.close(fd)
 
 
-def _apply_bridge_status(projection, *, now=None):
-    """Read fixed bridge health as local owner input; stale data is unavailable."""
+def _apply_bridge_status(snapshot, *, now=None):
+    """Overlay bridge coverage issues without mixing its source sequences into OBS."""
     now = time.time() if now is None else now
+    reason = None
     try:
         fd = os.open(BRIDGE_STATUS_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         try:
@@ -129,7 +133,8 @@ def _apply_bridge_status(projection, *, now=None):
             identity = lambda item: tuple(getattr(item, name) for name in identity_fields)
             if identity(info) != identity(after) or identity(after) != identity(leaf) or len(raw) != info.st_size:
                 raise ValueError()
-        finally: os.close(fd)
+        finally:
+            os.close(fd)
         def status_pairs(items):
             value = {}
             for key, item in items:
@@ -139,7 +144,7 @@ def _apply_bridge_status(projection, *, now=None):
         status = json.loads(raw.decode('utf-8'), object_pairs_hook=status_pairs,
                             parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
         fields = {'schema','state','observed_at','source_stream_created','consumer_created','ack_floor','first_seq','pending','reason'}
-        if type(status) is not dict or set(status) != fields or status['schema'] != 1 or type(status['schema']) is not int:
+        if type(status) is not dict or set(status) != fields or type(status['schema']) is not int or status['schema'] != 1:
             raise ValueError()
         if status['state'] not in {'starting','live','degraded','disconnected'} or status['reason'] not in (None,'invalid_config','unavailable','invalid_event','id_conflict','retention_gap'):
             raise ValueError()
@@ -151,18 +156,22 @@ def _apply_bridge_status(projection, *, now=None):
         observed = datetime.fromisoformat(status['observed_at'].replace('Z','+00:00')).timestamp()
         if not math.isfinite(observed) or observed > now + 5 or now-observed > 30:
             raise ValueError()
-        projection.coverage(status['first_seq'], status['ack_floor'], 86400, 104857600, replay_complete=False)
-        projection.issue('replay_incomplete')
-        if status['reason'] == 'retention_gap': projection.issue('retention_gap')
-        if status['reason'] == 'invalid_event': projection.issue('invalid_event')
-        if status['reason'] == 'id_conflict': projection.issue('id_conflict')
-        if status['state'] != 'live' or status['reason'] is not None:
-            projection.connection('disconnected','unavailable')
+        reason = status['reason']
     except Exception:
-        projection.coverage(None, None, None, None, replay_complete=False)
-        projection.issue('replay_incomplete')
-        projection.connection('disconnected','unavailable')
+        reason = 'unavailable'
 
+    coverage = snapshot.get('coverage') if type(snapshot) is dict else None
+    if type(coverage) is not dict:
+        return snapshot
+    issues = set(coverage.get('issues', []))
+    issues.add('replay_incomplete')  # The bridge begins at a recorded cutoff; history is partial.
+    if reason == 'retention_gap': issues.add('retention_gap')
+    if reason == 'invalid_event': issues.add('invalid_event')
+    if reason == 'id_conflict': issues.add('id_conflict')
+    coverage['issues'] = sorted(issues)
+    coverage['truncated'] = True
+    coverage['mode'] = 'unknown' if coverage.get('first_seq') is None else 'partial'
+    return snapshot
 
 def _devbus_empty(state='disabled', reason=None):
     return dict(schema=1, connection=dict(state=state, reason=reason),
@@ -422,7 +431,6 @@ class DevbusRuntime:
             if self._stopping.is_set():
                 return
             await self._observer.start()
-            _apply_bridge_status(self._projection)
         try:
             loop.run_until_complete(setup())
             self._ready.set()
@@ -516,6 +524,7 @@ class DevbusRuntime:
                 if cancellation.is_set() or self._stopping.is_set() or time.monotonic() >= deadline:
                     return {'error': 'unavailable'}
                 value = bounded_devbus_snapshot(self._projection, task, agent)
+                value = _apply_bridge_status(value)
                 return value if time.monotonic() < deadline else {'error': 'unavailable'}
             finally:
                 with self._lock:

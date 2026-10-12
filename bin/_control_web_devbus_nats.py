@@ -111,7 +111,7 @@ class _Transport:
             or not required.issubset(set(cfg.subjects or []))
             or not math.isfinite(cfg.max_age) or not 0 < cfg.max_age <= 86400
             or not 0 < cfg.max_bytes <= 104857600
-            or (self._config.stream_created and info.created != self._config.stream_created)
+            or (self._config.stream_created and _epoch_key(info.created) != _epoch_key(self._config.stream_created))
             or not 0 < cfg.max_msg_size <= 131072):
             raise BusUnavailable()
         return dict(first_seq=info.state.first_seq,last_seq=info.state.last_seq,
@@ -321,8 +321,24 @@ def load_bridge_config():
         os.close(fd)
 
 
+def _epoch_key(value):
+    try:
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed.astimezone(timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None
+
+
 def _stream_created(info):
-    return getattr(info, 'created', None)
+    return _epoch_key(getattr(info, 'created', None))
+
+
+class _BridgeFailure(RuntimeError):
+    def __init__(self, reason):
+        self.reason = reason if reason in _BRIDGE_REASONS else 'unavailable'
+        super().__init__(self.reason)
 
 
 def _policy_value(value):
@@ -334,7 +350,7 @@ async def _bridge_stream_info(js, name, expected_created, *, source):
     info = await asyncio.wait_for(js.stream_info(name), 5)
     cfg = info.config
     storage, retention = _policy_value(cfg.storage), _policy_value(cfg.retention)
-    if storage not in {'file', 'File'} or retention not in {'limits', 'Limits'} or _stream_created(info) != expected_created:
+    if storage not in {'file', 'File'} or retention not in {'limits', 'Limits'} or _stream_created(info) != _epoch_key(expected_created):
         raise RuntimeError('unavailable')
     subjects = set(cfg.subjects or ())
     required = {'devbus.commands.*', 'devbus.events.*'} if source else {'devbus.events.*'}
@@ -350,7 +366,7 @@ async def _bridge_consumer_info(js, source):
     info = await asyncio.wait_for(js.consumer_info('DEVBUS_V1', source['consumer']), 5)
     cfg = info.config
     def value(name): return _policy_value(getattr(cfg, name, None))
-    if (getattr(info, 'created', None) != source['consumer_created']
+    if (_epoch_key(getattr(info, 'created', None)) != _epoch_key(source['consumer_created'])
             or getattr(info, 'name', source['consumer']) != source['consumer']
             or getattr(info, 'stream_name', 'DEVBUS_V1') != 'DEVBUS_V1'
             or value('durable_name') != source['consumer']
@@ -407,7 +423,7 @@ async def _bridge_connect(factory, url, auth):
     return await asyncio.wait_for(result, 5)
 
 
-async def _bridge_session(config, nats_factory):
+async def _bridge_session(config, nats_factory, sticky_reason=None):
     """Run one connection generation; failures return to the bounded reconnect loop."""
     source_cfg, dest_cfg = config['source'], config['destination']
     state = _status_record(config)
@@ -417,6 +433,7 @@ async def _bridge_session(config, nats_factory):
         state = dict(state, **changes)
         now = time.monotonic()
         if now - last_write >= 5 or changes.get('state') in {'starting', 'live', 'disconnected'}:
+            state['observed_at'] = datetime.now(timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
             try: _write_bridge_status(state)
             except Exception: pass
             last_write = now
@@ -433,11 +450,12 @@ async def _bridge_session(config, nats_factory):
         ack_floor = getattr(ack, 'stream_seq', 0) or 0
         sinfo = await _bridge_stream_info(sjs, 'DEVBUS_V1', source_cfg['stream_created'], source=True)
         first_seq = sinfo.state.first_seq
-        pending = getattr(cinfo, 'num_pending', 0) + getattr(cinfo, 'num_ack_pending', 0)
+        pending = (getattr(cinfo, 'num_pending', 0) or 0) + (getattr(cinfo, 'num_ack_pending', 0) or 0)
         reason = 'retention_gap' if type(first_seq) is int and first_seq > ack_floor + 1 else None
         retention_gap = reason is not None
         # The just-completed stream/consumer checks fence this first batch before binding.
         sub = await asyncio.wait_for(sjs.pull_subscribe_bind(name=source_cfg['consumer'], stream='DEVBUS_V1'), 5)
+        reason = 'retention_gap' if retention_gap else sticky_reason
         report(state='degraded' if reason else 'live', ack_floor=ack_floor, first_seq=first_seq, pending=pending, reason=reason)
         delay = 1
         first_batch = True
@@ -457,10 +475,14 @@ async def _bridge_session(config, nats_factory):
                 first_batch = False
                 messages = await asyncio.wait_for(sub.fetch(batch=32, timeout=1), 5)
             except asyncio.TimeoutError:
+                report(observed_at=datetime.now(timezone.utc))
                 continue
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as error:
+                if type(error).__name__ == 'TimeoutError' and type(error).__module__.startswith('nats.'):
+                    report(observed_at=datetime.now(timezone.utc))
+                    continue
                 report(state='degraded', reason='unavailable')
                 raise
             for message in messages:
@@ -472,7 +494,7 @@ async def _bridge_session(config, nats_factory):
                         raise ValueError('invalid_event')
                 except Exception:
                     report(state='degraded', reason='invalid_event', ack_floor=ack_floor, first_seq=first_seq)
-                    continue
+                    raise _BridgeFailure('invalid_event')
                 try:
                     # Epoch fences bracket destination publish and actual SDK ACK.
                     sinfo = await _bridge_stream_info(sjs, 'DEVBUS_V1', source_cfg['stream_created'], source=True)
@@ -487,9 +509,11 @@ async def _bridge_session(config, nats_factory):
                     await _bridge_consumer_info(sjs, source_cfg)
                     await _bridge_stream_info(djs, 'OBS_EVENTS', dest_cfg['stream_created'], source=False)
                     await asyncio.wait_for(message.ack_sync(timeout=5), 5)
-                    ack_floor = max(ack_floor or 0, sequence)
-                    pending = max(0, (pending or 0) - 1)
-                    report(state='degraded' if retention_gap else 'live', ack_floor=ack_floor, first_seq=sinfo.state.first_seq, pending=pending, reason='retention_gap' if retention_gap else None)
+                    cinfo = await _bridge_consumer_info(sjs, source_cfg)
+                    ack_floor = getattr(getattr(cinfo, 'ack_floor', None), 'stream_seq', None)
+                    pending = (getattr(cinfo, 'num_pending', 0) or 0) + (getattr(cinfo, 'num_ack_pending', 0) or 0)
+                    effective_reason = 'retention_gap' if retention_gap else sticky_reason
+                    report(state='degraded' if effective_reason else 'live', ack_floor=ack_floor, first_seq=sinfo.state.first_seq, pending=pending, reason=effective_reason)
                     delay = 1
                 except asyncio.CancelledError:
                     raise
@@ -501,6 +525,9 @@ async def _bridge_session(config, nats_factory):
                 await asyncio.sleep(.01)
     except asyncio.CancelledError:
         report(state='disconnected', reason='unavailable')
+        raise
+    except _BridgeFailure as error:
+        report(state='degraded', reason=error.reason)
         raise
     except Exception:
         report(state='degraded', reason='unavailable')
@@ -520,12 +547,22 @@ async def run_bridge(config, *, nats_factory=None):
         import nats
         nats_factory = nats.connect
     delay = 1
+    sticky_reason = None
     while True:
         try:
-            await _bridge_session(config, nats_factory)
+            await _bridge_session(config, nats_factory, sticky_reason)
             return
         except asyncio.CancelledError:
             raise
+        except _BridgeFailure as error:
+            if error.reason == 'invalid_event':
+                sticky_reason = error.reason
+            try:
+                _write_bridge_status(_status_record(config, state='degraded', reason=error.reason))
+            except Exception:
+                pass
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 30)
         except Exception:
             try:
                 _write_bridge_status(_status_record(config, state='degraded', reason='unavailable'))
