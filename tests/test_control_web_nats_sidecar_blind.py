@@ -809,7 +809,7 @@ class ExistingObserverEphemeralBlind(unittest.IsolatedAsyncioTestCase):
                 async def start(self): self.projection.connection("live")
                 async def stop(self): return None
             config = SimpleNamespace(enabled=True, token="")
-            for age, reason in ((0, "retention_gap"), (31, None)):
+            for age, reason in ((0, "retention_gap"), (0, None), (31, None)):
                 timestamp = observed - timedelta(seconds=age)
                 status = {
                     "schema": 1,

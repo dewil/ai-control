@@ -18,8 +18,12 @@ class DevbusLoaderBlind(unittest.TestCase):
         self.assertTrue(hasattr(self.module, "DEVBUS_CONFIG_PATH"), "PUBLIC-SEAM PREREQUISITE: DEVBUS_CONFIG_PATH absent")
         self.temp = tempfile.TemporaryDirectory(prefix="bus-config-blind-", dir="/var/tmp"); self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / "observer.json"
-        self.mapping = dict(CONTROL_DEVBUS_ENABLED="1", CONTROL_DEVBUS_STREAM="DEVBUS",
-                           DEVBUS_NATS_URL="nats://127.0.0.1:4222", DEVBUS_NATS_TOKEN="synthetic-private-token")
+        self.mapping = dict(schema=2, enabled=True, url="nats://127.0.0.1:4222",
+                           stream="OBS_EVENTS", stream_created="2026-10-12T00:02:00Z",
+                           user="control_observer", password="synthetic-obs-password")
+        self.legacy_token_mapping = dict(CONTROL_DEVBUS_ENABLED="1", CONTROL_DEVBUS_STREAM="DEVBUS",
+                                         DEVBUS_NATS_URL="nats://127.0.0.1:4222",
+                                         DEVBUS_NATS_TOKEN="synthetic-private-token")
         self.real_stat, self.real_fstat = os.stat, os.fstat
 
     def synthetic_stat(self, value):
@@ -65,39 +69,45 @@ class DevbusLoaderBlind(unittest.TestCase):
 
     def test_missing_file_disabled_without_error(self): self.disabled(self.invoke(), None)
 
-    def test_valid_file_exact_four_keys_explicit_mapping_open_read_bounds(self):
-        _, nats = s.accepted_modules(); real_open, real_read = os.open, os.read
+    def test_valid_file_exact_schema2_obs_mapping_and_bounded_read(self):
+        real_open, real_read = os.open, os.read
         opened = []; read_sizes = []
         def record_open(path, flags, *args, **kwargs):
             opened.append((path, flags)); return real_open(path, flags, *args, **kwargs)
         def record_read(fd, size): read_sizes.append(size); return real_read(fd, size)
-        with patch.object(nats.NatsConfig, "from_env", wraps=nats.NatsConfig.from_env) as parse:
-            result = self.invoke(s.canonical(self.mapping), patches=(
-                patch.object(self.module.os, "open", side_effect=record_open),
-                patch.object(self.module.os, "read", side_effect=record_read)))
+        result = self.invoke(s.canonical(self.mapping), patches=(
+            patch.object(self.module.os, "open", side_effect=record_open),
+            patch.object(self.module.os, "read", side_effect=record_read)))
         self.assertTrue(result[0].enabled); self.assertIsNone(result[1])
-        self.assertEqual(parse.call_count, 1); self.assertEqual(parse.call_args.args, (self.mapping,))
-        self.assertEqual(parse.call_args.kwargs, {})
+        self.assertEqual(result[0].url, self.mapping["url"])
+        self.assertEqual(result[0].stream, "OBS_EVENTS")
+        self.assertEqual(result[0].stream_created, self.mapping["stream_created"])
+        self.assertEqual(result[0].user, self.mapping["user"])
+        self.assertEqual(result[0].password, self.mapping["password"])
+        self.assertEqual(result[0].token, ""); self.assertEqual(result[0].creds, "")
         self.assertTrue(opened); flags = opened[0][1]
         self.assertEqual(flags & os.O_ACCMODE, os.O_RDONLY)
         self.assertTrue(flags & os.O_NOFOLLOW); self.assertTrue(flags & os.O_NONBLOCK)
         self.assertTrue(read_sizes); self.assertTrue(all(size <= 16385 for size in read_sizes))
 
     def test_strict_json_and_private_auth_keys_rejected(self):
-        bad = [b"{", b'{"x":NaN}', b'{"CONTROL_DEVBUS_ENABLED":"1","CONTROL_DEVBUS_ENABLED":"0"}',
+        bad = [b"{", b'{"x":NaN}', b'{"schema":2,"schema":2}',
                b"\xff", s.canonical(self.mapping | {"DEVBUS_NATS_CREDS": "/synthetic/private"}),
                s.canonical(self.mapping | {"extra_jwt": "synthetic"}),
-               s.canonical(self.mapping | {"CONTROL_DEVBUS_ENABLED": True}),
-               s.canonical(self.mapping | {"DEVBUS_NATS_TOKEN": ""}),
-               s.canonical(self.mapping | {"DEVBUS_NATS_URL": "nats://remote.invalid:4222"}),
-               s.canonical(self.mapping | {"CONTROL_DEVBUS_STREAM": "BAD.*"}),
-               s.canonical(self.mapping | {"DEVBUS_NATS_TOKEN": "synthetic\x80"}),
-               json.dumps(self.mapping | {"DEVBUS_NATS_TOKEN": "bad\ud800"}).encode()]
+               s.canonical(self.mapping | {"token": "synthetic-origin-token"}),
+               s.canonical(self.mapping | {"source": {"token": "synthetic-origin-token"}}),
+               s.canonical(self.mapping | {"schema": True}),
+               s.canonical(self.mapping | {"password": ""}),
+               s.canonical(self.mapping | {"url": "nats://remote.invalid:4222"}),
+               s.canonical(self.mapping | {"stream": "DEVBUS_V1"}),
+               s.canonical(self.mapping | {"password": "synthetic\x80"}),
+               json.dumps(self.mapping | {"password": "bad\ud800"}).encode(),
+               s.canonical(self.legacy_token_mapping)]
         for raw in bad:
             with self.subTest(length=len(raw)): self.disabled(self.invoke(raw), "invalid_config")
 
-    def test_disabled_empty_url_token_allowed(self):
-        self.disabled(self.invoke(s.canonical(self.mapping | {"CONTROL_DEVBUS_ENABLED": "0", "DEVBUS_NATS_URL": "", "DEVBUS_NATS_TOKEN": ""})), None)
+    def test_disabled_schema2_config_with_valid_obs_endpoint_allowed(self):
+        self.disabled(self.invoke(s.canonical(self.mapping | {"enabled": False})), None)
 
     def test_unsafe_mode_and_hardlink_rejected_without_repair(self):
         self.path.write_bytes(s.canonical(self.mapping)); self.path.chmod(0o644)
