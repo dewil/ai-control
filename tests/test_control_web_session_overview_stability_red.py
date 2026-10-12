@@ -134,22 +134,23 @@ class SessionOverviewBrowserRed(unittest.TestCase):
 
     def test_group_priority_title_fallback_stale_copy_and_unique_rows(self):
         # INV-SOV-CARD/GROUPS: project/title, fallback, priority, stale badge, and unique row placement.
-        attention = overview_row(1, 'Project Attention', SID, 'Needs attention',
+        # Public project route IDs are ASCII slugs; Unicode belongs in the title field.
+        attention = overview_row(1, 'attention', SID, 'Needs attention',
             activity='active', running='confirmed', waits=['approval', 'question'],
             questions=[dict(interaction_id=s.HANDLE, state='actionable', blocking=True)],
             result=completed_result('priority-final'))
-        ready = overview_row(2, 'Проект Δ', s.OTHER, 'Résumé final', activity='idle',
+        ready = overview_row(2, 'delta', s.OTHER, 'Проект Δ · Résumé final', activity='idle',
             result=completed_result('fresh-final'))
         working_sid = '66666666-6666-4666-8666-666666666666'
-        working = overview_row(3, 'Project Work', working_sid, '  ', activity='active',
+        working = overview_row(3, 'work', working_sid, '  ', activity='active',
             running='confirmed')
         stale_sid = '77777777-7777-4777-8777-777777777777'
-        stale = overview_row(4, 'Project Stale', stale_sid, '', activity='not_loaded',
+        stale = overview_row(4, 'stale', stale_sid, '', activity='not_loaded',
             result=completed_result('cached-final', ready=False), freshness='stale')
         unknown_sid = '99999999-9999-4999-8999-999999999999'
-        unknown = overview_row(5, 'Project Other', unknown_sid, 'Unconfirmed state',
+        unknown = overview_row(5, 'other', unknown_sid, 'Unconfirmed state',
             activity='unknown', freshness='stale')
-        failed = overview_row(6, 'Project Failed', s.TURN, 'Failed for review', activity='idle',
+        failed = overview_row(6, 'failed', s.TURN, 'Failed for review', activity='idle',
             result=completed_result('failed-item', ready=False, status='failed'))
         rows = [attention, ready, working, stale, unknown, failed]
         self.set_overview_rows(rows)
@@ -162,12 +163,12 @@ class SessionOverviewBrowserRed(unittest.TestCase):
         other = self.group_slice(body, 'Прочие состояния')
         self.assertIn('Needs attention', needs)
         self.assertIn('Failed for review', needs)
-        self.assertIn('Résumé final', review)
+        self.assertIn('Résumé final · Проект Δ', review)
         self.assertIn('Сессия ' + stale_sid[:8], review)
         self.assertIn('Последний известный ответ · сведения устарели', review)
         self.assertIn('Сессия ' + working_sid[:8], work)
         self.assertIn('Unconfirmed state', other)
-        self.assertIn('Проект Δ', review, 'Project is rendered separately from the sanitized title')
+        self.assertIn('delta', review, 'Valid project slug is rendered separately from its title')
         expected_group_rows = {
             'Нужно участие': ['Needs attention', 'Failed for review'],
             'Готово к проверке': ['Résumé final', 'Сессия ' + stale_sid[:8]],
