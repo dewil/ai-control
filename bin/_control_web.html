@@ -13,13 +13,25 @@
   </section>
   <section id="tasks-panel" role="tabpanel" aria-labelledby="tab-tasks"><div class="toolbar"><p id="count"></p><button id="refresh">Обновить</button></div><div id="cards"></div></section>
   <section id="sessions-panel" role="tabpanel" aria-labelledby="tab-sessions" hidden>
-    <details id="pinned-sessions" open><summary>Закреплённые</summary><small id="pin-snapshot-note" hidden>Сохранённые названия</small><div id="pin-list"></div><p id="pin-status" class="meta" role="status"></p></details>
+    <button id="navigator-open" type="button" class="secondary" aria-label="Открыть список сессий">Сессии · внимание 0</button>
+    <div id="navigator-desktop"><aside id="session-navigator" aria-label="Навигация сессий">
+      <h2 id="navigator-heading">Сессии</h2>
+      <button id="navigator-close" type="button" class="secondary">Закрыть список сессий</button>
+      <div id="navigator-filters" class="navigator-filters"></div>
+      <label for="navigator-project">Проект<select id="navigator-project"><option value="">Все проекты</option></select></label>
+      <div class="navigator-tools"><button id="create-open" type="button" class="secondary">Новая сессия</button><button id="projects-refresh" type="button" class="secondary">Обновить проекты</button></div>
+      <div class="navigator-tools"><button id="navigator-apply" type="button" class="secondary">Обновить список</button><button id="navigator-new" type="button" class="secondary" hidden></button></div>
+      <p id="navigator-status" class="meta" role="status" aria-live="polite"></p>
+      <ul id="navigator-list" aria-label="Сессии"></ul>
+      <button id="sessions-more" type="button" class="secondary" hidden>Ещё сессии</button>
+    </aside></div>
+    <div hidden aria-hidden="true" id="legacy-session-navigation">    <details id="pinned-sessions" open><summary>Закреплённые</summary><small id="pin-snapshot-note" hidden>Сохранённые названия</small><div id="pin-list"></div><p id="pin-status" class="meta" role="status"></p></details>
     <details id="participation-overview" open><summary>Работа и вопросы</summary><div id="participation-list"></div><p id="participation-status" class="meta" role="status"></p></details>
     <div class="page-navigation"><button type="button" class="secondary" data-page-scroll="up">↑ В начало</button><button type="button" class="secondary" data-page-scroll="down">↓ В конец</button></div>
     <div class="project-navigation">
     <div class="projects-header"><span id="projects-heading">Проекты</span><button id="projects-toggle" type="button" class="secondary" aria-controls="projects-body" aria-expanded="true">Проекты</button></div>
     <div id="projects-body">
-    <div class="project-picker"><button id="create-open" type="button" class="secondary">Новая сессия</button><label for="project-sort">Сортировка проектов<select id="project-sort"><option value="count">По числу сессий</option><option value="activity">По последней активности</option></select></label><button id="projects-refresh" type="button" class="secondary">Обновить проекты</button></div>
+    <div class="project-picker"><button id="legacy-create-open" type="button" class="secondary">Новая сессия</button><label for="project-sort">Сортировка проектов<select id="project-sort"><option value="count">По числу сессий</option><option value="activity">По последней активности</option></select></label><button id="legacy-projects-refresh" type="button" class="secondary">Обновить проекты</button></div>
     <div id="project-cloud" class="project-cloud" role="group" aria-label="Проекты"></div>
     <details id="project-details" hidden><summary>Сведения о проекте</summary><div id="project-details-content" class="meta"></div></details>
     <p id="project-summary-status" class="meta" role="status" aria-live="polite"></p>
@@ -27,8 +39,9 @@
     </div>
     <aside class="session-navigation" aria-label="Сессии проекта">
     <div id="session-list-status" class="message" role="status" aria-live="polite"></div><div id="session-list" class="session-list"></div>
-    <button id="sessions-more" type="button" class="secondary" hidden>Ещё сессии</button>
+    <button id="legacy-sessions-more" type="button" class="secondary" hidden>Ещё сессии</button>
     </aside>
+</div>
     <section id="chat-panel" hidden aria-label="Переписка с Codex">
       <header class="chat-heading"><h2 id="chat-title">Переписка</h2><div class="chat-navigation"><button id="pin-current" type="button" class="secondary">Закрепить</button><button id="rename-open" type="button" class="secondary">Переименовать</button><button id="rename-current-check" type="button" class="secondary" hidden>Проверить название</button><button id="history-new" type="button" class="secondary" hidden>Есть новые сообщения</button><button id="chat-latest" type="button" class="secondary">К последним сообщениям</button><button id="chat-refresh" type="button" class="secondary">Обновить переписку</button></div></header>
       <p id="native-attention" class="attention" hidden>Codex ожидает действия. Подтверждения разрешений доступны только в Codex.</p>
@@ -68,7 +81,7 @@
   </section>
   <section id="devbus-panel" role="tabpanel" aria-labelledby="tab-devbus" hidden><div id="devbus-root"></div></section>
 </section>
-</main><dialog id="rename-dialog" role="dialog" aria-labelledby="rename-heading">
+</main><dialog id="navigator-dialog" aria-label="Сессии"></dialog><dialog id="rename-dialog" role="dialog" aria-labelledby="rename-heading">
   <h2 id="rename-heading">Переименовать сессию</h2>
   <form id="rename-form"><label for="rename-title">Название сессии<input id="rename-title" type="text" autocomplete="off"></label><div class="actions"><button id="rename-save" type="submit">Сохранить</button><button id="rename-cancel" type="button" class="secondary">Отмена</button></div></form>
   <p id="rename-status" role="status" aria-live="polite"></p>
@@ -77,10 +90,11 @@
 <dialog id="create-dialog" aria-labelledby="create-heading">
 <h2 id="create-heading">Новая сессия</h2>
 <p>Текущие настройки сервера. Выбор подписки пока недоступен.</p>
-<form id="create-form"><label for="create-vendor">Вендор</label><select id="create-vendor"></select>
+<form id="create-form"><label for="create-project">Проект создания<select id="create-project" required></select></label><label for="create-vendor">Вендор</label><select id="create-vendor"></select>
 <p class="meta">Другие вендоры пока недоступны</p>
 <div class="actions"><button id="create-submit" type="submit">Создать</button><button id="create-cancel" type="button" class="secondary">Отмена</button></div></form>
 <p id="create-status" role="status" aria-live="polite"></p>
+<button id="create-result-open" type="button" class="secondary" hidden>Открыть созданную сессию</button>
 <button id="create-check" type="button" class="secondary" hidden>Проверить статус</button>
 </dialog>
 <dialog id="project-file-dialog" aria-labelledby="project-file-name">

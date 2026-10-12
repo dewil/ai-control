@@ -248,8 +248,8 @@ function notice(text){$('notice').textContent=text;}
 let androidResumeGeneration=0;
 function androidAuth(){return window.AndroidAuth&&typeof window.AndroidAuth.requestAuth==='function'?window.AndroidAuth:null;}
 function requestNativeAuth(notify=true){closeProjectFile();stopLimitsView(true);if(lifecycleV2)closePageGate();const native=androidAuth();stopPolling();stopDevbusView();devbusAdmitted=false;androidResumeGeneration++;if(native&&notify)native.requestAuth();return Boolean(native);}
-function ownerForbidden(){const notify=liveAndroidAuthGeneration!==chatAuthGeneration;liveAndroidAuthGeneration=chatAuthGeneration;requestNativeAuth(notify);notice('Войдите снова для обновления данных.');}
-function authExpired(){if(!requestNativeAuth())signedOut();}
+function ownerForbidden(){pinView.items=[];pinView.version++;partView.overview.data=null;sessionRows=[];resetNavigator();const notify=liveAndroidAuthGeneration!==chatAuthGeneration;liveAndroidAuthGeneration=chatAuthGeneration;requestNativeAuth(notify);notice('Войдите снова для обновления данных.');}
+function authExpired(){pinView.items=[];pinView.version++;partView.overview.data=null;sessionRows=[];resetNavigator();if(!requestNativeAuth())signedOut();}
 async function api(path,body,signal,isCurrent=()=>true,admission=false){
   const generation=pageGeneration,get=body===undefined;
   const allowed=()=>generation===pageGeneration&&(pageActive()||admission&&pageState==='admitting'&&path==='/api/session'&&get);
@@ -265,7 +265,7 @@ async function api(path,body,signal,isCurrent=()=>true,admission=false){
     return data;
   }finally{if(controller){const remaining=(observationControllers.get(controller)||0)-1;if(remaining>0)observationControllers.set(controller,remaining);else observationControllers.delete(controller);if(bridge)signal.removeEventListener('abort',abort);}}
 }
-function signedOut(){closeProjectFile();stopLimitsView(true);stopNavigation();resetParticipation();pinView.items=[];pinView.serverNow=null;pinView.received=0;pinView.version++;$('pin-list').replaceChildren();closeQueueTransferDialog();stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();queueViews.clear();if(acceptedStatusTimer!==null){pageClearTimer(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
+function signedOut(){resetNavigator();closeProjectFile();stopLimitsView(true);stopNavigation();resetParticipation();pinView.items=[];pinView.serverNow=null;pinView.received=0;pinView.version++;$('pin-list').replaceChildren();closeQueueTransferDialog();stopDevbusView();devbusAdmitted=false;projectsSelectionProof=null;setProjectsExpanded(true);closeCreateDialog();creates.clear();closeRenameDialog();renames.clear();chatAuthGeneration++;sendsInFlight.clear();modelDrafts.clear();queueViews.clear();if(acceptedStatusTimer!==null){pageClearTimer(acceptedStatusTimer);acceptedStatusTimer=null;}csrf='';taskLoaded=false;stopPolling();selectionGeneration++;initialScrollTarget=null;clearHistoryScrollSlack();selectedSession=null;selectedProject='';projectNames=[];availableProjects=new Set();projectEntries=[];projectSummaries.clear();projectsGeneration++;$('project-cloud').replaceChildren();$('project-summary-status').textContent='';sessionRows=[];drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();$('session-loading').hidden=true;$('workspace').hidden=true;$('login').hidden=false;$('logout').hidden=true;$('session-list').replaceChildren();$('cards').replaceChildren();updateUrl();syncCurrentSessionControls();}
 function field(parent,key,label,kind='textarea'){const wrap=node('label',label);const input=node(kind);input.maxLength=16000;input.value=drafts.get(key)||'';input.addEventListener('input',()=>drafts.set(key,input.value));wrap.append(input);parent.append(wrap);return input;}
 function button(parent,label,action,cls){const b=node('button',label,cls);b.type='button';b.addEventListener('click',action);parent.append(b);return b;}
 async function mutate(card,path,body){if(!pageActive())return;const lifecycle=pageGeneration,auth=chatAuthGeneration;if(busy)return;busy=true;const controls=[...document.querySelectorAll('#tasks-panel button')];controls.forEach(b=>b.disabled=true);const status=card.querySelector('.message');status.textContent='Сохраняем…';try{const data=await api(path,body);if(lifecycle!==pageGeneration||!pageActive())return;status.textContent=data.status==='already'?'Решение уже было принято.':'Решение принято.';await refresh();}catch(err){if(err.stale||lifecycle!==pageGeneration||!pageActive())return;status.textContent=err.message;if(err.code==='saved_pending'){await refresh();notice(err.message);}}finally{busy=false;if(pageActive()&&auth===chatAuthGeneration){if(lifecycle===pageGeneration)controls.forEach(b=>b.disabled=false);else{taskLoaded=false;if(currentTab==='tasks')refresh();}}}}
@@ -548,6 +548,167 @@ function renderModelControls(){
   }
 }
 
+// INV-USN-01..08: a bounded presentation snapshot; action authority stays in validated feeds.
+const navigatorView={entries:new Map(),snapshot:[],pending:[],filter:'all',project:'',initialized:false,opened:false,request:0,flight:null,page:0,more:false,partial:false,truncated:false,serial:0,openIntent:0,blocked:new Set(),pinIdentity:new Map(),applyPins:false};
+const navigatorMedia=window.matchMedia('(min-width:1024px)');
+const navigatorFilters=[['all','Все'],['attention','Внимание'],['ready','Готовы'],['working','Работают'],['pins','★']];
+function resetNavigator(){
+  navigatorView.request++;navigatorView.openIntent++;navigatorView.flight?.abort();navigatorView.flight=null;
+  navigatorView.entries.clear();navigatorView.snapshot=[];navigatorView.pending=[];navigatorView.initialized=false;navigatorView.project='';navigatorView.filter='all';navigatorView.opened=false;navigatorView.more=false;navigatorView.partial=false;navigatorView.blocked.clear();navigatorView.pinIdentity.clear();navigatorView.truncated=false;
+  $('navigator-list')?.replaceChildren();$('navigator-project')?.replaceChildren(new Option('Все проекты',''));if($('navigator-status'))$('navigator-status').textContent='';if($('navigator-new'))$('navigator-new').hidden=true;closeNavigator();
+}
+function navigatorAllowed(project){return !projectEntries.length||availableProjects.has(project);}
+function navigatorRemove(key){navigatorView.entries.delete(key);navigatorView.snapshot=navigatorView.snapshot.filter(value=>value!==key);navigatorView.pending=navigatorView.pending.filter(value=>value!==key);}
+function scrubRedactedPins(items){
+  for(const item of items){const old=navigatorView.pinIdentity.get(item.pin_id);if(!item.available&&old){const index=navigatorView.snapshot.indexOf(old);navigatorView.blocked.add(old);navigatorRemove(old);if(index>=0)navigatorView.snapshot.splice(index,0,item.pin_id);navigatorView.pinIdentity.delete(item.pin_id);}else if(item.available&&navigatorAllowed(item.project)){const key=chatKey(item.project,item.sid),index=navigatorView.snapshot.indexOf(item.pin_id);navigatorView.blocked.delete(key);navigatorView.pinIdentity.set(item.pin_id,key);navigatorRemove(item.pin_id);if(index>=0)navigatorView.snapshot.splice(index,0,key);}}
+  const ids=new Set(items.map(item=>item.pin_id));for(const id of navigatorView.pinIdentity.keys())if(!ids.has(id))navigatorView.pinIdentity.delete(id);
+}
+function reconcileNavigatorProjects(){
+  let revoked=false;
+  for(const [key,entry] of navigatorView.entries)if(entry.project&&!availableProjects.has(entry.project)){
+    revoked=true;navigatorView.blocked.add(key);
+    const pin=pinView.items.find(item=>item.available&&chatKey(item.project,item.sid)===key),index=navigatorView.snapshot.indexOf(key);
+    navigatorRemove(key);
+    if(pin){const opaque={pin_id:pin.pin_id,project:null,sid:null,title:'Недоступная сессия',vendor:null,available:false,metadata_state:'unavailable',status:'unknown',waits:[],last_activity:null,observed_at:null,activity_state:'unavailable'};
+      pinView.items=pinView.items.map(item=>item===pin?opaque:item);navigatorView.pinIdentity.delete(pin.pin_id);
+      navigatorRetain({key:pin.pin_id,opaque:true,title:opaque.title,pinId:pin.pin_id});if(index>=0)navigatorView.snapshot.splice(index,0,pin.pin_id);
+    }
+  }
+  if(revoked){for(const project of creates.keys())if(!availableProjects.has(project))creates.delete(project);for(const map of [drafts,historyData,modelDrafts,renames,queueViews,receipts,latestAttempts])for(const key of map.keys())if(!availableProjects.has(key.split('\u0000')[0]))map.delete(key);navigationEpoch++;if(partView.overview.data)partView.overview.data={...partView.overview.data,rows:partView.overview.data.rows.filter(row=>availableProjects.has(row.project))};partView.target=null;}
+  navigatorView.request++;navigatorView.flight?.abort();navigatorView.flight=null;
+  const select=$('navigator-project'),before=select.value;
+  select.replaceChildren(new Option('Все проекты',''),...projectEntries.filter(row=>availableProjects.has(row.name)).map(row=>new Option(row.name,row.name)));
+  navigatorView.project=availableProjects.has(before)?before:'';select.value=navigatorView.project;
+  if(createDialogProject&&!availableProjects.has(createDialogProject))closeCreateDialog();
+  syncNavigator();
+}
+function navigatorRetain(value){
+  const key=value.key,existing=navigatorView.entries.get(key);
+  if(navigatorView.blocked.has(key)||value.project&&!navigatorAllowed(value.project))return;
+  const entry={...existing,...value,received:existing?.received||++navigatorView.serial};
+  const size=new TextEncoder().encode(JSON.stringify(entry)).length;
+  let bytes=0;for(const [k,row]of navigatorView.entries)if(k!==key)bytes+=new TextEncoder().encode(JSON.stringify(row)).length;
+  while((!existing&&navigatorView.entries.size>=256)||bytes+size>256*1024){
+    const victim=[...navigatorView.entries.values()].filter(row=>row.key!==key&&!navigatorView.snapshot.includes(row.key)&&!row.pinId&&row.key!==currentSessionKey()).sort((a,b)=>a.received-b.received||a.key.localeCompare(b.key))[0];
+    if(!victim){navigatorView.truncated=true;return;}
+    bytes-=new TextEncoder().encode(JSON.stringify(victim)).length;navigatorRemove(victim.key);
+  }
+  navigatorView.entries.set(key,entry);
+}
+function ingestNavigatorPage(project,rows){
+  if(!navigatorAllowed(project))return;
+  for(const row of rows){if(!row||!UUID_RE.test(row.sid)||typeof row.title!=='string'&&row.title!==null)continue;
+    const key=chatKey(project,row.sid);navigatorView.blocked.delete(key);
+    navigatorRetain({key,project,sid:row.sid,pageTitle:typeof row.title==='string'?row.title.slice(0,1000):'',pageVendor:['codex','claude'].includes(row.vendor)?row.vendor:null,pageStatus:row.status,pageNeeds:row.needs_native_attention===true});
+  }
+}
+function navigatorEntry(key){
+  const entry=navigatorView.entries.get(key);if(!entry||navigatorView.blocked.has(key)||entry.project&&!navigatorAllowed(entry.project))return null;
+  const overview=partView.overview.data?.rows.find(row=>chatKey(row.project,row.sid)===key),pin=pinView.items.find(row=>row.available?chatKey(row.project,row.sid)===key:row.pin_id===key);
+  const fresh=overview&&partView.overview.data.health==='fresh'&&overview.freshness.state==='fresh';
+  const attention=Boolean(fresh&&(overview.waits.length||overview.questions.some(q=>['actionable','native_only','responding','sent','delivery_unknown'].includes(q.state))||overview.activity==='system_error'||['failed','interrupted'].includes(overview.result?.status)));
+  const ready=Boolean(fresh&&!attention&&overview.result?.ready),working=Boolean(fresh&&!attention&&!ready&&overview.running==='confirmed'&&overview.activity==='active');
+  const times=[pin?.last_activity,overview?.result?.completed_at].filter(value=>typeof value==='number'&&Number.isFinite(value));
+  const title=entry.pageTitle||overview?.label||pin?.title||entry.title||'Сессия '+entry.sid?.slice(0,8);
+  return {...entry,title,vendor:entry.pageVendor||overview?.vendor||pin?.vendor||null,pinId:pin?.pin_id||null,overview:overview||null,fresh,attention,ready,working,activity:times.length?Math.max(...times):null,snapshot:!entry.pageTitle&&!overview&&Boolean(pin?.available),unavailable:entry.opaque===true};
+}
+function navigatorMatches(entry,filter=navigatorView.filter){return Boolean(entry&&(!navigatorView.project||entry.project===navigatorView.project)&&({all:true,attention:entry.attention,ready:entry.ready,working:entry.working,pins:Boolean(entry.pinId)})[filter]);}
+function syncNavigator(apply=false){
+  if(!navigationVisible())return;
+  const data=partView.overview.data;
+  for(const row of data?.rows||[]){const key=chatKey(row.project,row.sid);navigatorRetain({key,project:row.project,sid:row.sid,title:row.label});}
+  for(const pin of pinView.items){const key=pin.available?chatKey(pin.project,pin.sid):pin.pin_id;navigatorRetain(pin.available?{key,project:pin.project,sid:pin.sid,pinId:pin.pin_id,title:pin.title}:{key,opaque:true,title:'Недоступная сессия',pinId:pin.pin_id});}
+  // Pins removed by the server cannot leave opaque identity-free rows behind.
+  for(const [key,entry]of navigatorView.entries)if(entry.opaque&&!pinView.items.some(pin=>!pin.available&&pin.pin_id===key))navigatorRemove(key);
+  const entries=[...navigatorView.entries.keys()].map(navigatorEntry).filter(Boolean),matching=entries.filter(row=>navigatorMatches(row));
+  if(apply||navigatorView.applyPins||!navigatorView.initialized&&matching.length){
+    navigatorView.snapshot=matching.sort((a,b)=>Number(Boolean(b.pinId))-Number(Boolean(a.pinId))||(b.activity??-1)-(a.activity??-1)||a.key.localeCompare(b.key)).map(row=>row.key);navigatorView.initialized=true;navigatorView.applyPins=false;
+  }
+  navigatorView.snapshot=navigatorView.snapshot.filter(key=>navigatorEntry(key));
+  navigatorView.pending=matching.filter(row=>!navigatorView.snapshot.includes(row.key)).map(row=>row.key);
+  renderNavigator(entries);
+}
+function navigatorStatus(entry){
+  const row=entry.overview;
+  if(entry.unavailable)return 'Недоступная сессия';
+  if(entry.attention){if(row.waits.includes('approval'))return 'Разрешение в Codex';if(row.waits.includes('question')||row.questions.length)return 'Вопрос';return 'Ошибка';}
+  if(entry.ready)return 'Ответ готов';if(entry.working)return 'Работает';
+  if(row&&!entry.fresh)return 'Сведения устарели';
+  if(row?.activity==='active')return 'Активна по Codex';
+  return entry.pageStatus?statusLabel(entry.pageStatus):'Состояние неизвестно';
+}
+function renderNavigator(entries){
+  const filters=$('navigator-filters');
+  if(!filters.children.length)for(const [id,label]of navigatorFilters){const control=button(filters,label,()=>{navigatorView.filter=id;syncNavigator(true);},'secondary');control.dataset.filter=id;}
+  for(const [id,label]of navigatorFilters){const control=filters.querySelector('[data-filter="'+id+'"]'),count=entries.filter(row=>navigatorMatches(row,id)).length;control.textContent=label+' · '+count;control.setAttribute('aria-label',(id==='pins'?'Закреплённые':label)+' · '+count);control.setAttribute('aria-pressed',String(navigatorView.filter===id));}
+  $('navigator-open').textContent='Сессии · внимание '+entries.filter(row=>navigatorMatches(row,'attention')).length;
+  const changed=navigatorView.snapshot.some(key=>!navigatorMatches(navigatorEntry(key)));
+  const uncertain=navigatorView.truncated||navigatorView.partial||!navigatorView.project||!partView.overview.data||partView.overview.data.coverage.partial||partView.overview.data.health!=='fresh';
+  $('navigator-status').textContent=[changed?'Есть изменения.':'',uncertain?'Список частичный; полнота не подтверждена.':'',navigatorView.truncated?'Достигнуто ограничение списка.':'',!navigatorView.snapshot.length?'Выберите проект или обновите список.':''].filter(Boolean).join(' ');
+  $('navigator-new').hidden=!navigatorView.pending.length;$('navigator-new').textContent='Новые: '+navigatorView.pending.length;
+  const list=$('navigator-list'),existing=new Map([...list.children].map(row=>[row.navigatorKey,row]));
+  const rows=navigatorView.snapshot.map(key=>{
+    const entry=navigatorEntry(key);let row=existing.get(key);if(!row){row=node('li',undefined,'navigator-row');row.navigatorKey=key;}
+    const signature=JSON.stringify([entry.title,entry.vendor,entry.pinId,entry.activity,navigatorStatus(entry),navigatorMatches(entry),entry.snapshot,entry.overview?.questions,entry.overview?.result]);
+    if(row.navigatorSignature===signature)return row;
+    const focused=row.contains(document.activeElement),focusLabel=focused?document.activeElement.getAttribute('aria-label'):null;
+    row.replaceChildren();row.navigatorSignature=signature;
+    const content=node('div',undefined,'navigator-content');
+    if(entry.unavailable)content.append(node('strong','Недоступная сессия'));else{const open=button(content,entry.title,()=>openNavigatorEntry(key), 'secondary navigator-primary');open.setAttribute('aria-label','Открыть сессию '+entry.title);}
+    content.append(node('span',[entry.project,entry.vendor==='codex'?'Codex':entry.vendor==='claude'?'Claude':'Вендор неизвестен',entry.snapshot?'Сохранённое название':''].filter(Boolean).join(' · '),'meta'));
+    const badges=node('div',undefined,'navigator-badges');badges.append(node('span',navigatorStatus(entry),'participation-badge '+(entry.ready?'participation-badge-ready':entry.attention?'participation-badge-question':'participation-badge-status')));
+    if(entry.pinId)badges.append(node('span','★'));
+    const age=entry.activity===null?'—':projectAge(entry.activity);badges.append(node('span',age,'meta'));if(entry.activity!==null)badges.lastChild.title=projectExactTime(entry.activity)+' МСК';
+    if(!navigatorMatches(entry))badges.append(node('span','Статус изменился','meta'));
+    content.append(badges);row.append(content);
+    const menu=node('div',undefined,'navigator-menu'),toggle=button(menu,'⋯',()=>{actions.hidden=!actions.hidden;toggle.setAttribute('aria-expanded',String(!actions.hidden));},'secondary');toggle.setAttribute('aria-label','Действия');toggle.setAttribute('aria-expanded','false');
+    const actions=node('div',undefined,'navigator-actions');actions.hidden=true;actions.setAttribute('role','menu');actions.addEventListener('keydown',event=>{const controls=[...actions.querySelectorAll('button')];if(event.key==='Escape'){event.preventDefault();event.stopPropagation();actions.hidden=true;toggle.setAttribute('aria-expanded','false');toggle.focus({preventScroll:true});}else if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();const index=controls.indexOf(document.activeElement),next=event.key==='Home'?0:event.key==='End'?controls.length-1:(index+(event.key==='ArrowDown'?1:-1)+controls.length)%controls.length;controls[next]?.focus({preventScroll:true});}});
+    const action=(label,callback)=>{const b=button(actions,label,()=>{actions.hidden=true;toggle.setAttribute('aria-expanded','false');callback();},'secondary');b.setAttribute('role','menuitem');};
+    if(!entry.unavailable){if(entry.fresh)for(const q of entry.overview?.questions||[])action('Открыть вопрос',()=>openNavigatorEntry(key,{interaction:q.interaction_id}));
+      if(entry.fresh&&entry.overview?.result?.ready)action('Открыть результат',()=>openNavigatorEntry(key,{turn:entry.overview.result.turn_id,item:entry.overview.result.item_id}));
+      action('Переименовать',async()=>{if(await openNavigatorEntry(key))openRenameDialog();});
+    }
+    action(entry.pinId?'Открепить':'Закрепить',()=>{const current=navigatorEntry(key);if(current)changePin(!current.pinId,current.pinId,current);});menu.append(actions);row.append(menu);
+    if(focused){const control=[...row.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')===focusLabel);control?.focus({preventScroll:true});}
+    return row;
+  });reconcileHistoryChildren(list,rows);
+}
+async function openNavigatorEntry(key,target=null){
+  const entry=navigatorEntry(key);if(!entry||entry.unavailable)return false;
+  if(target){const live=entry.overview;if(!entry.fresh||!live||target.interaction&&!live.questions.some(q=>q.interaction_id===target.interaction)||target.turn&&(!live.result?.ready||live.result.turn_id!==target.turn||live.result.item_id!==target.item))return false;}
+  if(target){await openParticipationTarget(entry.overview,target);return activeSelection(entry.project,entry.sid);}
+  return openPinnedSession({available:true,project:entry.project,sid:entry.sid,title:entry.title,vendor:entry.vendor});
+}
+async function loadNavigatorProject(page=0){
+  const project=navigatorView.project;if(!navigationVisible()||!project||!availableProjects.has(project))return;
+  navigatorView.flight?.abort();const controller=newObservationController();navigatorView.flight=controller;
+  const request=++navigatorView.request,auth=chatAuthGeneration,lifecycle=pageGeneration,current=()=>navigationVisible()&&request===navigatorView.request&&project===navigatorView.project&&auth===chatAuthGeneration&&lifecycle===pageGeneration&&availableProjects.has(project);
+  const timer=pageTimeout(()=>controller.abort(),30000);$('sessions-more').disabled=true;
+  try{const path=queryPath('/api/sessions',{project,page});let data;try{data=await api(path,undefined,controller.signal,current);}catch(error){if(error.status!==409||error.code!=='stale'||!current())throw error;data=await api(path,undefined,controller.signal,current);}
+    if(!current())return;ingestNavigatorPage(project,Array.isArray(data.rows)?data.rows:[]);navigatorView.page=page;navigatorView.more=data.has_more===true;navigatorView.partial=navigatorView.more;$('sessions-more').hidden=!navigatorView.more;syncNavigator(true);
+  }catch(error){if(current()){if(error.status===401||error.status===403){resetNavigator();if(error.status===403)ownerForbidden();}else{$('navigator-status').textContent='Список недоступен; полнота не подтверждена.';}}}
+  finally{pageClearTimer(timer);if(navigatorView.flight===controller)navigatorView.flight=null;if(current())$('sessions-more').disabled=false;}
+}
+function closeNavigator(){
+  const dialog=$('navigator-dialog');if(!dialog?.open)return;dialog.close();document.body.style.overflow='';if(!navigatorMedia.matches&&navigationVisible())$('navigator-open').focus({preventScroll:true});
+}
+function openNavigator(apply=true){
+  navigatorView.opened=true;if(apply)syncNavigator(true);syncNavigatorLayout();
+  if(!navigatorMedia.matches&&!$('navigator-dialog').open){$('navigator-dialog').showModal();document.body.style.overflow='hidden';$('navigator-close').focus({preventScroll:true});}
+}
+function syncNavigatorLayout(){
+  const host=$('session-navigator');if(!host)return;
+  if(navigatorMedia.matches){closeNavigator();$('navigator-desktop').append(host);}else $('navigator-dialog').append(host);
+}
+navigatorMedia.addEventListener('change',syncNavigatorLayout);
+$('navigator-open').addEventListener('click',()=>openNavigator());
+$('navigator-close').addEventListener('click',closeNavigator);
+$('navigator-dialog').addEventListener('cancel',event=>{event.preventDefault();closeNavigator();});
+$('navigator-dialog').addEventListener('click',event=>{if(event.target===$('navigator-dialog')){const box=event.target.getBoundingClientRect();if(event.clientX<box.left||event.clientX>box.right||event.clientY<box.top||event.clientY>box.bottom)closeNavigator();}});
+$('navigator-project').addEventListener('change',()=>{navigatorView.project=$('navigator-project').value;navigatorView.request++;navigatorView.flight?.abort();navigatorView.more=false;$('sessions-more').hidden=true;syncNavigator(true);if(navigatorView.project)loadNavigatorProject();});
+$('navigator-apply').addEventListener('click',()=>syncNavigator(true));$('navigator-new').addEventListener('click',()=>syncNavigator(true));
+syncNavigatorLayout();
+
 function navigationVisible(){return pageActive()&&Boolean(csrf)&&currentTab==='sessions'&&document.visibilityState==='visible'&&!$('workspace').hidden;}
 function stopNavigation(){navigationEpoch++;if(partView.selected)partView.selected.rendered='';disablePartControls();for(const button of document.querySelectorAll('[data-queue-start]'))button.disabled=true;if(navigationTimer!==null){pageClearTimer(navigationTimer);navigationTimer=null;}}
 function syncNavigation(force=false){
@@ -566,11 +727,11 @@ function validPartOverview(data){
   const stamp=v=>v===null||typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=253402300799;
   return exactFields(data,['schema','epoch','revision','generated_at','health','coverage','rows','tasks'])&&validPartBase(data)&&data.generated_at!==null&&stamp(data.generated_at)&&['fresh','stale','unavailable'].includes(data.health)&&Array.isArray(data.rows)&&data.rows.length<=256&&Array.isArray(data.tasks)&&data.tasks.length<=128&&data.rows.every(row=>exactFields(row,['session_key','project','sid','label','vendor','activity','running','waits','questions','result','freshness'])&&typeof row.session_key==='string'&&/^[0-9a-f]{64}$/.test(row.session_key)&&typeof row.project==='string'&&/^[A-Za-z0-9_-]{1,32}$/.test(row.project)&&UUID_RE.test(row.sid)&&typeof row.label==='string'&&Array.from(row.label).length<=120&&row.vendor==='codex'&&['active','idle','not_loaded','system_error','unknown'].includes(row.activity)&&['confirmed','unconfirmed'].includes(row.running)&&Array.isArray(row.waits)&&[JSON.stringify([]),JSON.stringify(['approval']),JSON.stringify(['question']),JSON.stringify(['approval','question'])].includes(JSON.stringify(row.waits))&&Array.isArray(row.questions)&&row.questions.every(q=>exactFields(q,['interaction_id','state','blocking'])&&UUID_RE.test(q.interaction_id)&&['actionable','native_only','responding','sent','delivery_unknown','closed','stale'].includes(q.state)&&[true,false,null].includes(q.blocking))&&exactFields(row.freshness,['state','observed_at'])&&['fresh','stale','unavailable'].includes(row.freshness.state)&&stamp(row.freshness.observed_at)&&(row.result===null||exactFields(row.result,['turn_id','item_id','status','ready','completed_at'])&&validHistoryId(row.result.turn_id)&&(row.result.item_id===null||validHistoryId(row.result.item_id))&&['completed','failed','interrupted'].includes(row.result.status)&&typeof row.result.ready==='boolean'&&(!row.result.ready||row.result.status==='completed'&&row.result.item_id!==null)&&stamp(row.result.completed_at)));
 }
-function resetParticipation(){partView.epoch=null;partView.admission++;partView.overview={last:0,flight:null,data:null,rendered:''};partView.selected=null;partView.target=null;partView.actions.clear();$('participation-list').replaceChildren();$('session-questions').replaceChildren();$('participation-status').textContent='';}
+function resetParticipation(){resetNavigator();partView.epoch=null;partView.admission++;partView.overview={last:0,flight:null,data:null,rendered:''};partView.selected=null;partView.target=null;partView.actions.clear();$('participation-list').replaceChildren();$('session-questions').replaceChildren();$('participation-status').textContent='';}
 function admitPartEpoch(data,admission,previousEpoch){
   if(partView.epoch===data.epoch)return true;
   if(partView.admission!==admission||partView.epoch!==null&&!previousEpoch)return false;
-  partView.epoch=data.epoch;partView.admission++;partView.target=null;partView.actions.clear();partView.overview.data=null;partView.overview.rendered='';$('participation-list').replaceChildren();
+  resetNavigator();partView.epoch=data.epoch;partView.admission++;partView.target=null;partView.actions.clear();partView.overview.data=null;partView.overview.rendered='';$('participation-list').replaceChildren();
   if(partView.selected){partView.selected.data=null;partView.selected.rendered='';}$('session-questions').replaceChildren();return true;
 }
 function disablePartControls(){for(const control of $('session-questions').querySelectorAll('button,input,textarea'))control.disabled=true;}
@@ -595,106 +756,7 @@ function loadSessionQuestions(force=false){
   if(!scope||scope.key!==key||scope.generation!==selectionGeneration){partView.selected={key,project:selectedProject,sid:selectedSession.sid,generation:selectionGeneration,last:0,flight:null,data:null,rendered:''};$('session-questions').replaceChildren();}
   return loadPartScope(partView.selected,true,force);
 }
-function participationGroup(list,id,title){
-  if(id==='other'){
-    let group=[...list.children].find(element=>element.dataset.participationGroup===id);
-    if(!group){group=document.createElement('details');group.className='participation-other';group.dataset.participationGroup=id;group.append(node('summary',title));}
-    return {group,title:group.querySelector('summary'),rows:group};
-  }
-  let heading=[...list.children].find(element=>element.tagName==='H3'&&element.dataset.participationGroup===id);
-  if(!heading){heading=node('h3',title);heading.dataset.participationGroup=id;}
-  return {group:heading,title:heading,rows:list};
-}
-function participationRow(row,existing){
-  const signature=JSON.stringify(row);
-  const article=existing||node('article',undefined,'participation-row');
-  if(existing&&existing.participationSignature===signature){article.participationRow=row;return article;}
-  article.dataset.participationKey=JSON.stringify([row.project,row.sid]);
-  let content=article.querySelector('.participation-row-content');
-  let heading,projectTitle,titleNode,badges,actions;
-  if(!content){
-    content=node('div',undefined,'participation-row-content');
-    heading=node('div',undefined,'participation-row-heading');
-    projectTitle=node('strong',undefined,'participation-project');
-    titleNode=node('span',undefined,'participation-title');
-    heading.append(projectTitle,titleNode);content.append(heading);
-    badges=node('p',undefined,'meta participation-badges');content.append(badges);
-    actions=node('div',undefined,'participation-actions');article.append(content,actions);
-  }else{
-    heading=content.querySelector('.participation-row-heading');
-    projectTitle=heading.querySelector('.participation-project');
-    titleNode=heading.querySelector('.participation-title');
-    badges=content.querySelector('.participation-badges');
-    actions=article.querySelector('.participation-actions');
-  }
-  projectTitle.textContent=row.project;
-  const sessionTitle=row.label.trim()||'Сессия '+row.sid.slice(0,8);
-  titleNode.textContent=sessionTitle;
-  const labels=[],openQuestionStates=['actionable','native_only','responding','sent','delivery_unknown'];
-  const hasQuestion=row.waits.includes('question')||row.questions.some(question=>openQuestionStates.includes(question.state));
-  if(hasQuestion)labels.push(['Вопрос','question']);
-  if(row.waits.includes('approval'))labels.push(['Разрешение в Codex · подтвердите в Codex','approval']);
-  if(row.result?.ready)labels.push(['Ответ готов','ready']);
-  const staleCompletion=row.freshness.state==='stale'&&row.result?.status==='completed'&&row.result.item_id!==null&&!row.result.ready;
-  if(staleCompletion)labels.push(['Последний известный ответ · сведения устарели','status']);
-  if(row.running==='confirmed')labels.push(['Работа подтверждена','work']);else if(row.activity==='active')labels.push(['Активна по Codex','active']);
-  if(row.result?.status==='failed')labels.push(['Ход завершился с ошибкой','status']);else if(row.result?.status==='interrupted')labels.push(['Ход прерван','status']);
-  if(row.freshness.state==='stale')labels.push(['Сведения устарели','status']);else if(row.freshness.state==='unavailable')labels.push(['Сведения недоступны','status']);
-  badges.hidden=!labels.length;badges.replaceChildren();for(const [label,kind]of labels)badges.append(node('span',label,'participation-badge participation-badge-'+kind));
-  article.participationRow=row;
-  const specifications=[{key:'session',text:'Чат',name:'Открыть сессию',target:null},
-    ...row.questions.map(question=>({key:'question:'+question.interaction_id,text:'Вопрос',name:'Открыть вопрос',target:{interaction:question.interaction_id}}))];
-  if(row.result?.ready)specifications.push({key:'result:'+row.result.turn_id+':'+row.result.item_id,
-    text:'Результат',name:'Открыть результат',target:{turn:row.result.turn_id,item:row.result.item_id}});
-  const existingActions=new Map([...actions.children].map(button=>[button.dataset.participationAction,button]));
-  const renderedActions=specifications.map(specification=>{
-    let button=existingActions.get(specification.key);
-    if(!button){
-      button=node('button',undefined,'secondary');button.type='button';
-      button.addEventListener('click',()=>openParticipationTarget(article.participationRow,button.participationTarget));
-    }
-    button.dataset.participationAction=specification.key;button.textContent=specification.text;
-    button.setAttribute('aria-label',specification.name);button.title=specification.name;
-    button.participationTarget=specification.target;
-    return button;
-  });
-  reconcileHistoryChildren(actions,renderedActions);article.participationSignature=signature;return article;
-}
-function renderParticipation(){
-  const scope=partView.overview,data=scope.data;if(!data||!navigationVisible()||data.epoch!==partView.epoch)return;
-  const signature=JSON.stringify([data.epoch,data.rows,data.coverage,data.health]);if(signature===scope.rendered)return;scope.rendered=signature;
-  const selected=activeSelection(),decision=selected?captureHistoryScroll(selectedProject,selectedSession.sid,selectionGeneration,false):captureViewportAnchor();
-  const list=$('participation-list');
-  const groups=[['attention','Нужно участие'],['review','Готово к проверке'],['working','В работе'],['other','Прочие состояния']];
-  const openQuestionStates=['actionable','native_only','responding','sent','delivery_unknown'];
-  const hasAttention=row=>row.waits.includes('approval')||row.waits.includes('question')||row.questions.some(question=>openQuestionStates.includes(question.state))||row.activity==='system_error'||['failed','interrupted'].includes(row.result?.status);
-  const staleCompletion=row=>row.freshness.state==='stale'&&row.result?.status==='completed'&&row.result.item_id!==null&&!row.result.ready;
-  const group=row=>hasAttention(row)?'attention':row.result?.ready||staleCompletion(row)?'review':row.running==='confirmed'&&row.activity==='active'?'working':'other';
-  const grouped=new Map(groups.map(([id])=>[id,[]]));for(const row of data.rows)grouped.get(group(row)).push(row);
-  const waitingCount=grouped.get('attention').length,readyCount=grouped.get('review').filter(row=>row.result?.ready).length,workingCount=grouped.get('working').length;
-  const staleRows=data.rows.some(row=>row.freshness.state!=='fresh');
-  const uncertain=data.coverage.partial||data.health!=='fresh'||staleRows;
-  $('participation-overview').querySelector('summary').textContent=(uncertain?'Наблюдается: ':'')+'Сессии: требуется внимание '+waitingCount+' · работают '+workingCount+' · ответы '+readyCount;
-  const existingRows=new Map([...list.querySelectorAll('.participation-row')].map(article=>[article.dataset.participationKey,article]));
-  const orderedGroups=[];
-  for(const [id,title]of groups){
-    const rows=grouped.get(id),container=participationGroup(list,id,title);
-    const rendered=rows.map(row=>participationRow(row,existingRows.get(JSON.stringify([row.project,row.sid]))));
-    if(id==='other'){
-      container.group.hidden=!rows.length;container.title.textContent=rows.length?title:'';
-      reconcileHistoryChildren(container.rows,[container.title,...rendered]);orderedGroups.push(container.group);
-    }else if(rows.length){container.title.textContent=title;orderedGroups.push(container.title,...rendered);}
-  }
-  const status=[];if(data.health==='stale')status.push('Состояние обзора устарело.');else if(data.health==='unavailable')status.push('Наблюдение недоступно.');
-  if(data.coverage.partial||data.health!=='fresh')status.push('Полнота не подтверждена.');else status.push('Полнота покрытия подтверждена.');
-  if(staleRows)status.push('Некоторые сведения о сессиях устарели.');
-  const reasonLabels={limit:'Достигнут предел выборки.',deadline:'Превышено время наблюдения.',native_callbacks_partial:'Часть native callbacks недоступна.',source_unavailable:'Источник недоступен.',unsupported:'Источник не поддерживается.',binding_incomplete:'Не все привязки подтверждены.'};
-  if(data.coverage.partial)for(const reason of data.coverage.reasons){const label=reasonLabels[reason];if(label&&!status.includes(label))status.push(label);}
-  let empty=list.querySelector('.participation-empty');
-  if(!data.rows.length){if(!empty)empty=node('p',undefined,'meta participation-empty');empty.textContent=uncertain?'Список сессий не подтверждён':'Нет сессий для отображения';orderedGroups.push(empty);}else empty?.remove();
-  reconcileHistoryChildren(list,orderedGroups);$('participation-status').textContent=status.join(' ');
-  if(decision)restoreHistoryScroll(decision,selectedProject,selectedSession?.sid,selectionGeneration);
-}
+function renderParticipation(){syncNavigator();}
 async function openParticipationTarget(row,target){
   const epoch=partView.epoch;
   await openPinnedSession({available:true,project:row.project,sid:row.sid,title:row.label,vendor:'codex'});
@@ -770,61 +832,29 @@ async function loadPins(force=false){
   const controller=newObservationController(),timer=pageTimeout(()=>controller.abort(),15000);
   try{const data=await api('/api/session-pins?activity=1',undefined,controller.signal,current);if(!current())return;
     if(!validPins(data))throw new Error(messages.unavailable);
-    pinView.items=data.items;pinView.serverNow=data.schema===2?data.server_now:null;pinView.received=performance.now();renderPins();$('pin-status').textContent='';
+    scrubRedactedPins(data.items);pinView.items=data.items;pinView.serverNow=data.schema===2?data.server_now:null;pinView.received=performance.now();renderPins();$('pin-status').textContent='';
   }catch(error){if(!error.stale&&current()){if(error.status===401||error.status===403){stopNavigation();if(error.status===403)ownerForbidden();}renderPins();$('pin-status').textContent='Закреплённые сессии пока недоступны.';}}
   finally{pageClearTimer(timer);if(pinView.flight===flight)pinView.flight=null;if(pinView.pending){pinView.pending=false;if(navigationVisible())loadPins(true);}}
 }
-function renderPins(){
-  const generation=selectionGeneration,project=selectedProject,sid=selectedSession?.sid;
-  const selected=activeSelection(),decision=selected?captureHistoryScroll(project,sid,generation,false):captureViewportAnchor(),list=$('pin-list');
-  const existing=new Map([...list.children].map(row=>[row.dataset.pinId,row])),children=[];
-  const now=pinView.serverNow===null?null:pinView.serverNow+Math.max(0,performance.now()-pinView.received)/1000;
-  const ordered=pinView.items.slice().sort((a,b)=>(b.last_activity??-1)-(a.last_activity??-1));
-  for(const item of ordered){
-    let row=existing.get(item.pin_id);
-    if(!row){row=node('div',undefined,'pin-row');row.dataset.pinId=item.pin_id;}
-    let title=row.querySelector('.pin-title');
-    if(!title){title=node('button',undefined,'secondary pin-title');title.type='button';row.append(title);row.append(node('div',undefined,'pin-activity'));}
-    title.textContent=item.title;title.disabled=!item.available;
-    title.title=item.available?'Сохранённый снимок названия':'Сессия недоступна';
-    title.onclick=()=>openPinnedSession(item);
-    const activity=row.querySelector('.pin-activity');
-    let status=activity.querySelector('.pin-status-badge'),time=activity.querySelector('.pin-time-badge');
-    if(!status){status=node('span',undefined,'pin-status-badge');time=node('span',undefined,'pin-time-badge');activity.append(status,time);}
-    const stale=item.activity_state==='fresh'&&now!==null&&now-item.observed_at>15;
-    status.textContent=!item.available?'Недоступна':stale?'Нет свежих данных':item.status==='active'&&item.waits?.length?item.waits.map(wait=>wait==='approval'?'Ожидает разрешения':'Ожидает ответа').join(' · '):({active:'Работает',idle:'Готова',notLoaded:'Не загружена',systemError:'Ошибка'})[item.status]||'Нет данных';
-    if(item.last_activity!==null&&item.last_activity!==undefined&&now!==null){
-      const age=Math.max(0,now-item.last_activity);
-      time.textContent=age<60?'сейчас':age<3600?Math.floor(age/60)+'м':age<86400?Math.floor(age/3600)+'ч':Math.floor(age/86400)+'д';
-      const full=new Intl.DateTimeFormat('ru-RU',{timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(item.last_activity*1000))+' (Москва)'+(stale?' · Устаревший снимок':'');
-      time.title=full;time.setAttribute('aria-label','Последняя активность: '+full);
-    }else{time.textContent='—';time.title='Время активности неизвестно';time.setAttribute('aria-label','Время активности неизвестно');}
-    let remove=row.querySelector('.pin-remove');
-    if(!remove){remove=node('button','Открепить','secondary pin-remove');remove.type='button';row.append(remove);}
-    remove.disabled=pinView.busy;remove.onclick=()=>changePin(false,item.pin_id);
-    children.push(row);
-  }
-  reconcileHistoryChildren(list,children);$('pin-snapshot-note').hidden=!pinView.items.some(item=>item.available);
-  if(decision)restoreHistoryScroll(decision,project,sid,generation);
-}
+function renderPins(){syncNavigator();}
 async function openPinnedSession(item){
-  if(!navigationVisible()||!item.available)return;
-  const auth=chatAuthGeneration,lifecycle=pageGeneration;
+  if(!navigationVisible()||!item.available)return false;
+  const auth=chatAuthGeneration,lifecycle=pageGeneration,intent=++navigatorView.openIntent;
   if(!projectNames.includes(item.project))await loadProjects();
-  if(!navigationVisible()||auth!==chatAuthGeneration||lifecycle!==pageGeneration||!availableProjects.has(item.project))return;
-  projectChanged(item.project);
-  openChat({sid:item.sid,title:item.title,vendor:item.vendor});
+  if(!navigationVisible()||auth!==chatAuthGeneration||lifecycle!==pageGeneration||intent!==navigatorView.openIntent||!availableProjects.has(item.project))return false;
+  selectedProject=item.project;sessionRows=[];sessionPage=0;sessionsHaveMore=false;
+  openChat({sid:item.sid,title:item.title,vendor:item.vendor});closeNavigator();return true;
 }
-async function changePin(add,pinId=null){
-  if(!navigationVisible()||pinView.busy||add&&!activeSelection())return;
+async function changePin(add,pinId=null,scope=null){
+  if(!navigationVisible()||pinView.busy||add&&!(scope?availableProjects.has(scope.project):activeSelection()))return;
   const auth=chatAuthGeneration,lifecycle=pageGeneration,epoch=navigationEpoch;
   const current=()=>navigationVisible()&&auth===chatAuthGeneration&&lifecycle===pageGeneration&&epoch===navigationEpoch;
-  const payload=add?{project:selectedProject,sid:selectedSession.sid}:{pin_id:pinId};
+  const payload=add?{project:scope?.project||selectedProject,sid:scope?.sid||selectedSession.sid}:{pin_id:pinId};
   pinView.version++;pinView.busy=true;$('pin-current').disabled=true;renderPins();
   try{const data=await api(add?'/api/session-pin':'/api/session-unpin',payload);if(!current())return;
     if(!exactFields(data,['schema','pin_id','pinned'])||data.schema!==1||!UUID_RE.test(data.pin_id)||data.pinned!==add||!add&&data.pin_id!==pinId)throw new Error(messages.unavailable);
-    if(add)loadPins(true);
-    else{pinView.items=pinView.items.filter(item=>item.pin_id!==pinId);renderPins();}
+    if(add){navigatorView.applyPins=true;loadPins(true);}
+    else{pinView.items=pinView.items.filter(item=>item.pin_id!==pinId);syncNavigator(true);}
     $('pin-status').textContent='';
   }catch(error){if(!error.stale&&current())$('pin-status').textContent='Не удалось изменить закрепление. Обновите список.';}
   finally{pinView.busy=false;if(current()){renderPins();syncCurrentSessionControls();}}
@@ -1086,11 +1116,11 @@ function syncCurrentSessionControls(force=false){if(!pageActive()&&!force)return
 function showTab(tab,load=true){if(!pageActive())return;
   if(!['tasks','sessions','devbus','limits'].includes(tab))return;
   if(currentTab!==tab){closeProjectFile();stopLimitsView();stopDevbusView();devbusTerminal=false;}
-  currentTab=tab;if(tab!=='sessions')clearHistoryScrollSlack();
+  currentTab=tab;if(tab!=='sessions')closeNavigator();if(tab!=='sessions')clearHistoryScrollSlack();
   for(const name of ['tasks','sessions','devbus','limits']){$('tab-'+name).setAttribute('aria-selected',String(tab===name));$(name+'-panel').hidden=tab!==name;}
   syncCurrentSessionControls();syncNavigation();
   if(tab==='tasks'){stopPolling();if(load&&!taskLoaded)refresh();}
-  else if(tab==='sessions'){if(load&&!projectNames.length)loadProjects();else if(load&&!selectedProject)loadSessionList(0,false);startPolling();}
+  else if(tab==='sessions'){syncNavigatorLayout();if(!selectedSession&&!navigatorView.opened)openNavigator(false);if(load&&!projectNames.length)loadProjects();else if(load&&!selectedProject)loadSessionList(0,false);startPolling();}
   else if(tab==='limits'){stopPolling();if($('notice').textContent==='Здесь появятся вопросы и результаты ваших задач.')notice('');syncLimitsView();}
   else{stopPolling();if(devbusAdmitted)syncDevbusView();else admitDevbusView();}
 }
@@ -1448,7 +1478,7 @@ async function loadProjects(){if(!pageActive())return;
     projectNames=projectEntries.map(x=>x.name);
     availableProjects=new Set(projectEntries.filter(x=>x.unavailable!==true).map(x=>x.name));
     if(selectedProject&&!availableProjects.has(selectedProject)){clearUnavailableProject();setSessionStatus('Выбранный проект недоступен. Выберите другой проект.');}
-    renderProjects();
+    reconcileNavigatorProjects();renderProjects();
     let summarySelection=selectionGeneration;
     const summaryCurrent=()=>current()&&summarySelection===selectionGeneration;
     let summaryFailed=false,summaryUnknown=false;
@@ -1472,7 +1502,7 @@ async function loadProjects(){if(!pageActive())return;
     finally{pageClearTimer(timer);if(current()&&!summaryCurrent())$('project-summary-status').textContent='';}
     if(!summaryCurrent())return;
     $('project-summary-status').textContent=summaryFailed?'Сводка недоступна. Число сессий и активность неизвестны.':summaryUnknown?'Некоторые метаданные пока недоступны. Обновите проекты, чтобы повторить.':'';
-    renderProjects();
+    reconcileNavigatorProjects();renderProjects();
     // A refresh never reopens history or overrides a newer user selection.
     if(selection!==selectionGeneration)return;
     const link=!hadNames&&parseDeepLink();
@@ -1510,7 +1540,10 @@ async function loadSessionList(page=0,append=false,deepSid=null){if(!pageActive(
   }catch(err){if(err.stale)return;if(current())setSessionStatus(err.status===409&&err.code==='stale'?'Метаданные сессий устарели. Обновите список, чтобы повторить.':'Список сессий недоступен. Обновите список, чтобы повторить.');}
   finally{pageClearTimer(timer);if(owns())$('sessions-more').disabled=false;}
 }
-function renderSessions(){const list=$('session-list');const frag=document.createDocumentFragment();for(const row of sessionRows){if(!row||typeof row.sid!=='string'||!UUID_RE.test(row.sid))continue;const b=node('button',undefined,'session-choice'+(selectedSession&&selectedSession.sid===row.sid?' selected':''));b.type='button';b.setAttribute('aria-pressed',String(Boolean(selectedSession&&selectedSession.sid===row.sid)));b.append(node('span',row.title||'Codex','session-title'));const vendorLabel=row.vendor==='codex'?'Codex':row.vendor==='claude'?'Claude':'Вендор неизвестен';b.append(node('span',vendorLabel,'session-vendor-badge'));b.append(node('span',statusLabel(row.status),'meta'));if(row.needs_native_attention===true)b.append(node('span','Нужно действие в клиенте Codex; ответы из панели пока недоступны.','attention-inline'));b.addEventListener('click',()=>openChat(row));frag.append(b);}list.replaceChildren(frag);}
+function renderSessions(){
+  if(selectedProject)ingestNavigatorPage(selectedProject,sessionRows);
+  syncNavigator();
+}
 function statusLabel(status){const labels={active:'Работает',idle:'Готова',notLoaded:'Недоступна',systemError:'Ошибка',completed:'Завершён',interrupted:'Прерван',failed:'Ошибка',inProgress:'Выполняется'};return labels[status]||'Состояние неизвестно';}
 function chatError(err){if(err&&err.code==='stale')return 'Сессия устарела или изменилась. Обновите список и выберите её снова.';return err&&err.message||messages.unavailable;}
 function clearHistoryScrollSlack(){historyScrollSlack=0;pinnedHistoryScope=null;historyScrollIntent=false;historyTouchY=null;historyScrollbarStartY=null;if(historyScrollSpacer){historyScrollSpacer.remove();historyScrollSpacer=null;}}
@@ -1522,32 +1555,37 @@ function exactFields(value,keys){return Boolean(value&&typeof value==='object'&&
 function createState(project){if(!creates.has(project))creates.set(project,{operation:null,status:'draft',inFlight:false,loading:false,available:false,message:'',generation:0,auth:chatAuthGeneration});return creates.get(project);}
 function closeCreateDialog(){createDialogEpoch++;createDialogProject=null;if($('create-dialog').open)$('create-dialog').close();}
 function syncCreateControls(){if(!pageActive())return;
-  $('create-open').disabled=!csrf||!selectedProject||!availableProjects.has(selectedProject);
-  const state=createDialogProject&&creates.get(createDialogProject);if(!state)return;
-  $('create-vendor').disabled=state.loading||state.inFlight||Boolean(state.operation);
-  $('create-submit').disabled=!state.available||state.loading||state.inFlight||Boolean(state.operation)||selectedProject!==createDialogProject||state.optionsGeneration!==selectionGeneration;
-  $('create-check').hidden=!state.operation;$('create-check').disabled=state.inFlight;
-  $('create-status').textContent=state.message;
+  $('create-open').disabled=!csrf||!availableProjects.size;
+  const state=createDialogProject&&creates.get(createDialogProject);
+  $('create-project').disabled=Boolean(state?.inFlight||state?.operation);
+  $('create-vendor').disabled=!state||state.loading||state.inFlight||Boolean(state.operation);
+  $('create-submit').disabled=!state||!state.available||state.loading||state.inFlight||Boolean(state.operation)||!availableProjects.has(createDialogProject)||state.optionsEpoch!==createDialogEpoch;
+  $('create-check').hidden=!state?.operation||state.status==='accepted';$('create-check').disabled=Boolean(state?.inFlight);
+  $('create-result-open').hidden=!state?.result;$('create-status').textContent=state?.message||'Выберите проект создания.';
 }
 function validCreateOptions(data,project){return exactFields(data,['schema','project','options'])&&data.schema===1&&data.project===project&&Array.isArray(data.options)&&data.options.length===1&&data.options.every(row=>exactFields(row,['context_mode','provider_id','available','reason'])&&row.context_mode==='configured'&&row.provider_id==='codex'&&typeof row.available==='boolean'&&row.reason===(row.available?null:'unavailable'));}
-async function openCreateDialog(){if(!pageActive())return;
-  if(!csrf||!selectedProject||!availableProjects.has(selectedProject))return;
-  const project=selectedProject,previous=creates.get(project);
-  if(previous?.status==='accepted'&&previous.selected)creates.delete(project);
-  const state=createState(project),auth=chatAuthGeneration,generation=selectionGeneration,epoch=++createDialogEpoch;
-  const lifecycle=pageGeneration,current=()=>pageActive()&&lifecycle===pageGeneration&&auth===chatAuthGeneration&&createDialogProject===project&&createDialogEpoch===epoch&&selectedProject===project&&selectionGeneration===generation&&$('create-dialog').open;
-  createDialogProject=project;state.optionsGeneration=generation;state.loading=true;state.available=false;
-  const pendingOption=new Option('Codex','codex');pendingOption.disabled=true;
-  $('create-vendor').replaceChildren(pendingOption);syncCreateControls();
-  if(!$('create-dialog').open)$('create-dialog').showModal();
+async function loadCreateOptions(project){
+  createDialogEpoch++;createDialogProject=project||null;syncCreateControls();if(!project||!availableProjects.has(project))return;
+  const state=createState(project),auth=chatAuthGeneration,epoch=createDialogEpoch,lifecycle=pageGeneration;
+  const current=()=>pageActive()&&lifecycle===pageGeneration&&auth===chatAuthGeneration&&createDialogProject===project&&createDialogEpoch===epoch&&availableProjects.has(project)&&$('create-dialog').open;
+  state.optionsEpoch=epoch;state.loading=true;state.available=false;
+  $('create-vendor').replaceChildren(new Option('Codex','codex'));syncCreateControls();
   const controller=newObservationController(),timer=pageTimeout(()=>controller.abort(),15000);
   try{const data=await api(queryPath('/api/session-create-options',{project}),undefined,controller.signal,current);if(!current())return;
-    if(!validCreateOptions(data,project))throw new Error();
-    state.available=data.options[0].available;const option=new Option('Codex','codex');option.disabled=!state.available;$('create-vendor').replaceChildren(option);
+    if(!validCreateOptions(data,project))throw new Error();state.available=data.options[0].available;
     if(!state.operation)state.message=state.available?'':'Создание пока недоступно.';
-  }catch(_){if(current()){state.available=false;$('create-vendor').replaceChildren(new Option('Вендор недоступен',''));if(!state.operation)state.message='Создание пока недоступно.';}}
+  }catch(_){if(current()){state.available=false;if(!state.operation)state.message='Создание пока недоступно.';}}
   finally{pageClearTimer(timer);if(current()){state.loading=false;syncCreateControls();}}
 }
+async function openCreateDialog(){if(!pageActive()||!csrf||!availableProjects.size)return;
+  const project=navigatorView.project;
+  $('create-project').replaceChildren(new Option('Выберите проект',''),...[...availableProjects].map(name=>new Option(name,name)));
+  $('create-project').value=project;closeNavigator();
+  if(!$('create-dialog').open)$('create-dialog').showModal();
+  await loadCreateOptions(project);
+}
+$('create-project').addEventListener('change',()=>loadCreateOptions($('create-project').value));
+$('create-result-open').addEventListener('click',async()=>{const state=creates.get(createDialogProject),row=state?.result;if(!row||!availableProjects.has(row.project))return;closeCreateDialog();await openPinnedSession({available:true,...row});});
 function validCreateResult(data,operation){
   if(!data||data.operation_id!==operation.operation_id)return false;
   if(data.status==='delivery_unknown')return exactFields(data,['operation_id','status']);
@@ -1555,21 +1593,18 @@ function validCreateResult(data,operation){
   return data.status==='accepted'&&exactFields(data,['operation_id','status','session'])&&exactFields(row,['sid','project','vendor','context_mode','title'])&&typeof row.sid==='string'&&UUID_RE.test(row.sid)&&row.project===operation.project&&row.vendor==='codex'&&row.context_mode==='configured'&&(row.title===null||typeof row.title==='string'&&Array.from(row.title).length<=500);
 }
 function confirmCreate(state,data,generation){
-  if(!validCreateResult(data,state.operation))return false;
-  if(data.status!=='accepted')return false;
-  state.status='accepted';state.message='Сессия создана. Подтвердите выбор ручной проверкой статуса.';
+  if(!validCreateResult(data,state.operation)||data.status!=='accepted')return false;
+  state.status='accepted';state.result={...data.session,title:data.session.title||'Новая сессия'};state.message='Сессия создана. Открыть созданную сессию';
   projectSummaries.delete(state.operation.project);if(!pageActive())return true;renderProjects();
-  const key=chatKey(state.operation.project,data.session.sid);modelDrafts.delete(key);historyData.delete(key);
-  if(selectedProject!==state.operation.project||selectionGeneration!==generation||!availableProjects.has(selectedProject))return true;
-  const row={sid:data.session.sid,title:data.session.title||'Новая сессия',vendor:'codex',status:'unknown',configuredCreated:true};
-  sessionRows=[row,...sessionRows.filter(existing=>existing.sid!==row.sid)];
-  state.selected=true;closeCreateDialog();renderSessions();openChat(row);return true;
+  const row={...state.result,status:'unknown',configuredCreated:true};ingestNavigatorPage(row.project,[row]);syncNavigator();
+  if(selectionGeneration!==generation||createDialogProject!==row.project||createDialogEpoch!==state.dialogIntent||!$('create-dialog').open||!availableProjects.has(row.project))return true;
+  selectedProject=row.project;state.selected=true;closeCreateDialog();openChat(row);return true;
 }
 async function submitCreate(event){if(!pageActive()){event.preventDefault();notice('Панель восстанавливается');return;}
   event.preventDefault();const project=createDialogProject,state=project&&creates.get(project);
-  if(!state||state.inFlight||state.operation||!state.available||project!==selectedProject||state.optionsGeneration!==selectionGeneration||$('create-vendor').value!=='codex')return;
+  if(!state||state.inFlight||state.operation||!state.available||!availableProjects.has(project)||state.optionsEpoch!==createDialogEpoch||$('create-vendor').value!=='codex')return;
   state.operation=Object.freeze({project,operation_id:crypto.randomUUID(),context_mode:'configured',provider_id:'codex'});
-  state.generation=selectionGeneration;state.auth=chatAuthGeneration;state.inFlight=true;state.status='sending';state.message='Создаём сессию…';syncCreateControls();
+  state.generation=selectionGeneration;state.dialogIntent=createDialogEpoch;state.auth=chatAuthGeneration;state.inFlight=true;state.status='sending';state.message='Создаём сессию…';syncCreateControls();
   try{let data;try{data=await api('/api/session-create',state.operation,undefined,()=>state.auth===chatAuthGeneration);}catch(err){if(err.stale)return;if(err.data?.status==='delivery_unknown')data=err.data;else if(['invalid_request','forbidden','stale'].includes(err.code)){if(state.auth===chatAuthGeneration){state.operation=null;state.status='refused';state.message='Создание отклонено. Обновите параметры перед новой попыткой.';}return;}else throw err;}
     if(state.auth!==chatAuthGeneration)return;
     if(!confirmCreate(state,data,state.generation)){state.status='delivery_unknown';state.message='Создание не подтверждено. Проверить статус';}
@@ -2081,7 +2116,7 @@ $('tab-devbus').addEventListener('click',()=>showTab('devbus'));
 $('tab-limits').addEventListener('click',()=>showTab('limits'));
 $('project-sort').addEventListener('change',()=>{projectSort=$('project-sort').value==='activity'?'activity':'count';try{localStorage.setItem('project-sort',projectSort);}catch(_){}renderProjects();});
 $('projects-refresh').addEventListener('click',loadProjects);
-$('sessions-more').addEventListener('click',()=>{if(sessionsHaveMore)loadSessionList(sessionPage+1,true);});
+$('sessions-more').addEventListener('click',()=>{if(navigatorView.more)loadNavigatorProject(navigatorView.page+1);});
 $('chat-refresh').addEventListener('click',()=>loadHistory(false,true));
 $('history-retry').addEventListener('click',()=>loadHistory(false,true));
 $('history-new').addEventListener('click',()=>{if(activeSelection()){initialScrollTarget=null;scrollToDocumentBottom();}});

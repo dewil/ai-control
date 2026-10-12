@@ -175,3 +175,32 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 #chat-panel{margin-top:8px}
 .toolbar{margin-bottom:6px}
 @media(max-width:600px){.participation-row{align-items:flex-start}.participation-row-content{flex-basis:100%}.participation-actions{align-self:flex-start}}
+/* INV-USN-04..06: one movable navigation host, independent desktop scroll. */
+#sessions-panel{display:block;min-width:0}
+#navigator-desktop,#session-navigator{min-width:0}
+#session-navigator{padding:8px;background:#1d1d20;border:1px solid #38383e;border-radius:6px;overflow-wrap:anywhere}
+#navigator-heading{font-size:16px;margin:4px 0 8px}
+#navigator-list{list-style:none;padding:0;margin:8px 0;display:grid;gap:4px;overflow-anchor:none}
+.navigator-filters,.navigator-tools{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0}
+#session-navigator button{min-height:44px;min-width:44px;max-width:100%;padding:4px 7px;font-size:12px}
+.navigator-filters button[aria-pressed=true]{border-color:#a5afff;background:#353541}
+.navigator-row{display:flex;align-items:flex-start;gap:4px;border:1px solid #414148;border-radius:5px;padding:4px;min-width:0;overflow-anchor:none}
+.navigator-content{display:flex;flex:1;min-width:0;flex-direction:column;gap:2px}
+.navigator-primary{width:100%;text-align:left;white-space:normal;overflow-wrap:anywhere;border:0;background:transparent;line-height:1.3}
+.navigator-content>.meta{font-size:11px}
+.navigator-badges{display:flex;flex-wrap:wrap;align-items:center;gap:3px;min-width:0;font-size:11px}
+.navigator-badges .participation-badge{font-size:11px;padding:1px 4px}
+.navigator-menu{position:relative;flex:none}
+.navigator-actions{position:absolute;z-index:3;right:0;top:44px;width:180px;padding:4px;border:1px solid #60606b;background:#252529;border-radius:5px;box-shadow:0 4px 12px #0008}
+.navigator-actions button{width:100%;text-align:left}
+#navigator-dialog{box-sizing:border-box;width:calc(100vw - 24px);max-width:480px;max-height:calc(100dvh - 32px);padding:0;border:1px solid #60606b;border-radius:7px;background:#1d1d20;color:inherit;overflow:auto;overscroll-behavior:contain}
+#navigator-dialog::backdrop{background:#0009}
+#navigator-dialog #session-navigator{border:0}
+#navigator-open{margin:0 0 8px}
+#navigator-desktop:empty{display:none}
+@media(min-width:1024px){
+  #sessions-panel{display:grid;grid-template-columns:300px minmax(0,1fr);align-items:start;gap:16px}
+  #navigator-open,#navigator-close{display:none}
+  #navigator-desktop{position:sticky;top:8px;max-height:calc(100dvh - 16px);overflow-y:auto;overscroll-behavior:contain;overflow-anchor:none}
+  #chat-panel{margin-top:0}
+}
