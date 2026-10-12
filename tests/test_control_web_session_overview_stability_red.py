@@ -208,6 +208,31 @@ class SessionOverviewBrowserRed(unittest.TestCase):
         self.assertNotIn('Synthetic final witness', body)
         self.assertEqual(self.posts(), [], 'Opening overview cards performs no native answer POST')
 
+    def test_attention_priority_excludes_fresh_ready_row_from_review_count(self):
+        # INV-SOV-GROUPS: a high-priority attention row belongs to one group and not the ready count.
+        row = overview_row(8, 'counter', SID, 'Ready with question', activity='idle',
+            waits=['question'],
+            questions=[dict(interaction_id=s.HANDLE, state='actionable', blocking=True)],
+            result=completed_result('counter-ready'))
+        self.set_overview_rows([row])
+        self.page.clock.install()
+        self.select()
+        self.participation_ready()
+        self.until(lambda: self.page.get_by_text('Ready with question', exact=True).count() == 1,
+                   'Attention row with a fresh result must remain visible')
+        body = self.page.locator('body').inner_text()
+        summary = next((line for line in body.splitlines()
+                        if line.startswith('Наблюдается: Сессии:')), '')
+        self.assertIn('требуется внимание 1', summary)
+        self.assertIn('ответы 0', summary,
+                      'Only rows assigned to the review group contribute to its ready count')
+        self.assertEqual(self.page.get_by_text('Нужно участие', exact=True).count(), 1)
+        self.assertEqual(self.page.get_by_text('Готово к проверке', exact=True).count(), 0,
+                         'No ready review group exists when the only ready row needs attention')
+        self.assertEqual(self.page.get_by_text('Ready with question', exact=True).count(), 1,
+                         'The priority row is rendered once')
+        self.assertEqual(self.posts(), [])
+
     def test_loaded_completed_unload_stays_stale_active_supersedes_and_unload_does_not_resurrect(self):
         # INV-SOV-LIFECYCLE: live, last-known, and active-after-completion are distinct.
         sid = '55555555-5555-4555-8555-555555555555'
