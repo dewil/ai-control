@@ -6,7 +6,14 @@ from playwright.sync_api import expect
 
 def session_navigator(page):
     """Return the one public session list, opening its mobile drawer if needed."""
-    rows = page.get_by_role('listbox', name='Сессии', exact=True)
+    rows = page.get_by_role('list', name='Сессии', exact=True).or_(
+        page.get_by_role('listbox', name='Сессии', exact=True))
+    project_filter = page.get_by_role('combobox', name='Проект', exact=True)
+    # A desktop sidebar can be visible before any rows load. Its empty list is
+    # still the navigator; do not mistake it for a closed mobile drawer.
+    if project_filter.is_visible():
+        expect(rows).to_have_count(1)
+        return rows
     if not rows.is_visible():
         dialog = page.get_by_role('dialog', name='Сессии', exact=True)
         if not dialog.is_visible():
@@ -15,6 +22,7 @@ def session_navigator(page):
             expect(trigger).to_be_visible()
             trigger.click()
         expect(dialog).to_be_visible()
+    expect(rows).to_have_count(1)
     expect(rows).to_be_visible()
     return rows
 
