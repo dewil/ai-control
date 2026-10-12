@@ -87,27 +87,19 @@ class AllWindowMarkersBlind(unittest.TestCase):
         expect(scale).to_have_count(1)
         track = bar.bounding_box()
         endpoints = scale.evaluate('''scale => {
-          const text = scale.textContent || '', out = {};
-          const patterns = {start: /(^|\\s)0(?=\\s|$)/g,
-                            end: /(^|\\s)7(?=\\s*(?:дней|дн\\b))/ig};
-          const walker = document.createTreeWalker(scale, NodeFilter.SHOW_TEXT);
-          while (walker.nextNode()) {
-            const node = walker.currentNode, value = node.nodeValue || '';
-            for (const [name, pattern] of Object.entries(patterns)) {
-              pattern.lastIndex = 0;
-              const match = pattern.exec(value);
-              if (!match) continue;
-              const start = match.index + (match[1] ? match[1].length : 0);
-              const range = document.createRange();
-              range.setStart(node, start); range.setEnd(node, start + 1);
-              const box = range.getBoundingClientRect();
-              out[name] = {center: box.left + box.width/2};
-            }
-          }
-          return out;
+          const leaves = [...scale.querySelectorAll('*')].filter(e => !e.children.length);
+          const label = (pattern) => {
+            const el = leaves.find(e => pattern.test((e.textContent || '').trim()));
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return {center: r.left + r.width/2};
+          };
+          return {start: label(/^0$/), end: label(/^7\\s*(?:дней|дн)$/i)};
         }''')
         self.assertIn('start', endpoints, 'Weekly scale must label its zero endpoint')
         self.assertIn('end', endpoints, 'Weekly scale must label its seven-day endpoint')
+        self.assertIsNotNone(endpoints['start'], 'Zero endpoint must be an individual scale label')
+        self.assertIsNotNone(endpoints['end'], 'Seven-day endpoint must be an individual scale label')
         self.assertAlmostEqual(endpoints['start']['center'], track['x'], delta=3)
         self.assertAlmostEqual(endpoints['end']['center'], track['x'] + track['width'], delta=3)
         expect(card.get_by_text(NORMAL, exact=True)).to_be_visible()
