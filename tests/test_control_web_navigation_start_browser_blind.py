@@ -2,11 +2,11 @@
 from copy import deepcopy
 import json
 import re
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit,parse_qs
 import uuid
 import unittest
 from playwright.sync_api import expect
-from control_browser_helpers import choose_project,project_is_selected
+from control_browser_helpers import choose_project,project_is_selected,session_navigator
 import live_sse_blind_support as live
 import native_queue_blind_support as q
 import navigation_start_blind_support as s
@@ -16,11 +16,14 @@ START=re.compile(r'Запустить.*очеред',re.I)
 CONFIRM=re.compile(r'^(Подтвердить|Запустить|Запустить из очереди|Да, запустить)$',re.I)
 PIN=re.compile(r'^Закрепить(?: сессию| чат)?$',re.I)
 UNPIN=re.compile(r'Открепить|Удалить закрепление',re.I)
+PIN_SID_A='99999999-9999-4999-8999-999999999999'
+PIN_SID_B='88888888-8888-4888-8888-888888888888'
+PIN_SID_C='77777777-7777-4777-8777-777777777777'
 PINS_ROUTE=re.compile(r'/api/session-pins(?:\?.*)?$')
 
 class NavigationBackend(core.BrowserQueueBackend):
     def __init__(self):
-        super().__init__();self.pin_rows=[s.pin_item(),s.pin_item(q.OTHER,'other',q.OTHER,'Pinned synthetic B')]
+        super().__init__();self.pin_rows=[s.pin_item(sid=PIN_SID_A),s.pin_item(q.OTHER,'other',PIN_SID_B,'Pinned synthetic B')]
         self.nav_calls=[];self.start_state='started';self.start_support=True;self.start_receipts={};self.start_receipt_scopes={};self.blocked_queue_ids={}
     def session_projects(self):return dict(projects=[dict(name='demo'),dict(name='other')])
     def session_project_summary(self):
@@ -67,12 +70,27 @@ class NavigationStartBrowserBlind(unittest.TestCase):
         self.assertEqual(button.count(),1,'Selected idle native row needs separate queue-start action')
         return button
     def pins_title(self):
-        title=self.page.get_by_text('Закреплённые',exact=True).first
-        self.assertEqual(title.count(),1,'Global compact pins block missing');expect(title).to_be_visible();return title
+        # Mobile uses the navigator trigger, not a second visible pinned list.
+        title=self.page.get_by_role('button',name=re.compile(r'^Закреплённые'))
+        if title.is_visible(): return title
+        trigger=self.page.get_by_role('button',name='Открыть список сессий',exact=True)
+        expect(trigger).to_be_visible(); return trigger
     def pin_block(self):
-        title=self.pins_title()
-        block=title.locator('xpath=ancestor::*[self::details or self::section or @role="region"][1]')
-        self.assertEqual(block.count(),1,'Pins need a bounded accessible block container');return block
+        block=session_navigator(self.page)
+        project=self.page.get_by_role('combobox',name='Проект',exact=True)
+        if project.input_value()!=project.locator('option').filter(has_text='Все проекты').get_attribute('value'):
+            project.select_option(label='Все проекты')
+        pinned=self.page.get_by_role('button',name=re.compile(r'^Закреплённые'))
+        if pinned.get_attribute('aria-pressed')!='true': pinned.click()
+        self.page.get_by_role('button',name=re.compile(r'^(?:Обновить список|Новые:\s*\d+)$')).click()
+        return block
+    def pin_row(self,title):
+        block=self.pin_block()
+        return block.get_by_role('listitem').or_(block.get_by_role('option')).filter(has_text=title)
+    def unpin_action(self,title):
+        row=self.pin_row(title)
+        row.get_by_role('button',name=re.compile('Действия|Меню|⋯')).click()
+        return self.page.get_by_role('menuitem',name=UNPIN).or_(self.page.get_by_role('button',name=UNPIN)).first
     def dialog(self):
         self.start_button().click();dialog=self.page.get_by_role('dialog');expect(dialog).to_be_visible()
         self.assertEqual(dialog.get_attribute('aria-modal'),'true')
@@ -83,30 +101,35 @@ class NavigationStartBrowserBlind(unittest.TestCase):
         self.page.evaluate("Object.defineProperty(document,'visibilityState',{configurable:true,get:()=> 'visible'});document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('pageshow'))")
 
     def test_pins_global_cross_project_reload_saved_title_and_compact_collapse(self):
-        # INV-PIN-01 INV-PIN-07 INV-PIN-08
-        self.select();block=self.pin_block()
-        for text in ['Pinned synthetic A','Pinned synthetic B']:expect(block.get_by_text(text,exact=True)).to_be_visible()
-        choose_project(self.page,'other');expect(block.get_by_text('Pinned synthetic A',exact=True)).to_be_visible()
-        self.page.reload();self.page.get_by_role('button',name='Сессии',exact=True).or_(self.page.get_by_role('tab',name='Сессии',exact=True)).click()
-        block=self.pin_block();expect(block.get_by_text('Pinned synthetic B',exact=True)).to_be_visible()
+        # INV-PIN01/07/08 retained; old separate details collapse superseded by INV-USN05/06.
+        self.select(); block=self.pin_block()
+        for text in ['Pinned synthetic A','Pinned synthetic B']: expect(block.get_by_text(text,exact=True)).to_be_visible()
+        choose_project(self.page,'other')
+        expect(block.get_by_text('Pinned synthetic A',exact=True)).to_have_count(0)
+        block=self.pin_block(); expect(block.get_by_text('Pinned synthetic A',exact=True)).to_be_visible()
+        self.page.reload(); self.page.get_by_role('button',name='Сессии',exact=True).or_(self.page.get_by_role('tab',name='Сессии',exact=True)).click()
+        block=self.pin_block(); expect(block.get_by_text('Pinned synthetic B',exact=True)).to_be_visible()
         for width in [320,360]:
-            self.page.set_viewport_size(dict(width=width,height=900));box=block.bounding_box()
-            self.assertIsNotNone(box);self.assertLessEqual(box['x']+box['width'],width+1);self.assertGreaterEqual(box['x'],-1)
-            self.assertLessEqual(box['height'],260,'Two compact pinned rows consume excessive phone height')
-            toggle=block.locator('summary').or_(block.get_by_role('button',name=re.compile('Закреплённые',re.I))).first
-            self.assertEqual(toggle.count(),1,'Pins require persistent collapse toggle');toggle.click();expect(self.pins_title()).to_be_visible();toggle.click()
-        block.get_by_text('Pinned synthetic B',exact=True).click()
-        self.assertTrue(project_is_selected(self.page,'other'),'Pin must navigate to its own project')
+            self.page.set_viewport_size(dict(width=width,height=900)); box=block.bounding_box()
+            self.assertIsNotNone(box); self.assertLessEqual(box['x']+box['width'],width+1); self.assertGreaterEqual(box['x'],-1)
+            self.assertLessEqual(box['height'],260)
+            dialog=self.page.get_by_role('dialog',name='Сессии',exact=True)
+            dialog.get_by_role('button',name='Закрыть список сессий',exact=True).click()
+            expect(dialog).not_to_be_visible(); expect(self.pins_title()).to_be_visible()
+            block=self.pin_block()
+        block.get_by_role('button',name='Открыть сессию Pinned synthetic B',exact=True).click()
+        query=parse_qs(urlsplit(self.page.url).query)
+        self.assertEqual(query.get('project'),['other']); self.assertEqual(query.get('sid'),[PIN_SID_B])
         self.assertEqual(self.navposts(),[])
 
     def test_unavailable_pin_exports_generic_label_and_can_unpin(self):
         # INV-PIN-04 INV-PIN-05 INV-PIN-08
         self.backend.pin_rows=[s.pin_item(available=False)];self.select();block=self.pin_block()
-        expect(block.get_by_text('Недоступная сессия',exact=True)).to_be_visible()
+        expect(self.pin_row('Недоступная сессия')).to_be_visible()
         self.assertNotIn(live.SID,block.inner_text());self.assertNotIn('demo',block.inner_text())
-        button=block.get_by_role('button',name=UNPIN);self.assertEqual(button.count(),1);button.click()
+        button=self.unpin_action('Недоступная сессия'); button.click()
         self.until(lambda:any(call[0]=='unpin' for call in self.backend.nav_calls))
-        expect(block.get_by_text('Недоступная сессия',exact=True)).to_have_count(0)
+        expect(block.get_by_role('listitem').or_(block.get_by_role('option')).filter(has_text='Недоступная сессия')).to_have_count(0)
         self.assertEqual([call for call in self.backend.nav_calls if call[0]=='unpin'],[('unpin','owner',q.MID)])
         self.assertEqual(len(self.navposts()),1)
 
@@ -116,14 +139,16 @@ class NavigationStartBrowserBlind(unittest.TestCase):
         self.select();self.until(lambda:len(held)==1)
         composer=self.page.locator('textarea');composer.fill('Unsent navigation draft');composer.focus()
         held[0].fulfill(status=200,json=dict(schema=1,items=deepcopy(self.backend.pin_rows)))
-        block=self.pin_block();expect(block.get_by_text('Pinned synthetic A',exact=True)).to_be_visible()
-        self.assertEqual(composer.input_value(),'Unsent navigation draft');self.assertTrue(composer.evaluate('e=>e===document.activeElement'))
+        self.page.wait_for_timeout(80)
+        self.assertEqual(composer.input_value(),'Unsent navigation draft'); self.assertTrue(composer.evaluate('e=>e===document.activeElement'))
+        block=self.pin_block(); expect(block.get_by_text('Pinned synthetic A',exact=True)).to_be_visible()
         self.page.unroute(PINS_ROUTE);self.page.route(PINS_ROUTE,lambda route:held.append(route))
         self.visible();self.until(lambda:len(held)>=2)
-        block.get_by_text('Pinned synthetic A',exact=True).locator('xpath=ancestor::*[.//button][1]').get_by_role('button',name=UNPIN).click()
+        self.unpin_action('Pinned synthetic A').click()
         self.until(lambda:any(call[0]=='unpin' for call in self.backend.nav_calls))
-        held[1].fulfill(status=200,json=dict(schema=1,items=[s.pin_item()]))
-        self.page.wait_for_timeout(100);expect(self.page.get_by_text('Pinned synthetic A',exact=True)).to_have_count(0)
+        held[1].fulfill(status=200,json=dict(schema=1,items=[s.pin_item(sid=PIN_SID_A)]))
+        self.page.wait_for_timeout(100); self.pin_block()
+        expect(self.page.get_by_text('Pinned synthetic A',exact=True)).to_have_count(0)
         self.assertEqual(composer.input_value(),'Unsent navigation draft')
 
     def test_pin_from_current_selection_uses_exact_body_and_preserves_draft(self):
@@ -135,7 +160,8 @@ class NavigationStartBrowserBlind(unittest.TestCase):
         posts=self.navposts();self.assertEqual(len(posts),1)
         body=json.loads(posts[0][2]);self.assertEqual(body,dict(project='demo',sid=live.SID))
         self.assertEqual(composer.input_value(),'Draft before pin')
-        expect(self.pin_block().get_by_text('New pinned synthetic',exact=True)).to_be_visible()
+        # Current authorized page title outranks the saved pin snapshot label.
+        expect(self.pin_block().get_by_text('LIVE synthetic A',exact=True)).to_be_visible()
 
     def test_current_native_confirmation_uuid_only_on_confirm_doubleclick_one_post_no_bubble(self):
         # INV-QSTART-02 INV-QSTART-07
@@ -164,7 +190,7 @@ class NavigationStartBrowserBlind(unittest.TestCase):
         self.assertEqual(self.navposts(),[])
         dialog=self.dialog();dialog.get_by_role('button',name=CONFIRM).click()
         self.until(lambda:len([call for call in self.backend.nav_calls if call[0]=='start'])==1)
-        expect(self.page.get_by_text(re.compile('неизвест|не подтверж|native|родн',re.I)).first).to_be_visible()
+        expect(self.page.get_by_role('status').filter(has_text='Доставка команды запуска неизвестна')).to_be_visible()
         self.assertEqual(self.start_button().is_enabled(),False,'Unknown qid must not offer another start')
         checks=self.page.get_by_role('button',name=re.compile('Проверить.*статус|Обновить.*статус',re.I))
         if checks.count():checks.first.click()
@@ -187,20 +213,25 @@ class NavigationStartBrowserBlind(unittest.TestCase):
         self.page.wait_for_timeout(100);expect(self.page.get_by_text('Late private pin after logout',exact=True)).to_have_count(0)
 
     def test_pin_refresh_preserves_reader_node_and_scroll_anchor(self):
-        # INV-PIN-08 INV-QSTART-07
-        self.select();self.pins_title()
+        # Desktop reader/sidebar coexistence; background pins become pending, not live insertions.
+        self.page.set_viewport_size(dict(width=1280,height=900))
+        self.select(); self.pin_block()
         history=live.history('Reader synthetic first')
         history['turns'][0]['items']=[dict(id='reader-'+str(i),role='assistant',text='Reader synthetic '+str(i)+'\n'+'long line\n'*12,
             truncated=False,timestamp=1770000000+i,time_precision='item') for i in range(24)]
-        self.backend.value=history;self.fixture.transport.emit(live.snapshot(2,value=history))
-        anchor=self.page.get_by_text(history['turns'][0]['items'][10]['text'],exact=True);expect(anchor).to_have_count(1)
-        anchor.evaluate("e=>{e.scrollIntoView({block:'start'});window.pinnedReaderNode=e}")
+        self.backend.value=history; self.fixture.transport.emit(live.snapshot(2,value=history))
+        self.page.get_by_role('button',name='К последним сообщениям',exact=True).click()
+        anchor=self.page.get_by_text(history['turns'][0]['items'][10]['text'],exact=True); expect(anchor).to_have_count(1)
         self.page.locator('textarea').fill('Reader retained unsent draft')
-        anchor.evaluate("e=>e.scrollIntoView({block:'start'})");before=anchor.bounding_box()['y']
-        self.backend.pin_rows.insert(0,s.pin_item(q.ACTION,'demo',live.THIRD,'New asynchronous pin'))
-        self.visible();expect(self.page.get_by_text('New asynchronous pin',exact=True)).to_have_count(1)
-        self.assertTrue(anchor.evaluate('e=>e===window.pinnedReaderNode'),'Pin refresh replaced reader node')
-        self.assertLessEqual(abs(anchor.bounding_box()['y']-before),8,'Pin refresh moved reader anchor')
+        anchor.evaluate("e=>{e.scrollIntoView({block:'start'});window.pinnedReaderNode=e}"); before=anchor.bounding_box()['y']
+        self.backend.pin_rows.insert(0,s.pin_item(q.ACTION,'demo',PIN_SID_C,'New asynchronous pin'))
+        self.visible(); expect(self.page.get_by_role('button',name=re.compile(r'^Новые:\s*1'))).to_be_visible()
+        self.assertTrue(anchor.evaluate('e=>e===window.pinnedReaderNode'))
+        self.assertLessEqual(abs(anchor.bounding_box()['y']-before),8)
+        self.page.get_by_role('button',name=re.compile(r'^(?:Обновить список|Новые:\s*\d+)$')).click()
+        expect(self.page.get_by_text('New asynchronous pin',exact=True)).to_have_count(1)
+        self.assertTrue(anchor.evaluate('e=>e===window.pinnedReaderNode'))
+        self.assertLessEqual(abs(anchor.bounding_box()['y']-before),8)
         self.assertEqual(self.page.locator('textarea').input_value(),'Reader retained unsent draft')
 
     def test_late_start_ACK_cannot_touch_other_selected_session(self):
@@ -208,6 +239,7 @@ class NavigationStartBrowserBlind(unittest.TestCase):
         self.select();held=[];self.page.route('**/api/session-queue-start',lambda route:held.append(route))
         self.dialog().get_by_role('button',name=CONFIRM).click();self.until(lambda:len(held)==1)
         body=held[0].request.post_data_json
+        session_navigator(self.page)
         self.page.get_by_role('button',name='LIVE synthetic B',exact=False).click()
         expect(self.page.get_by_text('Queue browser B history',exact=True)).to_have_count(1)
         self.page.locator('textarea').fill('B retained draft')
