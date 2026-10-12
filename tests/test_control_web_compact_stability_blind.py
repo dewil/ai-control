@@ -6,6 +6,7 @@ import unittest
 
 from playwright.sync_api import expect
 from unittest.mock import patch
+from control_browser_helpers import project_is_selected
 
 import live_sse_blind_support as live
 import participation_blind_support as part
@@ -174,6 +175,36 @@ class CompactOverviewBrowserBlind(unittest.TestCase):
         self.assertLessEqual(abs(neighbor.bounding_box()['y']-neighbor_y), 3,
                              'when the anchor disappears, the surviving neighbor was not retained')
 
+    def test_CUI03_anchor_moving_to_collapsed_other_falls_back_to_visible_neighbor(self):
+        self.page.clock.install()
+        base = [attention.row(i+1, f'{i+10:08d}-0000-4000-8000-{i+10:012d}',
+            f'Group move row {i:02d}', activity='active', running='confirmed') for i in range(28)]
+        self.backend.overview['rows'] = base
+        self.open_panel()
+        anchor = self.page.get_by_text('Group move row 17', exact=True)
+        neighbor = self.page.get_by_text('Group move row 18', exact=True)
+        self.place_visible_anchor(anchor)
+        expect(neighbor).to_be_visible()
+        neighbor_y = neighbor.bounding_box()['y']
+
+        changed = [deepcopy(row) for row in base]
+        moved = changed[17]
+        moved['activity'] = 'idle'
+        moved['running'] = 'unconfirmed'
+        with_rows(self.backend, changed)
+        self.page.clock.fast_forward(6000)
+        self.until(lambda:self.page.locator('details.participation-other .participation-row').filter(
+            has_text='Group move row 17').count() == 1)
+
+        other = self.page.locator('details.participation-other')
+        expect(other).to_have_count(1)
+        self.assertFalse(other.evaluate('el=>el.open'), 'automatic group transition opened Other disclosure')
+        self.assertEqual(anchor.count(), 1, 'moved session remains represented in collapsed Other')
+        self.assertFalse(anchor.is_visible(), 'collapsed Other session must not be treated as a visible anchor')
+        expect(neighbor).to_be_visible()
+        self.assertLessEqual(abs(neighbor.bounding_box()['y']-neighbor_y), 3,
+                             'visible reader position did not fall back when anchor moved into collapsed Other')
+
 
 class CompactPinsBrowserBlind(unittest.TestCase):
     """Pins refresh uses the existing synthetic public endpoint fixture."""
@@ -238,6 +269,7 @@ class CompactProjectSummaryBrowserBlind(unittest.TestCase):
         expect(self.tile('high')).to_be_visible()
         loww_tile = self.tile('loww')
         loww_before = loww_tile.bounding_box()
+        loww_before_area = loww_before['width']*loww_before['height']
 
         # Change an existing project's count enough to reflow the expanded
         # mobile cloud above the chat reader.
@@ -269,8 +301,12 @@ class CompactProjectSummaryBrowserBlind(unittest.TestCase):
         held[0].fulfill(status=200, json={'projects': rows})
         self.page.unroute('**/api/session-project-summary*')
         expect(reader).to_be_visible()
+        deadline = time.monotonic() + 3
         loww_after = loww_tile.bounding_box()
-        loww_grew = loww_after['width']*loww_after['height'] > loww_before['width']*loww_before['height']
+        while loww_after['width']*loww_after['height'] <= loww_before_area and time.monotonic() < deadline:
+            self.page.wait_for_timeout(20)
+            loww_after = loww_tile.bounding_box()
+        loww_grew = loww_after['width']*loww_after['height'] > loww_before_area
         anchor_delta = abs(reader.bounding_box()['y']-reader_y)
         composer_kept_focus = composer.evaluate('el=>el===document.activeElement')
         draft_kept = composer.input_value() == 'Synthetic project refresh draft'
@@ -286,4 +322,130 @@ class CompactProjectSummaryBrowserBlind(unittest.TestCase):
         self.assertTrue(high_still_selected, 'reflowing the cloud cleared the current project selection')
         self.assertTrue(explicit_selection_works, 'an explicit project selection stopped working after refresh')
         self.assertTrue(no_horizontal_overflow, 'project-summary reflow caused horizontal overflow at 360px')
+
+
+class CompactSelectedChatBrowserBlind(unittest.TestCase):
+    """Overview refresh behavior while a real synthetic chat is selected."""
+    setUpClass = classmethod(pinned.PinnedActivityBrowserBlind.setUpClass.__func__)
+    setUp = pinned.PinnedActivityBrowserBlind.setUp
+    tearDown = pinned.PinnedActivityBrowserBlind.tearDown
+    until = pinned.PinnedActivityBrowserBlind.until
+    select = pinned.PinnedActivityBrowserBlind.select
+
+    def answer_overview(self, route):
+        self.overview_requests += 1
+        route.fulfill(status=200, json=deepcopy(self.overview_value))
+
+    def open_chat(self):
+        self.page.clock.install()
+        self.overview_value = part.overview_dto()
+        self.overview_value['rows'] = [attention.row(1, live.SID, 'LIVE synthetic A',
+            activity='active', running='confirmed')]
+        self.overview_requests = 0
+        self.page.route(re.compile(r'/api/participation-overview(?:\?.*)?$'), self.answer_overview)
+        self.select()
+        self.until(lambda:self.overview_requests > 0)
+        history = item_history()
+        self.backend.value = history
+        self.fixture.transport.emit(live.snapshot(2, value=history))
+        self.anchor = self.page.get_by_text(re.compile('Activity reader 10'))
+        expect(self.anchor).to_be_visible()
+        self.participation_row = self.page.locator('#participation-list .participation-row').filter(
+            has_text='LIVE synthetic A')
+        expect(self.participation_row).to_be_visible()
+
+    def publish_overview(self, rows):
+        previous_calls = self.overview_requests
+        self.overview_value = deepcopy(self.overview_value)
+        self.overview_value['rows'] = deepcopy(rows)
+        self.overview_value['revision'] += 1
+        self.overview_value['generated_at'] += 1
+        self.page.clock.fast_forward(6000)
+        self.until(lambda:self.overview_requests > previous_calls)
+
+    def visible_y(self, locator):
+        expect(locator).to_be_visible()
+        locator.evaluate("e=>e.scrollIntoView({block:'center',behavior:'instant'})")
+        expect(locator).to_be_visible()
+        box = locator.bounding_box()
+        self.assertIsNotNone(box)
+        self.assertGreater(box['y']+box['height'], 0)
+        self.assertLess(box['y'], self.page.viewport_size['height'])
+        return box['y']
+
+    def scroll_gap(self):
+        return self.page.evaluate('document.scrollingElement.scrollHeight-innerHeight-scrollY')
+
+    def follow_bottom(self):
+        controls = self.page.get_by_role('button', name='↓ В конец', exact=True, include_hidden=True)
+        self.assertEqual(controls.count(), 2, 'explicit top-level and menu bottom-follow controls exist')
+        for summary in controls.last.locator('xpath=ancestor::details[not(@open)]/summary').all():
+            summary.click()
+        self.assertTrue(controls.first.is_visible())
+        controls.first.click()
+        self.until(lambda:self.scroll_gap() <= 8)
+
+    def test_CUI03_selected_chat_anchor_survives_overview_insert_remove_and_bottom_follow(self):
+        self.open_chat()
+        history_y = self.visible_y(self.anchor)
+        initial = deepcopy(self.overview_value['rows'])
+        fillers = [attention.row(i+10, f'{i+20:08d}-0000-4000-8000-{i+20:012d}',
+            f'Chat overview insert {i:02d}', activity='active', running='confirmed')
+            for i in range(10)]
+
+        self.publish_overview([*fillers, *initial])
+        expect(self.page.get_by_text('Chat overview insert 00', exact=True)).to_be_visible()
+        expect(self.anchor).to_be_visible()
+        self.assertLessEqual(abs(self.anchor.bounding_box()['y']-history_y), 3,
+                             'overview insertion above selected history moved its anchor')
+        history_y = self.anchor.bounding_box()['y']
+        self.publish_overview(initial)
+        expect(self.page.get_by_text('Chat overview insert 00', exact=True)).to_have_count(0)
+        expect(self.anchor).to_be_visible()
+        self.assertLessEqual(abs(self.anchor.bounding_box()['y']-history_y), 3,
+                             'overview removal above selected history moved its anchor')
+
+        self.follow_bottom()
+        self.assertLessEqual(abs(self.scroll_gap()), 8, 'explicit bottom-follow reaches the document end')
+        self.publish_overview([*fillers, *initial])
+        self.assertLessEqual(abs(self.scroll_gap()), 8,
+                             'overview insertion above selected chat broke explicit bottom-follow')
+        self.publish_overview(initial)
+        self.assertLessEqual(abs(self.scroll_gap()), 8,
+                             'overview removal above selected chat broke explicit bottom-follow')
+
+    def test_CUI02_CUI03_freshness_refresh_and_group_move_preserve_common_open_action(self):
+        self.open_chat()
+        self.page.locator('textarea').fill('Keep synthetic selected-chat draft')
+        row = self.participation_row
+        open_chat = row.get_by_role('button', name='Открыть сессию', exact=True)
+        expect(open_chat).to_be_visible()
+        open_chat.focus()
+        row.evaluate('e=>window.selectedChatParticipationRow=e')
+        open_chat.evaluate('e=>window.selectedChatOpenAction=e')
+        baseline_row = deepcopy(self.overview_value['rows'][0])
+
+        refreshed = deepcopy(baseline_row)
+        refreshed['freshness']['observed_at'] += 1
+        self.publish_overview([refreshed])
+        self.assertTrue(row.evaluate('e=>e.isConnected && e===window.selectedChatParticipationRow'),
+                        'freshness-only observation replaced the unchanged visible session row')
+        self.assertTrue(open_chat.evaluate('e=>e.isConnected && e===window.selectedChatOpenAction && e===document.activeElement'),
+                        'freshness-only observation replaced or blurred the common open-session action')
+
+        waiting = deepcopy(refreshed)
+        waiting['waits'] = ['question']
+        waiting['questions'] = [dict(interaction_id=part.HANDLE, state='actionable', blocking=True)]
+        self.publish_overview([waiting])
+        self.assertTrue(row.evaluate('e=>e.isConnected && e===window.selectedChatParticipationRow'),
+                        'moving the row from working to attention replaced its DOM node')
+        self.assertTrue(open_chat.evaluate('e=>e.isConnected && e===window.selectedChatOpenAction && e===document.activeElement'),
+                        'group transition replaced or blurred the common open-session action')
+        heading = row.evaluate("""el=>{let n=el.previousElementSibling;
+            while(n&&n.tagName!=='H3')n=n.previousElementSibling;return n?.textContent.trim()}""")
+        self.assertEqual(heading, 'Нужно участие', 'new question moves the selected session into attention')
+        self.assertEqual(self.page.locator('textarea').input_value(), 'Keep synthetic selected-chat draft')
+        self.assertTrue(project_is_selected(self.page, 'demo'), 'overview refresh changed the selected project')
+        expect(self.page.get_by_role('heading', name='LIVE synthetic A', exact=True)).to_be_visible()
+        expect(self.anchor).to_be_visible()
 
