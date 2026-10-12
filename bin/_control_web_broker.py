@@ -424,7 +424,7 @@ class DevbusRuntime:
         async def setup():
             if self._stopping.is_set():
                 return
-            self._projection = self._projection_factory(secrets=(config.token,) if config.token else ())
+            self._projection = self._projection_factory(secrets=tuple(secret for secret in (config.token, config.password) if secret))
             if self._stopping.is_set():
                 return
             self._observer = self._observer_factory(self._projection, lambda: self._connect_factory(config))

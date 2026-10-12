@@ -1,4 +1,4 @@
-"""Optional read-only JetStream transport; no broker provisioning or publishing."""
+"""Read-only observer transport plus the explicitly invoked bounded event bridge."""
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -103,7 +103,7 @@ class _Transport:
             raise BusUnavailable()
 
     async def _info(self):
-        info = await self._js.stream_info(self._config.stream)
+        info = await _raw_stream_info(self._nc, self._config.stream)
         cfg = info.config
         from nats.js.api import RetentionPolicy, StorageType
         required = {'devbus.events.*'} if self._config.stream == 'OBS_EVENTS' else {'devbus.commands.*','devbus.events.*'}
@@ -346,8 +346,54 @@ def _policy_value(value):
 
 
 
-async def _bridge_stream_info(js, name, expected_created, *, source):
-    info = await asyncio.wait_for(js.stream_info(name), 5)
+async def _raw_info(nc, subject, model_name):
+    """Read one fixed JetStream INFO API response without losing its creation epoch."""
+    try:
+        reply = await asyncio.wait_for(nc.request(subject, b'', timeout=5), 5)
+        data = reply.data
+        if type(data) is not bytes or not 0 < len(data) <= 65536:
+            raise ValueError()
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result:
+                    raise ValueError()
+                result[key] = value
+            return result
+        response = json.loads(data.decode('utf-8'), object_pairs_hook=pairs,
+                              parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+        if type(response) is not dict or 'error' in response:
+            raise ValueError()
+        created = response.get('created')
+        created_key = _epoch_key(created)
+        if created_key is None:
+            raise ValueError()
+        from nats.js import api
+        model = getattr(api, model_name)
+        info = model.from_response(response)
+        # nats-py 2.9 intentionally omits created from both dataclasses.
+        info.created = created
+        return info
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        raise BusUnavailable() from None
+
+
+async def _raw_stream_info(nc, stream):
+    if stream not in {'DEVBUS_V1', 'OBS_EVENTS'}:
+        raise BusUnavailable()
+    return await _raw_info(nc, '$JS.API.STREAM.INFO.' + stream, 'StreamInfo')
+
+
+async def _raw_consumer_info(nc, stream, consumer):
+    if stream != 'DEVBUS_V1' or type(consumer) is not str or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', consumer):
+        raise BusUnavailable()
+    return await _raw_info(nc, '$JS.API.CONSUMER.INFO.' + stream + '.' + consumer, 'ConsumerInfo')
+
+
+async def _bridge_stream_info(nc, name, expected_created, *, source):
+    info = await _raw_stream_info(nc, name)
     cfg = info.config
     storage, retention = _policy_value(cfg.storage), _policy_value(cfg.retention)
     if storage not in {'file', 'File'} or retention not in {'limits', 'Limits'} or _stream_created(info) != _epoch_key(expected_created):
@@ -362,8 +408,8 @@ async def _bridge_stream_info(js, name, expected_created, *, source):
     return info
 
 
-async def _bridge_consumer_info(js, source):
-    info = await asyncio.wait_for(js.consumer_info('DEVBUS_V1', source['consumer']), 5)
+async def _bridge_consumer_info(nc, source):
+    info = await _raw_consumer_info(nc, 'DEVBUS_V1', source['consumer'])
     cfg = info.config
     def value(name): return _policy_value(getattr(cfg, name, None))
     if (_epoch_key(getattr(info, 'created', None)) != _epoch_key(source['consumer_created'])
@@ -443,12 +489,12 @@ async def _bridge_session(config, nats_factory, sticky_reason=None):
         src = await _bridge_connect(nats_factory, source_cfg['url'], source_cfg['auth'])
         dst = await _bridge_connect(nats_factory, dest_cfg['url'], {'mode': 'user_password', 'user': dest_cfg['user'], 'password': dest_cfg['password']})
         sjs, djs = src.jetstream(), dst.jetstream()
-        await _bridge_stream_info(sjs, 'DEVBUS_V1', source_cfg['stream_created'], source=True)
-        await _bridge_stream_info(djs, 'OBS_EVENTS', dest_cfg['stream_created'], source=False)
-        cinfo = await _bridge_consumer_info(sjs, source_cfg)
+        await _bridge_stream_info(src, 'DEVBUS_V1', source_cfg['stream_created'], source=True)
+        await _bridge_stream_info(dst, 'OBS_EVENTS', dest_cfg['stream_created'], source=False)
+        cinfo = await _bridge_consumer_info(src, source_cfg)
         ack = getattr(cinfo, 'ack_floor', None)
         ack_floor = getattr(ack, 'stream_seq', 0) or 0
-        sinfo = await _bridge_stream_info(sjs, 'DEVBUS_V1', source_cfg['stream_created'], source=True)
+        sinfo = await _bridge_stream_info(src, 'DEVBUS_V1', source_cfg['stream_created'], source=True)
         first_seq = sinfo.state.first_seq
         pending = (getattr(cinfo, 'num_pending', 0) or 0) + (getattr(cinfo, 'num_ack_pending', 0) or 0)
         reason = 'retention_gap' if type(first_seq) is int and first_seq > ack_floor + 1 else None
@@ -463,9 +509,9 @@ async def _bridge_session(config, nats_factory, sticky_reason=None):
             try:
                 # Recheck the captured server generations before every subsequent batch.
                 if not first_batch:
-                    sinfo = await _bridge_stream_info(sjs, 'DEVBUS_V1', source_cfg['stream_created'], source=True)
-                    cinfo = await _bridge_consumer_info(sjs, source_cfg)
-                    await _bridge_stream_info(djs, 'OBS_EVENTS', dest_cfg['stream_created'], source=False)
+                    sinfo = await _bridge_stream_info(src, 'DEVBUS_V1', source_cfg['stream_created'], source=True)
+                    cinfo = await _bridge_consumer_info(src, source_cfg)
+                    await _bridge_stream_info(dst, 'OBS_EVENTS', dest_cfg['stream_created'], source=False)
                     first_seq = sinfo.state.first_seq
                     ack_floor = getattr(getattr(cinfo, 'ack_floor', None), 'stream_seq', ack_floor)
                     pending = (getattr(cinfo, 'num_pending', 0) or 0) + (getattr(cinfo, 'num_ack_pending', 0) or 0)
@@ -497,19 +543,19 @@ async def _bridge_session(config, nats_factory, sticky_reason=None):
                     raise _BridgeFailure('invalid_event')
                 try:
                     # Epoch fences bracket destination publish and actual SDK ACK.
-                    sinfo = await _bridge_stream_info(sjs, 'DEVBUS_V1', source_cfg['stream_created'], source=True)
-                    await _bridge_consumer_info(sjs, source_cfg)
-                    await _bridge_stream_info(djs, 'OBS_EVENTS', dest_cfg['stream_created'], source=False)
+                    sinfo = await _bridge_stream_info(src, 'DEVBUS_V1', source_cfg['stream_created'], source=True)
+                    await _bridge_consumer_info(src, source_cfg)
+                    await _bridge_stream_info(dst, 'OBS_EVENTS', dest_cfg['stream_created'], source=False)
                     dedupe = hashlib.sha256(source_cfg['stream_created'].encode() + str(sequence).encode() + data).hexdigest()
                     headers = {'Nats-Msg-Id': dedupe}
                     puback = await asyncio.wait_for(djs.publish('devbus.events.' + event['source'], data, headers=headers, timeout=5), 5)
                     if getattr(puback, 'stream', None) != 'OBS_EVENTS':
                         raise RuntimeError('unavailable')
-                    await _bridge_stream_info(sjs, 'DEVBUS_V1', source_cfg['stream_created'], source=True)
-                    await _bridge_consumer_info(sjs, source_cfg)
-                    await _bridge_stream_info(djs, 'OBS_EVENTS', dest_cfg['stream_created'], source=False)
+                    await _bridge_stream_info(src, 'DEVBUS_V1', source_cfg['stream_created'], source=True)
+                    await _bridge_consumer_info(src, source_cfg)
+                    await _bridge_stream_info(dst, 'OBS_EVENTS', dest_cfg['stream_created'], source=False)
                     await asyncio.wait_for(message.ack_sync(timeout=5), 5)
-                    cinfo = await _bridge_consumer_info(sjs, source_cfg)
+                    cinfo = await _bridge_consumer_info(src, source_cfg)
                     ack_floor = getattr(getattr(cinfo, 'ack_floor', None), 'stream_seq', None)
                     pending = (getattr(cinfo, 'num_pending', 0) or 0) + (getattr(cinfo, 'num_ack_pending', 0) or 0)
                     effective_reason = 'retention_gap' if retention_gap else sticky_reason
