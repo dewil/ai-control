@@ -14,6 +14,7 @@ class OverviewNative(s.Native):
         self.reported_user_agent = 'codex/0.161.0 (synthetic)'
         self.malformed_methods = set()
         self.thread_item_entries_override = None
+        self.additive_page_fields = False
         super().__init__(base, root)
 
     def result(self, method, params):
@@ -24,6 +25,8 @@ class OverviewNative(s.Native):
         if method == 'thread/items/list' and self.thread_item_entries_override is not None:
             return {'data': deepcopy(self.thread_item_entries_override), 'nextCursor': None}
         result = super().result(method, params)
+        if self.additive_page_fields and method in ('thread/loaded/list', 'thread/turns/list', 'thread/items/list'):
+            result['unused_metadata'] = {'synthetic': True}
         if method == 'thread/read' and hasattr(self, 'thread_name_override'):
             result['thread']['name'] = self.thread_name_override
         return result
@@ -65,6 +68,26 @@ class SessionOverviewReadNegotiationRed(WireCase):
                 self.assertEqual((row['result']['status'], row['result']['item_id']),
                                  ('completed', 'future-final'))
                 self.assert_read_only()
+
+    def test_future_version_accepts_unconsumed_additive_page_metadata(self):
+        # INV-SOV-READ: require consumed fields, not an exact wrapper around them.
+        self.seed_completed()
+        self.native.additive_page_fields = True
+        self.reconnect_user_agent('codex/9.99.0 (synthetic future)')
+        self.overview()
+        self.wait_for(lambda: 'thread/loaded/list' in self.native.methods(),
+                      'The bounded overview read must start with the loaded-session page', timeout=7)
+        self.assert_read_only()
+        row = self.wait_for(lambda: next((item for item in self.overview().get('rows', [])
+                                          if item['sid'] == SID and item['freshness']['state'] == 'fresh'
+                                          and item['result'] and item['result']['ready']), None),
+                            'Future version plus harmless unused page metadata must still prove a fresh final result',
+                            timeout=8)
+        required = {'thread/loaded/list', 'thread/turns/list', 'thread/items/list'}
+        self.assertTrue(required.issubset(set(self.native.methods())))
+        self.assertEqual((row['result']['status'], row['result']['item_id']),
+                         ('completed', 'future-final'))
+        self.assert_read_only()
 
     def test_one_malformed_read_degrades_only_that_feature_without_mutation(self):
         # INV-SOV-01: unknown consumed shape is partial locally, not a global outage.
