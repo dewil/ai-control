@@ -605,7 +605,7 @@ function renderParticipation(){
   const staleCompletion=row=>row.freshness.state==='stale'&&row.result?.status==='completed'&&row.result.item_id!==null&&!row.result.ready;
   const group=row=>hasAttention(row)?'attention':row.result?.ready||staleCompletion(row)?'review':row.running==='confirmed'&&row.activity==='active'?'working':'other';
   const grouped=new Map(groups.map(([id])=>[id,[]]));for(const row of data.rows)grouped.get(group(row)).push(row);
-  const waitingCount=grouped.get('attention').length,readyCount=data.rows.filter(row=>row.result?.ready).length,workingCount=grouped.get('working').length;
+  const waitingCount=grouped.get('attention').length,readyCount=grouped.get('review').filter(row=>row.result?.ready).length,workingCount=grouped.get('working').length;
   const staleRows=data.rows.some(row=>row.freshness.state!=='fresh');
   const uncertain=data.coverage.partial||data.health!=='fresh'||staleRows;
   $('participation-overview').querySelector('summary').textContent=(uncertain?'Наблюдается: ':'')+'Сессии: требуется внимание '+waitingCount+' · работают '+workingCount+' · ответы '+readyCount;
