@@ -775,6 +775,10 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
                     else:
                         await asyncio.wait_for(written.wait(), 1)
                         self.assertFalse(factory.message.acked.is_set())
+                    # Cancellation writes the final disconnected status. Keep
+                    # both private status constants and the canonical-path
+                    # guard installed until that write has completed.
+                    await self.stop_task(task)
                     return task
                 except BaseException:
                     await self.stop_task(task)
