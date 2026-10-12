@@ -120,9 +120,13 @@ class AttentionPriorityBrowserBlind(unittest.TestCase):
         self.open_panel()
         headings = self.page.locator('#participation-list h3').all_text_contents()
         with self.subTest(contract='priority group headings and order'):
-            self.assertEqual(headings, ['Требуют внимания', 'Ответы готовы', 'Сейчас работают',
-                                        'Активны по Codex'])
-        labels = self.page.locator('#participation-list .participation-row strong').all_text_contents()
+            self.assertEqual(headings, ['Нужно участие', 'Готово к проверке'])
+            other = self.page.locator('#participation-list details.participation-other')
+            self.assertEqual(other.locator('summary').inner_text(), 'Прочие состояния')
+            self.assertFalse(other.evaluate('el=>el.open'), 'Other states stay collapsed by default')
+            self.assertEqual(other.locator('.participation-row .participation-title').all_text_contents(),
+                             ['Confirmed work', 'Active Codex work'])
+        labels = self.page.locator('#participation-list .participation-title').all_text_contents()
         with self.subTest(contract='each row once and source order within groups'):
             self.assertEqual(labels, ['Priority approval and question',
                                       'Nonblocking question in active work', 'Ready answer',
@@ -134,7 +138,7 @@ class AttentionPriorityBrowserBlind(unittest.TestCase):
             self.assertEqual(second.count(), 1)
             self.assertEqual(second.evaluate("""el=>{let n=el.previousElementSibling;
                 while(n&&n.tagName!=='H3')n=n.previousElementSibling;return n?.textContent}"""),
-                'Требуют внимания')
+                'Нужно участие')
 
     def test_INV_APRI02_distinct_badges_native_only_approval_and_bound_question_result_targets(self):
         self.open_panel()
@@ -175,10 +179,10 @@ class AttentionPriorityBrowserBlind(unittest.TestCase):
         self.backend.overview['generated_at'] = 1799990000
         self.open_panel()
         panel = self.page.locator('#participation-overview')
-        summary = panel.locator('summary').inner_text()
+        summary = panel.locator('summary').first.inner_text()
         status = self.page.locator('#participation-status')
         with self.subTest(contract='observed mutually exclusive counters'):
-            self.assertRegex(summary, r'Наблюдается:.*Сессии: требуется внимание\s*2\s*·\s*работают\s*2\s*·\s*ответы\s*1')
+            self.assertRegex(summary, r'Наблюдается:.*Сессии: требуется внимание\s*2\s*·\s*работают\s*0\s*·\s*ответы\s*1')
         with self.subTest(contract='stale and partial are explicit with safe reason labels'):
             expect(status).to_be_visible()
             self.assertIn('Полнота не подтверждена', status.inner_text())
