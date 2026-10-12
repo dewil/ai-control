@@ -912,7 +912,7 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
             status = {
                 "schema": 1, "state": "degraded", "observed_at": now.isoformat().replace("+00:00", "Z"),
                 "source_stream_created": BRIDGE_CREATED, "consumer_created": CONSUMER_CREATED,
-                "ack_floor": 12, "first_seq": 10, "pending": 1, "reason": "unavailable",
+                "ack_floor": 12, "first_seq": 10, "pending": 1, "reason": "retention_gap",
             }
             fixture.write_bytes(canonical(status)); fixture.chmod(0o600)
             snapshot = {
@@ -928,7 +928,8 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((result["coverage"]["first_seq"], result["coverage"]["last_seq"],
                               result["coverage"]["ttl_seconds"], result["coverage"]["max_bytes"]),
                              (31, 47, 86400, 104857600))
-            self.assertEqual(result["coverage"]["issues"], ["replay_incomplete"])
+            self.assertEqual(result["coverage"]["issues"], ["replay_incomplete", "retention_gap"])
+            # Unavailable/stale bridge health maps to disconnected in the outage regression below.
             # A subsequent fresh status must continue to preserve OBS transport state.
             status.update(state="live", observed_at=(now + timedelta(seconds=1)).isoformat().replace("+00:00", "Z"),
                           ack_floor=13, first_seq=10, pending=0, reason=None)
