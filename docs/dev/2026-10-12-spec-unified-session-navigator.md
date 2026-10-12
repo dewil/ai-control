@@ -32,3 +32,5 @@ INV-USN-08: numeric mobile viewport/DOM проверки: ровноодинvisi
 
 ### Дополнительные сценарии RED
 Chat A + draft + reader, project B→C при задержанном ответе; create B/cancel/late success после выбора C; dedup трёх feeds; sampling timestamp не сортирует как activity; stale/pin не повышают authority; revoked project + delayed response + open menu; cap overflow и partial counters; status filter перестаёт соответствовать строке без её удаления; mobile/desktop resize без изменения чата/порядка.
+
+Первичная загрузка: пустой snapshot не фиксируется до первого непустого валидного feed либо завершения всех начальных bounded запросов. Первый пригодный набор показывается сразу; медленный источник не задерживает уже доступные строки. После первой отрисовки новые matching keys идут в pending. При отсутствии данных явно предложить выбрать проект/повторить чтение; не выдавать unknown за «сессий нет». Полного обхода проектов ради All не делать.
