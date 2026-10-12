@@ -240,20 +240,20 @@ UI стабильно сортирует копию items по последне�
 
 
 ## Устойчивый обзор сессий (12.10.2026)
-- INV-SOV-READ: read-only PART/history допускаются по валидным bounded ответам
+- INV-SOV-01: read-only PART/history допускаются по валидным bounded ответам
   и текущим root/SID/context fences; номер версии является диагностикой.
   Неподдержанный read деградирует локально; mutation/callback gates отдельно.
-- INV-SOV-HISTORY: готовность требует свежего completed latest turn и exact
+- INV-SOV-02: готовность требует свежего completed latest turn и exact
   assistant final_item; чтение истории не вызывает resume/start.
-- INV-SOV-CARD: карточка показывает project route ID отдельно от sanitized
+- INV-SOV-03: карточка показывает project route ID отдельно от sanitized
   nonblank session title; запасной title «Сессия <short-sid>», без prompt inference.
-- INV-SOV-LIFECYCLE: bounded cache после unload может показать last-known completed
+- INV-SOV-04: bounded cache после unload может показать last-known completed
   со stale/ready=false, не новую authority. Fresh inProgress заменяет старый
   completion; restart не обещает durable inbox.
-- INV-SOV-GROUPS: «Нужно участие», «Готово к проверке», «В работе» в этом порядке;
+- INV-SOV-05: «Нужно участие», «Готово к проверке», «В работе» в этом порядке;
   прочие состояния свернуты. Stale active не считается текущей работой;
   ready counter считает только fresh ready, last-known явно помечается.
-- INV-SOV-FENCES: права/root/context/generation/once-only не расширяются;
+- INV-SOV-06: права/root/context/generation/once-only не расширяются;
   структурное чтение не дает право отвечать на callback или выполнять mutation.
 Трассируемость: tests/test_control_web_session_overview_stability_red.py,
 tests/test_control_web_participation_projection_blind.py и существующие wire/source

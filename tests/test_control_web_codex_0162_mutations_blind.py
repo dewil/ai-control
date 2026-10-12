@@ -168,6 +168,7 @@ class Codex0162QueueBlind(queue_fixture.QueueModuleCase):
         self.assertNotIn('turn/start', self.rpc.methods())
 
     def test_old_unreviewed_and_drifted_contexts_do_not_reserve_or_dispatch(self):
+        # INV-SOV-06: structural reads never authorize unreviewed mutations.
         # INV-COMPAT-03 INV-COMPAT-04: exact version sets and existing scope fences.
         for version in ('0.160.0', '0.999.0'):
             with self.subTest(version=version):

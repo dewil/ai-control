@@ -51,7 +51,7 @@ class SessionOverviewReadNegotiationRed(WireCase):
                         text='Synthetic final witness')])]
 
     def test_valid_read_shapes_admit_missing_and_future_reported_versions(self):
-        # INV-SOV-READ: valid bounded reads are admitted independently of native_version.
+        # INV-SOV-01: valid bounded reads are admitted independently of native_version.
         self.seed_completed()
         for user_agent, label in ((None, 'missing version'),
                                   ('codex/9.99.0 (synthetic future)', 'future version')):
@@ -67,7 +67,7 @@ class SessionOverviewReadNegotiationRed(WireCase):
                 self.assert_read_only()
 
     def test_one_malformed_read_degrades_only_that_feature_without_mutation(self):
-        # INV-SOV-READ: unknown consumed shape is partial locally, not a global outage.
+        # INV-SOV-01: unknown consumed shape is partial locally, not a global outage.
         self.seed_completed()
         self.native.malformed_methods.add('thread/loaded/list')
         self.overview()
@@ -85,7 +85,7 @@ class SessionOverviewReadNegotiationRed(WireCase):
         self.assert_read_only()
 
     def test_malformed_consumed_thread_name_degrades_fresh_read(self):
-        # INV-SOV-READ: missing/null title is permitted; structured title is an
+        # INV-SOV-01: missing/null title is permitted; structured title is an
         # incompatible consumed shape, not a nameless fresh session.
         self.seed_completed()
         self.wait_for(lambda: self.overview().get('health') == 'fresh',
@@ -99,7 +99,7 @@ class SessionOverviewReadNegotiationRed(WireCase):
         self.assert_read_only()
 
     def test_history_only_in_progress_without_loaded_snapshot_is_not_confirmed(self):
-        # INV-SOV-READ: selected-history proof cannot substitute for fresh loaded-list membership.
+        # INV-SOV-01: selected-history proof cannot substitute for fresh loaded-list membership.
         self.native.status = dict(type='active', activeFlags=[])
         self.native.turns = [dict(id=TURN, status='inProgress', items=[])]
         self.native.malformed_methods.add('thread/loaded/list')
@@ -117,7 +117,7 @@ class SessionOverviewReadNegotiationRed(WireCase):
         self.assert_read_only()
 
     def test_mixed_malformed_final_item_page_never_publishes_fresh_ready(self):
-        # INV-SOV-HISTORY: every consumed item entry needs matching turnId and unique, valid item ID.
+        # INV-SOV-02: every consumed item entry needs matching turnId and unique, valid item ID.
         self.seed_completed()
         warm = self.wait_for(lambda: (value if (row := next((item for item in value.get('rows', [])
             if item['sid'] == SID), None)) and row['freshness']['state'] == 'fresh' and row['result']['ready']
@@ -204,7 +204,7 @@ class SessionOverviewBrowserRed(unittest.TestCase):
         return body[start:stop]
 
     def test_group_priority_title_fallback_stale_copy_and_unique_rows(self):
-        # INV-SOV-CARD/GROUPS: project/title, fallback, priority, stale badge, and unique row placement.
+        # INV-SOV-03 / INV-SOV-05: project/title, fallback, priority, stale badge, and unique row placement.
         # Public project route IDs are ASCII slugs; Unicode belongs in the title field.
         attention = overview_row(1, 'attention', SID, 'Needs attention',
             activity='active', running='confirmed', waits=['approval', 'question'],
@@ -260,7 +260,7 @@ class SessionOverviewBrowserRed(unittest.TestCase):
         self.assertEqual(self.posts(), [], 'Opening overview cards performs no native answer POST')
 
     def test_attention_priority_excludes_fresh_ready_row_from_review_count(self):
-        # INV-SOV-GROUPS: a high-priority attention row belongs to one group and not the ready count.
+        # INV-SOV-05: a high-priority attention row belongs to one group and not the ready count.
         row = overview_row(8, 'counter', SID, 'Ready with question', activity='idle',
             waits=['question'],
             questions=[dict(interaction_id=s.HANDLE, state='actionable', blocking=True)],
@@ -285,7 +285,7 @@ class SessionOverviewBrowserRed(unittest.TestCase):
         self.assertEqual(self.posts(), [])
 
     def test_loaded_completed_unload_stays_stale_active_supersedes_and_unload_does_not_resurrect(self):
-        # INV-SOV-LIFECYCLE: live, last-known, and active-after-completion are distinct.
+        # INV-SOV-04: live, last-known, and active-after-completion are distinct.
         sid = '55555555-5555-4555-8555-555555555555'
         label = 'Bounded session'
         def completed(*, ready, freshness):

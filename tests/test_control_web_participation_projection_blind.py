@@ -59,6 +59,7 @@ class ParticipationProjectionBlind(WireCase):
         self.assert_read_only()
 
     def test_INV_PART_06_latest_completed_last_final_answer_item_is_exact_witness(self):
+        # INV-SOV-02: selected-history completion needs the exact final item.
         # INV-PART-06
         self.native.turns=[dict(id=TURN,status='completed',items=[
             dict(id='first-final',type='agentMessage',phase='final_answer',text='First answer'),
