@@ -132,7 +132,9 @@ class AttentionPriorityBrowserBlind(unittest.TestCase):
             has_text='Nonblocking question in active work')
         with self.subTest(contract='nonblocking open question overrides working classification'):
             self.assertEqual(second.count(), 1)
-            self.assertEqual(second.evaluate("el=>el.previousElementSibling?.textContent"), 'Требуют внимания')
+            self.assertEqual(second.evaluate("""el=>{let n=el.previousElementSibling;
+                while(n&&n.tagName!=='H3')n=n.previousElementSibling;return n?.textContent}"""),
+                'Требуют внимания')
 
     def test_INV_APRI02_distinct_badges_native_only_approval_and_bound_question_result_targets(self):
         self.open_panel()
@@ -202,7 +204,7 @@ class AttentionPriorityBrowserBlind(unittest.TestCase):
         text = self.page.locator('#participation-overview').inner_text()
         with self.subTest(contract='partial empty is not a confirmed empty result'):
             self.assertIn('Список сессий не подтверждён', text)
-            self.assertNotRegex(text, r'требуется внимание\s+0')
+            self.assertRegex(text, r'Наблюдается:.*Сессии: требуется внимание\s*0\s*·\s*работают\s*0\s*·\s*ответы\s*0')
             self.assertIn('Полнота не подтверждена', text)
 
     def test_INV_APRI04_manual_collapse_survives_foreground_overview_refresh(self):
