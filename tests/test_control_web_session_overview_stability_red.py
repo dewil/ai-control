@@ -20,7 +20,10 @@ class OverviewNative(s.Native):
             return {} if self.reported_user_agent is None else {'userAgent': self.reported_user_agent}
         if method in self.malformed_methods:
             return {'data': 'not-a-bounded-list', 'nextCursor': None}
-        return super().result(method, params)
+        result = super().result(method, params)
+        if method == 'thread/read' and hasattr(self, 'thread_name_override'):
+            result['thread']['name'] = self.thread_name_override
+        return result
 
 
 class SessionOverviewReadNegotiationRed(WireCase):
@@ -76,6 +79,20 @@ class SessionOverviewReadNegotiationRed(WireCase):
         self.assertTrue(set(overview['coverage']['reasons']) & {'source_unavailable', 'unsupported'})
         history = self.chat.history('demo', SID)
         self.assertIn('turns', history, 'A malformed overview read must not disable selected history')
+        self.assert_read_only()
+
+    def test_malformed_consumed_thread_name_degrades_fresh_read(self):
+        # INV-SOV-READ: missing/null title is permitted; structured title is an
+        # incompatible consumed shape, not a nameless fresh session.
+        self.seed_completed()
+        self.wait_for(lambda: self.overview().get('health') == 'fresh',
+                      'Warm valid projection must exist before the malformed read', timeout=7)
+        self.native.thread_name_override = {'text': 'not-the-supported-title-shape'}
+        snapshot = self.wait_for(lambda: (value if value.get('health') == 'unavailable' else None)
+                                 if isinstance(value := self.overview(), dict) else None,
+                                 'Malformed consumed name must not publish a fresh fallback row', timeout=8)
+        self.assertTrue(snapshot['coverage']['partial'])
+        self.assertTrue(all(row['freshness']['state'] != 'fresh' for row in snapshot['rows']))
         self.assert_read_only()
 
     def test_history_only_in_progress_without_loaded_snapshot_is_not_confirmed(self):
