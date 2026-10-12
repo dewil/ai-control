@@ -41,3 +41,7 @@ INV-APRI01..04: ожидающие решения и готовые ответы
 
 ## 12.10 — PART0.162.1 admission
 INV-PVER01..03: feature-specificPARTallowlist0.161.0/0.162.1 для sampler/callback/response, без снятияпрочихschema/root/context/once-onlyguards. Непроверенные версии закрыты. Primaryschemas и syntheticreadonly/callbackконтракты проверяются отдельно; installedrealpoolrowsне заменяются browserfixture. Спека docs/dev/2026-10-12-spec-participation-01621.md.
+
+## Unified navigator presentation — 12.10
+INV-USN-01..08 заменяют отдельные видимые participation/pinned/project списки единым snapshot. INV-APRI01..04 сохраняют предикаты, различимые badges и честные counters/coverage; прежний порядок трёх групп не требует live-перестановки строк в новом UI. Статусный фильтр «Внимание» делает ожидающих доступными одним действием. Нативные approval responses по-прежнему отложены.
+Уточнение действующей r25 нормы: sampler/history read проверяются структурно по INV-SOV01; версия остаётся отдельным admission для mutation/callback возможностей. Новая навигация это не меняет.
