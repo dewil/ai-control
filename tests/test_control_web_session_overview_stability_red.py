@@ -88,7 +88,7 @@ class SessionOverviewReadNegotiationRed(WireCase):
         self.wait_for(lambda: self.overview().get('health') == 'fresh',
                       'Warm valid projection must exist before the malformed read', timeout=7)
         self.native.thread_name_override = {'text': 'not-the-supported-title-shape'}
-        snapshot = self.wait_for(lambda: (value if value.get('health') == 'unavailable' else None)
+        snapshot = self.wait_for(lambda: (value if value.get('health') in ('stale', 'unavailable') else None)
                                  if isinstance(value := self.overview(), dict) else None,
                                  'Malformed consumed name must not publish a fresh fallback row', timeout=8)
         self.assertTrue(snapshot['coverage']['partial'])

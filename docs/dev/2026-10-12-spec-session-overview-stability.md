@@ -70,3 +70,11 @@ partial, active unconfirmed до согласованного свежего ч�
 `project` в DTO остаётся идентификатором маршрута по существующему slug-контракту
 ^[A-Za-z0-9_-]{1,32}$; отображается отдельно без изменения auth/routing.
 Non-ASCII проверяется в названии сессии, а не вводит Unicode/пробелы в route ID.
+
+
+Read admission проверяет потребляемые поля, а не запрещает каждое additive
+непотребляемое поле native thread. `id`/canonical `cwd`, `status.type`/bounded
+`activeFlags`, `name` (null/отсутствует либо UTF-8 строка до8192bytes) валидируются
+до публикации. Сбой sampler помечает его старый snapshot stale сразу, сохраняя
+last-known; независимый успешный selected-history proof может оставаться fresh.
+Это не меняет строгую форму typed callbacks и не дает новых reply permissions.

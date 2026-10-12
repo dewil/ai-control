@@ -237,3 +237,25 @@ Schema2 строго проецирует native status/knownwaits и updatedAt;
 UI стабильно сортирует копию items по последней активности, known вышеunknown; compactstatus/time, Moscowtooltip, serverclock-relativeage,15сstale rule. Переиспользуется5сforegroundцикл; focus/readeranchor сохранены.
 
 Трассируемость: tests/test_control_web_pinned_activity_{module,http_broker,browser}_blind.py. Подробности docs/dev/2026-10-11-spec-pinned-activity.md.
+
+
+## Устойчивый обзор сессий (12.10.2026)
+- INV-SOV-READ: read-only PART/history допускаются по валидным bounded ответам
+  и текущим root/SID/context fences; номер версии является диагностикой.
+  Неподдержанный read деградирует локально; mutation/callback gates отдельно.
+- INV-SOV-HISTORY: готовность требует свежего completed latest turn и exact
+  assistant final_item; чтение истории не вызывает resume/start.
+- INV-SOV-CARD: карточка показывает project route ID отдельно от sanitized
+  nonblank session title; запасной title «Сессия <short-sid>», без prompt inference.
+- INV-SOV-LIFECYCLE: bounded cache после unload может показать last-known completed
+  со stale/ready=false, не новую authority. Fresh inProgress заменяет старый
+  completion; restart не обещает durable inbox.
+- INV-SOV-GROUPS: «Нужно участие», «Готово к проверке», «В работе» в этом порядке;
+  прочие состояния свернуты. Stale active не считается текущей работой;
+  ready counter считает только fresh ready, last-known явно помечается.
+- INV-SOV-FENCES: права/root/context/generation/once-only не расширяются;
+  структурное чтение не дает право отвечать на callback или выполнять mutation.
+Трассируемость: tests/test_control_web_session_overview_stability_red.py,
+tests/test_control_web_participation_projection_blind.py и существующие wire/source
+fences. Спека docs/dev/2026-10-12-spec-session-overview-stability.md; installed
+acceptance до поставки обязательна, текущий текст не утверждает ее выполнение.

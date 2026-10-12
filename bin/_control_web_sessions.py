@@ -1191,6 +1191,7 @@ class SessionChat:
             proof['final_item'] = (last['id'] if last is not None
                 and last.get('phase') == 'final_answer' and _identity(last.get('id')) else None)
         name = thread.get('name')
+        _need(name is None or type(name) is str and len(name.encode('utf-8')) <= 8192)
         status = thread.get('status')
         _need(type(status) is dict and status.get('type') in ('active', 'idle', 'notLoaded', 'systemError'))
         flags = status.get('activeFlags', [])
@@ -1298,7 +1299,8 @@ class SessionChat:
             thread, latest = source['thread'], source['latest']
             status = thread.get('status', {})
             activity = {'active':'active', 'idle':'idle', 'notLoaded':'not_loaded', 'systemError':'system_error'}.get(status.get('type'), 'unknown')
-            fresh = 0 <= time.monotonic() - source['at'] <= 15 and (loaded or not source.get('loaded_observation', False))
+            fresh = ((not source.get('loaded_observation', False) or 'source_unavailable' not in self._part_reasons) and
+                0 <= time.monotonic() - source['at'] <= 15 and (loaded or not source.get('loaded_observation', False)))
             if not loaded:
                 activity = 'not_loaded'
             questions = self._part_rows(project, sid, source['root'], context) if loaded and fresh else []
