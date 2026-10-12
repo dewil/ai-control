@@ -75,11 +75,17 @@ class NativeQueueBrowserBlind(unittest.TestCase):
         while not predicate() and time.monotonic()<until:self.page.wait_for_timeout(20)
         self.assertTrue(predicate(),'Expected public queue/transport outcome')
     def select(self):
+        streams_before = self.fixture.transport.streams
         self.page.goto(self.fixture.origin)
         self.page.get_by_role('button',name='Сессии',exact=True).or_(self.page.get_by_role('tab',name='Сессии',exact=True)).click()
         choose_project(self.page,'demo');self.page.get_by_role('button',name='LIVE synthetic A',exact=False).click()
-        expect(self.page.get_by_text('LIVE original synthetic text',exact=True)).to_have_count(1)
-        self.until(lambda:self.fixture.transport.streams>=1)
+        # A fresh browser replays the fixture's existing native SSE frames.
+        # The current streamed A snapshot may replace its initial HTTP text
+        # before this assertion; neither snapshot belongs to another session.
+        original = self.page.get_by_text('LIVE original synthetic text',exact=True)
+        streamed = self.page.get_by_text('Queue browser streamed ready A',exact=True)
+        expect(original.or_(streamed)).to_have_count(1)
+        self.until(lambda:self.fixture.transport.streams > streams_before)
         self.fixture.transport.emit(live.snapshot(value=live.history('Queue browser streamed ready A')))
         expect(self.page.get_by_text('Queue browser streamed ready A',exact=True)).to_have_count(1)
     def send_button(self):return self.page.get_by_role('button',name=SEND)
