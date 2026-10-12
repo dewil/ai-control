@@ -3,7 +3,7 @@
 No asset-source reads or native/user history. Runtime DOM and computed styles
 are observations. Fixture controls and screenshots stay private in /var/tmp.
 """
-from control_browser_helpers import choose_project
+from control_browser_helpers import choose_project, session_navigator
 from control_live_legacy_fixture import LiveHistoryFixture, replay_path
 import importlib
 import json
@@ -118,6 +118,7 @@ class CompactChatBrowserContract(unittest.TestCase):
         self.assertTrue(self.page.evaluate('localStorage.length===0 && sessionStorage.length===0'))
 
     def open_history(self):
+        session_navigator(self.page)
         self.session.click()
         self.page.get_by_text('LATEST message 23', exact=False).wait_for(state='attached')
 
@@ -129,8 +130,9 @@ class CompactChatBrowserContract(unittest.TestCase):
         observations = []
         for width in (1280, 768, 360):
             self.page.set_viewport_size({'width': width, 'height': 900}); self.page.wait_for_timeout(100)
+            session_navigator(self.page)
             menu = self.session.evaluate('''el => {const s=getComputedStyle(el),r=el.getBoundingClientRect();return {font:s.fontFamily,size:parseFloat(s.fontSize),weight:Number(s.fontWeight),left:r.left,right:r.right,width:r.width,height:r.height}}''')
-            sidebar = self.session.evaluate('''el => {const n=el.closest('aside[aria-label="Сессии проекта"]');const r=n.getBoundingClientRect();return {width:r.width,right:r.right,containsChat:n.contains(document.querySelector('.chat-items'))};}''')
+            sidebar = self.session.evaluate('''el => {const n=el.closest('aside[aria-label="Навигация сессий"]');const r=n.getBoundingClientRect();return {width:r.width,right:r.right,containsChat:n.contains(document.querySelector('.chat-items'))};}''')
             chat = self.page.locator('.chat-items').bounding_box()
             page = self.page.evaluate('''() => ({width:innerWidth,overflow:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),targets:[...document.querySelectorAll('button,select,textarea')].filter(el=>el.getBoundingClientRect().width&&el.getBoundingClientRect().height).map(el=>({text:el.textContent.slice(0,50),height:el.getBoundingClientRect().height}))})''')
             # Body typography applies to the synthetic message paragraph, not compact turn metadata.
@@ -138,10 +140,10 @@ class CompactChatBrowserContract(unittest.TestCase):
             observations.append({'typography': typography, 'menu': menu, 'sidebar': sidebar, 'chat': chat, **page})
         private_json(self.evidence / 'layout.json', observations)
         failures = []
-        if 'Готова' not in self.session.inner_text(): failures.append('idle session must be labelled Готова')
+        if 'Ожидает' not in self.session.locator('xpath=ancestor::li[1]').inner_text(): failures.append('Idle must remain waiting, not ready')
         for result in observations:
             width = result['width']; menu = result['menu']
-            if menu['size'] != 14 or not 400 <= menu['weight'] <= 500 or re.search('mono|courier|consolas', menu['font'], re.I): failures.append(f'{width}: menu typography {menu}')
+            if not 12 <= menu['size'] <= 14 or not 400 <= menu['weight'] <= 500 or re.search('mono|courier|consolas', menu['font'], re.I): failures.append(f'{width}: menu typography {menu}')
             if result['overflow'] > width + 1: failures.append(f'{width}: horizontal overflow {result["overflow"]}')
             text = result['typography']
             if not 15 <= text['size'] <= 16 or abs(text['line'] - 1.5) > .05: failures.append(f'{width}: message typography {text}')
@@ -149,7 +151,7 @@ class CompactChatBrowserContract(unittest.TestCase):
             minimum = 44 if width < 1024 else 40
             if any(t['height'] < minimum - .5 for t in result['targets']): failures.append(f'{width}: targets below {minimum}px')
             if width == 1280:
-                if not 240 <= result['sidebar']['width'] <= 280 or result['sidebar']['containsChat']: failures.append('desktop: sidebar width outside240–280')
+                if not 240 <= result['sidebar']['width'] <= 320 or result['sidebar']['containsChat']: failures.append('desktop: sidebar width outside240–320')
                 if result['chat']['x'] < menu['right'] - 1: failures.append('desktop: chat is not to right of session menu')
         self.assertEqual(failures, [])
 

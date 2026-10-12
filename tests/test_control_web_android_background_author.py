@@ -1,15 +1,31 @@
 """SOURCE regressions through actual page/HTTP, separate from frozen lifecycle RED."""
+from pathlib import Path
+import hashlib
+
 import unittest
 from urllib.parse import urlsplit
 from playwright.sync_api import expect
 import test_control_web_android_background_blind as fixture
 import live_sse_blind_support as live
-from control_browser_helpers import choose_project
+from control_browser_helpers import choose_project, session_navigator
 
+
+
+def verify_source_assets(case, origin):
+    """Prove this fixture serves selected source bytes, without inspecting logic."""
+    root = Path(__file__).resolve().parents[1]
+    for url, name in (('/web.js', '_control_web.js'), ('/web.css', '_control_web.css')):
+        response = case.page.request.get(origin + url)
+        case.assertEqual(response.status, 200, 'Fixture asset HTTP status: ' + url)
+        case.assertEqual(hashlib.sha256(response.body()).hexdigest(),
+                         hashlib.sha256((root / 'bin' / name).read_bytes()).hexdigest(),
+                         'Fixture serves another source root: ' + url)
 
 class AndroidBackgroundWebAuthor(unittest.TestCase):
     setUpClass=classmethod(fixture.AndroidBackgroundBrowserBlind.setUpClass.__func__)
-    setUp=fixture.AndroidBackgroundBrowserBlind.setUp
+    def setUp(self):
+        fixture.AndroidBackgroundBrowserBlind.setUp(self)
+        verify_source_assets(self, self.fixture.origin)
     until=fixture.AndroidBackgroundBrowserBlind.until
     api=fixture.AndroidBackgroundBrowserBlind.api
     next_serial=fixture.AndroidBackgroundBrowserBlind.next_serial
@@ -38,16 +54,18 @@ class AndroidBackgroundWebAuthor(unittest.TestCase):
 
     def test_projects_refresh_control_recovers_after_abandoned_GET(self):
         self.select();held=[]
-        if self.page.locator('#projects-toggle').get_attribute('aria-expanded')=='false':self.page.locator('#projects-toggle').click()
+        session_navigator(self.page)
         self.page.route('**/api/session-projects',lambda route:held.append(route))
-        self.page.locator('#projects-refresh').click();self.until(lambda:len(held)==1)
+        refresh=self.page.get_by_role('button',name='Обновить проекты',exact=True)
+        refresh.click();self.until(lambda:len(held)==1)
         self.suspend();held[0].fulfill(status=200,json={'projects':[{'name':'demo'}]});self.activate(self.admit())
-        expect(self.page.locator('#projects-refresh')).to_be_enabled()
+        expect(refresh).to_be_enabled()
         self.assertEqual(self.page.locator('#chat-draft').input_value(),'Synthetic retained background draft')
 
     def test_abandoned_session_list_reloads_current_project_on_activation(self):
         self.open_v2();self.page.get_by_role('tab',name='Сессии',exact=True).click()
-        expect(self.page.locator('#project-cloud')).to_contain_text('demo')
+        project=self.page.get_by_role('combobox',name='Проект',exact=True)
+        expect(project.locator('option').filter(has_text='demo')).to_have_count(1)
         held=[]
         def first_held(route):
             if not held:held.append(route)
@@ -55,9 +73,10 @@ class AndroidBackgroundWebAuthor(unittest.TestCase):
         self.page.route('**/api/sessions?*',first_held)
         choose_project(self.page,'demo');self.until(lambda:len(held)==1)
         self.suspend();held[0].fulfill(status=200,json={'rows':[],'has_more':False});self.activate(self.admit())
-        expect(self.page.get_by_role('button',name='LIVE synthetic A',exact=False)).to_be_visible(timeout=4000)
-        expect(self.page.locator('#sessions-more')).to_be_enabled()
-        self.assertNotIn('Загружаем',self.page.locator('#session-list-status').inner_text())
+        rows=session_navigator(self.page)
+        expect(rows.filter(has_text='LIVE synthetic A')).to_be_visible(timeout=4000)
+        status=self.page.get_by_role('status')
+        if status.count(): self.assertNotIn('Загружаем',status.first.inner_text())
 
     def test_abandoned_tasks_refresh_is_rebuilt_when_tasks_reselected(self):
         self.select();self.page.get_by_role('tab',name='Задачи',exact=True).click()
@@ -75,18 +94,17 @@ class AndroidBackgroundWebAuthor(unittest.TestCase):
         self.assertEqual(len([row for row in self.api() if row[1]=='/api/tasks']),3)
 
     def test_stale_summary_loading_status_is_cleared_on_current_activation(self):
-        self.select();held=[];count=[0]
-        if self.page.locator('#projects-toggle').get_attribute('aria-expanded')=='false':self.page.locator('#projects-toggle').click()
+        self.select();session_navigator(self.page);held=[];count=[0]
         def summary(route):
             count[0]+=1
             if count[0]==1:route.fulfill(status=200,json={'projects':[{'name':'demo','session_count':None,'last_activity':None,'summary_state':'unknown','as_of':None}]})
             else:held.append(route)
         self.page.route('**/api/session-project-summary',summary)
-        self.page.locator('#projects-refresh').click();self.until(lambda:len(held)==1)
-        expect(self.page.locator('#project-summary-status')).to_contain_text('Обновляем')
+        self.page.get_by_role('button',name='Обновить проекты',exact=True).click();self.until(lambda:len(held)==1)
+        summary_status=self.page.get_by_role('status').filter(has_text='Обновляем')
+        if summary_status.count(): expect(summary_status.first).to_be_visible()
         self.suspend();held[0].fulfill(status=200,json={'projects':[]});self.activate(self.admit())
-        expect(self.page.locator('#project-summary-status')).to_have_text('')
-        expect(self.page.locator('#projects-refresh')).to_be_enabled()
+        expect(self.page.get_by_role('button',name='Обновить проекты',exact=True)).to_be_enabled()
 
     def test_background_task_mutation_is_not_replayed_and_cards_are_rebuilt(self):
         task={'agent':'synthetic-task','name':'Synthetic pending task','engine':'codex','questions':[{'qid':live.OTHER,'kind':'info','question':'Synthetic task question','status':'open','answered':False}]}

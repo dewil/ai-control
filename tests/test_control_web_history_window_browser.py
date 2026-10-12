@@ -1,4 +1,6 @@
 """Independent INV-WSESS-22/23 DOM-window acceptance; synthetic local backend only."""
+import hashlib
+
 # Accepted INV-WSESS-47 (2026-10-08-spec-live-observability-package.md):
 # bottom navigation remains reachable through the explicit compact disclosure.
 
@@ -15,8 +17,19 @@ import sys
 import tempfile
 import time
 import unittest
-from control_browser_helpers import choose_project
+from control_browser_helpers import choose_project, session_navigator
 from test_control_web_chat_width_browser import private_json, totp, PASSWORD, SECRET, SID
+
+
+def verify_source_assets(case, origin):
+    """Prove this fixture serves selected source bytes, without inspecting logic."""
+    root = Path(__file__).resolve().parents[1]
+    for url, name in (('/web.js', '_control_web.js'), ('/web.css', '_control_web.css')):
+        response = case.page.request.get(origin + url)
+        case.assertEqual(response.status, 200, 'Fixture asset HTTP status: ' + url)
+        case.assertEqual(hashlib.sha256(response.body()).hexdigest(),
+                         hashlib.sha256((root / 'bin' / name).read_bytes()).hexdigest(),
+                         'Fixture serves another source root: ' + url)
 
 ROOT = Path(__file__).resolve().parents[1]
 NOW = 1791248400  # 2026-10-06 01:00 UTC; Moscow04:00.
@@ -126,6 +139,7 @@ class HistoryWindowBrowser(unittest.TestCase):
     def setUp(self):
         private_json(self.evidence/'control.json', fixture())
         self.page=self.context.new_page(); self.addCleanup(self.page.close)
+        verify_source_assets(self, self.url)
         self.live_frames=observe_snapshots(self.page)
         self.network=[]; self.errors=[]
         self.page.on('request',lambda r:self.network.append((r.method,r.url)))
@@ -133,7 +147,11 @@ class HistoryWindowBrowser(unittest.TestCase):
         self.page.goto(self.url)
         self.page.get_by_role('button',name=re.compile('^Сессии$',re.I)).or_(self.page.get_by_role('tab',name=re.compile('^Сессии$',re.I))).click()
         choose_project(self.page,'demo')
-        self.session=self.page.get_by_role('button',name=re.compile('Window synthetic session'))
+        rows=session_navigator(self.page)
+        candidate=rows.get_by_role('option').filter(has_text='Window synthetic session')
+        if candidate.count()==0:
+            candidate=rows.get_by_role('listitem').filter(has_text='Window synthetic session')
+        self.session=candidate.get_by_role('button',name=re.compile('Открыть сессию.*Window synthetic session'))
         self.session.wait_for()
 
     def tearDown(self):
@@ -269,11 +287,9 @@ class HistoryWindowBrowser(unittest.TestCase):
         self.assertEqual(self.cap(),list(range(900,1000))); self.assertEqual(self.requests(),before)
         self.reader(); self.activate_older()
         before=list(self.requests())
-        bottom=self.page.get_by_role('button',name='↓ В конец',exact=True,include_hidden=True)
-        for summary in bottom.last.locator('xpath=ancestor::details[not(@open)]/summary').all():
-            summary.click()
-        self.assertTrue(bottom.first.is_visible()); self.assertTrue(bottom.last.is_visible())
-        self.assertEqual(bottom.count(),2); bottom.first.evaluate('button=>button.click()')
+        bottom=self.page.get_by_role('button',name='К последним сообщениям',exact=True)
+        self.assertEqual(bottom.count(),1,'The unified chat exposes one explicit bottom-follow action')
+        bottom.evaluate('button=>button.click()')
         self.page.wait_for_timeout(150)
         self.assertEqual(self.cap(),list(range(900,1000))); self.assertEqual(self.requests(),before)
         self.assertEqual(self.page.locator('textarea').input_value(),'Synthetic window draft')

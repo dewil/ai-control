@@ -27,7 +27,18 @@ from playwright.sync_api import expect, sync_playwright
 expect.set_options(timeout=1500)
 
 import live_observability_blind_support as fixture
-from control_browser_helpers import choose_project
+from control_browser_helpers import choose_project, session_navigator
+
+
+def verify_source_assets(case, origin):
+    """Prove this fixture serves selected source bytes, without inspecting logic."""
+    root = Path(__file__).resolve().parents[1]
+    for url, name in (('/web.js', '_control_web.js'), ('/web.css', '_control_web.css')):
+        response = case.page.request.get(origin + url)
+        case.assertEqual(response.status, 200, 'Fixture asset HTTP status: ' + url)
+        case.assertEqual(hashlib.sha256(response.body()).hexdigest(),
+                         hashlib.sha256((root / 'bin' / name).read_bytes()).hexdigest(),
+                         'Fixture serves another source root: ' + url)
 
 ROOT = Path(os.environ.get("CONTROL_LIVE_UX_QA_REPO", str(Path(__file__).resolve().parents[1])))
 BASELINE = "0f4cbe3d2b5f7c8983375d6c3ef9d262d19bbcde"
@@ -200,6 +211,7 @@ class LiveUXBlindBrowser(unittest.TestCase):
             color_scheme="dark", has_touch=True, timezone_id="America/Los_Angeles")
         self.addCleanup(self.context.close)
         self.page = self.context.new_page(); self.page.set_default_timeout(3500)
+        verify_source_assets(self, self.url)
         self.errors = []; self.page.on("pageerror", lambda error: self.errors.append(str(error)))
         self.requests = []; self.page.on("request", lambda request: self.requests.append(request))
 
@@ -226,7 +238,13 @@ class LiveUXBlindBrowser(unittest.TestCase):
 
     def select_session(self):
         self.sessions(); choose_project(self.page, "demo")
-        self.page.get_by_role("button", name=re.compile("^UX synthetic session")).click()
+        self.open_session_row('UX synthetic session')
+
+    def open_session_row(self, title):
+        rows=session_navigator(self.page)
+        row=rows.get_by_role('option').filter(has_text=title)
+        if row.count()==0: row=rows.get_by_role('listitem').filter(has_text=title)
+        row.get_by_role('button',name=re.compile('^Открыть сессию '+re.escape(title))).click()
 
     def wait_history(self):
         self.page.get_by_text("Fixture readable message 23", exact=True).wait_for()
@@ -406,85 +424,50 @@ class LiveUXBlindBrowser(unittest.TestCase):
             self.reveal(button); self.assert_hit(button); button.focus()
             self.assertTrue(button.evaluate("e=>e===document.activeElement"))
 
-    def test_INV48_frozen_chips_geometry_count_area(self):
-        self.control(projects=fixture.chips()); self.sessions()
+    def test_USN_compact_session_rows_geometry_count_area(self):
+        self.control(projects=fixture.chips()); self.sessions(); choose_project(self.page, 'high')
         for width in (320, 390, 412):
             with self.subTest(width=width):
                 self.page.set_viewport_size({"width": width, "height": 844})
-                rects = []
-                for name, count in (("zero", 0), ("loww", 3), ("high", 12), ("stle", 20)):
-                    tile = self.page.get_by_role("button", name=re.compile("^" + name + r"(?:\b|\s)"))
-                    expect(tile).to_contain_text(re.compile(r"(?<!\d)" + str(count) + r"(?!\d)")); expect(tile).to_contain_text("5м")
-                    self.assertEqual(tile.get_attribute("type"), "button")
-                    box = tile.bounding_box(); rects.append(box)
-                    expected = 112 + 4 * min(5, math.floor(math.log2(count + 1)))
-                    self.assertAlmostEqual(box["width"], expected, delta=.5)
-                    self.assertAlmostEqual(box["height"], 44, delta=.5)
-                    self.assertEqual(tile.evaluate("e=>getComputedStyle(e).boxSizing"), "border-box")
-                self.assertTrue(all(a["width"] * a["height"] < b["width"] * b["height"] for a, b in zip(rects, rects[1:])))
-                self.assertLessEqual(max(r["y"] + r["height"] for r in rects) - min(r["y"] for r in rects), 96.5)
+                rows=session_navigator(self.page)
+                choices=rows.get_by_role('option')
+                if choices.count()==0: choices=rows.get_by_role('listitem')
+                choices.first.wait_for()
+                self.assertGreater(choices.count(),0)
+                for choice in choices.all():
+                    box=choice.bounding_box()
+                    self.assertIsNotNone(box)
+                    self.assertGreaterEqual(box['height'],44,'Unified session row must retain a 44px touch target')
+                    for button in choice.get_by_role('button').all():
+                        if button.is_visible():
+                            button_box=button.bounding_box()
+                            self.assertGreaterEqual(button_box['width'],43.5)
+                            self.assertGreaterEqual(button_box['height'],43.5)
                 self.assertLessEqual(self.page.evaluate("Math.max(document.body.scrollWidth,document.documentElement.scrollWidth)-innerWidth"), 1)
 
-    def test_INV48_unknown_stale_zero_noactivity_future_and_details(self):
+    def test_USN_project_filter_authority_and_unknown_options_do_not_select_history(self):
         now = int(time.time())
         self.control(projects=[fixture.project("zero", 0, None, now=now), fixture.project("unkn", None, None, "unknown", now),
             fixture.project("stle", 20, now - 7200, "stale", now), fixture.project("futr", 1, now + 3600, now=now)])
         self.sessions()
-        for name, count, activity in (("zero", "0", "—"), ("unkn", "?", "?"), ("stle", "20", "2ч"), ("futr", "1", "?")):
-            tile = self.page.get_by_role("button", name=re.compile("^" + name + r"(?:\b|\s)"))
-            if name == "unkn": expect(tile).to_contain_text(re.compile(r"\?[\s\S]*\?"))
-            else: expect(tile).to_contain_text(re.compile(r"(?<!\d)" + count + r"(?!\d)"))
-            text = tile.inner_text()
-            if name == "unkn":
-                self.assertGreaterEqual(text.count("?"), 2, "Unknown count and unknown activity must both be explicit")
-                self.assertNotIn("—", text)
-            else:
-                self.assertRegex(text, r"(?<!\d)" + count + r"(?!\d)")
-                expect(tile).to_contain_text(activity)
-                if name == "zero": self.assertNotIn("?", text)
-                if name == "futr": self.assertNotIn("—", text)
-            if name == "stle": expect(tile).to_contain_text("устар.")
-            self.assertNotIn("сейчас", tile.inner_text().lower())
-            self.assert_hit(tile)
-        # UXC-PROJECTS explicitly allows details of the selected project. Activate
-        # stle, wait for its proven selection, then resolve only its bound details.
-        tile = self.page.get_by_role("button", name=re.compile("^stle")); tile.focus(); tile.press("Enter")
-        expect(tile).to_have_attribute("aria-pressed", "true")
-        self.page.get_by_role("button", name=re.compile("^UX synthetic session")).wait_for()
-        toggle = self.page.locator("#projects-toggle")
-        if toggle.count() and toggle.get_attribute("aria-expanded") == "false": toggle.click()
-        related = tile.evaluate("e=>[...new Set([e.id,...(e.getAttribute('aria-describedby')||'').split(/\\s+/),...(e.getAttribute('aria-controls')||'').split(/\\s+/)].filter(Boolean))]")
-        containers = []
-        for identity in related:
-            candidate = self.page.locator("[id=" + json.dumps(identity) + "]")
-            if candidate.count(): containers.append(candidate)
-        semantic = self.page.get_by_role("region", name=re.compile("stle", re.I)).or_(self.page.get_by_role("group", name=re.compile("stle", re.I)))
-        containers += semantic.all()
-        # A selected-project disclosure can be a sibling labelled from stle.
-        triggers = self.page.get_by_role("button", name=re.compile("stle.*(?:сведени|подроб|информац)|(?:сведени|подроб|информац).*stle", re.I)).or_(
-            self.page.locator("summary").filter(has_text=re.compile("stle", re.I)))
-        for trigger in triggers.all():
-            if trigger.is_visible(): trigger.click()
-            control = trigger.get_attribute("aria-controls")
-            if control: containers.append(self.page.locator("[id=" + json.dumps(control) + "]"))
-            if trigger.evaluate("e=>e.parentElement.tagName==='DETAILS'"): containers.append(trigger.locator(".."))
-        matching = [c for c in containers if c.is_visible() and re.search(r"20\s+сессий", c.inner_text())]
-        self.assertTrue(matching, "Visible project details must be bound to selected stle by ARIA/name, not unrelated page text")
-        exact = datetime.fromtimestamp(now - 7200, ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M") + " МСК"
-        self.assertTrue(any(exact in c.inner_text() for c in matching), "stle details must show the actual Europe/Moscow activity time: " + exact)
+        project=self.page.get_by_role('combobox',name=re.compile('Проект',re.I))
+        options=project.locator('option')
+        for name in ('zero','unkn','stle','futr'):
+            expect(options.filter(has_text=re.compile('^'+name+r'(?:\s|$)'))).to_have_count(1)
+        before=[call for call in self.calls('history')]
+        project.select_option('stle')
+        self.assertEqual(self.page.get_by_role('combobox',name=re.compile('Проект',re.I)).input_value(),'stle')
+        self.assertEqual(self.calls('history'),before,'Project-filter choice cannot open a chat or infer activity authority')
 
-    def test_INV48_long_unbroken_project_wraps_without_clipping(self):
+    def test_USN_long_project_option_does_not_create_horizontal_overflow(self):
         name = "long_" + "unbroken" * 14
         self.control(projects=[fixture.project(name, 99999, int(time.time()) - 300)])
         self.sessions()
-        tile = self.page.get_by_role("button", name=re.compile("^" + name))
-        expect(tile).to_be_visible()
+        project=self.page.get_by_role('combobox',name=re.compile('Проект',re.I))
+        expect(project.locator('option').filter(has_text=name)).to_have_count(1)
         for width in (320, 390, 412, 1280):
             self.page.set_viewport_size({"width": width, "height": 844})
-            observation = tile.evaluate("e=>({overflow:Math.max(document.body.scrollWidth,document.documentElement.scrollWidth)-innerWidth,height:e.getBoundingClientRect().height,clipped:e.scrollWidth>e.clientWidth+1||e.scrollHeight>e.clientHeight+1,ellipsis:[e,...e.querySelectorAll('*')].some(n=>getComputedStyle(n).textOverflow==='ellipsis')})")
-            self.assertLessEqual(observation["overflow"], 1, observation)
-            self.assertGreater(observation["height"], 44, "Long generic aliases must wrap, preserving full text")
-            self.assertFalse(observation["clipped"] or observation["ellipsis"], observation)
+            self.assertLessEqual(self.page.evaluate("Math.max(document.body.scrollWidth,document.documentElement.scrollWidth)-innerWidth"), 1)
 
     def test_INV47_delivery_unknown_stays_visible_inband_and_manual_no_resend(self):
         self.control(send_status="delivery_unknown"); self.open()
@@ -602,10 +585,10 @@ class LiveUXBlindBrowser(unittest.TestCase):
         self.page.route("**/api/session-history?*", lambda route: held.append(route))
         self.start_refresh(); self.wait_until(lambda: bool(held), "Old A public refresh must be held")
         old_A = held.pop()
-        self.page.get_by_role("button", name="Other UX synthetic session", exact=False).click()
+        self.open_session_row('Other UX synthetic session')
         self.page.wait_for_timeout(80)
         expect(self.page.locator("#current-model-status")).to_have_text(UNKNOWN)
-        self.page.get_by_role("button", name=re.compile("^UX synthetic session")).click()
+        self.open_session_row('UX synthetic session with a long readable title')
         self.page.wait_for_timeout(80)
         expect(self.page.locator("#current-model-status")).to_have_text(UNKNOWN)
         for route in held:

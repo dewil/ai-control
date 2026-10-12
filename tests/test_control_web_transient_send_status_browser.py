@@ -216,8 +216,14 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         self.assertTrue(self.accepted(), 'Local transition must show accepted immediately')
         accepted_at=time.monotonic()
         self.page.locator('textarea').fill('Draft survives status expiry')
-        self.page.get_by_text('LATEST message 21', exact=True).scroll_into_view_if_needed()
         anchor = self.page.get_by_text('LATEST message 21', exact=True)
+        # Set up the reader position atomically. Playwright's stability wait in
+        # scroll_into_view_if_needed can retain a detached paragraph across a
+        # concurrent SSE render; that race is not the expiry/anchor oracle.
+        # The actual visible position and its preservation are checked below.
+        anchor.evaluate("el=>el.scrollIntoView({block:'center',behavior:'instant'})")
+        from playwright.sync_api import expect
+        expect(anchor).to_be_in_viewport()
         before_form_height = self.page.locator('form').filter(has=self.page.locator('textarea')).bounding_box()['height']
         before_y = anchor.bounding_box()['y']; before_requests = len(self.history_requests())
         before_calls = self.calls()

@@ -198,33 +198,46 @@ class SessionOverviewBrowserRed(unittest.TestCase):
     posts = participation_browser.ParticipationBrowserBlind.posts
 
     def set_overview_rows(self, rows, revision=1):
-        value = deepcopy(s.overview_dto(revision=revision))
-        value['rows'] = deepcopy(rows)
-        self.backend.overview = value
+        value=deepcopy(s.overview_dto(revision=revision)); value['rows']=deepcopy(rows)
+        self.backend.overview=value
+        # Authorized namespace includes every synthetic overview project; page title
+        # precedence should not erase the unrelated overview-only source identities.
+        names=sorted({'demo',*(row['project'] for row in rows)})
+        self.backend.session_projects=lambda:dict(projects=[dict(name=name) for name in names])
+        self.backend.session_project_summary=lambda:dict(projects=[dict(name=name,session_count=0,
+            last_activity=None,summary_state='fresh',as_of=1800000000) for name in names])
 
-    def browser_groups(self):
-        self.select()
-        self.participation_ready()
-        self.assertEqual(self.posts(), [], 'Opening overview performs no native answer POST')
-        self.until(lambda: self.page.get_by_text('Нужно участие', exact=True).count() == 1,
-                   'Overview must render the attention group')
-        self.until(lambda: self.page.get_by_text('Готово к проверке', exact=True).count() == 1,
-                   'Overview must render the review-ready group')
-        self.until(lambda: self.page.get_by_text('В работе', exact=True).count() == 1,
-                   'Overview must render the working group')
-        other = self.page.get_by_text('Прочие состояния', exact=True)
-        self.assertEqual(other.count(), 1, 'Other states must have one collapsible section')
-        other_details = other.locator('xpath=ancestor::details[1]')
-        self.assertEqual(other_details.count(), 1)
-        self.assertFalse(other_details.evaluate('(element) => element.open'),
-                         'Unknown/idle states must be collapsed by default')
-        other_details.locator('summary').click()
-        return self.page.locator('body').inner_text()
+    def browser_navigator(self):
+        from control_browser_helpers import session_navigator
+        self.select(); self.participation_ready()
+        self.assertEqual(self.posts(),[])
+        listing=session_navigator(self.page)
+        self.page.get_by_role('combobox',name='Проект',exact=True).select_option(label='Все проекты')
+        self.page.get_by_role('button',name=re.compile(r'^Все(?:\s|[·(:]|$)')).click()
+        self.page.get_by_role('button',name=re.compile(r'^(?:Обновить список|Новые:\s*\d+)$')).click()
+        return listing
 
-    def group_slice(self, body, title, next_title=None):
-        start = body.index(title)
-        stop = body.index(next_title, start + len(title)) if next_title else len(body)
-        return body[start:stop]
+    def rows(self):
+        listing=self.page.get_by_role('list',name='Сессии',exact=True).or_(
+            self.page.get_by_role('listbox',name='Сессии',exact=True))
+        return listing.get_by_role('listitem').or_(listing.get_by_role('option'))
+
+    def filter_button(self,label):
+        return self.page.get_by_role('button',name=re.compile('^'+re.escape(label)+r'(?:\s|[·(:]|$)'))
+
+    def assert_count(self,label,count):
+        button=self.filter_button(label)
+        self.assertEqual(button.count(),1)
+        self.assertRegex(button.get_attribute('aria-label') or button.inner_text(),r'(?<!\d)'+str(count)+r'(?!\d)')
+
+    def assert_no_result_action(self,label):
+        row=self.rows().filter(has_text=label)
+        actions=row.get_by_role('button',name='Действия',exact=True)
+        actions.click()
+        self.assertTrue(row.get_by_role('menu').is_visible())
+        self.assertEqual(row.get_by_role('menuitem',name='Открыть результат',exact=True).count(),0,
+                         'A stale/non-completed snapshot cannot expose a ready-result target')
+        actions.click()
 
     def test_group_priority_title_fallback_stale_copy_and_unique_rows(self):
         # INV-SOV-03 / INV-SOV-05: project/title, fallback, priority, stale badge, and unique row placement.
@@ -249,38 +262,30 @@ class SessionOverviewBrowserRed(unittest.TestCase):
         rows = [attention, ready, working, stale, unknown, failed]
         self.set_overview_rows(rows)
         self.page.clock.install()
-        body = self.browser_groups()
-
-        needs = self.group_slice(body, 'Нужно участие', 'Готово к проверке')
-        review = self.group_slice(body, 'Готово к проверке', 'В работе')
-        work = self.group_slice(body, 'В работе', 'Прочие состояния')
-        other = self.group_slice(body, 'Прочие состояния')
-        self.assertIn('Needs attention', needs)
-        self.assertIn('Failed for review', needs)
-        self.assertIn('Résumé final · Проект Δ', review)
-        self.assertIn('Сессия ' + stale_sid[:8], review)
-        self.assertIn('Последний известный ответ · сведения устарели', review)
-        self.assertIn('Сессия ' + working_sid[:8], work)
-        self.assertIn('Unconfirmed state', other)
-        self.assertIn('delta', review, 'Valid project slug is rendered separately from its title')
-        expected_group_rows = {
-            'Нужно участие': ['Needs attention', 'Failed for review'],
-            'Готово к проверке': ['Résumé final · Проект Δ', 'Сессия ' + stale_sid[:8]],
-            'В работе': ['Сессия ' + working_sid[:8]],
-            'Прочие состояния': ['Unconfirmed state'],
-        }
-        fragments = {'Нужно участие': needs, 'Готово к проверке': review,
-                     'В работе': work, 'Прочие состояния': other}
-        for group, labels in expected_group_rows.items():
-            with self.subTest(group=group):
-                self.assertEqual(sum(fragments[group].count(label) for label in labels), len(labels),
-                                 'Each source session belongs to exactly one visible group')
-        for label in ('Needs attention', 'Résumé final · Проект Δ', 'Сессия ' + working_sid[:8],
-                      'Сессия ' + stale_sid[:8], 'Unconfirmed state', 'Failed for review'):
-            self.assertEqual(body.count(label), 1, 'A session row must not be duplicated across groups')
-        self.assertNotIn('cached-final', body, 'Stale item IDs never become browser actions or links')
-        self.assertNotIn('Synthetic final witness', body)
-        self.assertEqual(self.posts(), [], 'Opening overview cards performs no native answer POST')
+        listing=self.browser_navigator()
+        self.assert_count('Внимание',2); self.assert_count('Готовы',1); self.assert_count('Работают',1)
+        for label in ('Needs attention','Résumé final · Проект Δ','Сессия '+working_sid[:8],
+                      'Сессия '+stale_sid[:8],'Unconfirmed state','Failed for review'):
+            self.until(lambda:self.rows().filter(has_text=label).count()==1,
+                       'Each overview key must have one unified row: '+label)
+        stale_row=self.rows().filter(has_text='Сессия '+stale_sid[:8])
+        self.assertRegex(stale_row.inner_text(),r'(?i)устар|последний известный')
+        self.assertIn('delta',self.rows().filter(has_text='Résumé final · Проект Δ').inner_text())
+        self.filter_button('Внимание').click()
+        self.assertEqual(self.rows().filter(has_text='Needs attention').count(),1)
+        self.assertEqual(self.rows().filter(has_text='Failed for review').count(),1)
+        self.assertEqual(self.rows().filter(has_text='Résumé final · Проект Δ').count(),0)
+        self.filter_button('Готовы').click()
+        self.assertEqual(self.rows().filter(has_text='Résumé final · Проект Δ').count(),1)
+        self.assertEqual(self.rows().filter(has_text='Needs attention').count(),0)
+        self.filter_button('Работают').click()
+        self.assertEqual(self.rows().filter(has_text='Сессия '+working_sid[:8]).count(),1)
+        self.assertEqual(self.rows().filter(has_text='Сессия '+stale_sid[:8]).count(),0)
+        self.filter_button('Все').click()
+        body=listing.inner_text()
+        self.assertNotIn('cached-final',body,'Stale item IDs never become browser actions or links')
+        self.assertNotIn('Synthetic final witness',body)
+        self.assertEqual(self.posts(),[])
 
     def test_attention_priority_excludes_fresh_ready_row_from_review_count(self):
         # INV-SOV-05: a high-priority attention row belongs to one group and not the ready count.
@@ -290,22 +295,14 @@ class SessionOverviewBrowserRed(unittest.TestCase):
             result=completed_result('counter-ready'))
         self.set_overview_rows([row])
         self.page.clock.install()
-        self.select()
-        self.participation_ready()
-        self.until(lambda: self.page.get_by_text('Ready with question', exact=True).count() == 1,
-                   'Attention row with a fresh result must remain visible')
-        body = self.page.locator('body').inner_text()
-        summary = next((line for line in body.splitlines()
-                        if line.startswith('Наблюдается: Сессии:')), '')
-        self.assertIn('требуется внимание 1', summary)
-        self.assertIn('ответы 0', summary,
-                      'Only rows assigned to the review group contribute to its ready count')
-        self.assertEqual(self.page.get_by_text('Нужно участие', exact=True).count(), 1)
-        self.assertEqual(self.page.get_by_text('Готово к проверке', exact=True).count(), 0,
-                         'No ready review group exists when the only ready row needs attention')
-        self.assertEqual(self.page.get_by_text('Ready with question', exact=True).count(), 1,
-                         'The priority row is rendered once')
-        self.assertEqual(self.posts(), [])
+        self.browser_navigator()
+        self.until(lambda:self.rows().filter(has_text='Ready with question').count()==1)
+        self.assert_count('Внимание',1); self.assert_count('Готовы',0)
+        self.filter_button('Готовы').click()
+        self.assertEqual(self.rows().filter(has_text='Ready with question').count(),0)
+        self.filter_button('Внимание').click()
+        self.assertEqual(self.rows().filter(has_text='Ready with question').count(),1)
+        self.assertEqual(self.posts(),[])
 
     def test_loaded_completed_unload_stays_stale_active_supersedes_and_unload_does_not_resurrect(self):
         # INV-SOV-04: live, last-known, and active-after-completion are distinct.
@@ -316,8 +313,7 @@ class SessionOverviewBrowserRed(unittest.TestCase):
                 result=completed_result('lifecycle-final', ready=ready), freshness=freshness)
         self.set_overview_rows([completed(ready=True, freshness='fresh')])
         self.page.clock.install()
-        self.select()
-        self.participation_ready()
+        self.browser_navigator()
         self.assertEqual(self.posts(), [], 'Opening overview performs no native answer POST')
         self.until(lambda: self.page.get_by_text(label, exact=True).count() == 1,
                    'Fresh completed result must appear in overview')
@@ -325,23 +321,28 @@ class SessionOverviewBrowserRed(unittest.TestCase):
         # Native unload preserves only a visibly stale last-known completion.
         self.set_overview_rows([completed(ready=False, freshness='stale')], revision=2)
         self.page.clock.fast_forward(6000)
-        self.until(lambda: self.page.get_by_text('Последний известный ответ · сведения устарели', exact=True).count() == 1,
+        self.until(lambda:self.rows().filter(has_text=label).get_by_text('Сведения устарели',exact=True).count()==1,
                    'Unloaded completed result must remain visible with the stale badge')
+        self.assert_count('Готовы',0)
+        self.assert_no_result_action(label)
         self.assertNotIn('lifecycle-final', self.page.locator('body').inner_text())
 
         # A fresh current inProgress replaces the old completed witness entirely.
         self.set_overview_rows([overview_row(7, 'lifecycle', sid, label,
             activity='active', running='confirmed', freshness='fresh')], revision=3)
         self.page.clock.fast_forward(6000)
-        self.until(lambda: self.page.get_by_text('В работе', exact=True).count() == 1)
-        self.assertEqual(self.page.get_by_text('Последний известный ответ · сведения устарели', exact=True).count(), 0)
+        self.until(lambda:bool(re.search(r'(?<!\d)1(?!\d)',self.filter_button('Работают').inner_text())))
+        self.assertEqual(self.rows().filter(has_text=label).get_by_text('Сведения устарели',exact=True).count(),0)
         self.assertNotIn('lifecycle-final', self.page.locator('body').inner_text())
 
         # Unload after that active observation cannot resurrect the completed result.
         self.set_overview_rows([overview_row(7, 'lifecycle', sid, label,
             activity='not_loaded', running='unconfirmed', result=None, freshness='stale')], revision=4)
         self.page.clock.fast_forward(6000)
-        self.until(lambda: self.page.get_by_text('Прочие состояния', exact=True).count() == 1)
-        self.assertEqual(self.page.get_by_text('Последний известный ответ · сведения устарели', exact=True).count(), 0)
+        self.until(lambda:bool(re.search(r'(?<!\d)0(?!\d)',self.filter_button('Работают').inner_text())))
+        self.assert_count('Готовы',0)
+        self.assertEqual(self.rows().filter(has_text=label).count(),1)
+        self.assertEqual(self.rows().filter(has_text=label).get_by_text('Сведения устарели',exact=True).count(),1)
+        self.assert_no_result_action(label)
         self.assertNotIn('lifecycle-final', self.page.locator('body').inner_text())
         self.assertEqual(self.posts(), [])

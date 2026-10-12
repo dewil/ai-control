@@ -3,8 +3,9 @@ import re
 import time
 import unittest
 from playwright.sync_api import expect, sync_playwright
-from control_browser_helpers import choose_project
+from control_browser_helpers import choose_project, session_navigator
 import live_sse_blind_support as s
+from test_control_web_ux_package_blind_red import verify_source_assets
 
 UNKNOWN='Сессия: модель неизвестна · Размышление: уровень неизвестен'
 
@@ -23,6 +24,7 @@ class LiveBrowserBlind(unittest.TestCase):
         self.context.add_cookies([{'name':name,'value':value,'url':self.fixture.origin}])
         self.page=self.context.new_page();self.errors=[];self.page.on('pageerror',lambda error:self.errors.append(str(error)))
         self.page.set_default_timeout(3000)
+        verify_source_assets(self,self.fixture.origin)
 
     def tearDown(self):self.assertEqual(self.errors,[])
 
@@ -170,8 +172,8 @@ class LiveBrowserBlind(unittest.TestCase):
 
     def test_switch_A_B_A_old_generation_callbacks_discard(self):
         self.select();self.page.locator('textarea').fill('Synthetic A draft')
-        self.page.get_by_role('button',name='LIVE synthetic B',exact=False).click()
-        self.page.get_by_role('button',name='LIVE synthetic A',exact=False).click()
+        session_navigator(self.page).get_by_role('button',name='Открыть сессию LIVE synthetic B',exact=True).click()
+        session_navigator(self.page).get_by_role('button',name='Открыть сессию LIVE synthetic A',exact=True).click()
         self.until(lambda:len(self.requests('/api/session-events'))>=3)
         self.transport.emit(s.snapshot(2,value=s.history('Synthetic current A generation')))
         expect(self.page.get_by_text('Synthetic current A generation',exact=True)).to_have_count(1)

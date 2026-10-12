@@ -5,12 +5,15 @@ project_file is the documented injection seam. Held routes affect only file GETs
 No providers, real project files, external origins or production state are used.
 """
 from copy import deepcopy
+import hashlib
+import os
+from pathlib import Path
 import re
 import unittest
 from urllib.parse import parse_qsl, urlsplit, urljoin
 
 from playwright.sync_api import expect, sync_playwright
-from control_browser_helpers import choose_project, project_is_selected
+from control_browser_helpers import choose_project
 import live_sse_blind_support as live
 
 
@@ -68,6 +71,12 @@ class ProjectFileBrowserRED(unittest.TestCase):
         self.requests, self.errors = [], []
         self.page.on('request', lambda r: self.requests.append(r))
         self.page.on('pageerror', lambda e: self.errors.append(str(e)))
+        root=Path(os.environ.get('CONTROL_LIVE_SSE_QA_REPO',Path(__file__).resolve().parents[1])).resolve()
+        self.assertEqual(Path(self.fixture.web.__file__).resolve(),root/'bin/_control_web.py')
+        for path,name in (('/web.js','_control_web.js'),('/web.css','_control_web.css')):
+            response=self.page.request.get(self.fixture.origin+path)
+            self.assertEqual(response.status,200)
+            self.assertEqual(hashlib.sha256(response.body()).hexdigest(),hashlib.sha256((root/'bin'/name).read_bytes()).hexdigest())
         # Deliberately remove the file-fetch abort signal to independently test
         # generation fences against responses which survive cancellation.
         self.page.add_init_script('''const realFetch=window.fetch.bind(window);
@@ -90,7 +99,9 @@ class ProjectFileBrowserRED(unittest.TestCase):
         choose_project(self.page, 'demo')
         self.page.get_by_role('button', name=re.compile('LIVE synthetic A')).click()
         expect(self.page.get_by_text('FILE HISTORY READY', exact=True)).to_be_attached()
-        self.assertTrue(project_is_selected(self.page, 'demo'))
+        self.assertEqual(dict(parse_qsl(urlsplit(self.page.url).query)),
+                         {'project':'demo','sid':live.SID},
+                         'File authority belongs to the selected chat, not navigator filter')
         self.assertEqual(self.page.locator('textarea').count(), 1,
                          'Authenticated real history and selected chat must be ready')
 
@@ -256,7 +267,9 @@ class ProjectFileBrowserRED(unittest.TestCase):
         dialog = self.activate()
         expect(dialog.get_by_text(re.compile('не поддерж|неподдерж|недоступ|ошиб', re.I)).first).to_be_visible()
         self.assertEqual(self.page.locator('textarea').input_value(), 'UNSENT DRAFT')
-        self.assertTrue(project_is_selected(self.page, 'demo'))
+        self.assertEqual(dict(parse_qsl(urlsplit(self.page.url).query)),
+                         {'project':'demo','sid':live.SID},
+                         'File authority belongs to the selected chat, not navigator filter')
         expect(self.page.get_by_text('FILE HISTORY READY', exact=True)).to_be_attached()
         self.page.clock.fast_forward(120000); self.page.wait_for_timeout(80)
         self.assertEqual(len(self.gets()), 1, 'Error must not automatically retry or poll')
@@ -290,11 +303,26 @@ class ProjectFileBrowserRED(unittest.TestCase):
             with self.subTest(scope=scope):
                 self.render('[FILE LINK](docs/test.md)')
                 held = self.hold(); self.activate(); self.until(lambda: len(held) == 1)
-                # Dispatch a public control's click to isolate the selection
-                # handler from close cancellation even if the dialog is modal.
+                # The project filter is independent of chat/file authority.
+                # Dispatch only public control events under the modal (as in
+                # the original scope test), then explicitly open a new row.
                 # No private runtime function or forced pointer through inert UI.
-                target = r'^other(?:\b|\s)' if scope == 'project' else 'LIVE synthetic B'
-                self.page.get_by_role('button', name=re.compile(target), include_hidden=True).dispatch_event('click')
+                project='other' if scope=='project' else 'demo'
+                control=self.page.get_by_role('combobox',name='Проект',exact=True,include_hidden=True)
+                control.evaluate('(e,value)=>{e.value=value;e.dispatchEvent(new Event("change",{bubbles:true}));}',project)
+                self.assertEqual(dict(parse_qsl(urlsplit(self.page.url).query)),{'project':'demo','sid':live.SID},
+                                 'Changing a navigator filter must not select a different chat')
+                listing=self.page.get_by_role('list',name='Сессии',exact=True,include_hidden=True).or_(
+                    self.page.get_by_role('listbox',name='Сессии',exact=True,include_hidden=True))
+                title='LIVE synthetic A' if scope=='project' else 'LIVE synthetic B'
+                row=listing.get_by_role('listitem',include_hidden=True).or_(
+                    listing.get_by_role('option',include_hidden=True)).filter(has_text=title)
+                action=row.get_by_role('button',name=re.compile('Открыть сессию '+re.escape(title)),include_hidden=True)
+                expect(action).to_have_count(1)
+                action.dispatch_event('click')
+                expected_scope={'project':project,'sid':live.SID if scope=='project' else live.OTHER}
+                self.until(lambda:dict(parse_qsl(urlsplit(self.page.url).query))==expected_scope)
+                self.assertEqual(dict(parse_qsl(urlsplit(self.page.url).query)),expected_scope)
                 self.deliver(held[0], 'OLD SCOPE CONTENT')
                 expect(self.page.get_by_role('dialog')).to_be_hidden()
                 self.assertNotIn('OLD SCOPE CONTENT', self.page.locator('body').text_content())

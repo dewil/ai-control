@@ -1,11 +1,14 @@
 """Independent queue UI RED: actual JS, local HTTP and native EventSource."""
 from copy import deepcopy
+import hashlib
+import os
+from pathlib import Path
 import re
 import time
 from urllib.parse import urlsplit,parse_qs
 import unittest
 from playwright.sync_api import expect,sync_playwright
-from control_browser_helpers import choose_project
+from control_browser_helpers import choose_project, session_navigator
 import live_sse_blind_support as live
 import native_queue_blind_support as q
 
@@ -60,17 +63,29 @@ class NativeQueueBrowserBlind(unittest.TestCase):
         self.requests=[];self.errors=[]
         self.page.on('request',lambda r:self.requests.append((r.method,urlsplit(r.url).path,r.post_data)))
         self.page.on('pageerror',lambda e:self.errors.append(str(e)))
+        root=Path(os.environ.get('CONTROL_LIVE_SSE_QA_REPO',Path(__file__).resolve().parents[1])).resolve()
+        self.assertEqual(Path(self.fixture.web.__file__).resolve(),root/'bin/_control_web.py')
+        for path,name in (('/web.js','_control_web.js'),('/web.css','_control_web.css')):
+            response=self.page.request.get(self.fixture.origin+path)
+            self.assertEqual(response.status,200)
+            self.assertEqual(hashlib.sha256(response.body()).hexdigest(),hashlib.sha256((root/'bin'/name).read_bytes()).hexdigest())
     def tearDown(self):self.assertEqual(self.errors,[])
     def until(self,predicate,timeout=3):
         until=time.monotonic()+timeout
         while not predicate() and time.monotonic()<until:self.page.wait_for_timeout(20)
         self.assertTrue(predicate(),'Expected public queue/transport outcome')
     def select(self):
+        streams_before = self.fixture.transport.streams
         self.page.goto(self.fixture.origin)
         self.page.get_by_role('button',name='Сессии',exact=True).or_(self.page.get_by_role('tab',name='Сессии',exact=True)).click()
         choose_project(self.page,'demo');self.page.get_by_role('button',name='LIVE synthetic A',exact=False).click()
-        expect(self.page.get_by_text('LIVE original synthetic text',exact=True)).to_have_count(1)
-        self.until(lambda:self.fixture.transport.streams>=1)
+        # A fresh browser replays the fixture's existing native SSE frames.
+        # The current streamed A snapshot may replace its initial HTTP text
+        # before this assertion; neither snapshot belongs to another session.
+        original = self.page.get_by_text('LIVE original synthetic text',exact=True)
+        streamed = self.page.get_by_text('Queue browser streamed ready A',exact=True)
+        expect(original.or_(streamed)).to_have_count(1)
+        self.until(lambda:self.fixture.transport.streams > streams_before)
         self.fixture.transport.emit(live.snapshot(value=live.history('Queue browser streamed ready A')))
         expect(self.page.get_by_text('Queue browser streamed ready A',exact=True)).to_have_count(1)
     def send_button(self):return self.page.get_by_role('button',name=SEND)
@@ -155,6 +170,7 @@ class NativeQueueBrowserBlind(unittest.TestCase):
             if parse_qs(urlsplit(route.request.url).query).get('sid')==[live.SID]:held.append(route)
             else:route.continue_()
         self.page.route('**/api/session-queue?*',route_queue);self.select();self.until(lambda:len(held)==1)
+        session_navigator(self.page)
         self.page.get_by_role('button',name='LIVE synthetic B',exact=False).click()
         expect(self.page.get_by_text('Queue browser B history',exact=True)).to_have_count(1)
         held[0].fulfill(status=200,json=q.queue_dto([q.public_row(text='Forbidden A queue repaint')]))

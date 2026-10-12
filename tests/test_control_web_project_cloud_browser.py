@@ -1,5 +1,10 @@
-"""INV-WSESS-19: source-blind responsive project cloud, synthetic backend only."""
+"""USN migration of INV-WSESS-19: authorized project filters, synthetic HTTP only.
+
+Count-sized cloud tiles/live sorting are superseded by INV-USN01/03/06.
+Retain availability, metadata, readonly listing/history and revocation fences.
+"""
 import importlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -49,13 +54,17 @@ def serve(root, evidence):
             return {'projects': data['projects']}
         def session_list(self, project, page):
             self.record(method='list', project=project)
-            return {'rows': [{'sid': SID, 'title': 'Cloud synthetic session', 'status': 'idle'}], 'has_more': False}
+            return {'rows': [{'sid': SID, 'title': 'Cloud synthetic session', 'vendor': 'codex', 'status': 'idle'}], 'has_more': False}
         def session_history(self, project, sid, cursor):
             self.record(method='history', project=project, sid=sid)
             time.sleep(self.data().get('history_delay', 0))
             return {'turns': [{'id': 'cloud-turn', 'status': 'completed', 'items': [
                 {'id': 'cloud-item', 'role': 'assistant', 'text': 'CLOUD SYNTHETIC HISTORY', 'truncated': False}]}],
                 'next_cursor': None, 'truncated': False, 'recent_sends': []}
+        def participation_overview(self):
+            from participation_blind_support import overview_dto
+            value=overview_dto(); value['rows']=[]; return value
+        def session_pins(self, principal): return {'schema':2,'server_now':1800000000,'items':[]}
         def session_send(self, *args): return {'error': 'unavailable'}
         def session_send_status(self, *args): return {'error': 'stale'}
 
@@ -81,7 +90,9 @@ class ProjectCloudBrowserContract(unittest.TestCase):
         os.umask(0o077)
         cls.evidence = Path(tempfile.mkdtemp(prefix='control-cloud-qa-', dir='/var/tmp'))
         private_json(cls.evidence / 'control.json', {'projects': project_rows()})
-        cls.root = Path(os.environ.get('CONTROL_CLOUD_QA_REPO', str(ROOT)))
+        cls.root = Path(os.environ.get('CONTROL_CLOUD_QA_REPO', str(ROOT))).resolve()
+        cls.asset_sha={url:hashlib.sha256((cls.root/'bin'/name).read_bytes()).hexdigest()
+                       for url,name in (('/web.js','_control_web.js'),('/web.css','_control_web.css'))}
         interpreter = os.environ.get('CONTROL_CLOUD_QA_SERVER_PYTHON', sys.executable)
         cls.server = subprocess.Popen([interpreter, str(Path(__file__).resolve()), '--serve', str(cls.root), str(cls.evidence)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         cls.addClassCleanup(cls.stop_server)
@@ -118,6 +129,13 @@ class ProjectCloudBrowserContract(unittest.TestCase):
         self.page.evaluate('localStorage.clear();sessionStorage.clear()'); self.page.reload()
         self.page.get_by_role('button', name='Сессии', exact=True).or_(self.page.get_by_role('tab', name='Сессии', exact=True)).click()
         self.page.wait_for_timeout(150)
+        self.verify_assets()
+
+    def verify_assets(self):
+        for path,wanted in self.asset_sha.items():
+            response=self.page.request.get(self.url+path)
+            self.assertEqual(response.status,200)
+            self.assertEqual(hashlib.sha256(response.body()).hexdigest(),wanted,'Wrong served '+path)
 
     def tearDown(self):
         self.page.screenshot(path=str(self.evidence / (self._testMethodName + '.png')), full_page=True)
@@ -134,117 +152,125 @@ class ProjectCloudBrowserContract(unittest.TestCase):
         path = self.evidence / 'calls.jsonl'
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
+    def project_filter(self):
+        control=self.page.get_by_role('combobox',name=re.compile('Проект',re.I))
+        expect(control).to_have_count(1)
+        return control
+
     def tile(self, name):
-        # INV-WSESS-43: a confirmed deep link collapses projects; selected state remains inspectable.
-        button = self.page.get_by_role('button', name=re.compile(r'^' + name + r'(?:\b|\s)'), include_hidden=True)
-        expect(button).to_have_count(1, timeout=3000)
-        return button
+        # Compatibility name only: return the REAL option, never fake tile geometry.
+        option=ProjectCloudBrowserContract.project_filter(self).locator('option').filter(has_text=re.compile(r'^'+re.escape(name)+r'(?:\s|$)'))
+        expect(option).to_have_count(1,timeout=3000)
+        return option
+
+    def select_project(self, name):
+        option=self.tile(name)
+        ProjectCloudBrowserContract.project_filter(self).select_option(option.get_attribute('value'))
+
+    def selected_filter(self):
+        return ProjectCloudBrowserContract.project_filter(self).input_value()
 
     def order(self):
-        names = [p['name'] for p in project_rows()]
-        positions = {name:self.tile(name).evaluate('el=>[...document.querySelectorAll("button")].indexOf(el)') for name in names}
-        return sorted(names,key=lambda name:positions[name])
+        return ProjectCloudBrowserContract.project_filter(self).locator('option').all_text_contents()
 
     def choose_sort(self, value):
-        control = self.page.get_by_role('combobox', name=re.compile('Сорт|Порядок',re.I))
-        if control.count():
-            self.assertEqual(control.count(), 1); control.focus(); control.select_option(value)
-        else:
-            button = self.page.get_by_role('button', name=re.compile('активност' if value=='activity' else 'числ|колич|сесси',re.I))
-            self.assertEqual(button.count(), 1, 'Keyboard accessible sort choice')
-            button.focus(); button.press('Enter')
-        self.page.wait_for_timeout(100)
+        raise AssertionError('Cloud count/activity sorting superseded by INV-USN03; use explicit session snapshot apply')
+
+    def assert_unavailable(self, name):
+        option=ProjectCloudBrowserContract.project_filter(self).locator('option').filter(has_text=re.compile(r'^'+re.escape(name)+r'(?:\s|$)'))
+        self.assertTrue(option.count()==0 or option.is_disabled(),'Unavailable project must not be selectable')
+
+    def open_session(self, title='Cloud synthetic session'):
+        listing=self.page.get_by_role('list',name=re.compile('Сессии',re.I)).or_(
+            self.page.get_by_role('listbox',name=re.compile('Сессии',re.I)))
+        row=listing.get_by_role('listitem').or_(listing.get_by_role('option')).filter(has_text=title)
+        expect(row).to_have_count(1)
+        button=row.get_by_role('button',name=re.compile('Открыть(?: сессию)?|'+re.escape(title),re.I))
+        expect(button).to_have_count(1); button.click()
 
     def refresh(self):
-        button = self.page.get_by_role('button', name='Обновить проекты', exact=True)
-        self.assertEqual(button.count(), 1, 'Explicit summary refresh button')
-        button.click(); self.page.wait_for_timeout(300)
+        button=self.page.get_by_role('button',name='Обновить проекты',exact=True)
+        expect(button).to_have_count(1); button.click(); self.page.wait_for_timeout(300)
 
-    def test_INV_WSESS_19_count_sort_numeric_bounded_size_keyboard_selection_and_widths(self):
-        expected = ['stle','high','loww','Tieb','tieb','tiec','zero','down','unkn']
-        for name in expected:
-            button = self.tile(name)
-            self.assertEqual(button.get_attribute('type'), 'button')
-            self.assertTrue(button.locator('xpath=ancestor::*[@role="group" and (@aria-label or @aria-labelledby)]').count(), 'Labelled project group')
-        self.assertEqual(self.order(), expected, 'Initial count desc with alias tie-break and unknown last')
-        self.assertTrue(self.tile('down').is_disabled())
-        self.assertRegex(self.tile('zero').inner_text(), r'\b0\b')
-        self.assertRegex(self.tile('stle').inner_text(), '(?i)устар|stale')
-        for width in (360,768,1280):
-            self.page.set_viewport_size({'width':width,'height':900})
-            sizes = {name:self.tile(name).bounding_box() for name in ('zero','loww','high','stle')}
-            areas = [sizes[name]['width']*sizes[name]['height'] for name in ('zero','loww','high','stle')]
-            self.assertEqual(areas, sorted(areas), 'Known count monotonically sizes cloud tiles')
-            self.assertGreater(areas[-1], areas[0], 'Counts visibly affect size')
-            self.assertLessEqual(self.page.evaluate('Math.max(document.documentElement.scrollWidth,document.body.scrollWidth)'),width+1)
-            for size in sizes.values(): self.assertGreaterEqual(size['height'], 44 if width<1024 else 40)
-        self.tile('high').focus(); self.tile('high').press('Space')
-        self.assertEqual(self.tile('high').get_attribute('aria-pressed'),'true')
-        self.page.get_by_role('button',name='Cloud synthetic session',exact=False).wait_for()
-        self.assertFalse(any(c['method']=='history' for c in self.calls()), 'Project selection does not load session history')
+    def test_USN_project_options_authorized_keyboard_filter_and_phone_widths(self):
+        for name in ('high','loww','zero','stle','unkn'): self.tile(name)
+        self.assert_unavailable('down')
+        self.project_filter().focus()
+        self.select_project('high')
+        self.assertEqual(self.selected_filter(),'high')
+        self.page.get_by_text('Cloud synthetic session',exact=True).first.wait_for(state='attached')
+        self.assertFalse(any(c['method']=='history' for c in self.calls()),'Filter must not select a chat')
         self.assertEqual({c['project'] for c in self.calls() if c['method']=='list'},{'high'})
+        for width in (320,360,768,1280):
+            self.page.set_viewport_size({'width':width,'height':900})
+            self.assertLessEqual(self.page.evaluate('Math.max(document.documentElement.scrollWidth,document.body.scrollWidth)'),width+1)
+        self.assertFalse(any(method=='POST' for method,url in self.network))
 
-    def test_INV_WSESS_19_activity_groups_ties_and_only_sort_enum_persists(self):
-        self.tile('high'); self.choose_sort('activity')
-        self.assertEqual(self.order(), ['Tieb','tieb','tiec','loww','high','stle','zero','down','unkn'])
+    def test_USN_filter_namespace_does_not_persist_project_metadata_or_reorder_chat(self):
+        self.select_project('high'); self.select_project('loww')
+        self.assertEqual(self.selected_filter(),'loww')
+        self.assertFalse(any(c['method']=='history' for c in self.calls()))
         self.page.reload()
         self.page.get_by_role('button',name='Сессии',exact=True).or_(self.page.get_by_role('tab',name='Сессии',exact=True)).click()
-        self.page.wait_for_timeout(150)
-        self.assertEqual(self.order(), ['Tieb','tieb','tiec','loww','high','stle','zero','down','unkn'], 'Activity mode survives full reload')
-        self.assertEqual(self.page.evaluate('Object.values(localStorage).concat(Object.values(sessionStorage))'), ['activity'])
+        self.tile('high'); self.tile('loww')
+        stored=self.page.evaluate('Object.values(localStorage).concat(Object.values(sessionStorage))')
+        self.assertFalse(any('Cloud synthetic' in value or 'session_count' in value for value in stored),
+                         'Project metadata/session content must not become browser persistence')
 
     def test_INV_WSESS_19_valid_and_unavailable_deeplinks_use_exact_project_and_sid(self):
         self.page.goto(self.url+'/?project=high&sid='+SID)
         self.page.get_by_text('CLOUD SYNTHETIC HISTORY',exact=True).wait_for()
-        self.assertEqual(self.tile('high').get_attribute('aria-pressed'),'true')
+        from urllib.parse import parse_qs,urlsplit
+        self.assertEqual(parse_qs(urlsplit(self.page.url).query),{'project':['high'],'sid':[SID]})
         self.assertTrue(any(c.get('project')=='high' and c.get('sid')==SID for c in self.calls()))
-        before = len(self.calls()); self.page.goto(self.url+'/?project=down&sid='+SID)
+        before=len(self.calls()); self.page.goto(self.url+'/?project=down&sid='+SID)
         self.page.wait_for_timeout(400)
         self.assertFalse(any(c['method']=='history' for c in self.calls()[before:]))
-        self.assertTrue(self.tile('down').is_disabled())
+        self.assert_unavailable('down')
         before=len(self.calls()); self.page.goto(self.url+'/?project=secret&sid='+SID); self.page.wait_for_timeout(300)
-        self.assertFalse(any(c.get('project')=='secret' or c['method']=='history' for c in self.calls()[before:]), 'Unauthorized deeplink never loads history or project sessions')
-        self.assertEqual(self.page.get_by_role('button',name=re.compile('secret')).count(),0)
-        self.assertFalse(any(method=='POST' and '/api/session-send' in url for method,url in self.network))
+        self.assertFalse(any(c.get('project')=='secret' or c['method']=='history' for c in self.calls()[before:]),
+                         'Unauthorized deeplink never reads sessions/history')
+        self.assertEqual(self.project_filter().locator('option').filter(has_text='secret').count(),0)
+        self.assertFalse(any(method=='POST' for method,url in self.network))
 
-    def test_INV_WSESS_19_refresh_reflows_without_losing_focus_selection_or_viewport(self):
-        self.tile('high').press('Enter'); self.tile('high').focus()
-        before_y = self.page.evaluate('scrollY')
-        rows = project_rows(); rows[1]['session_count']=1000000
-        self.control(projects=rows)
-        # Trigger explicit refresh through keyboard while restoring reader focus
-        # to the selected tile before the controlled delayed response completes.
+    def test_USN_metadata_refresh_preserves_current_chat_draft_filter_and_focus(self):
+        self.select_project('high'); self.open_session()
+        self.page.get_by_text('CLOUD SYNTHETIC HISTORY',exact=True).wait_for()
+        self.select_project('loww')
+        composer=self.page.locator('textarea'); composer.fill('Filter-independent project draft')
+        before_url=self.page.url
+        rows=project_rows(); rows[1]['session_count']=1000000
         self.control(projects=rows,summary_delay=.4)
-        button = self.page.get_by_role('button',name='Обновить проекты',exact=True)
-        self.assertEqual(button.count(),1); button.click(); self.tile('high').focus()
+        self.page.get_by_role('button',name='Обновить проекты',exact=True).click()
+        composer.evaluate('e=>e.focus({preventScroll:true})')
         self.page.wait_for_timeout(700)
-        self.assertTrue(self.tile('high').evaluate('el=>el===document.activeElement'))
-        self.assertEqual(self.tile('high').get_attribute('aria-pressed'),'true')
-        self.assertLessEqual(abs(self.page.evaluate('scrollY')-before_y),8)
-        self.assertLessEqual(self.tile('high').bounding_box()['width'],self.page.viewport_size['width'])
+        self.assertTrue(composer.evaluate('e=>e===document.activeElement'))
+        self.assertEqual(composer.input_value(),'Filter-independent project draft')
+        self.assertEqual(self.selected_filter(),'loww')
+        self.assertEqual(self.page.url,before_url)
+        self.page.get_by_text('CLOUD SYNTHETIC HISTORY',exact=True).wait_for()
 
     def test_INV_WSESS_19_summary_failure_keeps_authoritative_projects_and_honest_unknown(self):
         self.control(projects=project_rows(),summary_error=True)
         self.page.reload()
         self.page.get_by_role('button',name='Сессии',exact=True).or_(self.page.get_by_role('tab',name='Сессии',exact=True)).click()
         self.page.wait_for_timeout(300)
-        for name in ('high','loww','zero','stle','unkn','down'): self.tile(name)
-        self.assertRegex(self.page.locator('body').inner_text(), '(?i)неизвест|недоступ|ошиб|не удалось')
-        self.assertNotRegex(self.tile('high').inner_text(), r'\b0\b', 'Summary failure cannot invent count0')
+        for name in ('high','loww','zero','stle','unkn'): self.tile(name)
+        self.assert_unavailable('down')
+        self.assertRegex(self.page.locator('body').inner_text(),r'(?i)неизвест|недоступ|ошиб|не удалось|непол|частич')
+        self.assertNotRegex(self.tile('high').inner_text(),r'\b0\b','Summary failure cannot invent count0')
         self.assertFalse(any(c['method']=='history' for c in self.calls()))
 
     def test_INV_WSESS_19_selected_project_becoming_unavailable_clears_history_and_late_response(self):
-        self.tile('high').press('Enter')
+        self.select_project('high')
         self.control(projects=project_rows(),history_delay=1.2)
-        self.page.get_by_role('button',name='Cloud synthetic session',exact=False).click()
-        self.page.wait_for_timeout(100)
+        self.open_session(); self.page.wait_for_timeout(100)
         rows=project_rows(); rows[1].update(summary_state='unavailable',session_count=None,last_activity=None,as_of=None)
         self.control(projects=rows); self.refresh()
-        self.assertTrue(self.tile('high').is_disabled())
-        self.assertNotEqual(self.tile('high').get_attribute('aria-pressed'),'true')
+        self.assert_unavailable('high')
         self.page.wait_for_timeout(1300)
-        self.assertEqual(self.page.get_by_text('CLOUD SYNTHETIC HISTORY',exact=True).count(),0,
-                         'Late pre-refresh history cannot restore unavailable selected project')
+        self.assertNotIn('CLOUD SYNTHETIC HISTORY',self.page.locator('body').inner_text(),
+                         'Late history cannot restore unavailable selected project')
 
 
 if __name__ == '__main__':

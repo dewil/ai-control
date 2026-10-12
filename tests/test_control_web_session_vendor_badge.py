@@ -1,5 +1,8 @@
 """Source-blind synthetic coverage for the bounded INV-WSESS-28 vendor badge."""
+import hashlib
+
 from control_browser_helpers import choose_project
+from control_browser_helpers import session_navigator
 import importlib
 import json
 import os
@@ -13,6 +16,17 @@ import time
 import unittest
 
 from test_control_web_chat_width_browser import private_json, totp, PASSWORD, SECRET
+
+
+def verify_source_assets(case, origin):
+    """Prove this fixture serves selected source bytes, without inspecting logic."""
+    root = Path(__file__).resolve().parents[1]
+    for url, name in (('/web.js', '_control_web.js'), ('/web.css', '_control_web.css')):
+        response = case.page.request.get(origin + url)
+        case.assertEqual(response.status, 200, 'Fixture asset HTTP status: ' + url)
+        case.assertEqual(hashlib.sha256(response.body()).hexdigest(),
+                         hashlib.sha256((root / 'bin' / name).read_bytes()).hexdigest(),
+                         'Fixture serves another source root: ' + url)
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bin"))
@@ -189,6 +203,7 @@ class SessionVendorBadgeBrowser(unittest.TestCase):
         self.page = self.context.new_page()
         self.addCleanup(self.page.close)
         self.page.set_default_timeout(5000)
+        verify_source_assets(self, self.url)
         self.network = []
         self.runtime_errors = []
         self.page.on("request", lambda request: self.network.append((request.method, request.url)))
@@ -210,23 +225,28 @@ class SessionVendorBadgeBrowser(unittest.TestCase):
         self.assertEqual(self.list_payload["has_more"], True)
         self.assertEqual([row["sid"] for row in self.list_payload["rows"]],
                          [SID, OTHER, UNKNOWN, MALICIOUS, NONSTRING, CONSTRUCTOR, PROTO, TOSTRING])
-        choices = self.page.locator(".session-choice")
+        listing = session_navigator(self.page)
+        choices = listing.get_by_role('option')
+        if choices.count() == 0: choices = listing.get_by_role('listitem')
         choices.first.wait_for()
         self.assertEqual(choices.count(), 8)
-        badges = self.page.locator(".session-choice .session-vendor-badge")
-        self.assertEqual(badges.count(), 8, "Each session choice needs a separate vendor badge span")
         expected = ["Codex", "Claude", "Вендор неизвестен", "Вендор неизвестен", "Вендор неизвестен",
                     "Вендор неизвестен", "Вендор неизвестен", "Вендор неизвестен"]
-        self.assertEqual([badge.inner_text() for badge in badges.all()], expected)
-        self.assertTrue(all(badge.evaluate("el => el.tagName === 'SPAN'") for badge in badges.all()))
+        self.assertEqual([row.inner_text().splitlines()[0].strip() for row in choices.all()],
+                         ["Claude is only the first title", "Codex is only the second title",
+                          "Unknown synthetic provider", "Malicious vendor metadata", "Non-string vendor metadata",
+                          "Prototype key constructor", "Prototype key proto", "Prototype key toString"])
+        self.assertEqual([row.inner_text().splitlines()[1].split(' · ')[-1].strip()
+                         for row in choices.all()], expected,
+                         "Each unified row includes a fixed allowlisted vendor label")
         malicious = choices.nth(3)
         self.assertEqual(malicious.locator("img,script,svg").count(), 0,
                          "Untrusted vendor metadata cannot create markup")
         self.assertIsNone(self.page.evaluate("window.__vendorProbe"))
         self.assertIn("Malicious vendor metadata", malicious.inner_text())
         self.assertIn("Unknown synthetic provider", choices.nth(2).inner_text())
-        self.assertEqual([choice.get_attribute("aria-pressed") for choice in choices.all()],
-                         ["false"] * 8)
+        self.assertEqual(self.page.url.split('?',1)[0].rstrip('/'), self.url.rstrip('/'),
+                         'Rendering vendor metadata does not select a chat or change route')
 
         self.page.wait_for_timeout(100)
         list_calls = [json.loads(line) for line in (self.evidence / "calls.jsonl").read_text().splitlines()]
@@ -234,9 +254,8 @@ class SessionVendorBadgeBrowser(unittest.TestCase):
                          "Displaying badges must preserve the existing first-page request")
         self.assertTrue(any("/api/sessions?" in url for _, url in self.network))
 
-        choices.first.click()
+        choices.first.get_by_role('button', name=re.compile('Открыть сессию')).click()
         self.page.get_by_text("Synthetic selected history", exact=True).wait_for()
-        self.assertEqual(choices.first.get_attribute("aria-pressed"), "true")
         calls = [json.loads(line) for line in (self.evidence / "calls.jsonl").read_text().splitlines()]
         self.assertEqual([call for call in calls if call["method"] == "history"],
                          [{"method": "history", "project": "demo", "sid": SID, "cursor": None}])

@@ -2,8 +2,9 @@
 # Accepted INV-WSESS-47..50 (2026-10-08-spec-live-observability-package.md):
 # canonical captions/chips and native disclosures replace the previous labels/layout.
 
-from control_browser_helpers import choose_project
+from control_browser_helpers import choose_project, session_navigator
 import importlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -179,6 +180,10 @@ class SessionRenameBrowser(unittest.TestCase):
         self.beta = self.row(OTHER_TITLE)
         self.alpha.wait_for(state='visible')
         self.open_session(SID)
+        for path,name in (('/web.js','_control_web.js'),('/web.css','_control_web.css')):
+            response=self.page.request.get(self.url+path)
+            self.assertEqual(response.status,200)
+            self.assertEqual(hashlib.sha256(response.body()).hexdigest(),hashlib.sha256((self.root/'bin'/name).read_bytes()).hexdigest())
 
     def tearDown(self):
         self.assertEqual(self.errors, [], 'Synthetic browser flow must not raise JavaScript exceptions')
@@ -193,9 +198,13 @@ class SessionRenameBrowser(unittest.TestCase):
         return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()] if path.exists() else []
 
     def row(self, title):
-        return self.page.get_by_role('button', name=re.compile(re.escape(title)))
+        # Public unified list, including a closed mobile drawer while a rename dialog is open.
+        listing=self.page.get_by_role('list',name='Сессии',exact=True,include_hidden=True).or_(
+            self.page.get_by_role('listbox',name='Сессии',exact=True,include_hidden=True))
+        return listing.get_by_role('button',name=re.compile('Открыть(?: сессию)? '+re.escape(title)),include_hidden=True)
 
     def open_session(self, sid):
+        session_navigator(self.page)
         (self.alpha if sid == SID else self.beta).click()
         title = OLD_TITLE if sid == SID else OTHER_TITLE
         self.page.get_by_text('Synthetic history for ' + title, exact=True).wait_for(state='attached')
@@ -245,7 +254,7 @@ class SessionRenameBrowser(unittest.TestCase):
 
     def assert_title(self, title):
         # Response headers may arrive before the browser applies its JSON result.
-        self.row(title).wait_for(state='visible', timeout=5000)
+        self.row(title).wait_for(state='attached', timeout=5000)
         self.heading(title).wait_for(state='visible', timeout=5000)
         self.assertEqual(self.row(title).count(), 1, 'Only the matching session list row receives the title')
         self.assertEqual(self.heading(title).count(), 1, 'Selected chat heading shows the confirmed title')

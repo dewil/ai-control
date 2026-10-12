@@ -1,5 +1,6 @@
 """Source-blind INV-WSESS-37 browser contracts with a synthetic HTTP backend."""
 import importlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,8 @@ import unittest
 import urllib.request
 
 from test_control_web_chat_width_browser import private_json, totp, PASSWORD, SECRET
+from control_browser_helpers import session_navigator
+from playwright.sync_api import expect
 
 ROOT = Path(__file__).resolve().parents[1]
 SID = '11111111-1111-4111-8111-111111111111'
@@ -223,6 +226,10 @@ class ConfiguredCreateBrowser(unittest.TestCase):
             self.page.get_by_role('tab', name=re.compile('^Сессии$', re.I))).click()
         from control_browser_helpers import choose_project
         choose_project(self.page, 'demo')
+        for path,name in (('/web.js','_control_web.js'),('/web.css','_control_web.css')):
+            response=self.page.request.get(self.url+path)
+            self.assertEqual(response.status,200)
+            self.assertEqual(hashlib.sha256(response.body()).hexdigest(),hashlib.sha256((self.root/'bin'/name).read_bytes()).hexdigest())
 
     def tearDown(self):
         self.assertEqual(self.errors, [], 'Synthetic create flow must not raise JavaScript exceptions')
@@ -236,7 +243,13 @@ class ConfiguredCreateBrowser(unittest.TestCase):
         path = self.evidence / 'calls.jsonl'
         return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()] if path.exists() else []
 
+    def navigation_action(self,title):
+        listing=self.page.get_by_role('list',name='Сессии',exact=True,include_hidden=True).or_(
+            self.page.get_by_role('listbox',name='Сессии',exact=True,include_hidden=True))
+        return listing.get_by_role('button',name=re.compile('Открыть(?: сессию)? '+re.escape(title)),include_hidden=True)
+
     def open_dialog(self):
+        session_navigator(self.page)
         button = self.page.get_by_role('button', name='Новая сессия', exact=True)
         self.assertEqual(button.count(), 1, 'INV-WSESS-37 requires one project-toolbar create action')
         button.click()
@@ -295,6 +308,7 @@ class ConfiguredCreateBrowser(unittest.TestCase):
         self.assertEqual([call.get('index') for call in self.calls() if call.get('method') == 'options'], [1],
                          'First same-project options response is held by the synthetic backend')
         dialog.get_by_role('button', name='Отмена', exact=True).click()
+        session_navigator(self.page)
         toolbar = self.page.get_by_role('button', name='Новая сессия', exact=True)
         self.assertEqual(toolbar.count(), 1)
         with self.page.expect_response(lambda response: response.request.method == 'GET' and
@@ -358,9 +372,11 @@ class ConfiguredCreateBrowser(unittest.TestCase):
         self.assertEqual((session.get('sid'), session.get('project'), session.get('vendor'),
                           session.get('context_mode')), (CREATED, 'demo', 'codex', 'configured'))
         self.page.get_by_role('heading', name='Новая сессия', exact=True).wait_for(state='visible')
-        selected_row = self.page.get_by_role('button').filter(has_text='Новая сессия').filter(has_text='Codex')
-        self.assertEqual(selected_row.count(), 1,
-                         'Accepted session row shows the local title fallback and Codex vendor badge')
+        listing=session_navigator(self.page)
+        selected_row=listing.get_by_role('listitem').or_(listing.get_by_role('option')).filter(has_text='Новая сессия')
+        expect(selected_row).to_have_count(1)
+        self.assertIn('Codex',selected_row.inner_text(),'Accepted unified row keeps title fallback/vendor')
+        self.page.get_by_role('button',name='Закрыть список сессий',exact=True).click()
         self.page.get_by_text('История пока недоступна', exact=True).wait_for(state='visible')
         self.assertEqual(self.page.locator('textarea').count(), 1,
                          'Only the explicit-message composer is available for the accepted empty thread')
@@ -422,10 +438,12 @@ class ConfiguredCreateBrowser(unittest.TestCase):
             dialog.get_by_role('button', name='Создать', exact=True).click()
         payload = json.loads(captured.value.post_data)
         dialog.get_by_role('button', name='Отмена', exact=True).click()
-        beta = self.page.get_by_role('button', name=re.compile('Beta synthetic session'))
+        session_navigator(self.page)
+        beta = self.navigation_action('Beta synthetic session')
         self.assertEqual(beta.count(), 1)
         beta.click()
-        alpha = self.page.get_by_role('button', name=re.compile('Alpha synthetic session'))
+        session_navigator(self.page)
+        alpha = self.navigation_action('Alpha synthetic session')
         self.assertEqual(alpha.count(), 1)
         alpha.click()
         self.page.get_by_role('heading', name='Alpha synthetic session', exact=True).wait_for(state='visible')

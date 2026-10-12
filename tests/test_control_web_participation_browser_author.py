@@ -60,7 +60,13 @@ class ParticipationBrowserAuthor(unittest.TestCase):
 
     def test_pool_question_navigation_focuses_exact_current_interaction(self):
         self.select();self.prompt_ready()
-        self.page.get_by_role('button',name='Открыть вопрос',exact=True).click()
+        # INV-USN04/05: the question target is a row-menu action in the mobile
+        # navigator, which is deliberately closed after selecting the chat.
+        drawer=blind.ParticipationBrowserBlind.open_navigator(self)
+        row=blind.ParticipationBrowserBlind.session_list(self,drawer).get_by_role(
+            'listitem').filter(has_text='LIVE synthetic A')
+        row.get_by_role('button',name='Действия',exact=True).click()
+        row.get_by_role('menuitem',name='Открыть вопрос',exact=True).click()
         self.until(lambda:self.page.evaluate('document.activeElement?.dataset.interactionId')==blind.s.HANDLE)
         self.assertEqual(self.posts(),[])
 

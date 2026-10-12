@@ -266,3 +266,8 @@ INV-CUI-02: session(project,sid) сохраняет DOM identity/focus/ручн�
 INV-CUI-03: автоматические обновления выше reader сохраняют видимый anchor либо явное bottom-follow, пользовательский scroll и навигация имеют приоритет, компенсация не удваивает browser anchoring.
 INV-CUI-04: уплотнение существующих navigation/project/chat controls сохраняет информацию и touch targets, без новой UI зависимости/state store.
 Feature docs/dev/2026-10-12-spec-compact-ui-window-markers.md; independent browser acceptance test_control_web_compact_stability_blind.py.
+
+## Единый навигатор сессий — решение dwl12.10
+INV-USN-01..08 определены в docs/dev/2026-10-12-spec-unified-session-navigator.md: один видимый дедуплицированный список, фильтры и неподвижный snapshot, отдельный mobile dialog и desktop sidebar, независимость фильтра от чата, bounded authorized sources и немедленное удаление отозванных данных.
+Новая presentation заменяет live-sort INV-WPIN03 и три видимые группы INV-SOV05: статусы/счётчики и source authority сохраняются, порядок меняется только по явному действию. Сохранение ручного состояния INV-CUI02 относится к панели/меню нового списка, не требует старого блока «Прочие состояния». Read-only/schema/grant/once-only ограничения прежние. Backend/API/collector не расширяются.
+Трассируемость: независимые browser RED единого навигатора и адаптированные browser helpers; source/wire/authority suites сохраняются. Source/installed acceptance фиксируются владельцем CONTROL-UNIFIED-SESSION-NAVIGATOR.

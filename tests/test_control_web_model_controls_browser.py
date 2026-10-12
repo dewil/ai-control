@@ -1,3 +1,4 @@
+from control_browser_helpers import session_navigator
 """Source-blind INV-WSESS-27 browser contracts with synthetic HTTP fixtures."""
 # Accepted INV-WSESS-47..50 (2026-10-08-spec-live-observability-package.md):
 # canonical captions/chips and native disclosures replace the previous labels/layout.
@@ -207,6 +208,7 @@ class ModelControlsBrowserContract(unittest.TestCase):
         return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()] if path.exists() else []
 
     def open_alpha(self):
+        session_navigator(self.page)  # INV-USN05: selecting closes the mobile drawer.
         self.alpha_session.click()
         self.page.locator('textarea').wait_for(state='visible')
         self.assert_controls()
@@ -330,6 +332,7 @@ class ModelControlsBrowserContract(unittest.TestCase):
                        OTHER: available([{'id': 'beta-ui', 'label': 'Model Beta', 'efforts': ['medium'],
                                           'default_effort': 'medium', 'is_default': True}], catalog_id='b' * 64)},
             'model_delay': {SID: .6}})
+        session_navigator(self.page)  # INV-USN05: selecting closes the mobile drawer.
         self.alpha_session.click()
         self.page.locator('textarea').wait_for(state='visible')
         model, _ = self.assert_controls()
@@ -338,6 +341,7 @@ class ModelControlsBrowserContract(unittest.TestCase):
             self.page.wait_for_timeout(20)
         self.assertTrue(any('/api/session-models?' in request.url and SID in request.url for request in self.network),
                         'Opening a session must start its model catalog request before testing late-response fencing')
+        session_navigator(self.page)  # INV-USN05: selecting closes the mobile drawer.
         self.beta_session.click()
         model, _ = self.assert_controls()
         self.wait_for_option('Model Beta')
