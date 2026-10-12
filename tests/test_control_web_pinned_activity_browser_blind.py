@@ -6,7 +6,7 @@ import unittest
 from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit,parse_qs
 from playwright.sync_api import expect
-from control_browser_helpers import project_is_selected
+from control_browser_helpers import session_navigator
 import live_sse_blind_support as live
 import native_queue_blind_support as q
 import navigation_start_blind_support as nav
@@ -22,8 +22,6 @@ class PinnedActivityBrowserBlind(unittest.TestCase):
     tearDown=old.NavigationStartBrowserBlind.tearDown
     until=old.NavigationStartBrowserBlind.until
     select=old.NavigationStartBrowserBlind.select
-    pin_block=old.NavigationStartBrowserBlind.pin_block
-    pins_title=old.NavigationStartBrowserBlind.pins_title
     hidden=old.NavigationStartBrowserBlind.hidden
     visible=old.NavigationStartBrowserBlind.visible
     navposts=old.NavigationStartBrowserBlind.navposts
@@ -34,8 +32,28 @@ class PinnedActivityBrowserBlind(unittest.TestCase):
             if self.pins_transport_failure:route.abort('failed')
             else:route.fulfill(status=200,json=deepcopy(self.value))
         self.page.route(PINS_ROUTE,respond)
+    def pin_block(self):
+        rows=session_navigator(self.page)
+        pinned_filter=self.page.get_by_role('button',name=re.compile(r'^Закреплённые'))
+        expect(pinned_filter).to_be_visible()
+        if pinned_filter.get_attribute('aria-pressed')!='true':pinned_filter.click()
+        return rows
     def row(self,title='Pinned synthetic A'):
-        return self.pin_block().get_by_text(title,exact=True).locator('xpath=ancestor::*[.//button][1]')
+        rows=self.pin_block();options=rows.get_by_role('option')
+        candidates=options if options.count() else rows.get_by_role('listitem')
+        row=candidates.filter(has_text=title);expect(row).to_have_count(1)
+        return row
+    def row_actions(self,title):
+        row=self.row(title)
+        menu=row.get_by_role('button',name=re.compile(r'⋯|Действия|Меню',re.I))
+        expect(menu).to_have_count(1);menu.click()
+        return row
+    def unpin_action(self,title):
+        self.row_actions(title)
+        action=self.page.get_by_role('menuitem',name=old.UNPIN).or_(
+            self.page.get_by_role('button',name=old.UNPIN))
+        expect(action).to_have_count(1)
+        return action.first
     def refresh(self):
         before=self.pin_gets;self.visible();self.until(lambda:self.pin_gets>before);self.page.wait_for_timeout(80)
         self.assertTrue(all(query=={'activity':['1']} for query in self.pin_queries),'New UI must explicitly negotiate activity=1')
@@ -109,11 +127,17 @@ class PinnedActivityBrowserBlind(unittest.TestCase):
         title=self.pin_block().get_by_role('button',name='Pinned synthetic A',exact=True)
         title.focus();title.evaluate('e=>window.activityPinNode=e')
         anchor.evaluate("e=>{window.activityReader=e;e.scrollIntoView({block:'start'})}");before=anchor.bounding_box()['y']
-        self.value['items'][1]['last_activity']=a.NOW-1;self.refresh();self.order(['Pinned synthetic B','Pinned synthetic A'])
+        self.value['items'][1]['last_activity']=a.NOW-1;self.refresh()
+        self.order(['Pinned synthetic A','Pinned synthetic B'])
+        self.page.get_by_role('button',name='Обновить список',exact=True).click()
+        self.order(['Pinned synthetic B','Pinned synthetic A'])
         self.assertTrue(title.evaluate('e=>e===window.activityPinNode&&e===document.activeElement'),'Reorder replaced focused pin node')
         self.assertTrue(anchor.evaluate('e=>e===window.activityReader'));self.assertLessEqual(abs(anchor.bounding_box()['y']-before),8)
-        self.pin_block().get_by_text('Pinned synthetic B',exact=True).click();self.assertTrue(project_is_selected(self.page,'other'))
-        self.row('Pinned synthetic B').get_by_role('button',name=old.UNPIN).click()
+        self.pin_block().get_by_text('Pinned synthetic B',exact=True).click()
+        query=parse_qs(urlsplit(self.page.url).query)
+        self.assertEqual(query.get('project'),['other'])
+        self.assertEqual(query.get('sid'),[q.OTHER])
+        self.unpin_action('Pinned synthetic B').click()
         self.until(lambda:any(call[0]=='unpin' for call in self.backend.nav_calls))
         self.assertEqual([call for call in self.backend.nav_calls if call[0]=='unpin'],[('unpin','owner',q.OTHER)])
         self.assertEqual([r[1] for r in self.navposts()],['/api/session-unpin'])
