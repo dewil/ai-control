@@ -96,7 +96,7 @@ def fake_stat(real, *, owner=1000, mode=None, nlink=None, inode=None):
 
 
 def redirect_status_io(fixture):
-    """Redirect the documented fixed status path to an owned private fixture."""
+    """Patch producers/readers to a private fixture and forbid canonical-path IO."""
     stack = ExitStack()
     fixture = Path(fixture)
     status_dir = str(Path(BRIDGE_STATUS_FILE).parent)
@@ -104,21 +104,26 @@ def redirect_status_io(fixture):
     real_mkdir, real_replace, real_unlink = os.mkdir, os.replace, os.unlink
     real_chmod, real_path_open, real_builtin_open = os.chmod, Path.open, builtins.open
 
-    def remap(value):
+    for module_name in ("_control_web_devbus_nats", "_control_web_broker"):
+        module = importlib.import_module(module_name)
+        if hasattr(module, "BRIDGE_STATUS_PATH"):
+            stack.enter_context(patch.object(module, "BRIDGE_STATUS_PATH", fixture))
+
+    def guard(value):
         text = os.fsdecode(value)
-        if text == BRIDGE_STATUS_FILE or text.startswith(status_dir + os.sep):
-            return fixture.parent / Path(text).name
+        if text in {BRIDGE_STATUS_FILE, status_dir} or text.startswith(status_dir + os.sep):
+            raise AssertionError("test attempted IO through canonical bridge status path")
         return value
 
-    stack.enter_context(patch.object(os, "open", side_effect=lambda path, *a, **k: real_open(remap(path), *a, **k)))
-    stack.enter_context(patch.object(os, "stat", side_effect=lambda path, *a, **k: real_stat(remap(path), *a, **k)))
-    stack.enter_context(patch.object(os, "lstat", side_effect=lambda path, *a, **k: real_lstat(remap(path), *a, **k)))
-    stack.enter_context(patch.object(os, "mkdir", side_effect=lambda path, *a, **k: real_mkdir(remap(path), *a, **k)))
-    stack.enter_context(patch.object(os, "replace", side_effect=lambda src, dst, *a, **k: real_replace(remap(src), remap(dst), *a, **k)))
-    stack.enter_context(patch.object(os, "unlink", side_effect=lambda path, *a, **k: real_unlink(remap(path), *a, **k)))
-    stack.enter_context(patch.object(os, "chmod", side_effect=lambda path, *a, **k: real_chmod(remap(path), *a, **k)))
-    stack.enter_context(patch.object(Path, "open", lambda self, *a, **k: real_path_open(Path(remap(self)), *a, **k)))
-    stack.enter_context(patch.object(builtins, "open", lambda path, *a, **k: real_builtin_open(remap(path), *a, **k)))
+    stack.enter_context(patch.object(os, "open", side_effect=lambda path, *a, **k: real_open(guard(path), *a, **k)))
+    stack.enter_context(patch.object(os, "stat", side_effect=lambda path, *a, **k: real_stat(guard(path), *a, **k)))
+    stack.enter_context(patch.object(os, "lstat", side_effect=lambda path, *a, **k: real_lstat(guard(path), *a, **k)))
+    stack.enter_context(patch.object(os, "mkdir", side_effect=lambda path, *a, **k: real_mkdir(guard(path), *a, **k)))
+    stack.enter_context(patch.object(os, "replace", side_effect=lambda src, dst, *a, **k: real_replace(guard(src), guard(dst), *a, **k)))
+    stack.enter_context(patch.object(os, "unlink", side_effect=lambda path, *a, **k: real_unlink(guard(path), *a, **k)))
+    stack.enter_context(patch.object(os, "chmod", side_effect=lambda path, *a, **k: real_chmod(guard(path), *a, **k)))
+    stack.enter_context(patch.object(Path, "open", lambda self, *a, **k: real_path_open(Path(guard(self)), *a, **k)))
+    stack.enter_context(patch.object(builtins, "open", lambda path, *a, **k: real_builtin_open(guard(path), *a, **k)))
     return stack
 
 
@@ -521,8 +526,14 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="sidecar-bridge-run-")
         self.addCleanup(self.temp.cleanup)
         self.status_path = Path(self.temp.name) / "devbus-bridge.json"
+        self._bridge_tasks = []
 
     async def asyncTearDown(self):
+        for task in self._bridge_tasks:
+            if not task.done():
+                task.cancel()
+        if self._bridge_tasks:
+            await asyncio.gather(*self._bridge_tasks, return_exceptions=True)
         self.temp.cleanup()
 
     def harness(self, **kwargs):
@@ -533,7 +544,9 @@ class BridgeRunBlind(unittest.IsolatedAsyncioTestCase):
 
     async def start(self, cfg, factory):
         self.addCleanup(redirect_status_io(self.status_path).close)
-        return asyncio.create_task(self.run_bridge(cfg, nats_factory=factory))
+        task = asyncio.create_task(self.run_bridge(cfg, nats_factory=factory))
+        self._bridge_tasks.append(task)
+        return task
 
     async def wait_source_fetch(self, factory):
         await asyncio.wait_for(factory.source_connected.wait(), 1)
