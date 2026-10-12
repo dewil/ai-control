@@ -9,3 +9,13 @@ HaikuSOURCEgen1791796280 unambiguousPASS/no accepted-contractblocker. Nonblockin
 Hermeticity: oldfake wrote syntheticstatus tocanonicalownerpath duepatchlifetimeendingbeforetaskcancel. Originaltestauthor0636137 partlyfixed, rawexecute.returnTask stillescaped;8e7b0d fixesfinalcleanupINSIDEfixturecontext. Rootquarantinedownedsyntheticrecord with evidence; full20caseownrun afterward leftcanonicalpathABSENT, noorigin/config/executorschanged. Failed/external-attribution report corrected, not erased. Newcasesguardproductionpaths andfinishworkersbeforepathrestore.
 
 Deployment scopes separate: signed22code viaexistingnoargshelper; sidecar/userunits/credentialfiles/precreatedsourceconsumer require reviewedownerprovisioning andinstalledread-onlynegativeproof. No liveNATSenable yet; ALPquotaexport separateblockeddependency. Native/vendor/sessionauth unaffected bysource.
+
+
+CI0eb1e7 failed four assertions: fixtureUIDportability, staleacceptedbytepin,
+legacyoverlay contamination. IndependentRED98ca6c9, originalwriter5406f92,
+originaltestauthor0eb0e07: OBS-onlyoverlay, missing/stale/disconnected bridge
+reportsdisconnected oncopy; freshretentiongapkeepslive andpartial; recovery
+preservesunderlyingOBSprojection. 22sidecar+17legacyPASS, canonicalstatusABSENT.
+HaikuSOURCEdelta gen1791804543-R48qvrHhF2ubybOZ9JXO PASS. Acceptedsource0eb0e07
+pinned in later test-onlyc121a8e, exactruntimeblobs+lockchecked; manifesttestPASS.
+NewfullCIpending; nothingdeployedfromthisdelta.
