@@ -51,3 +51,35 @@ INV-NBOOT-05. A completed exact repeat acquires the same lock, verifies immutabl
 ## Independent RED and limits of evidence
 
 `tests/test_control_node_bootstrap_red.py` uses real private temporary files, the accepted Deploy fixture and injected fake systemctl only. Cases: exact packet/unit delta/chain, pin and file drift, shared lock contention, checkpoint-before-mutation, every durable forward failure, all eight owned interrupted prefixes, rollback failure marker retention, unsafe packet/receipt, repeated execution and repeat after accepted schema6 advances, and absence of owner node config. Historical helper suites remain unchanged. Missing module is a declared implementation prerequisite, not installed proof; after implementation the same cases must be GREEN and actual source review/full CI must pass. The concrete production packet with actual hashes, source and execution carrier remains a later separately reviewable artifact; this generic DESIGN/RED never substitutes for it.
+
+## DESIGN clarification
+
+The concrete carrier is delivered through the already authorized root SSH channel as
+reviewed Python stdin bytes, with its SHA checked locally immediately before send;
+it sets EXPECTED_PACKET_SHA256 to the reviewed literal. No mutable carrier file is
+loaded remotely. Exact carrier bytes/hash and packet pin are recorded when the
+concrete packet is prepared; generic module design does not pretend those future
+bytes already exist. run/recover refuse missing/invalid pin or mismatch with exact
+manifest bytes. Both helper.before and helper.after are executed only after their
+hashes match the complete manifest protected by this pin. Test injection is not a
+production CLI or packet field.
+
+A first bootstrap always requires current state equal captured schema5 before.
+Only an already completed exact node receipt permits the read-only repeat path
+with a later schema5/6 state; missing receipt with an advanced state refuses.
+Reload must return success within40s before final verification and pending removal;
+nonzero/timeout triggers one rollback. Any present receipt with different exact
+bytes is foreign: refuse, retain pending, never delete or overwrite it. Missing,
+unsafe or busy existing lock raises sanitized ValueError before any writes (never
+create it). No errno text is exposed.
+
+Missing owner node config does not affect bootstrap: it is never read or created,
+services remain active and successful bootstrap returns extended. Disabled runtime
+behavior is checked independently by runtime tests and installed acceptance, not
+by inventing a config read in root bootstrap. Existing historical assertion changes
+are only latest MODES/schema-set expectations in attachment23 and deploy22 inventory;
+all fixed historical scope checks remain. Their exact diff is part of this PR.
+
+Whole packet cap2304KiB is an independent stricter aggregate limit, not the sum of
+per-leaf maxima. Manifest declared sizes are summed and rejected before leaf reads;
+each bounded read also verifies actual size/hash. A packet cannot evade either cap.
