@@ -110,6 +110,9 @@ def redirect_status_io(fixture):
         module = importlib.import_module(module_name)
         if hasattr(module, "BRIDGE_STATUS_PATH"):
             stack.enter_context(patch.object(module, "BRIDGE_STATUS_PATH", fixture))
+        if module_name == "_control_web_broker":
+            # Node launch is absent in this fixture; never read real owner state.
+            stack.enter_context(patch.object(module, "STORE_PATH", str(fixture.with_name("absent-node-tasks.sqlite"))))
 
     def guard(value):
         try: text = os.fsdecode(value)

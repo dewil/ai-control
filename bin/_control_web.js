@@ -328,7 +328,7 @@ function syncDevbusView(){
   if(devbusView)return;
   const generation=++devbusGeneration,auth=chatAuthGeneration,lifecycle=pageGeneration;
   const current=()=>pageActive()&&lifecycle===pageGeneration&&generation===devbusGeneration&&auth===chatAuthGeneration&&devbusAdmitted&&currentTab==='devbus'&&document.visibilityState==='visible';
-  devbusView=window.ControlDevbus.mount($('devbus-root'),{fetch:async(path,options)=>{
+  devbusView=window.ControlDevbus.mount($('devbus-root'),{csrf:()=>csrf,fetch:async(path,options)=>{
     if(!current())throw new DOMException('Stale BUS view','AbortError');
     const response=await fetch(path,options);
     if(!current()||options.signal?.aborted)throw new DOMException('Stale BUS view','AbortError');
@@ -2198,7 +2198,7 @@ function endHistoryScrollbarDrag(){historyScrollbarStartY=null;}
 
 $('login-form').addEventListener('submit',async event=>{event.preventDefault();if(!pageActive()||busy)return;stopLimitsView(true);busy=true;const b=event.target.querySelector('button');b.disabled=true;notice('Входим…');try{const data=await api('/api/login',{username:$('username').value,password:$('password').value,totp:$('login-totp').value});csrf=data.csrf;limitsView.authReady=true;devbusAdmitted=true;devbusTerminal=false;liveAndroidAuthGeneration=-1;$('password').value='';$('login-totp').value='';$('login').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;const link=parseDeepLink();if(link){showTab('sessions',false);await loadProjects();}else{showTab('tasks',false);updateUrl();await refresh();}}catch(err){if(err.stale)return;notice(err.message);}finally{busy=false;b.disabled=false;}});
 $('refresh').addEventListener('click',refresh);
-$('logout').addEventListener('click',async()=>{if(!pageActive())return;stopLimitsView(true);const native=androidAuth();if(native&&typeof native.requestLogout==='function'){if(lifecycleV2)closePageGate();stopPolling();stopDevbusView();devbusAdmitted=false;androidResumeGeneration++;native.requestLogout();return;}stopPolling();stopDevbusView();devbusAdmitted=false;try{await api('/api/logout',{});signedOut();drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();sessionRows=[];$('cards').replaceChildren();$('session-list').replaceChildren();clearHistoryView();updateUrl();notice('Вы вышли из Control.');}catch(err){if(err.stale)return;notice(err.message);}});
+$('logout').addEventListener('click',async()=>{if(!pageActive())return;window.ControlDevbus.clearPending();stopLimitsView(true);const native=androidAuth();if(native&&typeof native.requestLogout==='function'){if(lifecycleV2)closePageGate();stopPolling();stopDevbusView();devbusAdmitted=false;androidResumeGeneration++;native.requestLogout();return;}stopPolling();stopDevbusView();devbusAdmitted=false;try{await api('/api/logout',{});signedOut();drafts.clear();receipts.clear();latestAttempts.clear();historyData.clear();sessionRows=[];$('cards').replaceChildren();$('session-list').replaceChildren();clearHistoryView();updateUrl();notice('Вы вышли из Control.');}catch(err){if(err.stale)return;notice(err.message);}});
 $('tab-tasks').addEventListener('click',()=>showTab('tasks'));
 $('tab-sessions').addEventListener('click',()=>showTab('sessions'));
 $('tab-devbus').addEventListener('click',()=>showTab('devbus'));

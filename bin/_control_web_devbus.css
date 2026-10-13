@@ -18,3 +18,10 @@
 .devbus ol { padding-left: 1.3rem; margin: .2rem 0; }
 .devbus li { overflow-wrap: anywhere; padding: .15rem 0; }
 .devbus-events { max-height: 18rem; overflow-y: auto; }
+.control-nodes { border-bottom: 1px solid #8886; padding-bottom: .6rem; overflow-wrap: anywhere; }
+.control-nodes button { max-width: 100%; min-height: 2.5rem; margin: .25rem .3rem .25rem 0; padding: .35rem .6rem; white-space: normal; overflow-wrap: anywhere; }
+.node-task-form label { display: block; }
+.node-task-form textarea { display: block; width: 100%; resize: vertical; min-height: 6rem; padding: .4rem; font: inherit; color: inherit; background: #8881; border: 1px solid #8888; border-radius: .3rem; }
+.node-task-open { text-align: left; }
+.control-nodes :focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.control-nodes [hidden] { display: none; }

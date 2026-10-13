@@ -40,8 +40,10 @@ class AttachmentDeploy23Red(s.ControllerFixture):
     def test_exact23_modes_and_historical_state_read_contract(self):
         # INV-DEPLOY-01 INV-DEPLOY-03: extension is exactly one regular0644 module.
         self.assertEqual(getattr(self.api,'ATTACHMENT_MODES',None),FULL23)
-        self.assertEqual(self.api.MODES,FULL23);self.assertEqual(self.api.LIVE_MODES,s.FULL22)
-        self.assertEqual(set(self.api.SCHEMAS),{1,2,3,4,5})
+        # Latest default advances to exact25; schema5's fixed23 remains intact.
+        full25={**FULL23,'bin/_control_node_tasks.py':0o644,'bin/_control_node_runtime.py':0o644}
+        self.assertEqual(self.api.MODES,full25);self.assertEqual(self.api.LIVE_MODES,s.FULL22)
+        self.assertEqual(set(self.api.SCHEMAS),{1,2,3,4,5,6})
         for schema,files in ((1,self.base),(2,self.current),(3,self.before16),(4,self.after22),(5,self.after23)):
             with self.subTest(schema=schema):
                 self.assertEqual(set(self.api.SCHEMAS[schema]),set(files))

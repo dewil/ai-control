@@ -463,13 +463,14 @@ async def _bridge_quiet_error(_error):
     return None
 
 
-async def _bridge_connect(factory, url, auth):
+async def _bridge_connect(factory, url, auth, *, inbox_prefix=None):
     options = {'servers': [url], 'connect_timeout': 5, 'max_reconnect_attempts': 0,
                'allow_reconnect': False, 'error_cb': _bridge_quiet_error}
     if auth is not None:
         if auth['mode'] == 'token': options['token'] = auth['token']
         elif auth['mode'] == 'creds': options['user_credentials'] = auth['creds']
         else: options.update(user=auth['user'], password=auth['password'])
+    if inbox_prefix is not None: options['inbox_prefix'] = inbox_prefix
     result = factory(**options)
     return await asyncio.wait_for(result, 5)
 
@@ -491,7 +492,8 @@ async def _bridge_session(config, nats_factory, sticky_reason=None):
     src = dst = None
     delay = 1
     try:
-        src = await _bridge_connect(nats_factory, source_cfg['url'], source_cfg['auth'])
+        source_prefix = b'_INBOX.control_event_bridge' if source_cfg['auth']['mode'] == 'user_password' else None
+        src = await _bridge_connect(nats_factory, source_cfg['url'], source_cfg['auth'], inbox_prefix=source_prefix)
         dst = await _bridge_connect(nats_factory, dest_cfg['url'], {'mode': 'user_password', 'user': dest_cfg['user'], 'password': dest_cfg['password']})
         sjs, djs = src.jetstream(), dst.jetstream()
         await _bridge_stream_info(src, 'DEVBUS_V1', source_cfg['stream_created'], source=True)
@@ -505,7 +507,9 @@ async def _bridge_session(config, nats_factory, sticky_reason=None):
         reason = 'retention_gap' if type(first_seq) is int and first_seq > ack_floor + 1 else None
         retention_gap = reason is not None
         # The just-completed stream/consumer checks fence this first batch before binding.
-        sub = await asyncio.wait_for(sjs.pull_subscribe_bind(name=source_cfg['consumer'], stream='DEVBUS_V1'), 5)
+        bind_options = {'name': source_cfg['consumer'], 'stream': 'DEVBUS_V1'}
+        if source_prefix is not None: bind_options['inbox_prefix'] = source_prefix + b'.'
+        sub = await asyncio.wait_for(sjs.pull_subscribe_bind(**bind_options), 5)
         reason = 'retention_gap' if retention_gap else sticky_reason
         report(state='degraded' if reason else 'live', ack_floor=ack_floor, first_seq=first_seq, pending=pending, reason=reason)
         delay = 1

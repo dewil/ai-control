@@ -25,13 +25,15 @@ from urllib.parse import urlsplit
 try:
     from _control_web_devbus import Observer, Projection, _timestamp, valid_id, valid_metadata
     from _control_web_devbus_nats import NatsConfig, connect
+    from _control_node_tasks import NodeTaskStore, _uuid as valid_node_uuid
+    from _control_node_runtime import NodeTaskRuntime, STORE_PATH, load_node_tasks_config, node_result, valid_submit
 except ModuleNotFoundError as error:
-    if error.name not in {'_control_web_devbus', '_control_web_devbus_nats'}:
+    if error.name not in {'_control_web_devbus', '_control_web_devbus_nats', '_control_node_tasks', '_control_node_runtime'}:
         raise
     # The attention redactor also loads this file by spec without placing bin
     # on sys.path. Resolve only the two fixed siblings; preserve canonical module
     # identity when a normal import/test fixture already supplied either helper.
-    for name in ('_control_web_devbus', '_control_web_devbus_nats'):
+    for name in ('_control_web_devbus', '_control_web_devbus_nats', '_control_node_tasks', '_control_node_runtime'):
         if name not in sys.modules:
             spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().with_name(name + '.py'))
             module = importlib.util.module_from_spec(spec)
@@ -43,6 +45,28 @@ except ModuleNotFoundError as error:
                 raise
     from _control_web_devbus import Observer, Projection, _timestamp, valid_id, valid_metadata
     from _control_web_devbus_nats import NatsConfig, connect
+    from _control_node_tasks import NodeTaskStore, _uuid as valid_node_uuid
+    from _control_node_runtime import NodeTaskRuntime, STORE_PATH, load_node_tasks_config, node_result, valid_submit
+
+NODE_FIELDS = {
+    'node_tasks_overview': {'op', 'principal'},
+    'node_task_get': {'op', 'principal', 'task_id'},
+    'node_task_submit': {'op', 'principal', 'request_id', 'node_id', 'prompt'},
+}
+
+
+def _valid_node_request(request):
+    op = request.get('op')
+    return (op in NODE_FIELDS and set(request) == NODE_FIELDS[op]
+            and (op != 'node_task_get' or valid_node_uuid(request['task_id']))
+            and (op != 'node_task_submit' or valid_submit(request['request_id'], request['node_id'], request['prompt'])))
+
+
+def _node_result(request, value):
+    op = request['op']
+    kind = 'overview' if op == 'node_tasks_overview' else 'get' if op == 'node_task_get' else 'submit'
+    return node_result(value, kind, request.get('task_id', request.get('request_id')))
+
 
 DEVBUS_CONFIG_PATH = Path('/home/dwl/.config/ai-control/devbus-observer.json')
 BRIDGE_STATUS_PATH = Path('/home/dwl/.local/state/ai-control/devbus-bridge.json')
@@ -387,6 +411,9 @@ class DevbusRuntime:
         self._export_token = None
         self._fallback = _devbus_empty()
         self._bridge_status_enabled = False
+        self.node_tasks = None
+        self._node_store = None
+        self._node_enabled = False
 
     def start(self):
         with self._lock:
@@ -394,22 +421,35 @@ class DevbusRuntime:
                 return
             self._started = True
         try:
+            node_config, node_reason = load_node_tasks_config()
+            try:
+                if os.path.lexists(STORE_PATH) or node_config and node_config.get('enabled'):
+                    self._node_store = NodeTaskStore(STORE_PATH)
+            except ValueError:
+                self._node_store = None
+                node_reason = 'storage'
+            self.node_tasks = NodeTaskRuntime(self._node_store,
+                config_loader=(lambda: (None, 'storage')) if node_reason == 'storage' else load_node_tasks_config,
+                observer_snapshot=lambda: bounded_devbus_snapshot(self._projection) if self._projection else {})
+            node_enabled = self._node_enabled = node_config is not None and node_config.get('enabled') is True and self._node_store is not None
             config, reason = self._loader()
             self._bridge_status_enabled = (getattr(config, 'enabled', None) is True
                 and getattr(config, 'stream', None) == 'OBS_EVENTS'
                 and type(getattr(config, 'stream_created', None)) is str
                 and bool(config.stream_created))
-            if reason is not None:
+            if reason is not None and not node_enabled:
                 self._fallback = _devbus_empty('disconnected', 'invalid_config')
                 return
-            if not config.enabled:
+            if not config.enabled and not node_enabled:
                 return
             self._fallback = _devbus_empty('disconnected', 'unavailable')
             present = self._probe()
             if present is not True:
                 if present is False:
                     self._fallback = _devbus_empty('disconnected', 'dependency_unavailable')
-                return
+                if not node_enabled:
+                    return
+                config = NatsConfig()
             self._thread = threading.Thread(target=self._run, args=(config,), daemon=True, name='control-devbus')
             self._thread.start()
             if not self._ready.wait(1):
@@ -443,7 +483,10 @@ class DevbusRuntime:
             self._observer = self._observer_factory(self._projection, lambda: self._connect_factory(config))
             if self._stopping.is_set():
                 return
-            await self._observer.start()
+            if config.enabled:
+                await self._observer.start()
+            if self._node_enabled:
+                await self.node_tasks.start()
         try:
             loop.run_until_complete(setup())
             self._ready.set()
@@ -484,8 +527,20 @@ class DevbusRuntime:
     async def _cleanup(self):
         if self._cleanup_task is None:
             async def close():
-                if self._observer is not None:
-                    await asyncio.wait_for(self._observer.stop(), 10.1)
+                async def nodes():
+                    if self.node_tasks is not None:
+                        result = await self.node_tasks.stop()
+                        if not result['stopped']:
+                            raise RuntimeError('node cleanup unavailable')
+                    if self._node_store is not None:
+                        await asyncio.wait_for(asyncio.to_thread(self._node_store.close), 1)
+                        self._node_store = None
+                async def observer():
+                    if self._observer is not None:
+                        await asyncio.wait_for(self._observer.stop(), 10.1)
+                results = await asyncio.gather(nodes(), observer(), return_exceptions=True)
+                if any(isinstance(result, BaseException) for result in results):
+                    raise RuntimeError('owner cleanup unavailable')
             self._cleanup_task = asyncio.create_task(close())
         await asyncio.shield(self._cleanup_task)
 
@@ -574,6 +629,9 @@ class DevbusRuntime:
     def stop(self):
         self.request_stop()
         thread = self._thread
+        if thread is None and self._node_store is not None:
+            self._node_store.close()
+            self._node_store = None
         if thread is not None and thread is not threading.current_thread():
             thread.join(12)
             if thread.is_alive():
@@ -1966,6 +2024,23 @@ class RegistryBackend:
         self.task_attention_source = task_attention_source
         self.cached_limits_reader = cached_limits_reader
 
+    def _node(self, principal, kind, *args):
+        if type(principal) is not str or principal != 'owner':
+            return {'error': 'forbidden'}
+        runtime = getattr(self.devbus, 'node_tasks', None)
+        if runtime is None:
+            return {'error': 'unavailable'}
+        return getattr(runtime, kind)(*args)
+
+    def node_tasks_overview(self, principal):
+        return node_result(self._node(principal, 'overview'), 'overview')
+
+    def node_task_get(self, principal, task_id):
+        return node_result(self._node(principal, 'task', task_id), 'get', task_id)
+
+    def node_task_submit(self, principal, request_id, node_id, prompt):
+        return node_result(self._node(principal, 'submit', request_id, node_id, prompt), 'submit', request_id)
+
     def devbus_overview(self, task=None, agent=None):
         if not all(value is None or valid_id(value) for value in (task, agent)):
             return {'error': 'unavailable'}
@@ -2392,7 +2467,7 @@ def _receive(conn, deadline=None):
     typed_operation = False
     def pairs(items):
         nonlocal typed_operation
-        if any(key == 'op' and value in ('limits_overview', 'project_file') for key, value in items):
+        if any(key == 'op' and value in ('limits_overview', 'project_file', *NODE_FIELDS) for key, value in items):
             typed_operation = True
         result = {}
         for key, value in items:
@@ -2402,7 +2477,7 @@ def _receive(conn, deadline=None):
         return result
     result = json.loads(line, object_pairs_hook=pairs)
     if duplicates:
-        error = ValueError('duplicate field');error.invalid_queue = type(result) is dict and (typed_operation or type(result.get('op')) is str and result['op'] in QUEUE_OPS | NAV_OPS | PART_OPS | {'limits_overview', 'project_file'})
+        error = ValueError('duplicate field');error.invalid_queue = type(result) is dict and (typed_operation or type(result.get('op')) is str and result['op'] in QUEUE_OPS | NAV_OPS | PART_OPS | {'limits_overview', 'project_file'} | set(NODE_FIELDS))
         raise error
     return result
 
@@ -2428,12 +2503,13 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
     slots = threading.BoundedSemaphore(4)
     live_slot = threading.BoundedSemaphore(1)
     bus_slot = threading.BoundedSemaphore(1)
+    node_slot = threading.BoundedSemaphore(1)
     attachment_slot = threading.BoundedSemaphore(2)
     workers = set()
     workers_lock = threading.Lock()
     fields = {'snapshot': {'op'}, 'answer': {'op', 'agent', 'qid', 'decision', 'text'},
               'verdict': {'op', 'agent', 'generation', 'decision', 'comment'},
-              'devbus_overview': {'op', 'task', 'agent'}, **SESSION_FIELDS}
+              'devbus_overview': {'op', 'task', 'agent'}, **SESSION_FIELDS, **NODE_FIELDS}
 
     def reply(conn, result):
         wire = json.dumps(result, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8') + b'\n'
@@ -2446,7 +2522,13 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
             with conn:
                 try:
                     op = request['op']
-                    if op == 'snapshot':
+                    if op in NODE_FIELDS:
+                        deadline = time.monotonic() + 2
+                        method = getattr(backend, op)
+                        result = _node_result(request, method(**{key: value for key, value in request.items() if key != 'op'}))
+                        if time.monotonic() >= deadline:
+                            result = {'error': 'unavailable'}
+                    elif op == 'snapshot':
                         result = backend.snapshot()
                     elif op == 'devbus_overview':
                         deadline = time.monotonic() + 5
@@ -2518,7 +2600,9 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                     except OSError:
                         pass
         finally:
-            if request['op'] == 'session_live_snapshot':
+            if request['op'] in NODE_FIELDS:
+                node_slot.release()
+            elif request['op'] == 'session_live_snapshot':
                 live_slot.release()
             elif request['op'] == 'devbus_overview':
                 bus_slot.release()
@@ -2548,13 +2632,17 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                     live = type(request) is dict and request.get('op') == 'session_live_snapshot'
                     bus = type(request) is dict and request.get('op') == 'devbus_overview'
                     receiving=type(request) is dict and request.get('op')=='session_attachment' and request.get('action') in ('begin','chunk','finish')
-                    reservation = live_slot if live else bus_slot if bus else attachment_slot if receiving else None
+                    reservation = node_slot if type(request) is dict and request.get('op') in NODE_FIELDS else live_slot if live else bus_slot if bus else attachment_slot if receiving else None
                     if (type(request) is not dict or type(request.get('op')) is not str
                             or request['op'] not in fields):
                         result = {'error': 'unsupported'}
                     elif (set(request) != fields[request['op']] and not (
                             request['op'] in ('session_send', 'session_enqueue') and set(request) == fields[request['op']] | {'selection'})):
-                        result = {'error': 'unavailable' if live or bus else 'invalid_request' if request['op'] in QUEUE_OPS | NAV_OPS | PART_OPS | {'session_project_summary', 'limits_overview', 'project_file'} else 'invalid_or_stale'}
+                        result = {'error': 'unavailable' if live or bus else 'invalid_request' if request['op'] in QUEUE_OPS | NAV_OPS | PART_OPS | {'session_project_summary', 'limits_overview', 'project_file'} | set(NODE_FIELDS) else 'invalid_or_stale'}
+                    elif request['op'] in NODE_FIELDS and request['principal'] != 'owner':
+                        result = {'error': 'forbidden'}
+                    elif request['op'] in NODE_FIELDS and not _valid_node_request(request):
+                        result = {'error': 'invalid_request'}
                     elif request['op'] in NAV_OPS and request.get('principal', 'owner') != 'owner':
                         result = {'error': 'forbidden'}
                     elif request['op'] in SESSION_FIELDS and not _valid_session(request):
@@ -2609,6 +2697,22 @@ class SocketBackend:
     def __init__(self, socket_path):
         self.socket_path = socket_path
 
+    def _node_call(self, request):
+        if request['principal'] != 'owner':
+            return {'error': 'forbidden'}
+        if not _valid_node_request(request):
+            return {'error': 'invalid_request'}
+        return _node_result(request, self._call(request, timeout=3))
+
+    def node_tasks_overview(self, principal):
+        return self._node_call(dict(op='node_tasks_overview', principal=principal))
+
+    def node_task_get(self, principal, task_id):
+        return self._node_call(dict(op='node_task_get', principal=principal, task_id=task_id))
+
+    def node_task_submit(self, principal, request_id, node_id, prompt):
+        return self._node_call(dict(op='node_task_submit', principal=principal, request_id=request_id, node_id=node_id, prompt=prompt))
+
     def devbus_overview(self, task=None, agent=None):
         if not all(value is None or valid_id(value) for value in (task, agent)):
             return {'error': 'unavailable'}
@@ -2623,7 +2727,7 @@ class SocketBackend:
             if len(wire) > LIMIT:
                 return {'error': 'invalid_or_stale'}
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-                deadline = time.monotonic() + timeout if request.get('op') in ('session_live_snapshot', 'devbus_overview', 'limits_overview') else None
+                deadline = time.monotonic() + timeout if request.get('op') in ('session_live_snapshot', 'devbus_overview', 'limits_overview', *NODE_FIELDS) else None
                 conn.settimeout(timeout)
                 conn.connect(self.socket_path)
                 if deadline is not None:

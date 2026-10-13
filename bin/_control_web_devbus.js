@@ -22,14 +22,184 @@
     if (className) element.className = className;
     return element;
   }
+  const pendingKey = 'control.owner.node-task.pending.v1';
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  let nodeDraft = '';
+  function clearPending() { nodeDraft = ''; try { sessionStorage.removeItem(pendingKey); } catch (_) {} }
+  function readPending() {
+    try {
+      const value = JSON.parse(sessionStorage.getItem(pendingKey));
+      if (value && uuidPattern.test(value.request_id) && value.node_id === 'alp' &&
+          typeof value.prompt === 'string' && new TextEncoder().encode(value.prompt).length <= 32768) return value;
+    } catch (_) {}
+    return null;
+  }
+  function mountNodes(root, options, request) {
+    const section = node('section', undefined, 'control-nodes');
+    const status = node('p', 'Подключение', 'devbus-meta');
+    status.setAttribute('role', 'status');
+    const profile = node('p', 'Codex · read-only audit · 900s · один исполнитель', 'devbus-meta');
+    const workspace = node('p', '/home/dwl/alp-ai-study/diagnostic-context', 'devbus-meta');
+    const create = node('button', 'Новая задача');
+    create.type = 'button'; create.disabled = true;
+    const form = node('form', undefined, 'node-task-form'); form.hidden = true;
+    const field = node('label', 'Задание (без паролей и ключей)');
+    const prompt = node('textarea'); prompt.rows = 4; field.append(prompt);
+    const counter = node('span', '0 / 32768 UTF-8 байт', 'devbus-meta');
+    const submit = node('button', 'Отправить'); submit.type = 'submit';
+    form.append(field, counter, submit);
+    const pendingBox = node('div', undefined, 'node-task-pending');
+    const message = node('p', '', 'devbus-meta'); message.setAttribute('role', 'status');
+    const list = node('div');
+    const detail = node('section', undefined, 'node-task-detail');
+    section.append(node('h2', 'Узлы'), node('strong', 'ALP'), status, profile, workspace,
+      node('p', 'Исполнитель обрабатывает по одной задаче; свободен ли он сейчас, неизвестно', 'devbus-meta'),
+      create, form, pendingBox, message, node('h3', 'Задачи Control'),
+      node('p', 'Последние задачи, до 50 · Расход неизвестен', 'devbus-meta'), list, detail);
+    root.append(section);
+    let stopped = false, timer = null, busy = false, mutation = false, ready = false;
+    let selected = null, pending = readPending();
+    prompt.value = pending ? pending.prompt : nodeDraft;
+    const controllers = new Set();
+    const reasons = {
+      ready: 'Готов к приёму задач', disabled: 'Запуск не подключён', invalid_config: 'Настройка недоступна',
+      profile_unverified: 'Профиль не проверен', dependency_unavailable: 'Зависимость недоступна',
+      unavailable: 'Нет связи', observer_stale: 'Наблюдение устарело', retention_gap: 'Возможен разрыв истории',
+      invalid_event: 'Некорректное событие', id_conflict: 'Конфликт идентификаторов',
+      storage: 'Журнал недоступен', stopping: 'Остановка'
+    };
+    const delivery = {pending: 'Ожидает публикации', unknown: 'Публикация неизвестна', published: 'Опубликована'};
+    const execution = {waiting: 'Ожидает исполнителя', accepted: 'Принята исполнителем', running: 'В работе',
+      completed: 'Исполнитель завершил', failed: 'Ошибка исполнителя'};
+    function states(row, target) {
+      target.append(node('span', 'Доставка: ' + (delivery[row.delivery] || 'Неизвестно'), 'devbus-meta'),
+        node('span', 'Исполнение: ' + (execution[row.execution] || 'Неизвестно'), 'devbus-meta'),
+        node('span', 'Качество: не принято · Расход неизвестен', 'devbus-meta'));
+      if (row.coverage === 'partial') target.append(node('p', 'Неполная история: возможен разрыв событий; результат не доказывает полноту.', 'devbus-meta'));
+    }
+    function controls() {
+      const size = new TextEncoder().encode(prompt.value).length;
+      counter.textContent = size + ' / 32768 UTF-8 байт';
+      prompt.disabled = Boolean(pending) || mutation;
+      submit.disabled = !ready || Boolean(pending) || mutation || size < 1 || size > 32768 || prompt.value.includes('\0');
+      create.disabled = !ready || Boolean(pending) || mutation;
+    }
+    function showPending() {
+      pendingBox.replaceChildren();
+      if (pending) {
+        form.hidden = true;
+        pendingBox.append(node('p', 'Отправка не подтверждена. Проверка статуса и повтор используют ту же задачу.', 'devbus-meta'));
+        const check = node('button', 'Проверить статус'); check.type = 'button'; check.disabled = mutation;
+        const retry = node('button', 'Повторить отправку'); retry.type = 'button'; retry.disabled = mutation;
+        check.addEventListener('click', checkPending);
+        retry.addEventListener('click', sendPending);
+        pendingBox.append(check, retry);
+      }
+      controls();
+    }
+    async function call(path, body) {
+      const controller = new AbortController(); controllers.add(controller);
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      try {
+        const response = await request(path, {method: body ? 'POST' : 'GET', credentials: 'same-origin',
+          cache: 'no-store', signal: controller.signal,
+          headers: body ? {'Content-Type': 'application/json', 'X-CSRF-Token': options.csrf ? options.csrf() : ''} : {},
+          body: body ? JSON.stringify(body) : undefined});
+        if (stopped || controller.signal.aborted) throw new Error('stale');
+        if (response.status === 401 || response.status === 403) { stop(); section.replaceChildren(); throw new Error('auth'); }
+        const value = await response.json();
+        if (stopped || controller.signal.aborted) throw new Error('stale');
+        return {response, value};
+      } finally { clearTimeout(timeout); controllers.delete(controller); }
+    }
+    function showDetail(value) {
+      detail.replaceChildren(node('h3', 'Сохранённая задача'), node('p', text(value.prompt_preview, 256)));
+      states(value, detail);
+      if (value.prompt_truncated) detail.append(node('p', 'Задание показано частично', 'devbus-meta'));
+      if (value.result && typeof value.result.text === 'string') {
+        detail.append(node('pre', value.result.text, 'devbus-result'));
+        if (value.result.output_truncated) detail.append(node('p', 'Результат усечён', 'devbus-meta'));
+      } else detail.append(node('p', 'Сохранённого результата пока нет', 'devbus-meta'));
+    }
+    async function loadDetail(id) {
+      const {response, value} = await call('/api/node-tasks/' + encodeURIComponent(id));
+      if (response.ok && selected === id) showDetail(value);
+      else if (selected === id) detail.replaceChildren(node('p', 'Результат временно недоступен'));
+      return {response, value};
+    }
+    async function checkPending() {
+      if (!pending || mutation || stopped) return;
+      mutation = true; showPending(); const id = pending.request_id;
+      try {
+        const {response, value} = await call('/api/node-tasks/' + id);
+        if (response.ok) { pending = null; clearPending(); selected = id; showDetail(value); message.textContent = 'Задача сохранена в журнале.'; }
+        else message.textContent = response.status === 404 ? 'Статус пока не найден; исходная отправка могла сохраниться. Можно явно повторить тот же запрос.' : 'Статус временно недоступен.';
+      } catch (_) { if (!stopped) message.textContent = 'Статус временно недоступен.'; }
+      finally { mutation = false; if (!stopped) showPending(); }
+    }
+    async function sendPending() {
+      if (!pending || mutation || stopped) return;
+      mutation = true; showPending();
+      try {
+        const {response, value} = await call('/api/node-tasks', pending);
+        if (response.ok && value.task) {
+          pending = null; clearPending(); prompt.value = ''; form.hidden = true;
+          message.textContent = 'Задача сохранена в журнале; публикация и исполнение ещё не подтверждены.';
+          schedule(0);
+        } else if ([409, 422, 429].includes(response.status)) {
+          pending = null; clearPending(); nodeDraft = prompt.value; form.hidden = false;
+          message.textContent = 'Задача не принята: ' + (value.error === 'conflict' ? 'конфликт запроса' : value.error === 'capacity' ? 'очередь заполнена' : 'проверьте доступность узла и задание');
+        } else message.textContent = 'Отправка не подтверждена; проверьте статус или повторите тот же запрос.';
+      } catch (_) { if (!stopped) message.textContent = 'Отправка не подтверждена; проверьте статус или повторите тот же запрос.'; }
+      finally { mutation = false; if (!stopped) showPending(); }
+    }
+    function schedule(delay = 5000) { clearTimeout(timer); if (!stopped) timer = setTimeout(poll, delay); }
+    async function poll() {
+      if (stopped || busy) return;
+      busy = true;
+      try {
+        const {response, value} = await call('/api/node-tasks/overview');
+        if (!response.ok || value.schema !== 1 || !value.node || !Array.isArray(value.tasks)) throw new Error('unavailable');
+        const n = value.node; ready = n.readiness === 'ready';
+        status.textContent = (reasons[n.reason || n.readiness] || 'Недоступен') + ' · ' + label(n.heartbeat);
+        list.replaceChildren();
+        for (const row of value.tasks.slice(0, 50)) {
+          const article = node('article', undefined, 'devbus-task');
+          const open = node('button', text(row.prompt_preview, 256) || text(row.task_id, 80), 'node-task-open'); open.type = 'button';
+          open.addEventListener('click', async () => {
+            selected = row.task_id; detail.replaceChildren(node('p', 'Загрузка результата…'));
+            try { await loadDetail(selected); } catch (_) { if (!stopped) detail.replaceChildren(node('p', 'Результат временно недоступен')); }
+          });
+          article.append(open); states(row, article); list.append(article);
+        }
+        if (!value.tasks.length) list.append(node('p', 'Пока нет задач Control'));
+        if (value.tasks_truncated) list.append(node('p', 'Показана часть истории', 'devbus-meta'));
+        if (selected) await loadDetail(selected);
+      } catch (_) { if (!stopped) { ready = false; status.textContent = 'Нет связи · показанные данные могут устареть'; } }
+      finally { busy = false; if (!stopped) { controls(); schedule(); } }
+    }
+    function stop() { stopped = true; clearTimeout(timer); for (const controller of controllers) controller.abort(); }
+    create.addEventListener('click', () => { form.hidden = false; controls(); prompt.focus(); });
+    prompt.addEventListener('input', () => { nodeDraft = prompt.value; controls(); });
+    form.addEventListener('submit', event => {
+      event.preventDefault(); controls(); if (submit.disabled) return;
+      const snapshot = {request_id: crypto.randomUUID(), node_id: 'alp', prompt: prompt.value};
+      try { sessionStorage.setItem(pendingKey, JSON.stringify(snapshot)); }
+      catch (_) { message.textContent = 'Не удалось сохранить запрос в этой вкладке. Отправка не выполнена.'; return; }
+      pending = snapshot; sendPending();
+    });
+    showPending(); poll();
+    return {stop};
+  }
   function mount(root, options = {}) {
     if (!(root instanceof Element)) throw new TypeError('container required');
     const request = options.fetch || window.fetch.bind(window);
     const interval = Number.isFinite(options.intervalMs) && options.intervalMs >= 25 ? options.intervalMs : 2000;
     root.classList.add('devbus');
     root.replaceChildren();
+    const nodesView = mountNodes(root, options, request);
     const header = node('div', undefined, 'devbus-heading');
-    header.append(node('h2', 'Очередь разработки'));
+    header.append(node('h2', 'Окно событий шины'));
     const connection = node('p', 'Подключение', 'devbus-status');
     connection.setAttribute('role', 'status');
     const coverage = node('p', 'Покрытие истории неизвестно', 'devbus-coverage');
@@ -54,6 +224,7 @@
     let failures = 0, changed = false, lastBody = null, cancelWait = null;
     function stop() {
       stopped = true;
+      nodesView.stop();
       clearTimeout(timer);
       clearTimeout(timeout);
       if (controller) controller.abort();
@@ -202,5 +373,5 @@
     poll();
     return {stop};
   }
-  window.ControlDevbus = Object.freeze({mount});
+  window.ControlDevbus = Object.freeze({mount, clearPending});
 })();
