@@ -16,6 +16,8 @@ import uuid
 
 from _control_web_devbus import decode_event
 
+SCHEMA_VERSION = 2
+
 _TERMINAL = ('completed', 'failed', 'needs_attention')
 _FIELDS = {'message_id', 'task_id', 'correlation_id', 'source', 'target',
            'kind', 'created_at', 'payload'}
@@ -34,12 +36,13 @@ _SCHEMA = {
         digest TEXT NOT NULL, kind TEXT NOT NULL, created_at TEXT NOT NULL,
         conflicted INTEGER NOT NULL DEFAULT 0)""",
     'events_task': 'CREATE INDEX events_task ON events(task_id)',
+    'metadata': 'CREATE TABLE metadata(singleton INTEGER PRIMARY KEY CHECK(singleton=1), fence TEXT)',
     'diagnostics': 'CREATE TABLE diagnostics(name TEXT PRIMARY KEY, count INTEGER NOT NULL)',
 }
 
 
 def _schema_sql(sql):
-    # Schema v1 is fixed: compare definitions, including keys/FK/index, before
+    # The schema is fixed: compare definitions, including keys/FK/index, before
     # modifying an existing file. Formatting changes alone remain compatible.
     return ''.join(sql.split()).lower()
 
@@ -117,14 +120,14 @@ class NodeTaskStore:
                         raise ValueError()
                 except FileNotFoundError:
                     pass
-            self._db = sqlite3.connect(absolute, timeout=5, check_same_thread=False)
+            self._db = sqlite3.connect(absolute, timeout=1, check_same_thread=False)
             self._db.row_factory = sqlite3.Row
             after = os.stat(leaf, dir_fd=self._dir, follow_symlinks=False)
             if not _private(after) or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
                 raise ValueError()
             version = self._db.execute('PRAGMA user_version').fetchone()[0]
             tables = {r[0] for r in self._db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            if not new and (version != 1 or tables != {'tasks', 'events', 'diagnostics'}):
+            if not new and (version != SCHEMA_VERSION or tables != {'tasks', 'events', 'diagnostics', 'metadata'}):
                 raise ValueError()
             if not new:
                 actual = {name: _schema_sql(sql) for name, sql in self._db.execute(
@@ -145,7 +148,8 @@ class NodeTaskStore:
                 for sql in _SCHEMA.values():
                     self._db.execute(sql)
                 self._db.execute("INSERT INTO diagnostics VALUES('invalid',0),('ignored',0),('conflict',0),('capacity',0)")
-                self._db.execute('PRAGMA user_version=1')
+                self._db.execute('INSERT INTO metadata VALUES(1,NULL)')
+                self._db.execute('PRAGMA user_version=' + str(SCHEMA_VERSION))
                 self._db.commit()
         except (OSError, sqlite3.Error, ValueError, TypeError):
             self.close()
@@ -227,6 +231,8 @@ class NodeTaskStore:
             wire = _json(dict(message_id=mid, task_id=request_id, correlation_id=request_id,
                               source='control-web', target='codex-ai-dev-1', kind='submit',
                               created_at=now, payload={'prompt': prompt})).encode('utf-8')
+            if len(wire) > 126 * 1024:
+                return {'error': 'invalid_request'}
             self._db.execute('''INSERT INTO tasks(task_id,node_id,prompt,created_at,updated_at,
                 delivery,execution,coverage,message_id,wire,wire_sha256)
                 VALUES(?,?,?,?,?,'pending','waiting','complete',?,?,?)''',
@@ -248,13 +254,26 @@ class NodeTaskStore:
         return self._run(lambda: [self._dto(r) for r in self._db.execute(
             'SELECT * FROM tasks ORDER BY created_at,task_id LIMIT ?', (limit,))])
 
+    def recent(self, limit=50):
+        if type(limit) is not int or not 1 <= limit <= 50:
+            return {'error': 'invalid_request'}
+        return self._run(lambda: [self._dto(r) for r in self._db.execute(
+            'SELECT * FROM tasks ORDER BY created_at DESC,task_id DESC LIMIT ?', (limit,))])
+
+    def count(self):
+        return self._run(lambda: {'total': self._db.execute('SELECT count(*) FROM tasks').fetchone()[0]})
+
+    def runtime_state(self):
+        return self._run(lambda: {'fence': self._db.execute('SELECT fence FROM metadata WHERE singleton=1').fetchone()[0]})
+
     def pending(self, limit=1):
         if type(limit) is not int or not 1 <= limit <= 50:
             return {'error': 'invalid_request'}
         return self._run(lambda: [dict(r) for r in self._db.execute('''
             SELECT task_id,message_id,wire,wire_sha256 FROM tasks
             WHERE delivery IN ('pending','unknown') AND execution='waiting'
-              AND coverage='complete' AND retry_at<=? ORDER BY created_at,task_id LIMIT ?''',
+              AND coverage='complete' AND retry_at<=?
+              AND (SELECT fence FROM metadata WHERE singleton=1) IS NULL ORDER BY created_at,task_id LIMIT ?''',
             (self._clock(), limit))])
 
     def publication_started(self, task_id):
@@ -264,7 +283,8 @@ class NodeTaskStore:
             row = self._row(task_id)
             if row is None:
                 return {'error': 'not_found'}
-            if (row['delivery'] == 'published' or row['execution'] != 'waiting'
+            if (self._db.execute('SELECT fence FROM metadata WHERE singleton=1').fetchone()[0] is not None
+                    or row['delivery'] == 'published' or row['execution'] != 'waiting'
                     or row['coverage'] != 'complete' or row['retry_at'] > self._clock()):
                 return {'publish': False}
             self._db.execute("UPDATE tasks SET delivery='unknown',updated_at=? WHERE task_id=?",
@@ -392,8 +412,11 @@ class NodeTaskStore:
             return {'outcome': 'applied', 'task_id': task}
         return self._run(operation)
 
-    def mark_gap(self):
+    def mark_gap(self, reason='retention_gap'):
+        if type(reason) is not str or reason not in {'retention_gap', 'invalid_event', 'id_conflict'}:
+            return {'error': 'invalid_request'}
         def operation():
+            self._db.execute('UPDATE metadata SET fence=coalesce(fence,?) WHERE singleton=1', (reason,))
             cursor = self._db.execute("""UPDATE tasks SET coverage='partial',updated_at=?
                 WHERE execution NOT IN ('completed','failed','needs_attention') AND coverage='complete'""",
                 (self._time(),))
