@@ -20,6 +20,37 @@ _TERMINAL = ('completed', 'failed', 'needs_attention')
 _FIELDS = {'message_id', 'task_id', 'correlation_id', 'source', 'target',
            'kind', 'created_at', 'payload'}
 
+_SCHEMA = {
+    'tasks': """CREATE TABLE tasks(
+        task_id TEXT PRIMARY KEY, node_id TEXT NOT NULL, prompt TEXT NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        delivery TEXT NOT NULL, execution TEXT NOT NULL, coverage TEXT NOT NULL,
+        result TEXT, terminal_kind TEXT, terminal_digest TEXT,
+        message_id TEXT NOT NULL UNIQUE, wire BLOB NOT NULL, wire_sha256 TEXT NOT NULL,
+        retry_at REAL NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
+        first_sequence INTEGER, last_sequence INTEGER)""",
+    'events': """CREATE TABLE events(
+        event_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id),
+        digest TEXT NOT NULL, kind TEXT NOT NULL, created_at TEXT NOT NULL,
+        conflicted INTEGER NOT NULL DEFAULT 0)""",
+    'events_task': 'CREATE INDEX events_task ON events(task_id)',
+    'diagnostics': 'CREATE TABLE diagnostics(name TEXT PRIMARY KEY, count INTEGER NOT NULL)',
+}
+
+
+def _schema_sql(sql):
+    # Schema v1 is fixed: compare definitions, including keys/FK/index, before
+    # modifying an existing file. Formatting changes alone remain compatible.
+    return ''.join(sql.split()).lower()
+
+
+def _ancestor(info, path):
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.getuid()):
+        return False
+    if not info.st_mode & 0o022:
+        return True
+    return info.st_uid == 0 and path in ('/tmp', '/var/tmp') and bool(info.st_mode & stat.S_ISVTX)
+
 
 def _json(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False,
@@ -52,11 +83,17 @@ class NodeTaskStore:
             absolute = os.path.abspath(os.fspath(path))
             parts = absolute.split(os.sep)
             self._dir = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+            ancestor_path = '/'
+            if not _ancestor(os.fstat(self._dir), ancestor_path):
+                raise ValueError()
             for part in parts[1:-1]:
                 child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                                 dir_fd=self._dir)
                 os.close(self._dir)
                 self._dir = child
+                ancestor_path = os.path.join(ancestor_path, part)
+                if not _ancestor(os.fstat(self._dir), ancestor_path):
+                    raise ValueError()
             if not _private(os.fstat(self._dir), True):
                 raise ValueError()
             leaf = parts[-1]
@@ -90,13 +127,10 @@ class NodeTaskStore:
             if not new and (version != 1 or tables != {'tasks', 'events', 'diagnostics'}):
                 raise ValueError()
             if not new:
-                # Reject incompatible schemas before changing journal or other settings.
-                self._db.execute('''SELECT task_id,node_id,prompt,created_at,updated_at,
-                    delivery,execution,coverage,result,terminal_kind,terminal_digest,
-                    message_id,wire,wire_sha256,retry_at,failures,first_sequence,last_sequence
-                    FROM tasks LIMIT 0''')
-                self._db.execute('SELECT event_id,task_id,digest,kind,created_at,conflicted FROM events LIMIT 0')
-                self._db.execute('SELECT name,count FROM diagnostics LIMIT 0')
+                actual = {name: _schema_sql(sql) for name, sql in self._db.execute(
+                    'SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL')}
+                if actual != {name: _schema_sql(sql) for name, sql in _SCHEMA.items()}:
+                    raise ValueError()
             self._db.execute('PRAGMA journal_mode=WAL')
             self._db.execute('PRAGMA synchronous=FULL')
             self._db.execute('PRAGMA foreign_keys=ON')
@@ -107,26 +141,12 @@ class NodeTaskStore:
                 raise ValueError()
             self._db.execute('PRAGMA max_page_count=' + str(maxpages))
             if new:
-                self._db.executescript('''
-                    BEGIN IMMEDIATE;
-                    CREATE TABLE tasks(
-                      task_id TEXT PRIMARY KEY, node_id TEXT NOT NULL, prompt TEXT NOT NULL,
-                      created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-                      delivery TEXT NOT NULL, execution TEXT NOT NULL, coverage TEXT NOT NULL,
-                      result TEXT, terminal_kind TEXT, terminal_digest TEXT,
-                      message_id TEXT NOT NULL UNIQUE, wire BLOB NOT NULL, wire_sha256 TEXT NOT NULL,
-                      retry_at REAL NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
-                      first_sequence INTEGER, last_sequence INTEGER);
-                    CREATE TABLE events(
-                      event_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id),
-                      digest TEXT NOT NULL, kind TEXT NOT NULL, created_at TEXT NOT NULL,
-                      conflicted INTEGER NOT NULL DEFAULT 0);
-                    CREATE INDEX events_task ON events(task_id);
-                    CREATE TABLE diagnostics(name TEXT PRIMARY KEY, count INTEGER NOT NULL);
-                    INSERT INTO diagnostics VALUES('invalid',0),('ignored',0),('conflict',0),('capacity',0);
-                    PRAGMA user_version=1;
-                    COMMIT;
-                ''')
+                self._db.execute('BEGIN IMMEDIATE')
+                for sql in _SCHEMA.values():
+                    self._db.execute(sql)
+                self._db.execute("INSERT INTO diagnostics VALUES('invalid',0),('ignored',0),('conflict',0),('capacity',0)")
+                self._db.execute('PRAGMA user_version=1')
+                self._db.commit()
         except (OSError, sqlite3.Error, ValueError, TypeError):
             self.close()
             raise ValueError('unsafe or unavailable task store') from None
@@ -183,7 +203,8 @@ class NodeTaskStore:
         self._db.execute('UPDATE diagnostics SET count=min(count+1,2147483647) WHERE name=?', (name,))
 
     def _attention(self, task):
-        self._db.execute("UPDATE tasks SET execution='needs_attention', coverage='partial', updated_at=? WHERE task_id=?",
+        self._db.execute("""UPDATE tasks SET execution='needs_attention', coverage='partial', updated_at=?
+            WHERE task_id=? AND (execution!='needs_attention' OR coverage!='partial')""",
                          (self._time(), task))
 
     def submit(self, request_id, node_id, prompt):
@@ -346,6 +367,11 @@ class NodeTaskStore:
             kind, old = obj['kind'], row['execution']
             self._db.execute('INSERT INTO events(event_id,task_id,digest,kind,created_at) VALUES(?,?,?,?,?)',
                              (obj['message_id'], task, digest, kind, obj['created_at']))
+            if old == 'needs_attention' and kind == 'completed' and row['result'] is None:
+                # Keep the first late result for review; uncertainty is sticky.
+                self._db.execute('''UPDATE tasks SET result=?,terminal_kind=?,terminal_digest=?,
+                    updated_at=? WHERE task_id=?''',
+                    (_json(obj['payload']), kind, payload_digest, self._time(), task))
             if old != 'needs_attention':
                 if kind == 'needs_attention':
                     self._attention(task)
