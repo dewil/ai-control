@@ -576,3 +576,11 @@ pins не освобождаются. Квоты bytes/objects проверяю�
 `begin/chunk/finish/status`: `{attachment_id:UUID, state:"receiving"|"sealed"|"discarded"|"expired", bytes:int, size:int, sha256:null|hex64, expires_at:number, mode:"image"|"file"}`; sha256 только после seal. Bytes — durable полученные bytes; chunk index вычисляется из bytes/chunk_bytes, finish требует bytes=size.
 `discard`: `{attachment_id:UUID,state:"discarded"}`. Ошибка всех routes — существующий `{error:safe_code}`.
 `send-attachments/enqueue-attachments/receipt`: `{message_id:UUID,status:"accepted"|"queued"|"delivery_unknown"|"rejected",turn_id:null|string,queued_submission_id:null|string}`. Не выдавать paths/manifest/scope. Идентичный UUID остаётся при unknown; UI не очищает/не повторяет неопределённую отправку. Attachment IDs и исходный draft остаются в state выбранной сессии, late response другого SID не трогает текущий composer.
+
+
+## DTO и истёкшие окна: уточнение
+
+- `held` относится к queue transfer/listing, а не к состоянию upload. Stage остаётся sealed и pinned. Queue action использует existing safe queue DTO; автоматического fallback нет.
+- Quarantine receipt сохраняет известный accepted/queued, иначе delivery_unknown, с nullable `reason:"recovery_required"`; upload status при небезопасной metadata возвращает `{error:"recovery_required"}`. `options.reason` допустим null/unavailable/unsupported/stale/recovery_required/attachment_storage_full.
+- Переполнение begin возвращает HTTP507 `{error:"attachment_storage_full"}`. Receipt queued_submission_id — только фактический native ID из ACK/reconciliation, обязателен при queued; при unknown может сохраняться уже доказанный ID, но новый не выдумывается. explicit start принимает exact-ID и прежние scope guards.
+- ×3 не отменяет правила свежести: если всё окно истекло/данные устарели, прежнее сокрытие недостоверных чисел и маркеров сохраняется. Clamp ×3 проверять на 7/3 и 3 прошедших днях внутри ещё действующей недели.
