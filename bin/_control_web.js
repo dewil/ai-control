@@ -877,10 +877,12 @@ const attachmentDrafts=new Map();
 let attachmentUploadChain=Promise.resolve();
 function attachmentDraft(key,create=false){let value=attachmentDrafts.get(key);if(!value&&create){value={id:crypto.randomUUID(),files:[],options:null};attachmentDrafts.set(key,value);}return value;}
 function attachmentLocked(key){return sendsInFlight.has(key)||hasUnknown(key);}
-function attachmentReady(key){const draft=attachmentDraft(key);return !draft?.files.length||draft.files.every(file=>file.state==='sealed'&&file.expires>Date.now()/1000)&&Boolean(draft.options?.[queueMode(key)?'queue':'direct']);}
+function attachmentImageBytes(draft){return (draft?.files||[]).filter(file=>file.mode==='image').reduce((sum,file)=>sum+file.size,0);}
+function attachmentReady(key){const draft=attachmentDraft(key);return !draft?.files.length||draft.files.every(file=>file.state==='sealed'&&file.expires>Date.now()/1000)&&attachmentImageBytes(draft)<=(draft.options?.max_image_bytes||2097152)&&Boolean(draft.options?.[queueMode(key)?'queue':'direct']);}
 function renderAttachments(){
   const key=currentSessionKey(),draft=key&&attachmentDraft(key),root=$('chat-attachments');root.replaceChildren();
   $('attachment-add').disabled=!pageActive()||!key||attachmentLocked(key);
+  if(attachmentImageBytes(draft)>(draft?.options?.max_image_bytes||2097152))$('attachment-status').textContent='Изображения: не более 2 МБ суммарно на сообщение. Уменьшите их размер.';
   for(const file of draft?.files||[]){const chip=node('div',undefined,'attachment-chip');chip.append(node('span',file.name,'attachment-name'));
     const expired=file.state==='sealed'&&file.expires<=Date.now()/1000;
     chip.append(node('span',expired?'Срок загрузки истёк':file.state==='sealed'?'Загружено · '+Math.ceil(file.size/1024)+' КБ':file.error||'Загрузка · '+Math.floor(file.bytes/file.size*100)+'%','meta'));
@@ -890,7 +892,7 @@ function renderAttachments(){
     root.append(chip);
   }
 }
-function validAttachmentOptions(value){return value&&typeof value.available==='boolean'&&['images','files','direct','queue'].every(k=>typeof value[k]==='boolean')&&value.max_files===8&&value.max_file_bytes===20971520&&value.max_message_bytes===41943040&&value.chunk_bytes===49152;}
+function validAttachmentOptions(value){return value&&typeof value.available==='boolean'&&['images','files','direct','queue'].every(k=>typeof value[k]==='boolean')&&value.max_files===8&&value.max_file_bytes===20971520&&value.max_message_bytes===41943040&&value.chunk_bytes===49152&&(value.max_image_bytes===undefined||value.max_image_bytes===2097152);}
 function acceptAttachmentStage(file,data){
   if(!data||!UUID_RE.test(data.attachment_id||'')||file.id&&data.attachment_id!==file.id||!['receiving','sealed','discarded','expired'].includes(data.state)||!Number.isInteger(data.bytes)||data.bytes<0||data.bytes>file.size||data.size!==file.size||!Number.isFinite(data.expires_at)||!['image','file'].includes(data.mode)||data.state==='sealed'&&(data.bytes!==file.size||!/^[0-9a-f]{64}$/.test(data.sha256||'')))throw new Error('Некорректный ответ загрузки');
   file.id=data.attachment_id;file.state=data.state;file.bytes=data.bytes;file.expires=data.expires_at;file.mode=data.mode;
@@ -926,7 +928,7 @@ async function uploadAttachment(key,draft,file){
     if(!current())return;
     if(file.state!=='sealed'){data=await api('/api/session-attachment-finish',{attachment_id:file.id});acceptAttachmentStage(file,data);}
     if(file.state!=='sealed')throw new Error('Загрузка не завершена');file.error=null;
-  }catch(error){if(current()){file.error=error.code==='attachment_storage_full'?'Хранилище вложений заполнено':error.message||'Загрузка не подтверждена';}}
+  }catch(error){if(current()){file.error=error.code==='image_payload_too_large'?'Изображения: максимум 2 МБ на сообщение':error.code==='attachment_storage_full'?'Хранилище вложений заполнено':error.message||'Загрузка не подтверждена';}}
   finally{repaint();}
 }
 function addAttachmentFiles(files){
