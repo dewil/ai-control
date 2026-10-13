@@ -1134,6 +1134,109 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
     async def session_queue_cancel(request: Request):
         return await queue_write(request, True)
 
+    async def attachment_request(request, action):
+        # The allowed web UID is the existing broker auth authority. Browser
+        # authority fields are never accepted or forwarded.
+        mutation = action not in ('options', 'receipt')
+        def gate():
+            current, failure = session(request, mutation)
+            if failure is not None:return None, failure
+            if owner_only is not True or current.get('principal') != 'owner':
+                return None, error('forbidden', 403)
+            origins=request.headers.getlist('origin')
+            if origins and origins != [origin] or mutation and origins != [origin]:
+                return None, error('forbidden',403)
+            return current, None
+        current, failure=gate()
+        if failure is not None:return failure
+        fields = {'options': {'project','sid'}, 'receipt': {'project','sid','message_id'},
+            'begin': {'project','sid','message_id','upload_id','size','name','media_hint'},
+            'chunk': {'attachment_id','index'}, 'finish': {'attachment_id'},
+            'status': {'attachment_id'}, 'discard': {'attachment_id'},
+            'send': {'project','sid','message_id','text','attachment_ids'},
+            'enqueue': {'project','sid','message_id','text','attachment_ids'}}[action]
+        if action in ('options','receipt','chunk'):
+            pairs=list(request.query_params.multi_items())
+            if len(pairs)!=len(fields) or {k for k,v in pairs}!=fields:
+                return error('invalid_request',422)
+            data=dict(pairs)
+        else:
+            if list(request.query_params.multi_items()):return error('invalid_request',422)
+            data=await body(request,strict=True)
+            if data is None or set(data) not in (fields, fields|{'selection'} if action in ('send','enqueue') else fields):
+                return error('invalid_request',422)
+        if 'project' in data and not chat_project(data['project']):return error('invalid_request',422)
+        if any(not valid_uuid(data[k]) for k in ('sid','message_id','upload_id','attachment_id') if k in data):
+            return error('invalid_request',422)
+        if action=='begin':
+            name=data['name'];hint=data['media_hint']
+            if (type(data['size']) is not int or not 0<data['size']<=20971520 or type(name) is not str
+                or not 0<len(name.encode('utf-8',errors='replace'))<=240 or any(ord(c)<32 or 127<=ord(c)<160 or '\u202a'<=c<='\u202e' or '\u2066'<=c<='\u2069' for c in name)
+                or type(hint) is not str or len(hint.encode('utf-8',errors='replace'))>100):return error('invalid_request',422)
+        if action in ('send','enqueue'):
+            ids=data['attachment_ids']
+            if (type(data['text']) is not str or len(data['text'])>16000 or type(ids) is not list
+                or not 0<len(ids)<=8 or not all(valid_uuid(x) for x in ids) or len(set(ids))!=len(ids)):
+                return error('invalid_request',422)
+            if 'selection' in data:
+                from _control_web_sessions import _valid_selection
+                if not _valid_selection(data['selection']):return error('invalid_request',422)
+        if action=='chunk':
+            if not re.fullmatch('0|[1-9][0-9]{0,5}',data['index']):return error('invalid_request',422)
+            data['index']=int(data['index'])
+            if request.headers.getlist('content-type')!=['application/octet-stream']:return error('invalid_request',422)
+            raw=bytearray()
+            try:
+                async for chunk in request.stream():
+                    if len(raw)+len(chunk)>49152:return error('limit',413)
+                    raw.extend(chunk)
+            except Exception:return error('invalid_request',422)
+            if not raw:return error('invalid_request',422)
+            import base64
+            data['data']=base64.b64encode(raw).decode('ascii')
+        # Mandatory last-read fence, including status/discard and GET queries.
+        current, failure=gate()
+        if failure is not None:return failure
+        with lock:
+            current.setdefault('attachment_scope',secrets.token_hex(16))
+            auth={'scope':current['attachment_scope'],'expires_at':current['expires']}
+        try:
+            value=await run_in_threadpool(backend.session_attachment,action,data,auth)
+            _, failure=gate()
+            if failure is not None:return failure
+            from _control_web_attachments import public_result
+            value=public_result(action,value)
+            if 'error' in value:
+                code=value['error']
+                return error(code,{'invalid_request':422,'forbidden':403,'stale':409,'limit':413,
+                    'busy':429,'attachment_storage_full':507,'image_payload_too_large':422}.get(code,503))
+            return JSONResponse(value,headers={'Cache-Control':'no-store'})
+        except Exception:return error('unavailable',503)
+
+    async def attachment_route(request,action):
+        try:
+            async with asyncio.timeout(55):return await attachment_request(request,action)
+        except TimeoutError:return error('unavailable',503)
+
+    @app.get('/api/session-attachment-options')
+    async def attachment_options(request: Request):return await attachment_route(request,'options')
+    @app.post('/api/session-attachment-begin')
+    async def attachment_begin(request: Request):return await attachment_route(request,'begin')
+    @app.put('/api/session-attachment-chunk')
+    async def attachment_chunk(request: Request):return await attachment_route(request,'chunk')
+    @app.post('/api/session-attachment-finish')
+    async def attachment_finish(request: Request):return await attachment_route(request,'finish')
+    @app.post('/api/session-attachment-status')
+    async def attachment_status(request: Request):return await attachment_route(request,'status')
+    @app.post('/api/session-attachment-discard')
+    async def attachment_discard(request: Request):return await attachment_route(request,'discard')
+    @app.post('/api/session-send-attachments')
+    async def attachment_send(request: Request):return await attachment_route(request,'send')
+    @app.post('/api/session-enqueue-attachments')
+    async def attachment_enqueue(request: Request):return await attachment_route(request,'enqueue')
+    @app.get('/api/session-attachments-receipt')
+    async def attachment_receipt(request: Request):return await attachment_route(request,'receipt')
+
     @app.post('/api/session-send')
     async def session_send(request: Request):
         _, failure = session(request, True)

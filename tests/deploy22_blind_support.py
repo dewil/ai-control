@@ -42,6 +42,15 @@ def pinned_source():
     return result.stdout
 
 
+def accepted22_source():
+    # Historical fresh4 tests execute immutable accepted22; journal readers stay current.
+    result=subprocess.run(['/usr/bin/git','-C',str(ROOT),'show',
+        'd341ad6:deployment/ai-control-web-deploy.py'],capture_output=True,timeout=10,check=True)
+    if len(result.stdout)>1024*1024 or sha(result.stdout)!='f7be4af1769618d99b6f180356a49457eeeb4aa94207905532ff58e7eaa86483':
+        raise AssertionError('Immutable accepted22 helper byte/pin mismatch')
+    return result.stdout
+
+
 def module_bytes(data,label):
     module=types.ModuleType(label);module.__file__=str(ROOT/'deployment'/label)
     sys.modules[label]=module;exec(compile(data,module.__file__,'exec'),module.__dict__);return module
@@ -65,6 +74,10 @@ class ControllerFixture(unittest.TestCase):
         # Use the test user's home; /tmp has writable ancestors, and CI has no /home/dwl.
         with patch.object(tempfile,'TemporaryDirectory',side_effect=lambda **kwargs:temp_constructor(**(kwargs|{'dir':Path.home()}))):
             prior.fixture.SignedDeploy.setUp(self)
+        if self._testMethodName in getattr(self,'historical_fresh22_tests',frozenset()):
+            historical=accepted22_source()
+            self.api=module_bytes(historical,'deploy22_historical_'+self._testMethodName)
+            self.helper_hash=sha(historical)
         self.before16=self.current|{prior.AUTH:b'# invented auth16\n',prior.DOWNLOAD:b'# invented download16\n'}
         self.after22=self.before16|{p:('/* invented signed22 '+p+' */\n').encode() for p in NEW}
         self.install_state(self.before16,3,7)
@@ -72,7 +85,7 @@ class ControllerFixture(unittest.TestCase):
         self.unit=self.root/'actual-systemd/ai-control-web-broker.service'
         self.helper=self.root/'helper/ai-control-deploy'
         self.site=self.root/'venv/lib/python3.12/site-packages'
-        self.write(self.helper,prior.fixture.SOURCE.read_bytes(),0o755)
+        self.write(self.helper,accepted22_source() if self._testMethodName in getattr(self,'historical_fresh22_tests',frozenset()) else prior.fixture.SOURCE.read_bytes(),0o755)
         unit_before=(ROOT/'tests/fixtures/deploy22-blind/broker-unit.before').read_bytes()
         self.write(self.unit,unit_before.replace(b'[Service]\n',b'[Service]\n'+CONFIG_LINE,1),0o644)
         self.site.mkdir(parents=True,mode=0o755);self.site.chmod(0o755)
@@ -181,7 +194,7 @@ class BootstrapFixture(ControllerFixture):
         self.before_unit=(ROOT/'tests/fixtures/deploy22-blind/broker-unit.before').read_bytes()
         self.after_unit=self.before_unit.replace(b'[Service]\n',b'[Service]\n'+CONFIG_LINE,1)
         self.write(self.unit,self.before_unit,0o644);self.write(self.helper,pinned_source(),0o755)
-        self.new_helper=prior.fixture.SOURCE.read_bytes()
+        self.new_helper=accepted22_source()
         self.virtual={}
         self.stat_pins={}
         for name in ('SYSTEM_PYTHON','VENV_PYTHON','OWNER_IMPORT_LAUNCHER','SYSTEMCTL'):

@@ -42,6 +42,15 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     private boolean backgroundSuspended=false,timersPaused=false,unsupportedWeb=false,blockedUnconfirmed=false,cookieAccepted=false;
     private long suspendDeadline=0;
     private Runnable commandDeadline,commandPoll;
+    // INV-WATT-09: selection belongs to this page and login across picker pause/resume.
+    private ValueCallback<Uri[]> fileCallback;
+    private WebView fileOwner;
+    private CredentialStore.Record fileCredential;
+    private long fileNavigation;
+    private int fileRequest=0;
+    private boolean fileMultiple=false,fileResultReady=false;
+    private Uri[] fileResult;
+    private static final int MAX_ATTACHMENT_FILES=8;
     private static final long MAX_SERIAL=9007199254740991L;
     private final Runnable renewal=()->admit(false);
     private final Runnable banner=new Runnable(){public void run(){if(!foreground)return;View view=root.findViewWithTag("updates");if(view instanceof Button){ru.dewil.aicontrol.updater.UpdateInfo available=((ru.dewil.aicontrol.updater.UpdateRepositoryOwner)getApplication()).getUpdateRepository().getState().getValue().getAvailable();((Button)view).setText(available==null?"Обновления":"Доступно обновление "+available.getVersionName());}ui.postDelayed(this,5000);}};
@@ -186,7 +195,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
         cancelPageCommand();final WebView owner=web;final long operation=commandGeneration,life=lifecycleGeneration,navigation=navigationGeneration,auth=authGeneration;
         commandDeadline=()->{if(commandCurrent(owner,operation,life,navigation,auth)){loading=false;suspendPage(null);}};ui.postDelayed(commandDeadline,10000);
     }
-    private void failedResume(boolean unsupported){blockNetwork();cancelPageCommand();unsupportedWeb|=unsupported;if(timersPaused){loading=false;pausedMessage();return;}suspendPage(null);}
+    private void failedResume(boolean unsupported){finishFileChooser(null);blockNetwork();cancelPageCommand();unsupportedWeb|=unsupported;if(timersPaused){loading=false;pausedMessage();return;}suspendPage(null);}
     private void resumePage(long version,long generation,String phase,long admissionSerial){
         if(!active(version,generation)||web==null)return;cancelPageCommand();final WebView owner=web;
         final long serial=nextSerial(),operation=commandGeneration,life=lifecycleGeneration,navigation=navigationGeneration,auth=authGeneration;
@@ -205,7 +214,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
                 JSONObject result=decoded(value);
                 if(result==null||Boolean.TRUE.equals(result.opt("unsupported"))){failedResume(true);return;}
                 if(result.length()!=3||!(result.opt("serial") instanceof Number)||result.optDouble("serial")!=serial||!phase.equals(result.opt("phase"))){failedResume(false);return;}
-                Object ok=result.opt("ok");if(Boolean.TRUE.equals(ok)){cancelPageCommand();if("admit".equals(phase)){dispatch=Dispatch.ACTIVE;resumePage(version,generation,"activate",serial);}else{loading=false;hideOverlay();ui.removeCallbacks(renewal);ui.postDelayed(renewal,2*60*60*1000L);}}
+                Object ok=result.opt("ok");if(Boolean.TRUE.equals(ok)){cancelPageCommand();if("admit".equals(phase)){dispatch=Dispatch.ACTIVE;resumePage(version,generation,"activate",serial);}else{loading=false;hideOverlay();deliverFileResult();ui.removeCallbacks(renewal);ui.postDelayed(renewal,2*60*60*1000L);}}
                 else if(Boolean.FALSE.equals(ok)||ok!=JSONObject.NULL)failedResume(false);
                 else awaitResume(owner,operation,life,navigation,auth,version,generation,serial,phase,deadline);
             });};ui.postDelayed(commandPoll,100);
@@ -221,11 +230,51 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
         }catch(Exception e){return false;}
     }
     private void disposeWeb(){
+        finishFileChooser(null);
         blockNetwork();navigationGeneration++;cancelPageCommand();WebView page=web;
         unsupportedWeb=false;blockedUnconfirmed=false;cookieAccepted=false;mainFrameFailed=false;
         if(page==null)return;WebView receiver=timersPaused?new WebView(this):null;
         root.removeView(page);page.stopLoading();page.removeJavascriptInterface("AndroidAuth");page.destroy();web=null;
         if(receiver!=null){receiver.resumeTimers();timersPaused=false;receiver.destroy();}
+    }
+    private boolean filePageActive(WebView page){
+        return page!=null&&page==web&&foreground&&!isFinishing()&&credential!=null&&"ACTIVE".equals(credential.state)&&
+            gate.canApply(authGeneration)&&dispatch==Dispatch.ACTIVE&&!loading&&pageLoaded&&cookieAccepted&&
+            !unsupportedWeb&&!blockedUnconfirmed&&shellUrl(page.getUrl());
+    }
+    private void finishFileChooser(Uri[] values){
+        ValueCallback<Uri[]> callback=fileCallback;
+        fileCallback=null;fileOwner=null;fileCredential=null;fileResult=null;fileResultReady=false;
+        if(callback!=null)callback.onReceiveValue(values);
+    }
+    private void deliverFileResult(){
+        if(fileCallback==null||!fileResultReady)return;
+        if(fileOwner!=web||fileNavigation!=navigationGeneration||fileCredential!=credential||
+            credential==null||!"ACTIVE".equals(credential.state)||!shellUrl(fileOwner.getUrl())){finishFileChooser(null);return;}
+        // Activity results arrive before onResume; wait for existing admission/activation.
+        if(filePageActive(fileOwner))finishFileChooser(fileResult);
+    }
+    @Override protected void onActivityResult(int request,int result,Intent data){
+        super.onActivityResult(request,result,data);
+        if(request!=fileRequest||fileCallback==null||fileResultReady)return;
+        Uri[] values=null;
+        try{
+            if(result==android.app.Activity.RESULT_OK&&data!=null){
+                ClipData clip=data.getClipData();
+                if(clip!=null){
+                    int count=clip.getItemCount();
+                    if(count<1||count>MAX_ATTACHMENT_FILES||!fileMultiple&&count!=1){finishFileChooser(null);return;}
+                    values=new Uri[count];for(int i=0;i<count;i++)values[i]=clip.getItemAt(i).getUri();
+                }
+                else if(data.getData()!=null)values=new Uri[]{data.getData()};
+                if(values!=null){
+                    if(values.length==0||!fileMultiple&&values.length!=1)values=null;
+                    else for(Uri uri:values)if(uri==null||!"content".equals(uri.getScheme())||uri.getAuthority()==null||uri.getAuthority().isEmpty()){values=null;break;}
+                }
+            }
+        }catch(RuntimeException error){values=null;}
+        if(values==null){finishFileChooser(null);return;}
+        fileResult=values;fileResultReady=true;deliverFileResult();
     }
     private void hideOverlay(){if(overlay!=null){root.removeView(overlay);overlay=null;}}
     private final class Bridge {
@@ -261,7 +310,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
             @Override public void onPageFinished(WebView view,String url){if(view!=instance||!viewCurrent()||mainFrameFailed||!shellUrl(url)||!url.equals(view.getUrl()))return;pageLoaded=true;if(foreground&&!unsupportedWeb&&!blockedUnconfirmed&&cookieAccepted&&pageEpoch==epoch&&dispatch==Dispatch.BOOTSTRAP&&loading){cancelPageCommand();suspendPage(()->resumePage(pageEpoch,authGeneration,"admit",0));}}
             @Override public boolean onRenderProcessGone(WebView view,RenderProcessGoneDetail detail){if(!viewCurrent())return true;navigationGeneration++;cancelPageCommand();destroyPage();loading=false;showFailure("Панель закрылась; несохранённый черновик потерян. Повторите подключение.",true);return true;}
             @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon){
-                if(view!=instance||!viewCurrent())return;mainFrameFailed=false;long deadline=suspendDeadline;navigationGeneration++;cancelPageCommand();
+                if(view!=instance||!viewCurrent())return;finishFileChooser(null);mainFrameFailed=false;long deadline=suspendDeadline;navigationGeneration++;cancelPageCommand();
                 if(!foreground||unsupportedWeb||blockedUnconfirmed){blockNetwork();navigationPause(deadline);return;}
                 if(!cookieAccepted||credential==null||!"ACTIVE".equals(credential.state)){blockNetwork();loading=false;return;}
                 dispatch=Dispatch.BOOTSTRAP;loading=true;pageLoaded=false;pageEpoch=epoch;bootstrapDeadline();
@@ -269,7 +318,25 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
             }
         });
         int footerHeight=(int)(48*getResources().getDisplayMetrics().density);
-        web.setWebChromeClient(new WebChromeClient());FrameLayout.LayoutParams layout=new FrameLayout.LayoutParams(-1,-1);layout.bottomMargin=footerHeight;root.addView(web,0,layout);
+        web.setWebChromeClient(new WebChromeClient(){
+            @Override public boolean onShowFileChooser(WebView view,ValueCallback<Uri[]> callback,FileChooserParams params){
+                if(view!=instance||!filePageActive(view)||callback==null||params==null||
+                    params.getMode()!=FileChooserParams.MODE_OPEN&&params.getMode()!=FileChooserParams.MODE_OPEN_MULTIPLE)return false;
+                finishFileChooser(null);
+                // Never recycle request codes: a late replaced picker cannot satisfy its successor.
+                if(fileRequest==65535){
+                    callback.onReceiveValue(null);
+                    new AlertDialog.Builder(MainActivity.this).setMessage("Достигнут предел выбора файлов. Перезапустите приложение, чтобы продолжить.").setPositiveButton("Закрыть",null).show();
+                    return true;
+                }
+                fileRequest++;fileCallback=callback;fileOwner=view;fileCredential=credential;
+                fileNavigation=navigationGeneration;fileMultiple=params.getMode()==FileChooserParams.MODE_OPEN_MULTIPLE;
+                Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE,fileMultiple).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                try{startActivityForResult(intent,fileRequest);}catch(RuntimeException error){finishFileChooser(null);}
+                return true;
+            }
+        });FrameLayout.LayoutParams layout=new FrameLayout.LayoutParams(-1,-1);layout.bottomMargin=footerHeight;root.addView(web,0,layout);
         Button updates=new Button(this);updates.setText("Обновления");updates.setTextSize(14);
         updates.setBackgroundTintList(new ColorStateList(new int[][]{{android.R.attr.state_enabled,android.R.attr.state_pressed},{android.R.attr.state_enabled,android.R.attr.state_focused},{-android.R.attr.state_enabled},{}},new int[]{0xff3a3a3a,0xff3a3a3a,0xff242424,0xff141414}));
         updates.setFocusable(true);updates.setOnClickListener(v->startActivity(new Intent(this,UpdatesActivity.class)));updates.setTag("updates");FrameLayout.LayoutParams bar=new FrameLayout.LayoutParams(-2,footerHeight,Gravity.BOTTOM|Gravity.END);root.addView(updates,1,bar);
@@ -280,7 +347,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
         clearPending=true;CookieManager.getInstance().removeAllCookies(ok->{clearPending=false;CookieManager.getInstance().flush();if(foreground&&credential==null&&!storageBroken)showLogin();});
     }
     private void logout(){if(!foreground||credential==null||!"ACTIVE".equals(credential.state))return;
-        epoch++;loading=false;gate.logout();ui.removeCallbacks(renewal);if(web!=null)web.getSettings().setBlockNetworkLoads(true);
+        finishFileChooser(null);epoch++;loading=false;gate.logout();ui.removeCallbacks(renewal);if(web!=null)web.getSettings().setBlockNetworkLoads(true);
         try{store.save(credential.token,"PENDING_LOGOUT");credential=new CredentialStore.Record(credential.token,"PENDING_LOGOUT");revoke();}
         catch(Exception e){
             destroyPage();clearPending=true;

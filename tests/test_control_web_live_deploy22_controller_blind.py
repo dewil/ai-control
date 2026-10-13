@@ -9,8 +9,26 @@ from unittest.mock import patch
 import deploy22_blind_support as s
 
 class Deploy22ControllerBlind(s.ControllerFixture):
+    # Only superseded fresh4 flows use accepted22; historical journals use current.
+    historical_fresh22_tests=frozenset({
+        'test_exact22_modes_and_historical_schemas',
+        'test_actual_signed4_full22_staged_from16',
+        'test_signed22_install_preserves_full_scope_and_sameID_no_restart',
+        'test_sameID_unhealthy_refuses_without_state_or_package_repair',
+        'test_current_markers_block_otherwise_valid_signed22_before_later_seams',
+        'test_signed22_payload_uses_verified_snapshot_despite_owner_stage_swap',
+        'test_install_renames_every_leaf_in_fixed22_order',
+        'test_two_forward22_releases_repeat_and_stale16_base_refusal',
+        'test_subsets_extra_schema_boolean_and_direct14_rejected_before_mutation',
+        'test_fresh_matching_or_dangling_new_leaf_is_present_and_refused_prejournal',
+        'test_root_requirements_leaf_uses_target_parent_not_bin_collision',
+        'test_forward_gate_dependency_mutations_refuse_even_matching_receipt',
+        'test_missing_receipt_refuses_fresh_without_install_or_repair',
+        'test_actual_unit_hash_fault_refuses_fresh',
+        'test_actual_unit_fault_blocks_sameID_repeat_without_restart',
+    })
     def required22(self):
-        self.assertEqual(self.api.MODES,s.FULL22,'Actual controller still admits16, not exact signed22')
+        self.assertEqual(self.api.LIVE_MODES,s.FULL22,'Historical exact22 map must remain readable')
 
     def test_exact22_modes_and_historical_schemas(self):
         self.required22();self.assertEqual(self.api.APP_MODES,s.FULL16);self.assertEqual(self.api.LIVE_MODES,s.FULL22)
@@ -226,11 +244,12 @@ class Deploy22ControllerBlind(s.ControllerFixture):
         self.assertEqual(sum(call[1]=='start' for call in self.calls),2)
         self.assertLessEqual(len(self.calls),16,'Forward gate fault permits only one bounded package rollback')
 
-    def test_journal4_recovery_spends_single_budget_before_new22_install_failure(self):
+    def test_journal4_recovery_spends_single_budget_before_new23_install_failure(self):
         # INV-DEPLOY-20: a recovered invocation cannot roll back a second transaction.
         self.required22();raw,before,after,_,_=self.make_journal(before_schema=4)
         self.write(self.target/'bin/_control_web.css',after['bin/_control_web.css'],0o644)
-        self.dependency_after();self.signed(files=after,number=9,base=before)
+        after23={**after,'bin/_control_web_attachments.py':b'# synthetic new23 after oldjournal4 recovery\n'}
+        self.dependency_after();self.signed(files=after23,number=9,base=before,schema=5)
         original=self.runner;starts=[]
         def fail_third_start(args):
             result=original(args)
@@ -243,11 +262,12 @@ class Deploy22ControllerBlind(s.ControllerFixture):
         with self.assertRaises(self.api.RollbackFailed):controller.run()
         self.assertEqual(len(starts),3,'Spent invocation budget must prevent a second rollback')
         self.assertEqual(self.state.read_bytes(),raw);self.assertEqual(self.tree(),after)
+        self.assertEqual((self.target/'bin/_control_web_attachments.py').read_bytes(),after23['bin/_control_web_attachments.py'])
         pending=self.checkpoints/'pending.json';self.assertTrue(pending.exists())
         journal=json.loads(pending.read_bytes())
-        self.assertEqual(journal['schema'],4);self.assertEqual(journal['before'],json.loads(raw))
+        self.assertEqual(journal['schema'],5);self.assertEqual(journal['before'],json.loads(raw))
         self.assertEqual(journal['after']['release_id'],9)
-        self.assertEqual(journal['after']['files'],self.hashes(after))
+        self.assertEqual(journal['after']['files'],self.hashes(after23))
         self.assertTrue((self.checkpoints/journal['checkpoint']).is_dir())
         self.assertLessEqual(len(self.calls),20,'Recovery plus failed fresh install must remain bounded')
         # A separate invocation on the same public object may recover its retained journal.
@@ -255,6 +275,7 @@ class Deploy22ControllerBlind(s.ControllerFixture):
         with self.assertRaises(self.api.Rejected):controller.run()
         self.assertEqual(len(starts),5);self.assertEqual(self.state.read_bytes(),raw)
         self.assertEqual(self.tree(),before);self.assertFalse(pending.exists())
+        self.assertFalse((self.target/'bin/_control_web_attachments.py').exists())
         self.assertLessEqual(len(self.calls),16,'The next invocation permits one bounded recovery')
         with self.assertRaises(self.api.Rejected):controller.run()
         self.assertEqual(len(starts),5);self.assertFalse(controller.rollback_used)

@@ -31,9 +31,12 @@ LIVE_LEAVES = ('bin/_control_web_devbus.py', 'bin/_control_web_devbus_nats.py',
                'bin/_control_web_devbus.js', 'bin/_control_web_devbus.css',
                'requirements-devbus.lock', 'bin/_control_web_live.py')
 LIVE_MODES = {**APP_MODES, **dict.fromkeys(LIVE_LEAVES, 0o644)}
-MODES = LIVE_MODES
-SCHEMAS = {1: LEGACY_MODES, 2: CURRENT_MODES, 3: APP_MODES, 4: LIVE_MODES}
+ATTACHMENT_LEAF = "bin/_control_web_attachments.py"
+ATTACHMENT_MODES = {**LIVE_MODES, ATTACHMENT_LEAF: 0o644}
+MODES = ATTACHMENT_MODES
+SCHEMAS = {1: LEGACY_MODES, 2: CURRENT_MODES, 3: APP_MODES, 4: LIVE_MODES, 5: ATTACHMENT_MODES}
 LIVE_RECEIPT = Path('/var/lib/ai-control-deploy/live-bootstrap-complete.json')
+ATTACHMENT_RECEIPT = Path('/var/lib/ai-control-deploy/attachments-bootstrap-complete.json')
 BROKER_UNIT = Path('/etc/systemd/system/ai-control-web-broker.service')
 HELPER = Path('/usr/local/sbin/ai-control-deploy')
 SITE_PACKAGES = Path('/opt/ai-control-web/venv/lib/python3.12/site-packages')
@@ -411,7 +414,7 @@ def scope(files):
     if type(files) is dict and set(files) == set(LEGACY_MODES):
         return LEGACY_MODES
     if type(files) is dict:
-        for modes in (CURRENT_MODES, APP_MODES, LIVE_MODES):
+        for modes in (CURRENT_MODES, APP_MODES, LIVE_MODES, ATTACHMENT_MODES):
             if set(files) == set(modes):
                 return modes
     raise Rejected('Invalid fixed scope')
@@ -441,7 +444,7 @@ def state_value(value):
 
 
 def leaf_absent(target, owner_uid, leaf):
-    if leaf not in (NEW_LEAF, *APP_LEAVES, *LIVE_LEAVES):
+    if leaf not in (NEW_LEAF, *APP_LEAVES, *LIVE_LEAVES, ATTACHMENT_LEAF):
         raise Rejected('Unknown transition leaf path')
     parent = directory(Path(target) / Path(leaf).parent, owner_uid)
     try:
@@ -579,8 +582,8 @@ class Deploy:
 
     def live_gate(self):
         try:
-            receipt = decode(read_file(LIVE_RECEIPT, owners=(self.owner_uid,), limit=MAX_MANIFEST,
-                                       mode=0o600, private_parent=True))
+            receipt_raw = read_file(LIVE_RECEIPT, owners=(self.owner_uid,), limit=MAX_MANIFEST, mode=0o600, private_parent=True)
+            receipt = decode(receipt_raw)
             keys(receipt, ('schema', 'operation', 'packet_sha256', 'accepted_before_sha256',
                            'helper_sha256', 'unit_sha256', 'wheel_sha256', 'dependency_inventory_sha256'))
             if type(receipt['schema']) is not int or receipt['schema'] != 1 or receipt['operation'] != 'live22-bootstrap':
@@ -597,8 +600,22 @@ class Deploy:
                 raise Rejected('Unsafe actual broker unit')
             if digest(read_file(BROKER_UNIT, owners=(self.owner_uid,), mode=unit_mode, limit=MAX_MANIFEST)) != receipt['unit_sha256']:
                 raise Rejected('Actual broker unit mismatch')
-            if digest(read_file(HELPER, owners=(self.owner_uid,), mode=0o755, limit=1024*1024)) != receipt['helper_sha256']:
-                raise Rejected('Actual helper mismatch')
+            helper_sha = digest(read_file(HELPER, owners=(self.owner_uid,), mode=0o755, limit=1024*1024))
+            if helper_sha != receipt['helper_sha256']:
+                # Preserve the historical live22 proof; a separate reviewed
+                # root bootstrap binds its bytes to this exact extended helper.
+                chain = decode(read_file(ATTACHMENT_RECEIPT, owners=(self.owner_uid,), limit=MAX_MANIFEST,
+                                         mode=0o600, private_parent=True))
+                keys(chain, ('schema', 'operation', 'prior_helper_sha256', 'helper_sha256',
+                             'prior_receipt_sha256', 'accepted_before_sha256', 'packet_sha256'))
+                if type(chain['schema']) is not int or chain['schema'] != 1 or chain['operation'] != 'attachments23-bootstrap':
+                    raise Rejected('Invalid attachment bootstrap proof')
+                for key in set(chain) - {'schema', 'operation'}:
+                    if type(chain[key]) is not str or re.fullmatch('[0-9a-f]{64}', chain[key]) is None:
+                        raise Rejected('Invalid attachment bootstrap digest')
+                if (chain['prior_helper_sha256'] != receipt['helper_sha256'] or chain['helper_sha256'] != helper_sha
+                        or chain['prior_receipt_sha256'] != digest(receipt_raw)):
+                    raise Rejected('Attachment bootstrap chain mismatch')
         except (OSError, ValueError, TypeError) as exc:
             raise Rejected('Live bootstrap proof failed') from exc
 
@@ -643,7 +660,7 @@ class Deploy:
 
     def transition_leaf(self, expected, remove=False, leaf=NEW_LEAF):
         """Only a closed transition leaf may be removed after anchored proof."""
-        if leaf not in (NEW_LEAF, *APP_LEAVES, *LIVE_LEAVES):
+        if leaf not in (NEW_LEAF, *APP_LEAVES, *LIVE_LEAVES, ATTACHMENT_LEAF):
             raise Rejected('Unknown transition leaf path')
         parent = directory(self.target / Path(leaf).parent, self.owner_uid)
         child = None
@@ -718,7 +735,7 @@ class Deploy:
             for leaf in after['files'].keys() - before['files'].keys():
                 self.transition_leaf(after['files'][leaf], remove=True, leaf=leaf)
             self.install(old)
-            self.start(live=before['schema'] == 4)
+            self.start(live=before['schema'] in (4, 5))
             self.match(before['files'])
             atomic_write(self.state_path, raw, 0o600, self.owner_uid)
             self.accepted_raw = raw
@@ -735,7 +752,7 @@ class Deploy:
         if type(journal['schema']) is not int or journal['schema'] not in SCHEMAS:
             raise Rejected('Invalid journal schema')
         before, after = state_value(journal['before']), state_value(journal['after'])
-        pairs = {1: {(1, 1)}, 2: {(1, 2), (2, 2)}, 3: {(2, 3), (3, 3)}, 4: {(3, 4), (4, 4)}}
+        pairs = {1: {(1, 1)}, 2: {(1, 2), (2, 2)}, 3: {(2, 3), (3, 3)}, 4: {(3, 4), (4, 4)}, 5: {(4, 5), (5, 5)}}
         if ((before['schema'], after['schema']) not in pairs[journal['schema']]
                 or after['release_id'] <= before['release_id']
                 or accepted not in (before, after)):
@@ -756,9 +773,9 @@ class Deploy:
         current = self.interrupted_tree(before, after)
         if accepted == after and current == after['files']:
             try:
-                if after['schema'] == 4:
+                if after['schema'] in (4, 5):
                     self.live_gate()
-                self.services(live=after['schema'] == 4)
+                self.services(live=after['schema'] in (4, 5))
             except Exception:
                 pass
             else:
@@ -793,11 +810,11 @@ class Deploy:
             raise Rejected('Signature verification failed')
         manifest = decode(raw)
         keys(manifest, ('schema', 'release_id', 'base', 'files'))
-        if type(manifest['schema']) is not int or manifest['schema'] != 4:
+        if type(manifest['schema']) is not int or manifest['schema'] != 5:
             raise Rejected('Invalid release schema')
         integer(manifest['release_id'], 1)
         hashes(manifest['base'])
-        if scope(manifest['base']) not in (APP_MODES, LIVE_MODES):
+        if scope(manifest['base']) not in (LIVE_MODES, ATTACHMENT_MODES):
             raise Rejected('Invalid staged base scope')
         keys(manifest['files'], MODES)
         expected = {}
@@ -859,17 +876,17 @@ class Deploy:
         if release < before['release_id']:
             raise Rejected('Release replay')
         if release == before['release_id']:
-            if before['schema'] != 4 or sha != before['manifest_sha256'] or expected != before['files']:
+            if before['schema'] != 5 or sha != before['manifest_sha256'] or expected != before['files']:
                 raise Rejected('Release identity reused')
             self.live_gate()
             self.services()
             return {'result': 'already_installed', 'release_id': release}
-        if before['schema'] not in (3, 4):
-            raise Rejected('Only accepted16 or accepted22 may advance')
+        if before['schema'] not in (4, 5):
+            raise Rejected('Only accepted22 or accepted23 may advance')
         if manifest['base'] != before['files']:
             raise Rejected('Signed base mismatch')
         self.live_gate()
-        after = {'schema': 4, 'release_id': release, 'manifest_sha256': sha, 'files': expected}
+        after = {'schema': 5, 'release_id': release, 'manifest_sha256': sha, 'files': expected}
         self.services()
         basenames = [Path(path).name for path in original] + ['accepted.json']
         if len(set(basenames)) != len(basenames):
@@ -885,7 +902,7 @@ class Deploy:
                 os.fsync(fd)
             finally:
                 os.close(fd)
-        journal = {'schema': 4, 'before': before, 'after': after, 'checkpoint': checkpoint.name}
+        journal = {'schema': 5, 'before': before, 'after': after, 'checkpoint': checkpoint.name}
         atomic_write(self.pending, encode(journal), 0o600, self.owner_uid)
         try:
             self.match(before['files'])

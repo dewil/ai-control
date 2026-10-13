@@ -9,6 +9,14 @@ class SourceFinalInventoryBlind(s.ControllerFixture):
         self.assertTrue(callable(method),'PUBLIC-SEAM PREREQUISITE: controller canonical_inventory missing')
         return method
 
+    def test_actual_current_scope23_retains_historical_live22_map(self):
+        # Current helper is exercised here, never substituted by a historical pin.
+        exact23={**s.FULL22,'bin/_control_web_attachments.py':0o644}
+        self.assertEqual(self.api.MODES,exact23)
+        self.assertEqual(self.api.ATTACHMENT_MODES,exact23)
+        self.assertEqual(self.api.SCHEMAS[4],s.FULL22)
+        self.assertEqual(self.api.SCHEMAS[5],exact23)
+
     def test_actual_controller_serializer_matches_independent_full_rows(self):
         method=self.serializer();independent=s.rows()
         self.assertEqual(method(list(reversed(independent))),s.canonical(independent))

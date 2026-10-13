@@ -12,6 +12,7 @@ import test_control_web_limits_dashboard_browser_red as harness
 
 NORMAL = 'Обычный ×1'
 DOUBLE = 'Ориентир ×2'
+TRIPLE = 'Ориентир ×3'
 
 
 class AllWindowMarkersBlind(unittest.TestCase):
@@ -72,7 +73,7 @@ class AllWindowMarkersBlind(unittest.TestCase):
         self.tab('Лимиты').click()
         expect(self.panel()).to_be_visible()
 
-    def test_native_codex_weekly_elapsed_markers_share_spend_scale_and_double_only_weekly(self):
+    def test_native_codex_weekly_elapsed_markers_share_spend_scale_and_acceleration_only_weekly(self):
         value = native.overview(elapsed=3.5 * native.DAY, remaining=75)
         self.open_value(value)
         card = self.card('Codex')
@@ -80,9 +81,11 @@ class AllWindowMarkersBlind(unittest.TestCase):
         expect(bar).to_have_count(1)
         self.assertEqual(float(bar.get_attribute('aria-valuenow')), 25)
         meters = card.get_by_role('meter')
-        expect(meters).to_have_count(2)
+        # INV-WATT-11 supersedes the previous two-marker Codex weekly contract.
+        expect(meters).to_have_count(3)
         self.assert_marker(meters.nth(0), 50)
         self.assert_marker(meters.nth(1), 100)
+        self.assert_marker(meters.nth(2), 100)
         scale = card.locator('.lm-scale')
         expect(scale).to_have_count(1)
         track = bar.bounding_box()
@@ -104,6 +107,7 @@ class AllWindowMarkersBlind(unittest.TestCase):
         self.assertAlmostEqual(endpoints['end']['center'], track['x'] + track['width'], delta=3)
         expect(card.get_by_text(NORMAL, exact=True)).to_be_visible()
         expect(card.get_by_text(DOUBLE, exact=True)).to_be_visible()
+        expect(card.get_by_text(TRIPLE, exact=True)).to_be_visible()
 
     def test_kimi_short_and_weekly_windows_receive_normal_markers_and_spend_is_independent(self):
         self.open_value(v2.overview())
@@ -175,8 +179,11 @@ class AllWindowMarkersBlind(unittest.TestCase):
                 self.open_value(value)
                 card = self.card('Codex')
                 markers = card.get_by_role('meter')
-                expect(markers).to_have_count(2)
+                # INV-WATT-11: all three retain this same valid weekly anchor.
+                expect(markers).to_have_count(3)
                 self.assert_marker(markers.nth(0), elapsed / duration * 100)
+                self.assert_marker(markers.nth(1), max(0, min(100, 2 * elapsed / duration * 100)))
+                self.assert_marker(markers.nth(2), max(0, min(100, 3 * elapsed / duration * 100)))
                 self.assertEqual(float(card.get_by_role('progressbar').get_attribute('aria-valuenow')), 87)
         expired = v2.overview(native_value=native.overview(
             elapsed=duration + 60, remaining=13, duration=10080))

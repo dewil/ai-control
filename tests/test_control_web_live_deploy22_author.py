@@ -10,6 +10,8 @@ import deploy22_blind_support as s
 
 
 class GateRollbackAuthor(s.ControllerFixture):
+    # This test publishes a fresh4 release; other oldjournal recovery tests stay current.
+    historical_fresh22_tests=frozenset({'test_unit_fault_after_publish_before_clear_restores_raw_before16'})
     # INV-DEPLOY-25: the existing frontend sandbox never gains a second writable path.
     def test_expanded_frontend_write_paths_refuse_before_package_mutation(self):
         self.dependency_after()

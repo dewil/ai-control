@@ -214,3 +214,11 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 #navigator-status:empty{display:none}
 
 #session-navigator .navigator-tools>#navigator-apply{flex:0 0 108px}
+
+/* INV-WATT-10/11: native radio semantics and distinct time-marker lanes. */
+.send-mode{border:0;padding:0;margin:4px 0;min-width:0;display:flex;flex-wrap:wrap;gap:4px 12px}.send-mode legend{font-size:12px;color:var(--muted)}
+.send-mode label{display:inline-flex;align-items:center;gap:7px;min-width:44px;min-height:44px;margin:0;cursor:pointer}.send-mode input[type=radio]{width:18px;height:18px;margin:0;accent-color:var(--accent)}
+#limits-panel .lm-triple{top:-7px;width:10px;height:10px;background:#9d8ce0;border-color:#9d8ce0;border-radius:0;z-index:2}
+#limits-panel .lm-triple-legend{color:#b9a9f4}#limits-panel .lm-triple-legend:before{content:'■'}
+@media(forced-colors:active){#limits-panel .lm-triple{border-color:CanvasText;background:Highlight}}
+.chat-attachments{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}.attachment-chip{display:flex;align-items:center;flex-wrap:wrap;gap:6px;max-width:100%;padding:4px 8px;border:1px solid var(--border,#555);border-radius:6px;font-size:12px}.attachment-chip .attachment-name{overflow-wrap:anywhere;min-width:0}.attachment-chip button{min-width:44px;min-height:44px;padding:4px 8px}.attachment-chip .meta{margin:0}
