@@ -889,7 +889,7 @@ function renderAttachments(){
     chip.append(node('span',expired?'Срок загрузки истёк':file.state==='sealed'?'Загружено · '+Math.ceil(file.size/1024)+' КБ':file.error||'Загрузка · '+Math.floor(file.bytes/file.size*100)+'%','meta'));
     const remove=node('button','×');remove.type='button';remove.setAttribute('aria-label','Удалить вложение '+file.name);remove.disabled=attachmentLocked(key);
     remove.addEventListener('click',()=>{if(attachmentLocked(key))return;file.removed=true;draft.files=draft.files.filter(item=>item!==file);if(!draft.files.length)attachmentDrafts.delete(key);if(file.id)api('/api/session-attachment-discard',{attachment_id:file.id}).catch(()=>{});renderAttachments();syncCurrentSessionControls();});chip.append(remove);
-    if(file.error&&!attachmentLocked(key)){const retry=node('button','Проверить загрузку');retry.type='button';retry.addEventListener('click',()=>{file.error=null;queueAttachmentUpload(key,draft,file);});chip.append(retry);}
+    if(file.error&&!attachmentLocked(key)){const retry=node('button','Проверить загрузку');retry.type='button';retry.addEventListener('click',()=>{file.error=null;draft.options=null;queueAttachmentUpload(key,draft,file);});chip.append(retry);}
     root.append(chip);
   }
 }
@@ -900,9 +900,11 @@ function acceptAttachmentStage(file,data){
 }
 async function attachmentChunk(path,bytes,auth){
   if(!pageActive()||chatAuthGeneration!==auth)throw new Error('Загрузка приостановлена');
-  const response=await fetch(path,{method:'PUT',credentials:'same-origin',headers:{'Content-Type':'application/octet-stream','X-CSRF-Token':csrf},body:bytes});
-  const data=await response.json();if(chatAuthGeneration!==auth)throw pageStale();
-  if(!response.ok){if(response.status===401)authExpired();throw new Error(data.error==='attachment_storage_full'?'Хранилище вложений заполнено':'Загрузка не подтверждена');}return data;
+  let response,data;
+  try{response=await fetch(path,{method:'PUT',credentials:'same-origin',headers:{'Content-Type':'application/octet-stream','X-CSRF-Token':csrf},body:bytes});data=await response.json();}
+  catch(_){if(chatAuthGeneration!==auth)throw pageStale();throw new Error('Не удалось подтвердить загрузку. Проверьте соединение и версию приложения.');}
+  if(chatAuthGeneration!==auth)throw pageStale();
+  if(!response.ok){if(response.status===401)authExpired();throw new Error(data?.error==='attachment_storage_full'?'Хранилище вложений заполнено':'Загрузка не подтверждена');}return data;
 }
 function queueAttachmentUpload(key,draft,file){attachmentUploadChain=attachmentUploadChain.catch(()=>{}).then(()=>uploadAttachment(key,draft,file));}
 async function uploadAttachment(key,draft,file){

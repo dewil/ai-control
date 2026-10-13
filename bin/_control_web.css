@@ -222,3 +222,7 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 #limits-panel .lm-triple-legend{color:#b9a9f4}#limits-panel .lm-triple-legend:before{content:'■'}
 @media(forced-colors:active){#limits-panel .lm-triple{border-color:CanvasText;background:Highlight}}
 .chat-attachments{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}.attachment-chip{display:flex;align-items:center;flex-wrap:wrap;gap:6px;max-width:100%;padding:4px 8px;border:1px solid var(--border,#555);border-radius:6px;font-size:12px}.attachment-chip .attachment-name{overflow-wrap:anywhere;min-width:0}.attachment-chip button{min-width:44px;min-height:44px;padding:4px 8px}.attachment-chip .meta{margin:0}
+
+/* Lighter composer labels retain the 44px native-label touch target. */
+#chat-form label,#chat-form button,#chat-form summary{font-weight:400}
+.send-mode label{font-size:14px}.send-mode legend{color:#adaeb7}
