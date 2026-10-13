@@ -56,6 +56,12 @@ object OriginPolicy {
                 }
             }
 
+            // INV-WATT-09: chunk transport is the only additional HTTP method.
+            if (method == "PUT" && !mainFrame && !isRedirect &&
+                uri.rawPath == "/api/session-attachment-chunk" && uri.rawFragment == null) {
+                return NavigationDecision.ALLOW_PANEL
+            }
+
             return if (method == "GET" || method == "POST") {
                 NavigationDecision.ALLOW_PANEL
             } else {
