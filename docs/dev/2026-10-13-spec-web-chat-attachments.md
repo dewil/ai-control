@@ -568,3 +568,11 @@ pins не освобождаются. Квоты bytes/objects проверяю�
 - Namespace quarantine блокирует новые begin И новые sends/enqueue; read-only status/receipt доступны с проверенной авторизацией. Не затронутые text-only receipts/routes продолжают существующее поведение.
 - Целевой поставляемый пакет: image direct+queue, generic file direct+queue при реальном read witness, radio и ×3; Android chooser — новый APK с отдельным acceptance. Не объявлять text-only release выполнением этого пакета. Неисполненный gate остаётся явно незавершённым; автоматически сокращать пользовательский scope запрещено.
 - Первая реализация сознательно не удаляет accepted/unknown pins: при 2 GiB/2048 объектов возвращает attachment_storage_full и предлагает обслужить хранилище; no eviction. Это известный предел первой версии, не неизвестный delivery failure. Безопасное освобождение использованных вложений — отдельная задача; не выдавать бессрочную работу без обслуживания за критерий данного выпуска.
+
+
+## Публичные DTO для независимых тестов
+
+`options`: `{available:bool, images:bool, files:bool, direct:bool, queue:bool, max_files:8, max_file_bytes:20971520, max_message_bytes:41943040, chunk_bytes:49152, reason:null|safe_code}`. Нет native paths/lease/scope. `available=false` и reason объясняют запрет; capabilities не выводятся из одного filename.
+`begin/chunk/finish/status`: `{attachment_id:UUID, state:"receiving"|"sealed"|"discarded"|"expired", bytes:int, size:int, sha256:null|hex64, expires_at:number, mode:"image"|"file"}`; sha256 только после seal. Bytes — durable полученные bytes; chunk index вычисляется из bytes/chunk_bytes, finish требует bytes=size.
+`discard`: `{attachment_id:UUID,state:"discarded"}`. Ошибка всех routes — существующий `{error:safe_code}`.
+`send-attachments/enqueue-attachments/receipt`: `{message_id:UUID,status:"accepted"|"queued"|"delivery_unknown"|"rejected",turn_id:null|string,queued_submission_id:null|string}`. Не выдавать paths/manifest/scope. Идентичный UUID остаётся при unknown; UI не очищает/не повторяет неопределённую отправку. Attachment IDs и исходный draft остаются в state выбранной сессии, late response другого SID не трогает текущий composer.
