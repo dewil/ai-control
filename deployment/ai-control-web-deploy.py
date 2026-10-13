@@ -36,6 +36,7 @@ ATTACHMENT_MODES = {**LIVE_MODES, ATTACHMENT_LEAF: 0o644}
 MODES = ATTACHMENT_MODES
 SCHEMAS = {1: LEGACY_MODES, 2: CURRENT_MODES, 3: APP_MODES, 4: LIVE_MODES, 5: ATTACHMENT_MODES}
 LIVE_RECEIPT = Path('/var/lib/ai-control-deploy/live-bootstrap-complete.json')
+ATTACHMENT_RECEIPT = Path('/var/lib/ai-control-deploy/attachments-bootstrap-complete.json')
 BROKER_UNIT = Path('/etc/systemd/system/ai-control-web-broker.service')
 HELPER = Path('/usr/local/sbin/ai-control-deploy')
 SITE_PACKAGES = Path('/opt/ai-control-web/venv/lib/python3.12/site-packages')
@@ -581,8 +582,8 @@ class Deploy:
 
     def live_gate(self):
         try:
-            receipt = decode(read_file(LIVE_RECEIPT, owners=(self.owner_uid,), limit=MAX_MANIFEST,
-                                       mode=0o600, private_parent=True))
+            receipt_raw = read_file(LIVE_RECEIPT, owners=(self.owner_uid,), limit=MAX_MANIFEST, mode=0o600, private_parent=True)
+            receipt = decode(receipt_raw)
             keys(receipt, ('schema', 'operation', 'packet_sha256', 'accepted_before_sha256',
                            'helper_sha256', 'unit_sha256', 'wheel_sha256', 'dependency_inventory_sha256'))
             if type(receipt['schema']) is not int or receipt['schema'] != 1 or receipt['operation'] != 'live22-bootstrap':
@@ -599,8 +600,22 @@ class Deploy:
                 raise Rejected('Unsafe actual broker unit')
             if digest(read_file(BROKER_UNIT, owners=(self.owner_uid,), mode=unit_mode, limit=MAX_MANIFEST)) != receipt['unit_sha256']:
                 raise Rejected('Actual broker unit mismatch')
-            if digest(read_file(HELPER, owners=(self.owner_uid,), mode=0o755, limit=1024*1024)) != receipt['helper_sha256']:
-                raise Rejected('Actual helper mismatch')
+            helper_sha = digest(read_file(HELPER, owners=(self.owner_uid,), mode=0o755, limit=1024*1024))
+            if helper_sha != receipt['helper_sha256']:
+                # Preserve the historical live22 proof; a separate reviewed
+                # root bootstrap binds its bytes to this exact extended helper.
+                chain = decode(read_file(ATTACHMENT_RECEIPT, owners=(self.owner_uid,), limit=MAX_MANIFEST,
+                                         mode=0o600, private_parent=True))
+                keys(chain, ('schema', 'operation', 'prior_helper_sha256', 'helper_sha256',
+                             'prior_receipt_sha256', 'accepted_before_sha256', 'packet_sha256'))
+                if type(chain['schema']) is not int or chain['schema'] != 1 or chain['operation'] != 'attachments23-bootstrap':
+                    raise Rejected('Invalid attachment bootstrap proof')
+                for key in set(chain) - {'schema', 'operation'}:
+                    if type(chain[key]) is not str or re.fullmatch('[0-9a-f]{64}', chain[key]) is None:
+                        raise Rejected('Invalid attachment bootstrap digest')
+                if (chain['prior_helper_sha256'] != receipt['helper_sha256'] or chain['helper_sha256'] != helper_sha
+                        or chain['prior_receipt_sha256'] != digest(receipt_raw)):
+                    raise Rejected('Attachment bootstrap chain mismatch')
         except (OSError, ValueError, TypeError) as exc:
             raise Rejected('Live bootstrap proof failed') from exc
 
