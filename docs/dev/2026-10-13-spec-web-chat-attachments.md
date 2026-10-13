@@ -598,3 +598,7 @@ Radio clarification: группу показывать при выбранной
 Порядок locks: общий существующий receipt namespace → короткий spool lock. Spool никогда не вызывает receipt layer; ни один spool lock не удерживается во время native RPC. Это заменяет раннее предложение global→upload→receipt. Chunk/metadata bounded, отдельный upload lock не нужен.
 Фактический InteractiveRPC frame 4 MiB: суммарные native изображения ограничены2 MiB до reserve/dispatch (`image_payload_too_large`, HTTP422); options публикует max_image_bytes2097152. File mode до20 MiB остаётся. JSON/base64 echo не увеличивает общий transport bound.
 Для nontext queue row показывается безопасная native_summary без путей. Attachment send-now остаётся held/unavailable: этот выпуск не заявляет безопасный полный snapshot transfer; явный native queue start не копирует/не теряет input.
+
+
+## Android renewal и срок lease
+Продление текущей авторизации в /api/app/session сохраняет cookie/scope и изменяет expires. auth_expires_at является текущим ограничением доступа, не частью стабильной identity stage: сравнение исключает только это поле. Все scope/UID/root/SID/MID/context/generation поля остаются строгими; текущая авторизация проверяется на каждом вызове. Исходный absolute expires_at lease не продлевается, новые файлы того же сообщения наследуют его. Истёкший lease нельзя восстановить продлением авторизации. HTTP renewal и неизменяемость срока подтверждены отдельными RED→GREEN.
