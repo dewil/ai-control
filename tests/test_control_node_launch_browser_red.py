@@ -133,8 +133,10 @@ class NodeLaunchBrowserRed(s.HttpCase):
         self.assertEqual(len(self.node_requests('POST')),0,'Auth loss cannot replay mutation')
 
     def test_hidden_background_suspends_node_requests_and_native_auth_bridge(self):
-        self.page.add_init_script("window.nodeAuthCalls=[];window.AndroidAuth={requestAuth:(...args)=>window.nodeAuthCalls.push(args),requestLogout:()=>{}}")
+        # Admit the synthetic owner through the real cookie flow before adding
+        # the native callback spy; an incomplete native-login mock blocks admission.
         self.enter()
+        self.page.evaluate("window.nodeAuthCalls=[];window.AndroidAuth={requestAuth:(...args)=>window.nodeAuthCalls.push(args),requestLogout:()=>{}}")
         before=self.page.evaluate('window.nodeAuthCalls.length')
         self.page.evaluate("Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});Object.defineProperty(document,'visibilityState',{configurable:true,get:()=> 'hidden'});document.dispatchEvent(new Event('visibilitychange'))")
         count=len(self.node_requests()); self.page.wait_for_timeout(5300)
