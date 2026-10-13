@@ -134,6 +134,10 @@ class NodeTaskStore:
                     'SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL')}
                 if actual != {name: _schema_sql(sql) for name, sql in _SCHEMA.items()}:
                     raise ValueError()
+                metadata = self._db.execute('SELECT singleton,fence FROM metadata').fetchall()
+                if (len(metadata) != 1 or metadata[0]['singleton'] != 1
+                        or metadata[0]['fence'] not in (None, 'retention_gap', 'invalid_event', 'id_conflict')):
+                    raise ValueError()
             self._db.execute('PRAGMA journal_mode=WAL')
             self._db.execute('PRAGMA synchronous=FULL')
             self._db.execute('PRAGMA foreign_keys=ON')
@@ -177,7 +181,9 @@ class NodeTaskStore:
                 self._db.execute('BEGIN IMMEDIATE')
                 result = operation()
                 self._db.commit()
-            except sqlite3.Error:
+            except (sqlite3.Error, ValueError, TypeError):
+                # Stored-data decoding failures are storage failures too; leave
+                # no open transaction to poison an independent healthy read.
                 try:
                     self._db.rollback()
                 except sqlite3.Error:

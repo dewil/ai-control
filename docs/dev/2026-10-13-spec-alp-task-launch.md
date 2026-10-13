@@ -81,3 +81,7 @@ Existing schema v1 должна совпадать по ограничениям
 
 ### Служебные события общего subject
 Валидные exact-v1 heartbeat/registration с payload:dict не являются исходами задач. После strict envelope/UTF8/duplicate-key/nonfinite/ID/time/wire-limit проверки ядро возвращает ignored/task_id=null и коммитит bounded diagnostic counter до ACK, до любого task lookup или event-ID dispatch. Содержимое metadata dict не интерпретируется как authority; даже совпадающий owned task_id не изменяет task/result/fence. Metadata не заполняют task event digest table. Malformed envelope или payload не dict остаются invalid. Result payload limit60000B относится к исходам задач, metadata ограничены общим wire126KiB.
+
+
+### Повреждение сохранённых данных
+При открытии schema2 проверить ровно одну metadata singleton=1 row; fence допустим только null/retention_gap/invalid_event/id_conflict. Отсутствующая row, BLOB или неизвестное значение означают generic ValueError до изменения schema/data/journal settings; не восстанавливать singleton автоматически. Ошибка декодирования сохранённого result в операции означает generic storage error и немедленный rollback: следующая независимая исправная операция проходит без дополнительного «лечащего» вызова. Повреждённое значение не удаляется и не переписывается автоматически.
