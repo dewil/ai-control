@@ -64,3 +64,28 @@ INV-DEVBUS-10/11 reserved integration: ownerbrokerhosting / bounded owneronly AP
 - INV-SIDE06: actualFILErestart/outage/retry/dedupexpiry/retentionnegativeproof доenable; нетexactly-once/OSRCEisolationclaim, native/vendorauth untouched.
 
 Trace: tests/test_control_web_nats_sidecar_blind.py и disposableFILEintegration evidence. НовыеIDs именуютпринятыеclauses, не расширяютscopeприёмки.
+
+## 13.10 — запуск новых задач ALP
+
+По поручению пользователя отдельный owner publisher дополняет наблюдение.
+Ограничения observer выше сохраняются. Первый профиль — Codex read-only,
+фиксированный workspace на ALP, один worker. Контракт реализации и независимых
+проверок: `../dev/2026-10-13-spec-alp-task-launch.md` и
+`../dev/2026-10-13-spec-node-launch-runtime.md`.
+
+- INV-NRUN-01..03: отдельный долговечный журнал и роли publisher/sink;
+  сеть работает на существующем owner loop, HTTP читает ограниченный DTO.
+- INV-NRUN-04..06: неизменный task/request ID при неопределённой доставке,
+  commit перед ACK, отсутствие автоматического повторного исполнения;
+  heartbeat/registration не являются результатами задач.
+- INV-NRUN-07..09: owner-only HTTP и компактная панель, явная проверка/повтор
+  того же запроса; скрытая страница прекращает опрос, результат не означает
+  независимую приёмку качества, отсутствующий usage остаётся неизвестным.
+
+Трассируемость: tests/test_control_node_tasks*red.py,
+ tests/test_control_node_runtime*red.py, test_control_node_metadata_interop_red.py,
+ test_control_node_launch_http_red.py, test_control_node_launch_browser_red.py.
+Поставка helper exact25 и миграция NATS выполняются отдельно по фиксированным
+пакетам с откатом. На этапе source-интеграции установленный end-to-end запуск
+ещё не доказан. Resume, вопросы, cancel/reassign, write-профили и другие узлы
+остаются будущими срезами, а не возможностями этого релиза.
