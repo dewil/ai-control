@@ -539,6 +539,33 @@ def request_valid(action,data,auth):
     except (Refusal,ValueError,TypeError,KeyError,UnicodeError):return False
 
 
+def jpeg_sef_trailer(stream, size):
+    """Accept bounded metadata-only SEF; preserve opaque original bytes."""
+    remaining=size-stream.tell()
+    need(20<=remaining<=65536,'unsupported')
+    raw=stream.read(remaining)
+    need(len(raw)==remaining and raw[-4:]==b'SEFT' and b'\xff\xd8' not in raw,'unsupported')
+    length=int.from_bytes(raw[-8:-4],'little');start=len(raw)-8-length
+    need(start>=0 and length>=12 and raw[start:start+4]==b'SEFH','unsupported')
+    version=int.from_bytes(raw[start+4:start+8],'little')
+    count=int.from_bytes(raw[start+8:start+12],'little')
+    need(version in (101,107) and 1<=count<=256 and length==12+12*count,'unsupported')
+    spans=[]
+    for index in range(count):
+        entry=raw[start+12+index*12:start+24+index*12]
+        offset=int.from_bytes(entry[4:8],'little');block_size=int.from_bytes(entry[8:12],'little')
+        first=start-offset;last=first+block_size
+        need(entry[:2]==b'\0\0' and 0<=first<last<=start and block_size>=8,'unsupported')
+        need(raw[first:first+4]==entry[:4],'unsupported')
+        name_size=int.from_bytes(raw[first+4:first+8],'little')
+        need(name_size<=block_size-8,'unsupported');spans.append((first,last))
+    end=0
+    for first,last in sorted(spans):
+        need(first==end,'unsupported');end=last
+    need(end==start,'unsupported')
+    return True
+
+
 def image_bounds(fd,size):
     """Structural/resource fence, not a decoder or provider-consumption proof."""
     import zlib
@@ -574,7 +601,9 @@ def image_bounds(fd,size):
                     while marker==b'\xff':marker=stream.read(1)
                 else:marker=pending;pending=None
                 need(len(marker)==1,'unsupported');code=marker[0]
-                if code==0xd9:need(sof and sos and stream.tell()==size,'unsupported');return True
+                if code==0xd9:
+                    need(sof and sos,'unsupported')
+                    return True if stream.tell()==size else jpeg_sef_trailer(stream,size)
                 need(code not in (0,0xd8) and not 0xd0<=code<=0xd7,'unsupported')
                 raw=stream.read(2);need(len(raw)==2,'unsupported');length=int.from_bytes(raw,'big')
                 need(2<=length<=65535 and length-2<=size-stream.tell(),'unsupported')
