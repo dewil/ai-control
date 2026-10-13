@@ -77,3 +77,7 @@ Envelope имеет ровно message_id/task_id/correlation_id/source/target/k
 При event cap новый digest не принимается и не сохраняется: это capacity refusal с partial/needs_attention, а не обещание дедупликации неограниченного набора отклонённых событий. После первого перевода в needs_attention повторные capacity refusals не двигают updated_at; bounded diagnostic counter может считать отказы. Если attention возник до первого результата, поздний валидный completed сохраняет первый результат для проверки, но не снимает needs_attention/partial.
 
 Existing schema v1 должна совпадать по ограничениям PK/UNIQUE, внешнему ключу и обязательному индексу, а не только названиям столбцов. Все пройденные ancestors принадлежат root или service UID и не доступны на запись группе/остальным; исключение только root-owned sticky /tmp и /var/tmp. Same-UID adversary по-прежнему вне обещаний.
+
+
+### Служебные события общего subject
+Валидные exact-v1 heartbeat/registration с payload:dict не являются исходами задач. После strict envelope/UTF8/duplicate-key/nonfinite/ID/time/wire-limit проверки ядро возвращает ignored/task_id=null и коммитит bounded diagnostic counter до ACK, до любого task lookup или event-ID dispatch. Содержимое metadata dict не интерпретируется как authority; даже совпадающий owned task_id не изменяет task/result/fence. Metadata не заполняют task event digest table. Malformed envelope или payload не dict остаются invalid. Result payload limit60000B относится к исходам задач, metadata ограничены общим wire126KiB.

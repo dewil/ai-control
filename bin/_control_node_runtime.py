@@ -290,7 +290,7 @@ class NodeTaskRuntime:
             for agent in snapshot.get('agents', []):
                 if agent.get('agent') == 'codex-ai-dev-1':
                     at = _timestamp(agent.get('heartbeat_at'))[1]
-                    heartbeat = 'fresh' if (agent.get('registered') is True and agent.get('heartbeat_status') == 'fresh'
+                    heartbeat = 'fresh' if (agent.get('heartbeat_status') == 'fresh'
                         and at is not None and -5 <= self._clock() - at <= 45
                         and snapshot.get('connection', {}).get('state') == 'live') else 'stale'
         except Exception:

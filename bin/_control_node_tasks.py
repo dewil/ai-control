@@ -334,6 +334,10 @@ class NodeTaskStore:
         if set(obj) != _FIELDS:
             raise ValueError()
         kind, payload = obj['kind'], obj['payload']
+        if kind in ('heartbeat', 'registration'):
+            # Shared-subject metadata have no task authority; the strict v1
+            # envelope/dict payload was checked above. Do not interpret it.
+            return obj, None
         if kind in ('accepted', 'running'):
             valid = payload == {}
         elif kind == 'completed':
@@ -365,6 +369,9 @@ class NodeTaskStore:
             return self._run(invalid)
         digest = hashlib.sha256(raw).hexdigest()
         def operation():
+            if obj['kind'] in ('heartbeat', 'registration'):
+                self._counter('ignored')
+                return {'outcome': 'ignored', 'task_id': None}
             task = obj['task_id']
             row = self._row(task)
             if (not row or obj['source'] != 'codex-ai-dev-1' or obj['target'] != 'control-web'
