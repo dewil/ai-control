@@ -21,10 +21,10 @@ class NativePublicContract(unittest.TestCase):
 
     def test_release_identity_and_sdk_contract(self):
         # INV-APP-08: accepted Android lifecycle release supersedes
-        # startup 0.1.6/code7 with the exact 0.1.7/code8 release identity.
+        # startup 0.1.6/code7 with the exact 0.1.8/code9 release identity.
         source = self.source(ROOT / 'android/app/build.gradle.kts')
         for pattern in (r'applicationId\s*=\s*"ru\.dewil\.aicontrol"',
-            r'versionName\s*=\s*"0\.1\.7"', r'versionCode\s*=\s*8\b',
+            r'versionName\s*=\s*"0\.1\.7"', r'versionCode\s*=\s*9\b',
             r'minSdk\s*=\s*26\b', r'targetSdk\s*=\s*36\b'):
             self.assertRegex(source, pattern)
 
