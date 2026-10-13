@@ -230,6 +230,58 @@ class SendRecoveryStabilityContract(unittest.TestCase):
         expect(self.send_button()).to_be_enabled()
         self.assertEqual(self.send_requests(), [])
 
+    def test_INV_PSTAB_03_pending_recovery_aborts_at_10s_and_manual_retry_is_available(self):
+        # Public fetch AbortSignal observation proves the network operation is
+        # cancelled, independently from merely changing a loading caption.
+        self.page.clock.install()
+        self.page.evaluate("""() => {
+            const originalFetch = window.fetch;
+            window.__catalogDeadlineSignals = [];
+            window.fetch = function(input, options = {}) {
+                const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+                if (url.pathname === '/api/session-models') {
+                    const signal = options.signal || (typeof input === 'object' ? input.signal : null);
+                    const observed = {aborted: !!signal?.aborted};
+                    window.__catalogDeadlineSignals.push(observed);
+                    signal?.addEventListener('abort', () => observed.aborted = true, {once: true});
+                }
+                return originalFetch.apply(this, arguments);
+            };
+        }""")
+        beta_only = fixture.available([{'id': 'beta-ui', 'label': 'Model Beta',
+            'efforts': ['medium'], 'default_effort': 'medium', 'is_default': True}])
+        calls = self.catalog_sequence([(200, fixture.available(expires_in_ms=1000)), None,
+                                       (200, fixture.available()), (200, beta_only)])
+        self.choose_pair()
+        self.tick(1100)
+        self.await_calls(calls, 2)
+        self.tick(10001)
+        self.assertTrue(self.page.evaluate('window.__catalogDeadlineSignals[1].aborted'),
+                        'INV-PSTAB-03: catalog request must abort within the accepted 10000ms budget')
+        expect(self.send_button()).to_be_disabled()
+        self.assert_pair_draft()
+        refresh = self.page.get_by_role('button', name=re.compile('обнов.*модел|обнов.*каталог', re.I))
+        expect(refresh).to_be_visible()
+        expect(refresh).to_be_enabled()
+        expect(self.page.locator('#model-status')).to_contain_text(re.compile(
+            'недоступ|не удалось|ошиб|обнов|время', re.I))
+        self.tick(120000)
+        self.assertEqual(len(calls), 2, 'Timed out recovery cannot start an automatic retry loop')
+        refresh.click()
+        self.await_calls(calls, 3)
+        expect(self.send_button()).to_be_enabled()
+        self.assert_pair_draft()
+        session_navigator(self.page)
+        self.beta_session.click()
+        self.wait_for_option('Model Beta')
+        calls[1].fulfill(status=200, json=fixture.available())
+        self.page.wait_for_timeout(150)
+        model, _ = self.assert_controls()
+        self.assertNotIn('Model Alpha', model.locator('option').all_text_contents(),
+                         'An aborted old read cannot replace a different selected session')
+        self.assertEqual(self.page.locator('textarea').input_value(), '')
+        self.assertEqual(self.send_requests(), [])
+
     def test_INV_PSTAB_03_inherit_expiry_requires_no_refresh(self):
         self.page.clock.install()
         calls = self.catalog_sequence([(200, fixture.available(expires_in_ms=1000))])
