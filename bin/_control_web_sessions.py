@@ -120,7 +120,7 @@ def _operation(method):
         try:
             result = method(self, *args, **kwargs)
             capture = self._local.read_context
-            if capture is not None and method.__name__ not in ('send', 'enqueue', 'cancel_queued', 'send_queued_now', 'start_queued', 'answer_question', 'rename'):
+            if capture is not None and method.__name__ not in ('send', 'enqueue', 'cancel_queued', 'send_queued_now', 'start_queued', 'answer_question', 'rename', 'attachment'):
                 _need(self._catalog_context() == capture, 'stale')
             return result
         except _DomainError as error:
@@ -134,6 +134,7 @@ class _Receipts:
     """Private immutable receipts and explicit snapshot recovery per root/thread."""
     def __init__(self, path):
         self.path = os.path.abspath(path)
+        self.attachment_collision = None
 
     @staticmethod
     def _check(fd, deadline, directory=False):
@@ -255,11 +256,13 @@ class _Receipts:
     def read(self, ns, root, sid, mid, deadline, context_id=None):
         _budget(deadline)
         if ns is None:
+            _need(not callable(self.attachment_collision) or not self.attachment_collision(root,sid,mid), 'invalid_request')
             return None
         try:
             fd = os.open(mid + '.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=ns)
         except FileNotFoundError:
             _budget(deadline)
+            _need(not callable(self.attachment_collision) or not self.attachment_collision(root,sid,mid), 'invalid_request')
             return None
         try:
             self._check(fd, deadline)
@@ -274,7 +277,14 @@ class _Receipts:
             _need(type(record) is dict)
             _need(record.get('schema') == 4 or len(data) <= 4096)
             fields = {'root', 'sid', 'message_id', 'digest', 'status', 'turn_id', 'created'}
-            if record.get('schema') == 4:
+            if record.get('schema') == 4 and record.get('kind') in ('attachment_send','attachment_enqueue'):
+                _need(set(record)==fields|{'schema','context_id','kind','queued_submission_id','spool_digest'}
+                    and record['status'] in ('accepted','queued','delivery_unknown','rejected')
+                    and (record['queued_submission_id'] is None or _identity(record['queued_submission_id']))
+                    and type(record['context_id']) is str and re.fullmatch('[0-9a-f]{64}',record['context_id'])
+                    and type(record['spool_digest']) is str and re.fullmatch('[0-9a-f]{64}',record['spool_digest']))
+                if context_id is not None:_need(record['context_id']==context_id,'invalid_request')
+            elif record.get('schema') == 4:
                 _need(set(record) == fields | {'schema', 'context_id', 'kind', 'queued_submission_id',
                       'reason', 'expected_turn_id', 'client_id', 'snapshot_text', 'phase'}
                       and type(record['schema']) is int and record['kind'] == 'queue_transfer'
@@ -361,6 +371,8 @@ class _Receipts:
 
     @staticmethod
     def result(record):
+        if record.get('kind') in ('attachment_send','attachment_enqueue'):
+            return {key:record[key] for key in ('status','message_id','turn_id','queued_submission_id')}
         if record.get('kind') == 'queue_start':
             return {key: record[key] for key in ('status', 'message_id', 'queued_submission_id', 'turn_id', 'reason')}
         if record.get('schema') == 4:
@@ -867,6 +879,10 @@ class SessionChat:
         self.rpc, self.project_path, self.project_names = rpc, project_path, project_names
         self.configured_creator = configured_creator
         self.receipts = _Receipts(receipt_dir)
+        self._attachments = None
+        self._attachments_lock = threading.Lock()
+        self._attachments_path = os.path.join(os.path.dirname(self.receipts.path),'web-attachments')
+        self.receipts.attachment_collision = self._attachment_collision
         self.pin_store = PrivatePinStore(pin_store if pin_store is not None else
             os.path.join(os.path.dirname(self.receipts.path), 'web-session-pins'))
         self.renames = (rename_store if rename_store is not None else
@@ -910,6 +926,167 @@ class SessionChat:
                 rpc._participation_stop = self.close
             if callable(previous_stop):
                 previous_stop()
+
+    @staticmethod
+    def _visible_native_attachment(part):
+        kind=part.get('type')
+        if kind=='image':
+            value=part.get('url')
+            return type(part.get('fileId')) is str or type(value) is str and value.startswith(('data:image/','https://'))
+        return kind in ('localImage','audio','localAudio')
+
+    def _attachment_store(self):
+        from _control_web_attachments import AttachmentSpool
+        with self._attachments_lock:
+            if self._attachments is None:self._attachments=AttachmentSpool(self._attachments_path)
+            return self._attachments
+
+    def _attachment_record(self,root,sid,mid):
+        if not valid_uuid(mid) or not os.path.lexists(self._attachments_path):return None
+        record=self._attachment_store().find_record(root,sid,mid)
+        _need(not isinstance(record,dict) or 'error' not in record)
+        return record
+
+    def _attachment_collision(self,root,sid,mid):return self._attachment_record(root,sid,mid) is not None
+
+    def _attachment_target(self,project,sid,mid,auth,*,historical=False):
+        from _control_web_attachments import digest
+        _need(type(auth) is dict and set(auth)=={'scope','expires_at'} and type(auth['scope']) is str
+              and type(auth['expires_at']) in (int,float) and auth['expires_at']>time.time(),'stale')
+        root=self._root(project)
+        context=self._catalog_context()
+        _need(self._catalog_reason(context) is None and context['native_version']=='0.162.1','unavailable')
+        if not historical:self._proof(root,sid)
+        target=dict(owner_uid=os.getuid(),root=root,sid=sid,context=context['context_id'],mapping_version=1,
+                    login_scope=auth['scope'],auth_expires_at=auth['expires_at'],message_id=mid,
+                    process_generation=context['transport_generation'],context_generation=context['context_generation'],
+                    grant_generation=digest({'projects':self._names(),'root':root}))
+        return target,context
+
+    @_operation
+    def attachment(self,action,data,auth):
+        from _control_web_attachments import request_valid, public_result, native_input, normalized_input, digest, LIMITS
+        import base64
+        _need(request_valid(action,data,auth),'invalid_request')
+        _need(auth['expires_at']>time.time(),'stale')
+        spool=self._attachment_store()
+        if action in ('chunk','finish','status','discard'):
+            old=spool.trusted_stage_target(data['attachment_id']);_need('error' not in old)
+            _need(old['login_scope']==auth['scope'],'stale')
+            candidates=[p for p in self._names() if self._root(p)==old['root']]
+            _need(candidates,'stale');project=candidates[0]
+            target,context=self._attachment_target(project,old['sid'],old['message_id'],auth)
+            _need(target==old,'stale')
+            if action=='chunk':result=spool.chunk(target,data['attachment_id'],data['index'],base64.b64decode(data['data'],validate=True))
+            else:result=getattr(spool,action)(target,data['attachment_id'])
+            return public_result(action,result)
+        project,sid=data['project'],data['sid'];mid=data.get('message_id','00000000-0000-4000-8000-000000000000')
+        target,context=self._attachment_target(project,sid,mid,auth,historical=action=='receipt')
+        if action=='options':
+            capacity=spool.capacity(target);ready='error' not in capacity
+            return dict(available=ready,images=ready,files=ready,direct=ready,queue=ready,max_files=8,
+                        max_file_bytes=LIMITS['file_bytes'],max_message_bytes=LIMITS['message_bytes'],max_image_bytes=2097152,chunk_bytes=49152,
+                        reason=None if ready else capacity['error'] if capacity['error'] in ('attachment_storage_full','recovery_required','stale') else 'unavailable')
+        if action=='receipt':
+            receipt=spool.receipt(target,mid)
+            if receipt.get('status') in ('queued','delivery_unknown'):
+                record=self._attachment_record(target['root'],sid,mid)
+                if record is not None:
+                    try:
+                        verified=spool.verify_manifest(target,record['manifest']);_need(verified.get('valid') is True)
+                        expected=normalized_input(native_input(record['text'],record['manifest']),record['manifest'])
+                        matches=[];conflict=False;cursor=None;seen=set()
+                        for _ in range(4):
+                            page=self._page(sid,cursor)
+                            for turn in page['data']:
+                                for item in turn['items']:
+                                    if item['type']=='userMessage' and item.get('clientId')==mid:
+                                        try:same=normalized_input(item['content'],record['manifest'])==expected
+                                        except Exception:same=False
+                                        if same:matches.append(turn['id'])
+                                        else:conflict=True
+                            cursor=page['nextCursor']
+                            if cursor is None:break
+                            _need(cursor not in seen);seen.add(cursor)
+                        _need(self._catalog_context()==context and self._root(project)==target['root'],'stale')
+                        if len(matches)==1 and not conflict:
+                            completed=spool.complete(target,mid,'accepted',turn_id=matches[0],queued_submission_id=record.get('queued_submission_id'))
+                            if 'error' not in completed:
+                                receipt=completed
+                                with self.receipts.namespace(target['root'],sid,self._local.deadline) as ns:
+                                    shared=self.receipts.read(ns,target['root'],sid,mid,self._local.deadline,context['context_id'])
+                                    if shared is not None and shared.get('kind') in ('attachment_send','attachment_enqueue'):
+                                        shared.update(status='accepted',turn_id=matches[0]);self.receipts.write(ns,shared,self._local.deadline)
+                    except Exception:pass  # No read failure authorizes mutation/replay.
+            return public_result(action,receipt)
+        if action=='begin':
+            swept=spool.sweep();_need('error' not in swept,'recovery_required')
+            meta={k:data[k] for k in ('upload_id','size','media_hint')};meta['filename']=data['name']
+            return public_result(action,spool.begin(target,meta))
+        selection=data.get('selection')
+        _need(action in ('send','enqueue'))
+        _need(selection is None or action=='send','queue_unsupported_selection')
+        root=target['root']
+        # Lock order: shared receipt namespace -> short spool flock. Spool never
+        # calls receipts; no spool/global lock is held across a native RPC.
+        with self.receipts.namespace(root,sid,self._local.deadline,create=True) as ns:
+            # Orphan spool intent is still a UUID reservation, even if publishing
+            # the shared text/queue marker failed. Exact replay never dispatches.
+            existing=self._attachment_record(root,sid,mid)
+            if existing is not None:
+                reservation=spool.reserve(target,action,data['text'],data['attachment_ids'],selection)
+                if 'error' in reservation:return reservation
+                return public_result(action,spool.receipt(target,mid))
+            shared=self.receipts.read(ns,root,sid,mid,self._local.deadline,context['context_id'])
+            _need(shared is None,'invalid_request')
+            _need(len(self.receipts.names(ns,self._local.deadline,reserve=True))<RECEIPT_LIMIT)
+            origin=self._configured_origin('loaded_origin',project,root,sid)
+            choice=self._send_selection(selection,context) if selection is not None else None
+            if action=='enqueue':
+                _,thread,qcontext=self._queue_scope(project,sid);_need(qcontext==context,'unavailable')
+                if thread['status']['type']=='notLoaded':
+                    self._queue_proof(project,root,sid,context,'thread/resume')
+                    self._configured_origin('loaded_origin',project,root,sid)
+            elif origin is None:
+                # Preserve existing first-send/resume semantics; never resume a
+                # configured-origin fresh thread just to attach a file.
+                self._proof(root,sid,'thread/resume')
+            _need(self._root(project)==root and self._catalog_context()==context and time.time()<auth['expires_at'],'stale')
+            preview=spool.preview(target,data['attachment_ids'])
+            if 'error' in preview:return preview
+            # Native queue ACK/list normalizes images to base64; retain the
+            # existing 4MiB RPC frame rather than globally expanding it.
+            _need(sum(e['size'] for e in preview['manifest'] if e['mode']=='image')<=2*1024*1024,'image_payload_too_large')
+            reservation=spool.reserve(target,action,data['text'],data['attachment_ids'],selection)
+            if 'error' in reservation:return reservation
+            parts=native_input(data['text'],reservation['manifest'])
+            expected=normalized_input(parts,reservation['manifest'])
+            record=dict(schema=4,kind='attachment_'+action,context_id=context['context_id'],root=root,sid=sid,
+                        message_id=mid,digest=reservation['commitment'],spool_digest=reservation['digest'],
+                        status='delivery_unknown',turn_id=None,queued_submission_id=None,created=time.time_ns())
+            self.receipts.write(ns,record,self._local.deadline)
+            try:
+                verified=spool.verify_manifest(target,reservation['manifest']);_need(verified.get('valid') is True,'stale')
+                _need(self._root(project)==root and self._catalog_context()==context and time.time()<auth['expires_at'],'stale')
+                params=dict(threadId=sid,input=parts,clientUserMessageId=mid)
+                if choice is not None:params.update(model=choice['wire_model'],effort=choice['effort'])
+                if action=='send':
+                    response=self._send_fenced('turn/start',params,context)
+                    turn=response.get('turn');_need(type(turn) is dict and _identity(turn.get('id')))
+                    record.update(status='accepted',turn_id=turn['id'])
+                else:
+                    response=self._send_fenced('thread/queue/add',params,context)
+                    _need(set(response)=={'queuedSubmission'})
+                    row=response['queuedSubmission']
+                    _need(type(row) is dict and row.get('clientUserMessageId')==mid and _identity(row.get('id')))
+                    _need(normalized_input(row.get('input'),reservation['manifest'])==expected,'conflict')
+                    record.update(status='queued',queued_submission_id=row['id'])
+                _need(self._root(project)==root and self._catalog_context()==context,'stale')
+                complete=spool.complete(target,mid,record['status'],turn_id=record['turn_id'],queued_submission_id=record['queued_submission_id'])
+                _need('error' not in complete)
+                self.receipts.write(ns,record,self._local.deadline);self._summary_revision+=1
+                return public_result(action,complete)
+            except Exception:return public_result(action,spool.receipt(target,mid))
 
     @staticmethod
     def _limits_unavailable(provider='codex', error='source_unavailable'):
@@ -1972,6 +2149,8 @@ class SessionChat:
                             if part['type'] == 'text':
                                 _need(type(part.get('text')) is str)
                                 content.append({'type': 'text', 'text': part['text']})
+                            elif self._visible_native_attachment(part):
+                                content.append({'type':'text','text':'[Вложение]'})
                         page_projection.append({'id': item['id'], 'type': item['type'],
                                                 'content': content})
                         if valid_uuid(item.get('clientId')):
@@ -2326,7 +2505,7 @@ class SessionChat:
                 item = turn['items'][item_index]
                 is_eligible = (item['type'] == 'agentMessage'
                                or item['type'] == 'userMessage'
-                               and any(part['type'] == 'text' for part in item['content']))
+                               and any(part['type']=='text' or self._visible_native_attachment(part) for part in item['content']))
                 if is_eligible:
                     eligible_count += 1
                     if len(eligible) < item_limit:
@@ -2375,8 +2554,18 @@ class SessionChat:
             if type(item_started) is int and 0 <= item_started <= 253402300799999:
                 timing = {'timestamp': item_started // 1000, 'time_precision': 'item'}
             if native_item['type'] == 'userMessage':
-                raw_text = '\n'.join(part['text'] for part in native_item['content']
-                                     if part['type'] == 'text')
+                own=self._attachment_record(root,sid,native_item.get('clientId'))
+                if own is not None:
+                    _need(own['target']['context']==context['context_id'],'stale')
+                    raw_text=(own['text']+'\n' if own['text'] else '')+'[Вложения: '+str(len(own['manifest']))+']'
+                else:
+                    safe=[]
+                    for part in native_item['content']:
+                        if part['type']=='text':
+                            value=part['text']
+                            safe.append('[Вложение]' if value.startswith('Attached file (untrusted content): ') else value)
+                        elif self._visible_native_attachment(part):safe.append('[Вложение]')
+                    raw_text='\n'.join(safe)
                 role = 'user'
             else:
                 raw_text, role = native_item['text'], 'assistant'
@@ -2765,7 +2954,9 @@ class SessionChat:
         rows, texts, ids, clients, cursors = [], {}, set(), set(), set()
         cursor, partial, total = None, False, 0
         for index in range(4):
-            params = dict(threadId=sid, limit=64)
+            # Own attachment rows may contain a native inline-image echo. One
+            # bounded row/page fits the existing RPC frame; text legacy stays64.
+            params = dict(threadId=sid, limit=1 if os.path.lexists(self._attachments_path) else 64)
             if cursor is not None:
                 params['cursor'] = cursor
             try:
@@ -2778,14 +2969,32 @@ class SessionChat:
                   and type(page['data']) is list and len(page['data']) <= 64
                   and valid_cursor(page.get('nextCursor')))
             for row in page['data']:
-                text = self._queue_text(row)
+                _need(type(row) is dict and set(row)=={'id','clientUserMessageId','input'}
+                      and _identity(row['id']) and _identity(row['clientUserMessageId'])
+                      and type(row['input']) is list and 0<len(row['input'])<=256)
+                _need(all(type(p) is dict and type(p.get('type')) is str for p in row['input']))
+                own=self._attachment_record(root,sid,row['clientUserMessageId'])
+                nontext=any(p['type']!='text' or str(p.get('text','')).startswith('Attached file (untrusted content): ') for p in row['input'])
+                summary=None
+                if own is not None or nontext:
+                    if own is not None:
+                        _need(own['target']['context']==context['context_id'],'stale')
+                        text=own['text'] if own['text'].strip() else 'Вложения';count=len(own['manifest'])
+                    else:
+                        safe=[p.get('text','') for p in row['input'] if p['type']=='text'
+                              and type(p.get('text')) is str and not p['text'].startswith('Attached file (untrusted content): ')]
+                        text='\n'.join(safe)[:16000] or 'Вложения'
+                        count=sum(p['type']!='text' or str(p.get('text','')).startswith('Attached file (untrusted content): ') for p in row['input'])
+                    summary='Вложения: '+str(count)
+                else:text = self._queue_text(row)
                 _need(row['id'] not in ids and row['clientUserMessageId'] not in clients, 'conflict')
                 ids.add(row['id']); clients.add(row['clientUserMessageId'])
                 total += len(text.encode('utf-8'))
                 _need(total <= 4 * 1024 * 1024)
-                texts[row['id']] = text
-                rows.append(dict(queued_submission_id=row['id'], message_id=row['clientUserMessageId'],
-                                 text=redact(text), state='queued'))
+                texts[row['id']] = None if summary else text
+                projected=dict(queued_submission_id=row['id'],message_id=row['clientUserMessageId'],text=redact(text),state='queued')
+                if summary:projected['native_summary']=summary
+                rows.append(projected)
             cursor = page.get('nextCursor')
             if cursor is None:
                 break
@@ -3002,6 +3211,11 @@ class SessionChat:
             listing, native_texts = self._queue_listing(project, root, sid, context)
             row = next((row for row in listing['rows'] if row['queued_submission_id'] == queued_submission_id), None)
             _need(row is not None, 'stale')
+            if row.get('native_summary'):
+                # Full snapshot transfer is a separate capability. Never delete
+                # the native row then steer only its visible text.
+                return dict(status='held',message_id=action_id,queued_submission_id=queued_submission_id,
+                            turn_id=None,reason='unavailable')
             if valid_uuid(row['message_id']):
                 original = self.receipts.read(ns, root, sid, row['message_id'], self._local.deadline, context['context_id'])
                 if (original is not None and original.get('kind') == 'queue_enqueue'
@@ -3173,7 +3387,11 @@ class SessionChat:
                 return self.receipts.result(record)
             try:listing, _ = self._queue_listing(project, root, sid, context)
             except _DomainError as error:raise _DomainError('unavailable' if error.code == 'conflict' else error.code) from None
-            _need(any(row['queued_submission_id'] == queued_submission_id for row in listing['rows']), 'stale')
+            candidate=next((row for row in listing['rows'] if row['queued_submission_id']==queued_submission_id),None)
+            _need(candidate is not None,'stale')
+            if candidate.get('native_summary'):
+                own=self._attachment_record(root,sid,candidate['message_id'])
+                _need(own is not None and own.get('queued_submission_id')==queued_submission_id,'unavailable')
             _need(len(self.receipts.names(ns, self._local.deadline, reserve=True)) < RECEIPT_LIMIT)
             record = self._queue_record(context, root, sid, action_id, 'queue_cancel', queued_submission_id)
             self.receipts.write(ns, record, self._local.deadline)
@@ -3264,6 +3482,7 @@ class SessionChat:
             return self.receipts.result(record)
 
     def _send_replay(self, record, context, root, sid, text, selection):
+        _need(record.get('kind') not in ('attachment_send','attachment_enqueue'),'invalid_request')
         _need(record.get('schema') != 3, 'invalid_request')
         if 'schema' not in record:
             _need(selection is None, 'invalid_request')
@@ -3287,6 +3506,8 @@ class SessionChat:
         with self.receipts.namespace(root, sid, self._local.deadline) as ns:
             record = self.receipts.read(ns, root, sid, message_id, self._local.deadline, context['context_id'])
             _need(record is not None, 'stale')
+            if record.get('kind') in ('attachment_send','attachment_enqueue'):
+                return self.receipts.result(record)
             if record.get('kind') == 'queue_start':
                 return self.receipts.result(record)
             if record.get('kind') == 'queue_transfer':

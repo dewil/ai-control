@@ -644,11 +644,12 @@ def queue_result(value):
             result['recovery'].pop()
         ids, clients, rows = set(), set(), []
         for row in value['rows']:
-            if (type(row) is not dict or set(row) != {'queued_submission_id', 'message_id', 'text', 'state'}
+            if (type(row) is not dict or set(row) not in ({'queued_submission_id', 'message_id', 'text', 'state'}, {'queued_submission_id', 'message_id', 'text', 'state', 'native_summary'})
                     or not valid_queue_id(row['queued_submission_id']) or not valid_queue_id(row['message_id'])
                     or row['queued_submission_id'] in ids or row['message_id'] in clients
                     or type(row['text']) is not str or not 0 < len(row['text']) <= 16000 or row['state'] != 'queued'):
                 raise ValueError()
+            if 'native_summary' in row and (type(row['native_summary']) is not str or re.fullmatch('Вложения: [1-9][0-9]{0,2}',row['native_summary']) is None):raise ValueError()
             row['text'].encode('utf-8')
             ids.add(row['queued_submission_id']);clients.add(row['message_id'])
             rows.append(dict(row, text=redact(row['text'])))
@@ -915,6 +916,9 @@ def queue_transfer_result(value, action_id, queued_submission_id):
     return dict(value)
 
 def _queue_boundary(request, value):
+    if request['op']=='session_attachment':
+        from _control_web_attachments import public_result
+        return public_result(request['action'],value)
     if request['op'] == 'project_file':return project_file_result(value)
     if request['op'] in PART_OPS:return participation_result(value, request['op'], request)
     if request['op'] == 'session_pins':return pins_result(value)
@@ -1623,6 +1627,7 @@ def project_file_result(value):
 
 
 SESSION_FIELDS = {
+    'session_attachment': {'op','action','data','auth'},
     'project_file': {'op', 'project', 'path'},
     'limits_overview': {'op'},
     'participation_overview': {'op'},
@@ -1659,6 +1664,9 @@ def _valid_session(request):
             or request['op'] not in SESSION_FIELDS):
         return False
     fields = SESSION_FIELDS[request['op']]
+    if request['op']=='session_attachment':
+        from _control_web_attachments import request_valid
+        return set(request)==fields and request_valid(request['action'],request['data'],request['auth'])
     if set(request) != fields and not (
             request['op'] in ('session_send', 'session_enqueue') and set(request) == fields | {'selection'}):
         return False
@@ -1989,6 +1997,8 @@ class RegistryBackend:
             return {'error': 'unavailable'}
         try:
             op = request['op']
+            if op=='session_attachment':
+                return _queue_boundary(request,self.sessions.attachment(request['action'],request['data'],request['auth']))
             if op == 'project_file':
                 return project_file_result(self.sessions.project_file(request['project'], request['path']))
             if op == 'limits_overview':
@@ -2094,6 +2104,9 @@ class RegistryBackend:
 
     def project_file(self, project, path):
         return self._session(dict(op='project_file', project=project, path=path))
+
+    def session_attachment(self,action,data,auth):
+        return self._session(dict(op='session_attachment',action=action,data=data,auth=auth))
 
     def session_projects(self):
         return self._session({'op': 'session_projects'})
@@ -2415,6 +2428,7 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
     slots = threading.BoundedSemaphore(4)
     live_slot = threading.BoundedSemaphore(1)
     bus_slot = threading.BoundedSemaphore(1)
+    attachment_slot = threading.BoundedSemaphore(2)
     workers = set()
     workers_lock = threading.Lock()
     fields = {'snapshot': {'op'}, 'answer': {'op', 'agent', 'qid', 'decision', 'text'},
@@ -2443,6 +2457,7 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                         result = backend.answer(request['agent'], request['qid'], request['decision'], request['text'])
                     elif op == 'verdict':
                         result = backend.verdict(request['agent'], request['generation'], request['decision'], request['comment'])
+                    elif op=='session_attachment':result=backend.session_attachment(request['action'],request['data'],request['auth'])
                     elif op == 'project_file':result = project_file_result(backend.project_file(request['project'], request['path']))
                     elif op == 'limits_overview':result = limits_result(backend.limits_overview())
                     elif op == 'participation_overview':result = backend.participation_overview()
@@ -2507,6 +2522,8 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                 live_slot.release()
             elif request['op'] == 'devbus_overview':
                 bus_slot.release()
+            elif request['op']=='session_attachment' and request['action'] in ('begin','chunk','finish'):
+                attachment_slot.release()
             slots.release()
             with workers_lock:
                 workers.discard(threading.current_thread())
@@ -2530,7 +2547,8 @@ def serve_broker(socket_path, backend, allowed_uid, stop_event=None):
                     request = _receive(conn)
                     live = type(request) is dict and request.get('op') == 'session_live_snapshot'
                     bus = type(request) is dict and request.get('op') == 'devbus_overview'
-                    reservation = live_slot if live else bus_slot if bus else None
+                    receiving=type(request) is dict and request.get('op')=='session_attachment' and request.get('action') in ('begin','chunk','finish')
+                    reservation = live_slot if live else bus_slot if bus else attachment_slot if receiving else None
                     if (type(request) is not dict or type(request.get('op')) is not str
                             or request['op'] not in fields):
                         result = {'error': 'unsupported'}
@@ -2629,7 +2647,7 @@ class SocketBackend:
         if not _valid_session(request):
             return {'error': 'invalid_request'}
         if 'principal' in request and request['principal'] != 'owner':return {'error': 'forbidden'}
-        result = self._call(request)
+        result = self._call(request,timeout=55) if request['op']=='session_attachment' else self._call(request)
         if request['op'] in ('session_create_options', 'session_create', 'session_create_status'):
             return configured_create_result(result, request['project'], request.get('operation_id'))
         if request['op'] == 'session_history':
@@ -2666,6 +2684,9 @@ class SocketBackend:
 
     def project_file(self, project, path):
         return self._session(dict(op='project_file', project=project, path=path))
+
+    def session_attachment(self,action,data,auth):
+        return self._session(dict(op='session_attachment',action=action,data=data,auth=auth))
 
     def session_projects(self):
         return self._session({'op': 'session_projects'})
