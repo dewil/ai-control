@@ -79,6 +79,35 @@ class GeneratorRED(unittest.TestCase):
                 with self.assertRaises((ValueError, FileExistsError)): generator.generate(inp, out)
             self.assertEqual(source.read_bytes(), FIXTURE.read_bytes())
 
+    def test_generator_rejects_symlink_ancestors_and_preserves_existing_files(self):
+        generator=self.generator()
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);real=root/'real';real.mkdir();alias=root/'alias';alias.symlink_to(real,target_is_directory=True)
+            source=real/'source.py';source.write_bytes(FIXTURE.read_bytes())
+            for inp,out in [(source,alias/'out.py'),(alias/'source.py',root/'out.py')]:
+                with self.assertRaises(ValueError):generator.generate(inp,out)
+            self.assertFalse((real/'out.py').exists());self.assertFalse((root/'out.py').exists())
+            existing=root/'existing.py';existing.write_bytes(b'synthetic-existing-marker')
+            with self.assertRaises((ValueError,FileExistsError)):generator.generate(source,existing)
+            self.assertEqual(existing.read_bytes(),b'synthetic-existing-marker')
+
+    def test_output_creation_is_exclusive_relative_to_validated_parent_dirfd(self):
+        generator=self.generator()
+        with tempfile.TemporaryDirectory() as td:
+            output=Path(td)/'candidate.py'
+            with patch('os.open',wraps=os.open) as opened:
+                generator.generate(FIXTURE,output)
+            writes=[]
+            for call in opened.call_args_list:
+                args,kwargs=call.args,call.kwargs
+                flags=args[1] if len(args)>1 else kwargs.get('flags',0)
+                if flags & os.O_CREAT:
+                    writes.append((args,kwargs,flags))
+            self.assertTrue(writes,'candidate creation must use explicit dirfd os.open')
+            self.assertTrue(all(flags & os.O_EXCL for _,_,flags in writes))
+            self.assertTrue(all(isinstance(kwargs.get('dir_fd'),int) for _,kwargs,_ in writes))
+            self.assertTrue(all(not flags & os.O_TRUNC for _,_,flags in writes))
+
 
 class CandidateRED(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -142,6 +171,29 @@ class CandidateRED(unittest.IsolatedAsyncioTestCase):
             broker=await self.connect(DEVBUS_NATS_AUTH_MODE=mode,DEVBUS_NATS_USER='',DEVBUS_NATS_PASSWORD='',**{key:value})
             self.assertEqual(getattr(broker,'auth_mode',None),mode)
 
+    async def test_whitespace_selected_credentials_rejected_and_nonblank_preserved(self):
+        for env in [
+            {'DEVBUS_NATS_AUTH_MODE':'token','DEVBUS_NATS_TOKEN':' \t '},
+            {'DEVBUS_NATS_AUTH_MODE':'creds','DEVBUS_NATS_CREDS':' \t '},
+            {'DEVBUS_NATS_AUTH_MODE':'user_password','DEVBUS_NATS_USER':' \t ','DEVBUS_NATS_PASSWORD':'synthetic'},
+            {'DEVBUS_NATS_AUTH_MODE':'user_password','DEVBUS_NATS_USER':'runner','DEVBUS_NATS_PASSWORD':' \t '},
+        ]:
+            self.mods['nats'].connect.reset_mock()
+            with self.assertRaises(ValueError):await self.connect(**env)
+            self.mods['nats'].connect.assert_not_called()
+        await self.connect(DEVBUS_NATS_AUTH_MODE='user_password',DEVBUS_NATS_USER=' runner ',DEVBUS_NATS_PASSWORD=' synthetic-password ')
+        opts=self.mods['nats'].connect.call_args.kwargs
+        self.assertEqual(opts.get('user'),' runner ');self.assertEqual(opts.get('password'),' synthetic-password ')
+
+    async def test_url_userinfo_query_fragment_rejected_in_all_modes(self):
+        auths=[{'DEVBUS_NATS_TOKEN':'synthetic-token'}, {'DEVBUS_NATS_CREDS':'/synthetic/creds'},
+               {'DEVBUS_NATS_AUTH_MODE':'user_password','DEVBUS_NATS_USER':'runner','DEVBUS_NATS_PASSWORD':'synthetic-password'}]
+        for auth in auths:
+            for url in ['nats://@127.0.0.1:65530','nats://runner@127.0.0.1:65530','nats://127.0.0.1:65530?query=x','nats://127.0.0.1:65530#fragment']:
+                self.mods['nats'].connect.reset_mock()
+                with self.assertRaises(ValueError):await self.connect(**auth,DEVBUS_NATS_URL=url)
+                self.mods['nats'].connect.assert_not_called()
+
     async def test_legacy_missing_stream_creation_preserved(self):
         broker=await self.connect(DEVBUS_NATS_TOKEN='synthetic-token')
         self.js.stream_info.side_effect=Missing()
@@ -162,7 +214,7 @@ class CandidateRED(unittest.IsolatedAsyncioTestCase):
         cfg.subjects=['devbus.events.*']
         with self.assertRaises(ValueError): await broker.ensure_stream()
 
-    def valid_consumer(self): return NS(config=NS(ack_policy='explicit',filter_subject='devbus.commands.codex-ai-dev-1'))
+    def valid_consumer(self): return NS(name='dispatcher-codex-ai-dev-1',stream_name='DEVBUS_V1',config=NS(ack_policy='explicit',filter_subject='devbus.commands.codex-ai-dev-1'))
 
     async def test_strict_bind_existing_and_cache_without_create(self):
         broker=await self.strict(); self.js.consumer_info.return_value=self.valid_consumer()
@@ -183,6 +235,29 @@ class CandidateRED(unittest.IsolatedAsyncioTestCase):
             self.js.consumer_info.return_value=info
             with self.assertRaises((Missing,ValueError,RuntimeError)):await broker.commands('codex-ai-dev-1')
             self.js.pull_subscribe.assert_not_called();self.js.pull_subscribe_bind.assert_not_called()
+
+    async def test_strict_consumer_stream_name_and_name_must_match(self):
+        for field,wrong in [('stream_name','OTHER'),('name','dispatcher-other'),('stream_name',None),('name',None)]:
+            broker=await self.strict();info=self.valid_consumer()
+            if wrong is None:delattr(info,field)
+            else:setattr(info,field,wrong)
+            self.js.consumer_info.return_value=info;self.js.pull_subscribe_bind.reset_mock()
+            with self.assertRaises((ValueError,RuntimeError)):await broker.commands('codex-ai-dev-1')
+            self.js.pull_subscribe.assert_not_called();self.js.pull_subscribe_bind.assert_not_called()
+
+    async def test_commands_env_flip_does_not_enable_create(self):
+        broker=await self.strict();self.js.consumer_info.return_value=self.valid_consumer()
+        self.js.pull_subscribe_bind.return_value=NS(fetch=AsyncMock(return_value=[]))
+        with patch.dict(os.environ,{'DEVBUS_NATS_AUTH_MODE':'token','DEVBUS_NATS_TOKEN':'synthetic-token'},clear=True):
+            await broker.commands('codex-ai-dev-1')
+        self.js.pull_subscribe.assert_not_called();self.js.pull_subscribe_bind.assert_awaited_once()
+
+    async def test_legacy_token_and_creds_commands_keep_pull_subscribe(self):
+        for env in [{'DEVBUS_NATS_TOKEN':'synthetic-token'},{'DEVBUS_NATS_CREDS':'/synthetic/creds'}]:
+            broker=await self.connect(**env);self.js.pull_subscribe.reset_mock()
+            await broker.commands('codex-ai-dev-1')
+            self.js.pull_subscribe.assert_awaited_once()
+            self.js.pull_subscribe_bind.assert_not_called()
 
     async def test_strict_wrong_agent_cannot_inspect_or_bind(self):
         broker=await self.strict()
