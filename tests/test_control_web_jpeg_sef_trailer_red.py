@@ -62,6 +62,16 @@ class SamsungJpegTrailerRegression(unittest.TestCase):
         variants.update(count=changed(header+8,257),offset_escape=changed(header+16,header+1),
             block_overflow=changed(header+20,header+1),name_overflow=changed(4,65535),
             footer_length=changed(len(good)-8,12),overlap=changed(header+28,header))
+        # Keep every block reference valid while inserting an uncovered byte
+        # immediately before SEFH; only exact contiguous coverage can reject it.
+        gap=bytearray(good[:header]+b'\0'+good[header:])
+        for index in range(2):
+            pos=header+1+16+12*index
+            struct.pack_into('<I',gap,pos,struct.unpack_from('<I',gap,pos)[0]+1)
+        mismatch=bytearray(good);mismatch[2]^=1
+        reserved=bytearray(good);reserved[header+12]=1
+        variants.update(interior_gap=bytes(gap),block_header_mismatch=bytes(mismatch),
+                        reserved=bytes(reserved),zero_count=changed(header+8,0))
         for label,tail in variants.items():
             with self.subTest(label=label):
                 with self.assertRaises(self.module.Refusal):self.bounds(JPEG+tail)
