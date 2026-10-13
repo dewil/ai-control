@@ -778,6 +778,72 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
         except Exception:
             return error('unavailable', 503)
 
+    async def node_route(request, kind, task_id=None):
+        from _control_node_runtime import node_result, valid_submit, strict_json
+        from _control_node_tasks import _uuid
+        def node_error(code, status):
+            return JSONResponse({'error': code}, status_code=status, headers={'Cache-Control': 'no-store'})
+        current, failure = session(request, kind == 'submit')
+        if failure is not None:
+            return node_error('unauthorized' if failure.status_code == 401 else 'forbidden' if failure.status_code == 403 else 'unavailable', failure.status_code)
+        if owner_only is not True or type(current.get('principal')) is not str or current['principal'] != 'owner':
+            return node_error('forbidden', 403)
+        origins, sites = request.headers.getlist('origin'), request.headers.getlist('sec-fetch-site')
+        if (origins and origins != [origin] or sites and sites != ['same-origin']
+                or kind == 'submit' and (origins != [origin] or len(request.headers.getlist('x-csrf-token')) != 1)):
+            return node_error('forbidden', 403)
+        if list(request.query_params.multi_items()) or kind == 'get' and not _uuid(task_id):
+            return node_error('invalid_request', 422)
+        data = None
+        if kind == 'submit':
+            if request.headers.getlist('content-type') != ['application/json']:
+                return node_error('invalid_request', 422)
+            try:
+                raw = bytearray()
+                async for block in request.stream():
+                    raw.extend(block)
+                    if len(raw) > 128 * 1024:
+                        return node_error('invalid_request', 413)
+                data = strict_json(bytes(raw), 128 * 1024)
+                if (type(data) is not dict or set(data) != {'request_id', 'node_id', 'prompt'}
+                        or not valid_submit(data['request_id'], data['node_id'], data['prompt'])):
+                    raise ValueError()
+            except (ValueError, TypeError, UnicodeError, RecursionError):
+                return node_error('invalid_request', 422)
+        def call():
+            if kind == 'overview':
+                return backend.node_tasks_overview(current['principal'])
+            if kind == 'get':
+                return backend.node_task_get(current['principal'], task_id)
+            return backend.node_task_submit(current['principal'], data['request_id'], data['node_id'], data['prompt'])
+        try:
+            result = await asyncio.wait_for(run_in_threadpool(call), 3)
+            # A committed operation survives an expired browser session, but its
+            # late reply cannot disclose data across the revoked authorization.
+            _, failure = live_auth(request)
+            if failure is not None:
+                return node_error('unauthorized' if failure.status_code == 401 else 'forbidden', failure.status_code)
+            result = node_result(result, kind, task_id if kind == 'get' else data['request_id'] if data else None)
+        except Exception:
+            return node_error('unavailable', 503)
+        if 'error' in result:
+            code = result['error']
+            return node_error(code, {'invalid_request':422, 'forbidden':403, 'conflict':409,
+                'capacity':429, 'not_found':404, 'not_ready':409}.get(code, 503))
+        return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+    @app.get('/api/node-tasks/overview')
+    async def node_tasks_overview(request: Request):
+        return await node_route(request, 'overview')
+
+    @app.get('/api/node-tasks/{task_id}')
+    async def node_task_get(request: Request, task_id: str):
+        return await node_route(request, 'get', task_id)
+
+    @app.post('/api/node-tasks')
+    async def node_task_submit(request: Request):
+        return await node_route(request, 'submit')
+
     @app.get('/api/devbus/overview')
     async def devbus_overview(request: Request):
         from fastapi.responses import Response
