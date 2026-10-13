@@ -61,7 +61,8 @@ class NativeQueueBrowserBlind(unittest.TestCase):
         name,value=self.fixture.cookie.split('=',1);self.context.add_cookies([dict(name=name,value=value,url=self.fixture.origin)])
         self.page=self.context.new_page();self.page.set_default_timeout(2500)
         self.requests=[];self.errors=[]
-        self.page.on('request',lambda r:self.requests.append((r.method,urlsplit(r.url).path,r.post_data)))
+        self.page.on('request',lambda r:self.requests.append((r.method,urlsplit(r.url).path,
+            r.post_data_buffer if r.headers.get('content-type','').split(';',1)[0]=='application/octet-stream' else r.post_data)))
         self.page.on('pageerror',lambda e:self.errors.append(str(e)))
         root=Path(os.environ.get('CONTROL_LIVE_SSE_QA_REPO',Path(__file__).resolve().parents[1])).resolve()
         self.assertEqual(Path(self.fixture.web.__file__).resolve(),root/'bin/_control_web.py')
