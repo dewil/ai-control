@@ -70,3 +70,10 @@ DTO: `schema=1`, `task_id`, `node_id`, `prompt`, `created_at`, `updated_at`, `de
 
 ### Exact v1 и существующие payload
 Envelope имеет ровно message_id/task_id/correlation_id/source/target/kind/created_at/payload, без добавочного schema. Строковые wire IDs соответствуют [A-Za-z0-9_-]{1,80}; task/requestID Control дополнительно canonicalUUID. created_at — timezone-aware ISO8601; producer Control пишет UTC. accepted/running payload ровно {}. failed reason из timeout/output_limit/executor_exit/local_executor_error; exit_code optional int|null (local_executor_error его не содержит). needs_attention payload ровно {'reason': 'interrupted; outcome unknown; automatic retry disabled'}. completed — text/executor и optional output_truncated. Не принимать произвольную причину как raw exception.
+
+### Уточнения после SOURCE ядра
+Отсутствие lease преднамеренно: немедленный повтор после crash безопасен только с durable dedup runner, что требуется до live включения. Переход publication_started→unknown не обязан ждать backoff до первого восстановления. Время external created_at сохраняется как provenance, не используется для порядка состояний или UI updated_at (используется clock Control).
+
+При event cap новый digest не принимается и не сохраняется: это capacity refusal с partial/needs_attention, а не обещание дедупликации неограниченного набора отклонённых событий. После первого перевода в needs_attention повторные capacity refusals не двигают updated_at; bounded diagnostic counter может считать отказы. Если attention возник до первого результата, поздний валидный completed сохраняет первый результат для проверки, но не снимает needs_attention/partial.
+
+Existing schema v1 должна совпадать по ограничениям PK/UNIQUE, внешнему ключу и обязательному индексу, а не только названиям столбцов. Все пройденные ancestors принадлежат root или service UID и не доступны на запись группе/остальным; исключение только root-owned sticky /tmp и /var/tmp. Same-UID adversary по-прежнему вне обещаний.
