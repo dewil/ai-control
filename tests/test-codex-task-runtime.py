@@ -2353,9 +2353,12 @@ class RuntimeContract(unittest.TestCase):
         self.publish_registry()
         controller, hosts, calls, order = self.discovery_fixture(
             native_mode='done_dirty' if completion else 'ordinary_checkpoint_crash', checkpoint_prepare_crash=True)
-        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 4)
+        # Reach the injected crash after real durable discovery/bootstrap IO, even on slow CI disks.
+        # This fixture tests checkpoint recovery; deadline expiry is covered separately.
+        result = controller.execute('event-1', 7, 'attempt-1', deadline=time.monotonic() + 30)
         self.assertIn(result['outcome'], ('blocked', 'unknown'))
-        self.assertEqual(order.count('crash_before_first_checkpoint_receipt'), 1)
+        self.assertEqual(order.count('crash_before_first_checkpoint_receipt'), 1,
+            f'Checkpoint crash was not reached: result={result!r}, order={order!r}')
         self.assertTrue(all(host.phase == 'stopped' for host in hosts))
         self.assertFalse((self.agent / 'done.json').exists())
         self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.agent / 'work').strip(), self.base)
