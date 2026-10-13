@@ -38,6 +38,21 @@ class IndexedRPC:
     def model_context(self):
         return dict(self.context)
 
+    def prepare_context(self, timeout=None):
+        # Match InteractiveRPC's fenced read seam: prepare a validated snapshot
+        # before the list/read sequence, then prove that generation at publish.
+        context = copy.deepcopy(self.context)
+        required = {'schema', 'vendor', 'context_kind', 'context_id',
+                    'transport_generation', 'context_generation', 'native_version'}
+        if (set(context) != required or context['schema'] != 1 or
+                context['vendor'] != 'codex' or context['context_kind'] != 'legacy_unbound' or
+                not isinstance(context['context_id'], str) or len(context['context_id']) != 64 or
+                any(type(context[key]) is not int or context[key] < 0
+                    for key in ('transport_generation', 'context_generation')) or
+                not isinstance(context['native_version'], str)):
+            raise RuntimeError('synthetic invalid native read context')
+        return context
+
     def receipt_context(self):
         return {key: self.context[key] for key in ('schema', 'vendor', 'context_kind', 'context_id')}
 
