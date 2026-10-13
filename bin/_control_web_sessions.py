@@ -1717,7 +1717,13 @@ class SessionChat:
         remaining = self._remaining()
         capture = self._capture_read_context() if method in READ_METHODS else None
         if capture is not None:
-            return self._send_fenced(method, params, capture)
+            try:
+                return self._send_fenced(method, params, capture)
+            except Exception:
+                # INV-PSTAB-02: only confirmed read-context drift permits the
+                # existing bounded client retry; unchanged failures stay errors.
+                _need(self._catalog_context() == capture, 'stale')
+                raise
         result = (self.rpc.call(method, params, timeout=remaining)
                   if isinstance(self.rpc, InteractiveRPC) else self.rpc(method, params))
         self._remaining()
@@ -2366,7 +2372,8 @@ class SessionChat:
         root = self._root(project)
         origin_identity = self._configured_identity()
         def checked_rpc(method, params):
-            response = self._rpc(method, params)
+            # INV-PSTAB-02: enumerate the native index; never trigger rollout scan/repair.
+            response = self._rpc(method, dict(params, useStateDbOnly=True))
             _need(type(response.get('data')) is list and 'nextCursor' in response
                   and valid_cursor(response['nextCursor']))
             for thread in response['data']:
