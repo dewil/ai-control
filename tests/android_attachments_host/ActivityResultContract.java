@@ -1,0 +1,1 @@
+package androidx.activity.result.contract;public abstract class ActivityResultContract<I,O>{public abstract android.content.Intent createIntent(android.content.Context c,I input);public abstract O parseResult(int code,android.content.Intent data);}
