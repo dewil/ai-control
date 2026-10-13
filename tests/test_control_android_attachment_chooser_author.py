@@ -24,3 +24,6 @@ class AndroidAttachmentChooserAuthor(unittest.TestCase):
     def test_provider_huge_count_rejected_before_allocation_or_iteration(self):self.scenario('huge-count')
     def test_nine_files_rejected_as_whole_selection(self):self.scenario('nine-files')
     def test_eight_files_accepted(self):self.scenario('eight-files')
+
+    def test_failed_admission_releases_pending_result_and_preserves_retry(self):self.scenario('failed-admit')
+    def test_failed_activation_releases_pending_result_and_preserves_retry(self):self.scenario('failed-activate')

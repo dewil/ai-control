@@ -8,12 +8,15 @@ public final class AttachmentChooserAuthorProbe {
  static void resume(MainActivity a,WebView p)throws Exception {
   long old=BackgroundProbe.serial(BackgroundProbe.latest(p));
   a.onStart();BackgroundProbe.lifecycle(a,"onResume");
+  awaitSuspend(p,old);
+  BackgroundProbe.completeResume(p,"admit");BackgroundProbe.completeResume(p,"activate");
+ }
+ static void awaitSuspend(WebView p,long old)throws Exception {
   long deadline=System.nanoTime()+2_000_000_000L;
   while(System.nanoTime()<deadline){android.os.Handler.runPosted();if(BackgroundProbe.serial(BackgroundProbe.latest(p))>old)break;Thread.sleep(2);}
   WebView.Eval suspend=BackgroundProbe.latest(p);
   check(suspend.script.contains("aiControlAndroidSuspend")&&BackgroundProbe.serial(suspend)>old,"fresh suspend missing");
   suspend.callback.onReceiveValue(BackgroundProbe.ack(BackgroundProbe.serial(suspend)));
-  BackgroundProbe.completeResume(p,"admit");BackgroundProbe.completeResume(p,"activate");
  }
  public static void main(String[] args){try{
   MainActivity a=BackgroundProbe.login(true);WebView p=BackgroundProbe.page();AttachmentChooserProbe.Capture c=new AttachmentChooserProbe.Capture();
@@ -22,6 +25,23 @@ public final class AttachmentChooserAuthorProbe {
    BackgroundProbe.pause(a);a.onStop();a.deliverResult(-1,AttachmentChooserProbe.single());
    check(c.calls==0,"result crossed background admission fence");resume(a,p);
    check(c.calls==1&&c.value!=null,"pre-resume result lost after activation");a.deliverResult(-1,AttachmentChooserProbe.single());check(c.calls==1,"pre-resume duplicate redelivered");
+  }else if(args[0].equals("failed-admit")||args[0].equals("failed-activate")){
+   BackgroundProbe.pause(a);a.onStop();a.deliverResult(-1,AttachmentChooserProbe.single());check(c.calls==0,"premature selection");
+   long old=BackgroundProbe.serial(BackgroundProbe.latest(p));a.onStart();BackgroundProbe.lifecycle(a,"onResume");awaitSuspend(p,old);
+   String phase=args[0].equals("failed-admit")?"admit":"activate";
+   if(phase.equals("activate"))BackgroundProbe.completeResume(p,"admit");
+   WebView.Eval command=BackgroundProbe.latest(p);long serial=BackgroundProbe.serial(command);
+   command.callback.onReceiveValue(BackgroundProbe.result(new org.json.JSONObject().put("started",true)));
+   android.os.Handler.advance(100);WebView.Eval poll=BackgroundProbe.latest(p);
+   poll.callback.onReceiveValue(BackgroundProbe.result(new org.json.JSONObject().put("serial",serial).put("phase",phase).put("ok",false)));
+   check(c.calls==1&&c.value==null,"failed admission/activation retained pending result");
+   WebView.Eval cancel=BackgroundProbe.latest(p);check(cancel.script.contains("aiControlAndroidSuspend"),"failure skipped normal cancellation");
+   cancel.callback.onReceiveValue(BackgroundProbe.ack(BackgroundProbe.serial(cancel)));
+   a.deliverResult(-1,AttachmentChooserProbe.single());check(c.calls==1,"late result redelivered after failure");
+   boolean retry=false;old=BackgroundProbe.serial(BackgroundProbe.latest(p));
+   for(android.view.View v:BackgroundProbe.flatten(a.getWindow().getDecorView()))if(v instanceof android.widget.Button&&"Повторить".contentEquals(((android.widget.Button)v).getText())){v.performClick();retry=true;break;}
+   check(retry,"normal explicit retry disappeared");awaitSuspend(p,old);BackgroundProbe.completeResume(p,"admit");BackgroundProbe.completeResume(p,"activate");
+   AttachmentChooserProbe.Capture next=new AttachmentChooserProbe.Capture();AttachmentChooserProbe.launch(p,next,true);AttachmentChooserProbe.singleResult(a,next);check(c.calls==1,"retry reused cancelled callback");
   }else if(args[0].equals("replace-late")){
    int old=a.requestCode;AttachmentChooserProbe.Capture next=new AttachmentChooserProbe.Capture();AttachmentChooserProbe.launch(p,next,true);
    java.lang.reflect.Method result=MainActivity.class.getDeclaredMethod("onActivityResult",int.class,int.class,Intent.class);result.setAccessible(true);result.invoke(a,old,-1,AttachmentChooserProbe.single());

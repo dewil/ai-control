@@ -195,7 +195,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
         cancelPageCommand();final WebView owner=web;final long operation=commandGeneration,life=lifecycleGeneration,navigation=navigationGeneration,auth=authGeneration;
         commandDeadline=()->{if(commandCurrent(owner,operation,life,navigation,auth)){loading=false;suspendPage(null);}};ui.postDelayed(commandDeadline,10000);
     }
-    private void failedResume(boolean unsupported){blockNetwork();cancelPageCommand();unsupportedWeb|=unsupported;if(timersPaused){loading=false;pausedMessage();return;}suspendPage(null);}
+    private void failedResume(boolean unsupported){finishFileChooser(null);blockNetwork();cancelPageCommand();unsupportedWeb|=unsupported;if(timersPaused){loading=false;pausedMessage();return;}suspendPage(null);}
     private void resumePage(long version,long generation,String phase,long admissionSerial){
         if(!active(version,generation)||web==null)return;cancelPageCommand();final WebView owner=web;
         final long serial=nextSerial(),operation=commandGeneration,life=lifecycleGeneration,navigation=navigationGeneration,auth=authGeneration;
