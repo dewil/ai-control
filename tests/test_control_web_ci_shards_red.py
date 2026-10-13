@@ -176,6 +176,62 @@ class SharedCase(BaseMethods, unittest.TestCase):
         self.assertEqual(after["total_test_count"], before["total_test_count"] + 11)
         self.assert_partition(after, self.original_cases())
 
+    def test_node_and_transport_inventory_extends_original_multiset_exactly_once(self):
+        # Nodes are integration contracts in the same required CI partition.
+        original = self.original_cases()
+        expected = Counter(case['id'] for case in original)
+        additions = [('test_control_node_ledger_red', 2, True),
+                     ('test_control_node_runtime_red', 3, False),
+                     ('test_control_node_bootstrap_red', 1, False),
+                     ('test_node_transport_generator_red', 2, False)]
+        for name, count, shared in additions:
+            self.add_module(name, count, shared=shared)
+            expected.update(f'{name}.LocalCase.test_{index:02d}' for index in range(count))
+            if shared:
+                # Preserve unittest's intentional imported-class multiplicity.
+                expected.update(['_fixture_cases.SharedCase.test_inherited_a',
+                                 '_fixture_cases.SharedCase.test_inherited_b'])
+        self.add_module('test_node_unrelated', 1)
+        plan = self.plan()
+        actual = Counter(case_id for shard in plan['shards'] for case_id in shard['test_ids'])
+        self.assertEqual(actual, expected, 'node/transport contracts missing or discovered more than once')
+        self.assertEqual(plan['total_test_count'], sum(expected.values()))
+        modules = [module for shard in plan['shards'] for module in shard['modules']]
+        self.assertEqual(len(modules), len(set(modules)), 'node extension must preserve defining-module partition')
+
+    def test_future_node_module_is_discovered_without_inventory_manifest_edit(self):
+        before = self.plan()
+        self.add_module('test_control_node_future_unlisted_contract', 4)
+        after = self.plan()
+        self.assertEqual(after['total_test_count'], before['total_test_count'] + 4)
+        before_ids = Counter(case_id for shard in before['shards'] for case_id in shard['test_ids'])
+        after_ids = Counter(case_id for shard in after['shards'] for case_id in shard['test_ids'])
+        added = Counter(f'test_control_node_future_unlisted_contract.LocalCase.test_{index:02d}' for index in range(4))
+        self.assertEqual(after_ids, before_ids + added)
+
+    def test_node_or_transport_import_failure_fails_inventory_and_selected_shard(self):
+        for name in ('test_control_node_broken.py', 'test_node_transport_generator_red.py'):
+            self.write(name, "raise ImportError('intentional node collection failure')\n")
+            for args in (('--list',), ('--shard', '0')):
+                with self.subTest(module=name, arguments=args):
+                    result = self.call(*args)
+                    self.assertNotEqual(result.returncode, 0, 'CI silently excluded a broken node contract')
+                    self.assertIn('intentional node collection failure', result.stderr)
+            (self.repo / 'tests' / name).unlink()
+
+    def test_collected_node_test_runs_and_failure_reaches_required_shard(self):
+        self.add_module('test_control_node_required_runtime', 1)
+        identity = 'test_control_node_required_runtime.LocalCase.test_00'
+        plan = self.plan()
+        selected = [shard for shard in plan['shards'] if identity in shard['test_ids']]
+        self.assertEqual(len(selected), 1, 'required runtime contract must execute in exactly one shard')
+        args = ('--shard', str(selected[0]['index']))
+        passed = self.call(*args)
+        self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
+        failed = self.call(*args, env={'FAIL_TEST_ID': identity})
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn('intentional shard failure', failed.stdout + failed.stderr)
+
     def test_import_failure_fails_collection_and_every_selected_shard(self):
         self.write("test_control_web_broken.py", "raise ImportError('intentional collection failure')\n")
         for args in (("--list",), *(("--shard", str(i)) for i in range(4))):
