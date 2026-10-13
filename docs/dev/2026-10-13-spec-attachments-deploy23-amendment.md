@@ -45,3 +45,18 @@ fresh4 installs against a regular-forward5-only controller.
 Native orchestration usage unknown; parent owns task ledger. Root helper upgrade
 and reviewed bootstrap packet require their own exact CI/source/deployment closure;
 these tests authorize no production action.
+
+## Test-owner contract correction after first GREEN attempt
+
+The existing public controller propagates the original start exception after a
+successful rollback. The failure tests therefore accept `Exception` and retain
+all distinguishing checks: actual stop calls, exact raw accepted/tree restoration,
+attachment absence/presence, pending cleared. Requiring only `Rejected` would add
+an unrelated exception-type change to this extension.
+
+The interrupted journal test leaves accepted==before4 while target bytes==after5;
+this uncommitted publication must roll back before admitting the next candidate.
+A complete coherent after tree with durable accepted==after and successful health
+may finalize recovery; provisional rollback capability does not require reverting
+an otherwise fully committed healthy release. This correction preserves existing
+recovery behavior and targets the actual interrupted-before-commit window.

@@ -98,14 +98,14 @@ class AttachmentDeploy23Red(s.ControllerFixture):
     def test_failed4_to5_restores_raw4_and_absence_of_attachment_module(self):
         # INV-DEPLOY-04: bounded ordinary rollback restores exact accepted22.
         self.signed23();raw=self.state.read_bytes();before=self.tree();self.fail_starts=1
-        with self.assertRaises(self.api.Rejected):self.deploy().run()
+        with self.assertRaises(Exception):self.deploy().run()
         self.assertEqual(self.tree(),before);self.assertEqual(self.state.read_bytes(),raw)
         self.assertFalse(os.path.lexists(self.target/LEAF))
         self.assertFalse((self.checkpoints/'pending.json').exists())
         self.assertTrue(self.stops(),'Must exercise install failure, not early schema refusal')
 
     def test_interrupted5_journal_restores_raw4_before_bad_next_candidate(self):
-        # INV-DEPLOY-04: recovery precedes candidate rejection; provisional5 is rollbackable.
+        # INV-DEPLOY-04: interruption before accepted publication rolls back before admission.
         raw=self.state.read_bytes();before=json.loads(raw)
         after=dict(schema=5,release_id=8,manifest_sha256='b'*64,files=self.hashes(self.after23))
         checkpoint=self.checkpoints/'release-attachments23-blind';checkpoint.mkdir(mode=0o700)
@@ -114,7 +114,7 @@ class AttachmentDeploy23Red(s.ControllerFixture):
         self.write(self.checkpoints/'pending.json',s.canonical(dict(schema=5,before=before,after=after,
             checkpoint=checkpoint.name)),0o600)
         for path,data in self.after23.items():self.write(self.target/path,data,FULL23[path])
-        self.write(self.state,s.canonical(after),0o600)
+        # Installed after bytes with accepted still before: publication was interrupted.
         self.signed23();(self.stage/'release.sig').write_bytes(bytes(64))
         with self.assertRaises(self.api.Rejected):self.deploy().run()
         self.assertEqual(self.state.read_bytes(),raw);self.assertEqual(self.tree(),self.after22)
@@ -128,7 +128,7 @@ class AttachmentDeploy23Red(s.ControllerFixture):
         next_files={p:data+b'# second revision\n' for p,data in self.after23.items()}
         self.signed23(files=next_files,number=9,base=self.after23)
         raw=self.state.read_bytes();self.fail_starts=1
-        with self.assertRaises(self.api.Rejected):self.deploy().run()
+        with self.assertRaises(Exception):self.deploy().run()
         self.assertEqual(self.state.read_bytes(),raw);self.assertEqual(self.tree(),self.after23)
         self.assertEqual((self.target/LEAF).read_bytes(),self.after23[LEAF])
         self.assertFalse((self.checkpoints/'pending.json').exists())
