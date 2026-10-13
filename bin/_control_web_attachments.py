@@ -511,6 +511,29 @@ def normalized_input(parts,manifest):
     return result
 
 
+def delivery_matches(parts, expected, manifest):
+    """Delivery projection v2; native image normalization is not byte identity."""
+    import tempfile
+    try:
+        need(type(parts) is list and len(parts)==len(expected))
+        for part, original in zip(parts,expected):
+            if original['type']=='image' and type(part) is dict and part.get('type')=='image':
+                need(set(part)<={'type','url','detail'} and part.get('detail') in (None,'auto'))
+                url=part.get('url');need(type(url) is str and len(url)<=4*2097152//3+128)
+                header,sep,data=url.partition(',')
+                need(sep and header in ('data:image/png;base64','data:image/jpeg;base64'))
+                raw=base64.b64decode(data,validate=True)
+                need(0<len(raw)<=2097152 and base64.b64encode(raw).decode()==data)
+                need(raw.startswith(b'\x89PNG\r\n\x1a\n') if header=='data:image/png;base64' else raw.startswith(b'\xff\xd8'))
+                with tempfile.TemporaryFile() as f:
+                    f.write(raw);f.flush();need(image_bounds(f.fileno(),len(raw)))
+            else:
+                need(normalized_input([part],manifest)==[original])
+        return True
+    except (Refusal,ValueError,TypeError,KeyError,OSError):
+        return False
+
+
 def request_valid(action,data,auth):
     try:
         need(type(auth) is dict and set(auth)=={'scope','expires_at'} and type(auth['scope']) is str and 0<len(auth['scope'])<=256)
