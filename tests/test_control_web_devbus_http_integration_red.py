@@ -8,6 +8,16 @@ import unittest
 from unittest.mock import patch
 import live_devbus_blind_support as s
 
+# ALP launch intentionally extends the fixed local UI assets and adds a
+# user/password inbox to the bridge. Keep exact reviewed bytes for those leaves;
+# unchanged observer/dependency contracts remain pinned to their original revision.
+NODE_EXTENSION_COMMIT = "11e513f9f7b009e4759556d65771474d2f522469"
+def reviewed_asset_revision(path):
+    return NODE_EXTENSION_COMMIT if path in {
+        "bin/_control_web_devbus.js", "bin/_control_web_devbus.css",
+        "bin/_control_web_devbus_nats.py",
+    } else s.OBSERVER_COMMIT
+
 
 class BusHttpBlind(s.HttpCase):
     def test_actual_owner_route_exact_DTO_compact_bytes(self):
@@ -104,7 +114,7 @@ class BusHttpBlind(s.HttpCase):
         for url, path in (("/devbus.js", "bin/_control_web_devbus.js"), ("/devbus.css", "bin/_control_web_devbus.css")):
             connection, response = self.fixture.request(url); data = response.read(); connection.close()
             self.assertEqual(response.status, 200, "Accepted fixed local BUS assets must be exposed")
-            expected = __import__("subprocess").check_output(["git", "-C", str(s.ROOT), "show", s.OBSERVER_COMMIT + ":" + path])
+            expected = __import__("subprocess").check_output(["git", "-C", str(s.ROOT), "show", reviewed_asset_revision(path) + ":" + path])
             self.assertEqual(data, expected); self.assertIn("no-store", response.getheader("cache-control", ""))
             self.assertEqual(response.getheader("x-content-type-options"), "nosniff")
 
@@ -174,12 +184,12 @@ class DevbusFrontendBlind(unittest.IsolatedAsyncioTestCase):
 
 
 class BusManifestBlind(unittest.TestCase):
-    def test_all_four_passive_entries_once_and_accepted_file_bytes(self):
+    def test_observer_entries_once_and_reviewed_node_extension_bytes(self):
         entries = (s.ROOT / "scripts.manifest").read_text().splitlines()
         for name in ("_control_web_devbus.py", "_control_web_devbus_nats.py", "_control_web_devbus.js", "_control_web_devbus.css"):
             self.assertEqual(sum(row.strip() == name for row in entries), 1, "Accepted passive manifest entry missing/duplicated: " + name)
             path = s.ROOT / "bin" / name; self.assertTrue(path.is_file(), "Accepted immutable runtime leaf missing: " + name)
-            expected = __import__("subprocess").check_output(["git", "-C", str(s.ROOT), "show", s.OBSERVER_COMMIT + ":bin/" + name])
+            expected = __import__("subprocess").check_output(["git", "-C", str(s.ROOT), "show", reviewed_asset_revision("bin/" + name) + ":bin/" + name])
             self.assertEqual(hashlib.sha256(path.read_bytes()).digest(), hashlib.sha256(expected).digest())
         path = s.ROOT / "requirements-devbus.lock"
         self.assertTrue(path.is_file(), "Accepted immutable dependency lock missing")
