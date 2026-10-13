@@ -7,3 +7,5 @@
 Actual source native0.162.1: defaultlist6.5068s и14.3952s, indexed0.0026s; rowproof4total0.0121s. Первый freshclientproof unavailable0.0753s FAIL сохранён; independent exceptiondriftRED выявил classification gap. Послеfix: firstreadstale0.0763s +одинwhole-readretry0.0542s=0.1305s/4rows; next0.0317s. Ниauthниnativeпроцессы не менялись. Это source-only, не полный page cold-start и не installedacceptance.
 
 ПервыйCI38486536145: web1 нашёл unexpectedinheritforegroundGET и прежний exactparamsoracle. Исправлены guard и index-onlyожидание; callcounts/proofs сохранены. ПовторныйfullCI и signed33installation фиксируются владельцем пакета после получения фактических результатов. APKcode10 не пересобирается. PhysicalAndroidNOTRUN; синтетический браузерныйlifecycle не заменяетdeviceприёмку.
+
+Web2 первогоCI позднее обнаружил третье устаревшее ожидание INV49: постоянный stale безGET. Test обновлён под один pending read, expiredleaseblocked + semanticnear-selectionhint + samepair/draft + freshenablesSend; targetedPASS. Runtimecode на этом шаге не менялся.
