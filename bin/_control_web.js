@@ -931,7 +931,7 @@ async function uploadAttachment(key,draft,file){
     if(!current())return;
     if(file.state!=='sealed'){data=await api('/api/session-attachment-finish',{attachment_id:file.id});acceptAttachmentStage(file,data);}
     if(file.state!=='sealed')throw new Error('Загрузка не завершена');file.error=null;
-  }catch(error){if(current()){file.error=error.code==='image_payload_too_large'?'Изображения: максимум 2 МБ на сообщение':error.code==='attachment_storage_full'?'Хранилище вложений заполнено':error.message||'Загрузка не подтверждена';}}
+  }catch(error){if(current()){file.error=error.code==='unsupported'?'Формат изображения не поддерживается или файл повреждён.':error.code==='image_payload_too_large'?'Изображения: максимум 2 МБ на сообщение':error.code==='attachment_storage_full'?'Хранилище вложений заполнено':error.message||'Загрузка не подтверждена';}}
   finally{repaint();}
 }
 function addAttachmentFiles(files){
