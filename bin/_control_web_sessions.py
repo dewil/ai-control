@@ -278,7 +278,7 @@ class _Receipts:
             _need(record.get('schema') == 4 or len(data) <= 4096)
             fields = {'root', 'sid', 'message_id', 'digest', 'status', 'turn_id', 'created'}
             if record.get('schema') == 4 and record.get('kind') in ('attachment_send','attachment_enqueue'):
-                _need(set(record)==fields|{'schema','context_id','kind','queued_submission_id','spool_digest'}
+                _need(type(record['schema']) is int and set(record)==fields|{'schema','context_id','kind','queued_submission_id','spool_digest'}
                     and record['status'] in ('accepted','queued','delivery_unknown','rejected')
                     and (record['queued_submission_id'] is None or _identity(record['queued_submission_id']))
                     and type(record['context_id']) is str and re.fullmatch('[0-9a-f]{64}',record['context_id'])

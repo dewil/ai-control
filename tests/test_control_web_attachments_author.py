@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import struct
+import subprocess
+import sys
 import tempfile
 import time
 import threading
@@ -94,6 +96,49 @@ class AttachmentAuthor(unittest.TestCase):
         delete=self.client.post('/api/session-attachment-discard',json=dict(attachment_id=aid),headers=self.headers)
         self.assertEqual(delete.status_code,409)
         self.assertTrue(any(p.read_bytes()==b'opaque fixture' for p in (self.base/'web-attachments').glob('b-*')))
+    def test_fifo_substitution_refuses_promptly_in_bounded_subprocess(self):
+        script=r"""
+import json,os,sys,time
+from pathlib import Path
+from _control_web_attachments import AttachmentSpool
+root,mode=sys.argv[1:];project=Path(root).parent/'project'
+target=dict(owner_uid=os.getuid(),root=str(project),sid='11111111-1111-4111-8111-111111111111',context='synthetic',mapping_version=1,login_scope='synthetic',auth_expires_at=time.time()+60,message_id='22222222-2222-4222-8222-222222222222',process_generation=1,context_generation=1,grant_generation=1)
+spool=AttachmentSpool(root)
+stage=spool.begin(target,dict(upload_id='44444444-4444-4444-8444-444444444444',size=1,filename='fixture',media_hint=''))
+aid=stage['attachment_id']
+if mode=='blobread':
+    assert 'error' not in spool.chunk(target,aid,0,b'x')
+    assert 'error' not in spool.finish(target,aid)
+name=('s-'+aid+'.json') if mode=='metadata' else 'lock' if mode=='lock' else 'b-'+aid
+path=Path(root)/name;path.unlink();os.mkfifo(path,0o600)
+if mode=='metadata':result=spool.status(target,aid)
+elif mode=='blobwrite':result=spool.chunk(target,aid,0,b'x')
+elif mode=='blobread':result=spool.preview(target,[aid])
+else:result=spool.status(target,aid)
+assert result.get('error') in ('unavailable','recovery_required','stale'),result
+print('FIFO refused')
+"""
+        for mode in ('metadata','blobread','blobwrite','lock'):
+            with self.subTest(mode=mode):
+                child=subprocess.Popen([sys.executable,'-c',script,str(self.base/('fifo-'+mode)),mode],
+                    stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,
+                    env={**os.environ,'PYTHONPATH':str(s.ROOT/'bin')})
+                try:
+                    try:out,err=child.communicate(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        child.kill();child.communicate(timeout=2)
+                        self.fail('FIFO open blocked before fstat: '+mode)
+                    self.assertEqual(child.returncode,0,err);self.assertEqual(out.strip(),'FIFO refused')
+                finally:
+                    if child.poll() is None:child.kill();child.wait(timeout=2)
+
+    def test_attachment_shared_receipt_rejects_float_schema(self):
+        aid=self.upload(b'fixture','fixture.bin');self.assertEqual(self.send([aid]).json()['status'],'accepted')
+        name=hashlib.sha256((str(self.project)+'\0'+s.SID).encode()).hexdigest()
+        path=self.base/'receipts'/name/(s.MID+'.json');record=json.loads(path.read_text())
+        self.assertEqual(record['schema'],4);record['schema']=4.0;path.write_text(json.dumps(record))
+        self.assertIn('error',self.chat.send_status('demo',s.SID,s.MID))
+
     def test_shared_marker_publication_failure_never_replays_or_cross_kind_dispatches(self):
         aid=self.upload(b'crash fixture','fixture.bin')
         with patch.object(self.chat.receipts,'write',side_effect=OSError('synthetic shared-marker fsync loss')):

@@ -74,10 +74,10 @@ class AttachmentSpool:
 
     @contextmanager
     def _locked(self):
-        fd = os.open(self.root, os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        fd = os.open(self.root, os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_NONBLOCK)
         try:
             need(self._identity(os.fstat(fd)) == self.anchor, 'unavailable')
-            lock = os.open('lock', os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW, 0o600, dir_fd=fd)
+            lock = os.open('lock', os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW|os.O_NONBLOCK, 0o600, dir_fd=fd)
             try:
                 st=os.fstat(lock)
                 need(stat.S_ISREG(st.st_mode) and st.st_uid==os.getuid() and st.st_nlink==1 and not st.st_mode&0o077,'unavailable')
@@ -97,7 +97,7 @@ class AttachmentSpool:
         return names
 
     def _read(self, name, optional=False):
-        try:fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=self.fd)
+        try:fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=self.fd)
         except FileNotFoundError:
             if optional:return None
             raise
@@ -117,7 +117,7 @@ class AttachmentSpool:
     def _write(self, name, value):
         raw=canonical(value);need(len(raw)<=131072,'unavailable')
         tmp='tmp-'+str(uuid.uuid4())
-        fd=os.open(tmp,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600,dir_fd=self.fd)
+        fd=os.open(tmp,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW|os.O_NONBLOCK,0o600,dir_fd=self.fd)
         try:
             with os.fdopen(fd,'wb',closefd=False) as out:out.write(raw);out.flush();os.fsync(fd)
         finally:os.close(fd)
@@ -254,7 +254,7 @@ class AttachmentSpool:
         s=dict(attachment_id=aid,upload_id=metadata['upload_id'],target=copy.deepcopy(t),metadata=metadata,
                state='receiving',size=metadata['size'],bytes=0,sha256=None,expires_at=l['expires_at'],mode='file',chunks=[])
         self._write(self._stage_name(aid),s)
-        fd=os.open('b-'+aid,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600,dir_fd=self.fd)
+        fd=os.open('b-'+aid,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW|os.O_NONBLOCK,0o600,dir_fd=self.fd)
         os.fsync(fd);os.close(fd);os.fsync(self.fd)
         return self._dto(s)
 
@@ -267,7 +267,7 @@ class AttachmentSpool:
         if index<len(s['chunks']):
             need(index==len(s['chunks'])-1 and s['chunks'][index]==[len(raw),h]);return self._dto(s)
         need(index==len(s['chunks']) and len(raw)==min(CHUNK,s['size']-s['bytes']))
-        fd=os.open('b-'+aid,os.O_WRONLY|os.O_NOFOLLOW,dir_fd=self.fd)
+        fd=os.open('b-'+aid,os.O_WRONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=self.fd)
         try:
             st=os.fstat(fd);need(stat.S_ISREG(st.st_mode) and st.st_nlink==1 and st.st_uid==os.getuid() and st.st_size==s['bytes'],'recovery_required')
             os.lseek(fd,0,os.SEEK_END)
@@ -277,7 +277,7 @@ class AttachmentSpool:
         return self._dto(s)
 
     def _blob(self,s,seal=False):
-        fd=os.open('b-'+s['attachment_id'],os.O_RDONLY|os.O_NOFOLLOW,dir_fd=self.fd)
+        fd=os.open('b-'+s['attachment_id'],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=self.fd)
         try:
             st=os.fstat(fd)
             need(stat.S_ISREG(st.st_mode) and st.st_nlink==1 and st.st_uid==os.getuid() and st.st_size==s['size'],'stale')
@@ -300,11 +300,11 @@ class AttachmentSpool:
         if s['state']=='sealed':self._blob(s);return self._dto(s)
         need(s['bytes']==s['size'])
         identity,h,head=self._blob(s,True)
-        fd=os.open('b-'+aid,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=self.fd)
+        fd=os.open('b-'+aid,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=self.fd)
         try:mode='image' if image_bounds(fd,s['size']) else 'file'
         finally:os.close(fd)
         os.chmod('b-'+aid,0o400,dir_fd=self.fd,follow_symlinks=False)
-        fd=os.open('b-'+aid,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=self.fd)
+        fd=os.open('b-'+aid,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=self.fd)
         try:os.fsync(fd)
         finally:os.close(fd)
         s.update(state='sealed',sha256=h,identity=identity,mode=mode)
