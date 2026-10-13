@@ -2,6 +2,8 @@
 import base64
 from copy import deepcopy
 import hashlib
+import json
+from contextlib import contextmanager
 from pathlib import Path
 import struct
 import uuid
@@ -22,7 +24,9 @@ def inline(raw=None):
 
 class TransformingNative(h.Native):
     queue_filter=None
+    history_probe=None
     def __call__(self,method,params):
+        if method=='thread/turns/list' and params.get('itemsView')=='full' and self.history_probe:self.history_probe()
         result=super().__call__(method,params)
         if method=='thread/queue/add':
             parts=result['queuedSubmission']['input']
@@ -100,7 +104,13 @@ class AttachmentDeliveryReceiptsRED(unittest.TestCase):
 
     def test_queue_ack_wrong_text_order_count_media_or_generic_path_never_proves_delivery(self):
         # INV-WATT-DELIVERY-01: only image-byte transformation is permitted.
+        payload=b'x'*(2*1024*1024)
+        ancillary=struct.pack('>I',len(payload))+b'tEXt'+payload+struct.pack('>I',zlib.crc32(b'tEXt'+payload)&0xffffffff)
+        oversized=png()[:-12]+ancillary+png()[-12:]
         filters={
+            'detail_high':lambda p:[*p[:-1],dict(p[-1],detail='high')],
+            'oversize':lambda p:[*p[:-1],inline(oversized)],
+            'mime_bytes':lambda p:[*p[:-1],dict(type='image',url=p[-1]['url'].replace('image/png','image/jpeg'))],
             'text':lambda p:[dict(p[0],text='other'),*p[1:]],
             'order':lambda p:list(reversed(p)),
             'count':lambda p:p[:-1],
@@ -116,3 +126,54 @@ class AttachmentDeliveryReceiptsRED(unittest.TestCase):
                 response=self.send([file,image],'enqueue',mid=mid,text='caption')
                 self.assertEqual(response.json()['status'],'delivery_unknown',response.text)
                 self.assert_original(h.png())
+
+    def test_reencoded_jpeg_ack_and_history_accept_delivery_with_original_png_pins(self):
+        # INV-WATT-DELIVERY-01: PNG-to-JPEG transport is delivery, not pixel identity.
+        import test_control_web_jpeg_sef_trailer_red as jpeg
+        original=h.png();aid=self.upload(original,'original.png')
+        transformed=dict(type='image',url='data:image/jpeg;base64,'+base64.b64encode(jpeg.JPEG).decode(),detail='auto')
+        self.rpc.queue_filter=lambda parts:[parts[0],deepcopy(transformed)]
+        self.assertEqual(self.send([aid],'enqueue',text='caption').json()['status'],'queued')
+        self.history(s.MID,[dict(type='text',text='caption'),transformed])
+        self.assertEqual(self.status()['status'],'accepted');self.assert_original(original)
+
+    def test_unauthenticated_common_status_cannot_read_or_reconcile_receipt(self):
+        # INV-WATT-DELIVERY-03: common route retains ordinary auth boundary.
+        aid=self.upload(h.png(),'original.png');self.rpc.start_error=TimeoutError('synthetic')
+        self.send([aid],text='caption');self.history(s.MID,[dict(type='text',text='caption'),inline()])
+        self.client.cookies.clear();before=len(self.rpc.calls)
+        response=self.client.get('/api/session-send-status',params=dict(project='demo',sid=s.SID,message_id=s.MID))
+        self.assertEqual(response.status_code,401);self.assertEqual(len(self.rpc.calls),before)
+
+    def test_shared_receipt_corruption_and_commitment_digest_mismatch_refuse_acceptance(self):
+        # INV-WATT-DELIVERY-03: durable authority must agree before reconciliation.
+        aid=self.upload(h.png(),'original.png');self.rpc.start_error=TimeoutError('synthetic')
+        self.send([aid],text='caption');self.history(s.MID,[dict(type='text',text='caption'),inline()])
+        namespace=hashlib.sha256((str(self.project)+'\0'+s.SID).encode()).hexdigest()
+        path=self.base/'receipts'/namespace/(s.MID+'.json');original=json.loads(path.read_text())
+        before=len(self.rpc.starts())
+        for field,value in (('schema',4.0),('digest','0'*64),('spool_digest','0'*64)):
+            with self.subTest(field=field):
+                self.assertIn(field,original)
+                path.write_text(json.dumps({**original,field:value}))
+                response=self.client.get('/api/session-send-status',params=dict(project='demo',sid=s.SID,message_id=s.MID),headers=self.headers)
+                self.assertNotEqual(response.json().get('status'),'accepted','Corrupt shared authority cannot be bypassed by spool/history proof')
+                self.assertEqual(len(self.rpc.starts()),before)
+                path.write_text(json.dumps(original))
+
+    def test_common_reconciliation_releases_namespace_lock_before_native_history_read(self):
+        # INV-WATT-DELIVERY-03: no lock spans RPC; acceptance still requires history.
+        aid=self.upload(h.png(),'original.png');self.rpc.start_error=TimeoutError('synthetic')
+        self.send([aid],text='caption');self.history(s.MID,[dict(type='text',text='caption'),inline()])
+        active=[0];observed=[];original=self.chat.receipts.namespace
+        @contextmanager
+        def tracked(*args,**kwargs):
+            with original(*args,**kwargs) as namespace:
+                active[0]+=1
+                try:yield namespace
+                finally:active[0]-=1
+        self.chat.receipts.namespace=tracked
+        self.rpc.history_probe=lambda:observed.append(active[0])
+        self.assertEqual(self.status()['status'],'accepted')
+        self.assertTrue(observed,'Reconciliation must query authoritative native history')
+        self.assertEqual(observed,[0]*len(observed),'Namespace lock must not cover native history RPC')
