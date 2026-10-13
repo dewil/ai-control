@@ -558,3 +558,13 @@ SOURCE, exactCI, reviewed deployment и installed acceptance. PASS экспер�
 current target и existing exact-qid/context guards; иначе пояснение открыть
 штатный harness без скрытого mutation fallback. Held/changed/summary-without-identity
 pins не освобождаются. Квоты bytes/objects проверяются независимо при каждом begin.
+
+
+## Закрытие конкретных вопросов combined DESIGN
+
+- Trusted ai-panel UID trusted for auth: это существующая доверенная authority, не sandbox от другого процесса того же UID. Browser spoofing запрещён; compromised ai-panel — за этой границей. Дополнительный общий секрет эту границу не меняет и не вводится.
+- Generic-file canonical projection v1: wire содержит text-item `"Attached file (untrusted content): " + json.dumps({"name":display_name,"path":absolute_pinned_path}, ensure_ascii=False, sort_keys=True, separators=(",",":"))`. Для сравнения authoritative item должен точно совпасть с зафиксированной строкой receipt. Затем он заменяется canonical item `{type:"file", attachment_id, size, sha256}` из ТОГО ЖЕ pinned manifest после повторной проверки inode/hash. Не парсить произвольную строку как путь, не читать путь из native input. Несовпавший text-item — changed, отсутствие полного input — held. User text остаётся отдельным text-item; порядок items сохраняется.
+- При held UI может предложить отдельное явное действие пользователя «Запустить очередь» через уже проверенный exact-qid native start. Это НЕ автоматический fallback, НЕ send-now и НЕ скрытый вызов. Если current target не поддерживает start — только пояснение открыть native harness.
+- Namespace quarantine блокирует новые begin И новые sends/enqueue; read-only status/receipt доступны с проверенной авторизацией. Не затронутые text-only receipts/routes продолжают существующее поведение.
+- Целевой поставляемый пакет: image direct+queue, generic file direct+queue при реальном read witness, radio и ×3; Android chooser — новый APK с отдельным acceptance. Не объявлять text-only release выполнением этого пакета. Неисполненный gate остаётся явно незавершённым; автоматически сокращать пользовательский scope запрещено.
+- Первая реализация сознательно не удаляет accepted/unknown pins: при 2 GiB/2048 объектов возвращает attachment_storage_full и предлагает обслужить хранилище; no eviction. Это известный предел первой версии, не неизвестный delivery failure. Безопасное освобождение использованных вложений — отдельная задача; не выдавать бессрочную работу без обслуживания за критерий данного выпуска.
