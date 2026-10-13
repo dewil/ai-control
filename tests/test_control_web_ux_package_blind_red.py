@@ -160,11 +160,18 @@ class WebUXBlindBrowser(unittest.TestCase):
         for width in (320,390,1280):
             with self.subTest(width=width):
                 self.page.set_viewport_size({'width':width,'height':900})
-                observation=self.page.evaluate('''() => {const article=document.querySelector('article.chat-message'),s=getComputedStyle(article);return {overflow:Math.max(document.body.scrollWidth,document.documentElement.scrollWidth)-innerWidth,padding:[s.paddingTop,s.paddingBottom,s.paddingLeft,s.paddingRight].map(parseFloat),targets:[...document.querySelectorAll('button,input,select,textarea')].filter(e=>e.getBoundingClientRect().width&&e.getBoundingClientRect().height).map(e=>[e.getBoundingClientRect().width,e.getBoundingClientRect().height]),font:parseFloat(getComputedStyle(article.querySelector('p')).fontSize)}}''')
+                # INV-WATT-10: native radio glyphs may use their associated label's touch area.
+                observation=self.page.evaluate('''() => {const article=document.querySelector('article.chat-message'),s=getComputedStyle(article);return {overflow:Math.max(document.body.scrollWidth,document.documentElement.scrollWidth)-innerWidth,padding:[s.paddingTop,s.paddingBottom,s.paddingLeft,s.paddingRight].map(parseFloat),targets:[...document.querySelectorAll('button,input,select,textarea')].filter(e=>e.getBoundingClientRect().width&&e.getBoundingClientRect().height).map(e=>{const target=e.matches('input[type=radio]')&&e.labels?.length?e.labels[0]:e;const r=target.getBoundingClientRect();return [r.width,r.height]}),font:parseFloat(getComputedStyle(article.querySelector('p')).fontSize)}}''')
                 self.assertLessEqual(observation['overflow'],1)
                 self.assertTrue(all(p<=limit for p,limit in zip(observation['padding'],[8,8,12,12])),observation)
                 self.assertGreaterEqual(observation['font'],14)
                 self.assertTrue(all(w>=43.5 and h>=43.5 for w,h in observation['targets']),observation)
+                for radio in self.page.get_by_role('radio').all():
+                    if radio.is_visible() and radio.is_enabled():
+                        label=radio.evaluate_handle('e=>e.labels?.[0]||e').as_element()
+                        self.assertIsNotNone(label)
+                        label.click()
+                        self.assertTrue(radio.is_checked(),'Associated touch label must select its native radio')
 
     def test_INV43_selection_manual_reopen_poll_keyboard(self):
         self.page.set_viewport_size({'width':390,'height':844})
