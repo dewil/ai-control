@@ -323,7 +323,11 @@ class ModelControlsBrowserContract(unittest.TestCase):
         self.assertEqual(model.locator('option:checked').inner_text(), 'Model Alpha')
         self.assertEqual(effort.locator('option:checked').inner_text(), 'high')
         self.assertEqual(len(self.send_requests()), 1, 'Known stale pre-effects error cannot trigger retry or fallback')
-        self.assertEqual(self.calls()[-1]['selection'], {'catalog_id': MODEL_CATALOG_ID, 'model_id': 'alpha-ui', 'effort': 'high'})
+        # INV-PSTAB-03 permits a read-only catalog refresh after stale send;
+        # inspect the write receipt rather than assuming it is the last call.
+        sends = [call for call in self.calls() if call['method'] == 'send']
+        self.assertEqual(len(sends), 1, 'Read recovery must not repeat the write')
+        self.assertEqual(sends[0]['selection'], {'catalog_id': MODEL_CATALOG_ID, 'model_id': 'alpha-ui', 'effort': 'high'})
 
     def test_INV_WSESS_27_late_catalog_response_cannot_replace_current_session_catalog(self):
         private_json(self.evidence / 'control.json', {

@@ -5,6 +5,7 @@ fixtures. Visibility events model the web lifecycle, not physical Android.
 """
 import json
 import re
+import time
 import unittest
 
 from playwright.sync_api import expect
@@ -130,7 +131,7 @@ class SendRecoveryStabilityContract(unittest.TestCase):
         self.await_calls(calls, 2)
         self.assert_pair_draft()
         expect(self.send_button()).to_be_disabled()
-        expect(self.page.get_by_role('status').filter(has_text=re.compile(
+        expect(self.page.locator('#model-status').filter(has_text=re.compile(
             'недоступ|не удалось|ошиб|обнов', re.I))).to_be_visible()
         self.tick(120000)
         self.assertEqual(len(calls), 2, 'Failed read must not schedule a retry timer')
@@ -179,34 +180,52 @@ class SendRecoveryStabilityContract(unittest.TestCase):
         self.await_calls(calls, 2)
         self.assert_pair_draft()
         expect(self.send_button()).to_be_disabled()
-        expect(self.page.get_by_role('status').filter(has_text=re.compile(
+        expect(self.page.locator('#model-status').filter(has_text=re.compile(
             'недоступ|отсутств|больше|выбран|каталог', re.I))).to_be_visible()
         self.assertEqual(self.send_requests(), [])
 
     def test_INV_PSTAB_03_sse_reconnect_after_error_refreshes_once_without_post(self):
-        # Observe actual native EventSource instances, retaining all browser
-        # behaviour. Only public lifecycle events are injected by this test.
-        self.page.add_init_script("""(() => {
-            const NativeSource = window.EventSource;
-            window.__catalogSources = [];
-            window.EventSource = class extends NativeSource {
-                constructor(...args) {super(...args); window.__catalogSources.push(this);}
-            };
-        })()""")
-        self.page.reload()
+        # A real native stream closes, then the documented JSON snapshot and
+        # new stream restore the connection. An open event on a closed source
+        # is a late callback and cannot represent a successful reconnect.
+        import live_sse_blind_support as live
+        server = live.Fixture(transport=True)
+        self.addCleanup(server.stop)
+        server.login()
+        context = self.browser.new_context(viewport={'width': 390, 'height': 844})
+        self.addCleanup(context.close)
+        name, value = server.cookie.split('=', 1)
+        context.add_cookies([{'name': name, 'value': value, 'url': server.origin}])
+        self.page.close()
+        self.page = context.new_page()
+        self.addCleanup(self.page.close)
+        self.url = server.origin
+        self.network = []
+        self.page.on('request', lambda request: self.network.append(request))
+        self.page.on('pageerror', lambda error: self.errors.append(type(error).__name__))
+        self.page.goto(self.url)
         self.page.get_by_role('button', name='Сессии', exact=True).or_(
             self.page.get_by_role('tab', name='Сессии', exact=True)).click()
         choose_project(self.page, 'demo')
+        self.alpha_session = self.page.get_by_role('button', name=re.compile('LIVE synthetic A'))
         calls = self.catalog_sequence([(200, fixture.available())])
         self.choose_pair()
-        self.assertGreater(self.page.evaluate('window.__catalogSources.length'), 0,
-                           'SSE fixture must actually observe a browser EventSource')
-        self.page.evaluate("""() => {
-            const source=window.__catalogSources[window.__catalogSources.length-1];
-            source.dispatchEvent(new Event('error'));
-            source.dispatchEvent(new Event('open'));
-        }""")
+        server.transport.emit(live.snapshot())
+        expect(self.page.locator('#current-model-status')).to_contain_text('producer-A')
+        server.transport.close = True
+        deadline = time.monotonic() + 5
+        while server.transport.closed < 1 and time.monotonic() < deadline:
+            self.page.wait_for_timeout(25)
+        self.assertGreaterEqual(server.transport.closed, 1, 'Actual SSE must close before reconnect')
+        server.transport.close = False
+        deadline = time.monotonic() + 7
+        while server.transport.streams < 2 and time.monotonic() < deadline:
+            self.page.wait_for_timeout(25)
+        self.assertGreaterEqual(server.transport.streams, 2, 'Reconnect must use a new native EventSource')
+        server.transport.emit(live.snapshot(2))
         self.await_calls(calls, 2)
+        self.page.wait_for_timeout(250)
+        self.assertEqual(len(calls), 2, 'A single reconnect must not duplicate catalog reads')
         self.assert_pair_draft()
         expect(self.send_button()).to_be_enabled()
         self.assertEqual(self.send_requests(), [])
