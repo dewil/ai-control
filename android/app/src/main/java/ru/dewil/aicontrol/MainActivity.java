@@ -50,6 +50,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     private int fileRequest=0;
     private boolean fileMultiple=false,fileResultReady=false;
     private Uri[] fileResult;
+    private static final int MAX_ATTACHMENT_FILES=8;
     private static final long MAX_SERIAL=9007199254740991L;
     private final Runnable renewal=()->admit(false);
     private final Runnable banner=new Runnable(){public void run(){if(!foreground)return;View view=root.findViewWithTag("updates");if(view instanceof Button){ru.dewil.aicontrol.updater.UpdateInfo available=((ru.dewil.aicontrol.updater.UpdateRepositoryOwner)getApplication()).getUpdateRepository().getState().getValue().getAvailable();((Button)view).setText(available==null?"Обновления":"Доступно обновление "+available.getVersionName());}ui.postDelayed(this,5000);}};
@@ -260,7 +261,11 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
         try{
             if(result==android.app.Activity.RESULT_OK&&data!=null){
                 ClipData clip=data.getClipData();
-                if(clip!=null){values=new Uri[clip.getItemCount()];for(int i=0;i<values.length;i++)values[i]=clip.getItemAt(i).getUri();}
+                if(clip!=null){
+                    int count=clip.getItemCount();
+                    if(count<1||count>MAX_ATTACHMENT_FILES||!fileMultiple&&count!=1){finishFileChooser(null);return;}
+                    values=new Uri[count];for(int i=0;i<count;i++)values[i]=clip.getItemAt(i).getUri();
+                }
                 else if(data.getData()!=null)values=new Uri[]{data.getData()};
                 if(values!=null){
                     if(values.length==0||!fileMultiple&&values.length!=1)values=null;
@@ -319,7 +324,11 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
                     params.getMode()!=FileChooserParams.MODE_OPEN&&params.getMode()!=FileChooserParams.MODE_OPEN_MULTIPLE)return false;
                 finishFileChooser(null);
                 // Never recycle request codes: a late replaced picker cannot satisfy its successor.
-                if(fileRequest==65535){callback.onReceiveValue(null);return true;}
+                if(fileRequest==65535){
+                    callback.onReceiveValue(null);
+                    new AlertDialog.Builder(MainActivity.this).setMessage("Достигнут предел выбора файлов. Перезапустите приложение, чтобы продолжить.").setPositiveButton("Закрыть",null).show();
+                    return true;
+                }
                 fileRequest++;fileCallback=callback;fileOwner=view;fileCredential=credential;
                 fileNavigation=navigationGeneration;fileMultiple=params.getMode()==FileChooserParams.MODE_OPEN_MULTIPLE;
                 Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)

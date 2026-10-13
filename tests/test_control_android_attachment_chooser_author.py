@@ -20,3 +20,7 @@ class AndroidAttachmentChooserAuthor(unittest.TestCase):
     def test_replaced_picker_late_result_cannot_satisfy_successor(self):self.scenario('replace-late')
     def test_cancellation_releases_callback_while_backgrounded(self):self.scenario('cancel-background')
     def test_mixed_content_and_foreign_uri_rejects_whole_selection(self):self.scenario('mixed-uri')
+
+    def test_provider_huge_count_rejected_before_allocation_or_iteration(self):self.scenario('huge-count')
+    def test_nine_files_rejected_as_whole_selection(self):self.scenario('nine-files')
+    def test_eight_files_accepted(self):self.scenario('eight-files')

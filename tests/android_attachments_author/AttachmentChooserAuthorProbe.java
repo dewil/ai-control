@@ -28,6 +28,17 @@ public final class AttachmentChooserAuthorProbe {
    check(c.calls==1&&c.value==null&&next.calls==0,"old request satisfied successor");AttachmentChooserProbe.singleResult(a,next);
   }else if(args[0].equals("cancel-background")){
    BackgroundProbe.pause(a);a.onStop();a.deliverResult(0,null);check(c.calls==1&&c.value==null,"background cancel retained callback");
+  }else if(args[0].equals("huge-count")){
+   ClipData clip=new ClipData("files",new String[]{"*/*"},new ClipData.Item(AttachmentChooserProbe.uri("one"))){
+    public int getItemCount(){return Integer.MAX_VALUE;}
+    public ClipData.Item getItemAt(int n){throw new AssertionError("over-limit result iterated");}
+   };
+   a.deliverResult(-1,new Intent().setClipData(clip));check(c.calls==1&&c.value==null,"unbounded provider count accepted");
+  }else if(args[0].equals("nine-files")||args[0].equals("eight-files")){
+   int count=args[0].equals("nine-files")?9:8;ClipData clip=ClipData.newRawUri("files",AttachmentChooserProbe.uri("0"));
+   for(int i=1;i<count;i++)clip.addItem(new ClipData.Item(AttachmentChooserProbe.uri(""+i)));
+   a.deliverResult(-1,new Intent().setClipData(clip));check(c.calls==1,"bounded selection callback missing");
+   check(count==8?c.value!=null&&c.value.length==8:c.value==null,"selection limit boundary incorrect");
   }else if(args[0].equals("mixed-uri")){
    ClipData clip=ClipData.newRawUri("files",AttachmentChooserProbe.uri("one"));clip.addItem(new ClipData.Item(android.net.Uri.parse("https://invalid.example/file")));
    a.deliverResult(-1,new Intent().setClipData(clip));check(c.calls==1&&c.value==null,"mixed URI provider selection partly accepted");
