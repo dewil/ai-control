@@ -5,7 +5,7 @@
 После7days без foreground запуска нужен новый вход. При регулярном использовании
 30days срок токена продлевается автоматически; background polling не продлевает idle.
 
-Версия0.1.8/code9, applicationId ru.dewil.aicontrol, minSDK26/targetSDK36.
+Версия0.1.9/code10, applicationId ru.dewil.aicontrol, minSDK26/targetSDK36.
 Debug устанавливается отдельно как ru.dewil.aicontrol.debug.
 Скрепка открывает системный выбор документов: один или несколько файлов через
 content URI, без разрешений на общее хранилище. Возврат из выбора проходит

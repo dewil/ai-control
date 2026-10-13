@@ -20,11 +20,11 @@ class NativePublicContract(unittest.TestCase):
         return path.read_text()
 
     def test_release_identity_and_sdk_contract(self):
-        # INV-APP-08: attachment chooser release supersedes the lifecycle
-        # release 0.1.7/code8; keep SDK/applicationId and assert 0.1.8/code9.
+        # INV-APP-08: attachment upload transport release supersedes chooser
+        # release 0.1.8/code9; keep SDK/applicationId and assert 0.1.9/code10.
         source = self.source(ROOT / 'android/app/build.gradle.kts')
         for pattern in (r'applicationId\s*=\s*"ru\.dewil\.aicontrol"',
-            r'versionName\s*=\s*"0\.1\.8"', r'versionCode\s*=\s*9\b',
+            r'versionName\s*=\s*"0\.1\.9"', r'versionCode\s*=\s*10\b',
             r'minSdk\s*=\s*26\b', r'targetSdk\s*=\s*36\b'):
             self.assertRegex(source, pattern)
 
