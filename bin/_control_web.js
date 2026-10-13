@@ -882,7 +882,8 @@ function attachmentReady(key){const draft=attachmentDraft(key);return !draft?.fi
 function renderAttachments(){
   const key=currentSessionKey(),draft=key&&attachmentDraft(key),root=$('chat-attachments');root.replaceChildren();
   $('attachment-add').disabled=!pageActive()||!key||attachmentLocked(key);
-  if(attachmentImageBytes(draft)>(draft?.options?.max_image_bytes||2097152))$('attachment-status').textContent='Изображения: не более 2 МБ суммарно на сообщение. Уменьшите их размер.';
+  if(attachmentImageBytes(draft)>(draft?.options?.max_image_bytes||2097152))$('attachment-status').textContent='Изображения: не более 2 МБ суммарно на сообщение. Уменьшите их размер.';else if($('attachment-status').textContent.startsWith('Изображения:'))$('attachment-status').textContent='';
+  $('attachment-status').hidden=!$('attachment-status').textContent;
   for(const file of draft?.files||[]){const chip=node('div',undefined,'attachment-chip');chip.append(node('span',file.name,'attachment-name'));
     const expired=file.state==='sealed'&&file.expires<=Date.now()/1000;
     chip.append(node('span',expired?'Срок загрузки истёк':file.state==='sealed'?'Загружено · '+Math.ceil(file.size/1024)+' КБ':file.error||'Загрузка · '+Math.floor(file.bytes/file.size*100)+'%','meta'));

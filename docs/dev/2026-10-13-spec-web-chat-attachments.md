@@ -263,8 +263,9 @@ HTTP507 attachment_storage_full, без eviction. RED `WATT-QUOTA-HELD`: зап�
 
 ## Message binding, очередь и неизвестная доставка
 
-Новый receipt schema **4**, поскольку schema3 уже занята queue semantics текущего
-кода. Общий UUID namespace с существующими text/queue receipts: один UUID не может
+Общий receipt schema **4** уже используется kind=queue_transfer; новые
+kind=attachment_send/attachment_enqueue добавляются как строго различимые варианты.
+Отдельные spool receipts также имеют schema4 в собственном namespace. Общий UUID namespace с существующими text/queue receipts: один UUID не может
 обозначать одновременно text send, attachment send или queue. Старые schemas не
 переинтерпретируются. Changed payload или corrupted/unknown receipt не считаются
 отсутствием и не открывают новый dispatch.

@@ -61,7 +61,7 @@
           <fieldset id="chat-mode" class="send-mode"><legend>Режим отправки</legend><label><input type="radio" name="send-mode" value="queue" checked>В очередь</label><label><input type="radio" name="send-mode" value="direct">Сразу</label></fieldset>
           <label for="chat-draft">Сообщение</label><textarea id="chat-draft" maxlength="16000" autocomplete="off" aria-describedby="session-settings-note"></textarea>
           <div id="chat-attachments" class="chat-attachments" aria-label="Вложения"></div>
-          <input id="attachment-files" type="file" multiple hidden><p id="attachment-status" class="meta" role="status"></p>
+          <input id="attachment-files" type="file" multiple hidden><p id="attachment-status" class="meta" role="alert" hidden></p>
           <div class="chat-actions">
             <button id="attachment-add" type="button" class="secondary" aria-label="Прикрепить файл">📎</button>
             <button id="chat-send" type="submit">Отправить</button>
