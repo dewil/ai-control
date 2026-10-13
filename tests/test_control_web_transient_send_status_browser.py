@@ -209,6 +209,21 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         self.assertEqual(details.locator('[aria-live]').count(), 0, 'Problem details cannot repeat live announcements')
         return details
 
+    def reader_anchor_y(self, text):
+        # The first real SSE snapshot can replace the initial HTTP paragraph.
+        # Query and measure the current DOM atomically, without repositioning it.
+        rect = self.page.evaluate('''text => {
+          const el = [...document.querySelectorAll('.chat-items p')].find(
+            el => el.textContent.trim() === text);
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return {y:r.y, width:r.width, height:r.height};
+        }''', text)
+        self.assertIsNotNone(rect, 'Reader anchor must remain in the current history DOM')
+        self.assertGreater(rect['width'], 0, 'Reader anchor must retain rendered width')
+        self.assertGreater(rect['height'], 0, 'Reader anchor must retain rendered height')
+        return rect['y']
+
     def test_INV_WSESS_16_one_accepted_expires_without_poll_extension_or_reader_shift(self):
         self.open_history()
         self.slot().evaluate("el=>{window.statusAnnouncements=[];new MutationObserver(()=>{if(/принято/i.test(el.textContent))window.statusAnnouncements.push(el.textContent)}).observe(el,{childList:true,subtree:true,characterData:true});}")
@@ -225,7 +240,7 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         from playwright.sync_api import expect
         expect(anchor).to_be_in_viewport()
         before_form_height = self.page.locator('form').filter(has=self.page.locator('textarea')).bounding_box()['height']
-        before_y = anchor.bounding_box()['y']; before_requests = len(self.history_requests())
+        before_y = self.reader_anchor_y('LATEST message 21'); before_requests = len(self.history_requests())
         before_calls = self.calls()
         before_ids = [r['message_id'] for r in self.calls() if r['method'] == 'send']
         # BR6a/INV53: prove the same UUID reconciliation frame reached the DOM,
@@ -233,7 +248,7 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         marker='Synthetic accepted receipt reconciliation reached the UI'
         self.control(marker=marker)
         self.page.get_by_text(marker,exact=True).wait_for(timeout=6000)
-        self.assertLessEqual(abs(anchor.bounding_box()['y']-before_y),8)
+        self.assertLessEqual(abs(self.reader_anchor_y('LATEST message 21')-before_y),8)
         before_history = self.page.locator('.chat-items').inner_html()
         self.page.wait_for_timeout(max(0,4.2-(time.monotonic()-accepted_at))*1000)
         self.assertTrue(self.accepted(), 'Accepted remains visible through its five-second lifetime')
@@ -250,7 +265,7 @@ class TransientSendStatusBrowserContract(unittest.TestCase):
         self.assertEqual(self.calls(), before_calls, 'Expiry cannot trigger status GET or send')
         self.assertEqual(self.page.locator('.chat-items').inner_html(), before_history, 'Expiry preserves rendered history')
         self.assertEqual(len(self.page.evaluate('window.statusAnnouncements')), 1, 'Repeated polling cannot repeat accepted announcement')
-        self.assertLessEqual(abs(anchor.bounding_box()['y']-before_y), 8, 'Status collapse preserves reader anchor')
+        self.assertLessEqual(abs(self.reader_anchor_y('LATEST message 21')-before_y), 8, 'Status collapse preserves reader anchor')
         self.assertEqual(self.page.locator('textarea').input_value(), 'Draft survives status expiry')
         self.assertEqual([r['message_id'] for r in self.calls() if r['method'] == 'send'], before_ids)
         self.assertEqual(self.page.get_by_text(re.compile('Сообщение принято')).count(), 0, 'No accepted pile after expiry')
