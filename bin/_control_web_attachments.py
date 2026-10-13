@@ -199,12 +199,18 @@ class AttachmentSpool:
             if n.startswith(('p-','r-','m-')) and n.endswith('.json'):
                 try:r=self._read(n);r=r.get('record',r)
                 except (ValueError,Refusal):raise Refusal('recovery_required')
-                protected.update(x['id'] for x in r.get('manifest',[]))
+                manifest=r.get('manifest') if type(r) is dict else None
+                need(type(manifest) is list and 0<len(manifest)<=self.limits['message_files']
+                     and all(type(x) is dict and uid(x.get('id')) for x in manifest),'recovery_required')
+                protected.update(x['id'] for x in manifest)
         return protected
 
     def _protected(self,aid):return aid in self._protected_ids()
 
     def _delete(self,s,state):
+        # Final deletion authority is here, not merely in the callers. The
+        # spool flock spans this proof and the rename/unlink publication.
+        need(self._read('uncertain.json',True) is None and not self._protected(s['attachment_id']),'recovery_required')
         s['state']=state;self._write(self._stage_name(s['attachment_id']),s)
         blob='b-'+s['attachment_id'];trash='trash-'+s['attachment_id']
         try:os.rename(blob,trash,src_dir_fd=self.fd,dst_dir_fd=self.fd);os.fsync(self.fd)
@@ -399,13 +405,18 @@ class AttachmentSpool:
     def _safe(r):
         value={k:r.get(k) for k in ('message_id','status','turn_id','queued_submission_id')}
         if r.get('reason'):value['reason']=r['reason']
+        need(uid(value['message_id']) and value['status'] in ('accepted','queued','delivery_unknown','rejected'),'unavailable')
+        need(all(v is None or type(v) is str and 0<len(v)<=500 for v in (value['turn_id'],value['queued_submission_id'])),'unavailable')
+        need(value.get('reason') in (None,'recovery_required'),'unavailable')
         return value
 
     @guarded
     def receipt(self,t,message_id):
         self._target(t,True);need(uid(message_id));self._recover()
         r=self._read(self._receipt_name(t,message_id),True)
-        return self._safe(r) if r else {'error':'unavailable'}
+        if r is None:return {'error':'unavailable'}
+        need(r.get('message_id')==message_id and self._binding(r['target'])==self._binding(t),'recovery_required')
+        return self._safe(r)
 
 
 SAFE_ERRORS={'invalid_request','forbidden','stale','limit','busy','unavailable','unsupported',

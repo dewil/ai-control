@@ -9,6 +9,7 @@ import tempfile
 import time
 import threading
 import unittest
+from unittest.mock import patch
 import zlib
 from fastapi.testclient import TestClient
 import native_queue_blind_support as s
@@ -93,6 +94,60 @@ class AttachmentAuthor(unittest.TestCase):
         delete=self.client.post('/api/session-attachment-discard',json=dict(attachment_id=aid),headers=self.headers)
         self.assertEqual(delete.status_code,409)
         self.assertTrue(any(p.read_bytes()==b'opaque fixture' for p in (self.base/'web-attachments').glob('b-*')))
+    def test_shared_marker_publication_failure_never_replays_or_cross_kind_dispatches(self):
+        aid=self.upload(b'crash fixture','fixture.bin')
+        with patch.object(self.chat.receipts,'write',side_effect=OSError('synthetic shared-marker fsync loss')):
+            response=self.send([aid]);self.assertEqual(response.status_code,503,response.text)
+        self.assertEqual(self.rpc.starts(),[])
+        from _control_web_sessions import SessionChat
+        self.chat=SessionChat(self.rpc,lambda p:str(self.project),lambda:['demo'],str(self.base/'receipts'),model_context=self.rpc.model_context)
+        self.backend.sessions=self.chat
+        response=self.send([aid]);self.assertEqual(response.json()['status'],'delivery_unknown',response.text)
+        self.assertEqual(self.rpc.starts(),[])
+        for invoke in (self.chat.send,self.chat.enqueue):
+            result=invoke('demo',s.SID,s.MID,'cross-kind')
+            self.assertEqual(result,{'error':'invalid_request'})
+        self.assertEqual(self.rpc.starts(),[])
+        self.assertFalse(any(m in ('turn/start','thread/queue/add') for m,p in self.rpc.calls))
+
+    def test_spool_auth_boundary_records_watermark_and_rejects_clock_rollback(self):
+        from _control_web_attachments import AttachmentSpool
+        now=[1800000000]
+        spool=AttachmentSpool(str(self.base/'expiry-spool'),clock=lambda:now[0])
+        target=dict(owner_uid=os.getuid(),root=str(self.project),sid=s.SID,context='synthetic',mapping_version=1,
+                    login_scope='synthetic-scope',auth_expires_at=now[0]+2,message_id=s.MID,
+                    process_generation=1,context_generation=1,grant_generation=1)
+        stage=spool.begin(target,dict(upload_id=OTHER,size=1,filename='fixture',media_hint=''))
+        now[0]+=2
+        self.assertEqual(spool.chunk(target,stage['attachment_id'],0,b'x'),{'error':'stale'})
+        self.assertEqual((self.base/'expiry-spool'/('b-'+stage['attachment_id'])).stat().st_size,0)
+        now[0]-=1
+        restarted=AttachmentSpool(str(self.base/'expiry-spool'),clock=lambda:now[0])
+        self.assertEqual(restarted.chunk(target,stage['attachment_id'],0,b'x'),{'error':'stale'})
+
+    def test_corrupt_protection_manifest_aborts_sweep_and_central_delete(self):
+        aid=self.upload(b'protected fixture','fixture.bin');self.assertEqual(self.send([aid]).json()['status'],'accepted')
+        spool=self.chat._attachment_store();intent=next((self.base/'web-attachments').glob('m-*'))
+        intent.write_text('{}')
+        spool.clock=lambda:time.time()+4000
+        self.assertEqual(spool.sweep(),{'error':'recovery_required'})
+        blob=self.base/'web-attachments'/('b-'+aid);self.assertTrue(blob.exists())
+        with spool._locked():
+            stage=spool._read(spool._stage_name(aid))
+            with self.assertRaises(Refusal):spool._delete(stage,'expired')
+        self.assertEqual(blob.read_bytes(),b'protected fixture')
+
+    def test_corrupt_receipt_native_ids_rejected_inside_spool_safe_projection(self):
+        aid=self.upload(b'fixture','fixture.bin');self.assertEqual(self.send([aid]).json()['status'],'accepted')
+        spool=self.chat._attachment_store();record=spool.find_record(str(self.project),s.SID,s.MID)
+        target=record['target'];path=Path(record['receipt_path']);original=json.loads(path.read_text())
+        for field,value in [('turn_id','x'*501),('queued_submission_id',{}),('status','consumed'),('message_id',OTHER)]:
+            with self.subTest(field=field):
+                path.write_text(json.dumps({**original,field:value}))
+                self.assertIn('error',spool.receipt(target,s.MID))
+        path.write_text(json.dumps(original))
+        self.assertEqual(spool.receipt(target,s.MID)['status'],'accepted')
+
     def test_real_unix_broker_roundtrip_preserves_closed_dtos(self):
         sock=str(self.base/'broker.sock');stopped=threading.Event()
         thread=threading.Thread(target=serve_broker,args=(sock,self.backend,os.getuid(),stopped),daemon=True);thread.start()
