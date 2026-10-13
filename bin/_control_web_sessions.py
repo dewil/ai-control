@@ -965,7 +965,7 @@ class SessionChat:
 
     @_operation
     def attachment(self,action,data,auth):
-        from _control_web_attachments import request_valid, public_result, native_input, normalized_input, digest, LIMITS
+        from _control_web_attachments import request_valid, public_result, native_input, normalized_input, target_identity, digest, LIMITS
         import base64
         _need(request_valid(action,data,auth),'invalid_request')
         _need(auth['expires_at']>time.time(),'stale')
@@ -976,7 +976,7 @@ class SessionChat:
             candidates=[p for p in self._names() if self._root(p)==old['root']]
             _need(candidates,'stale');project=candidates[0]
             target,context=self._attachment_target(project,old['sid'],old['message_id'],auth)
-            _need(target==old,'stale')
+            _need(target_identity(target)==target_identity(old),'stale')
             if action=='chunk':result=spool.chunk(target,data['attachment_id'],data['index'],base64.b64decode(data['data'],validate=True))
             else:result=getattr(spool,action)(target,data['attachment_id'])
             return public_result(action,result)

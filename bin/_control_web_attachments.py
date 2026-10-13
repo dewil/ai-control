@@ -39,6 +39,12 @@ def uid(value):
     except (ValueError, AttributeError):return False
 
 
+def target_identity(target):
+    # Current auth expiry can renew on the same Android cookie/scope. It is an
+    # authorization deadline, not part of the immutable upload identity.
+    return {key:value for key,value in target.items() if key!='auth_expires_at'}
+
+
 class Refusal(Exception):
     pass
 
@@ -181,7 +187,7 @@ class AttachmentSpool:
 
     def _load_stage(self,t,aid):
         s=self._read(self._stage_name(aid))
-        need(s['target']==t,'stale')
+        need(target_identity(s['target'])==target_identity(t),'stale')
         return s
 
     @staticmethod
@@ -235,9 +241,9 @@ class AttachmentSpool:
         stages,live=self._quota()
         for s in stages:
             if s['upload_id']==metadata['upload_id']:
-                need(s['target']==t and s['metadata']==metadata,'invalid_request')
+                need(target_identity(s['target'])==target_identity(t) and s['metadata']==metadata,'invalid_request')
                 self._expire(s);need(s['state'] in ('receiving','sealed'),'stale');return self._dto(s)
-        same=[s for s in live if s['target']==t]
+        same=[s for s in live if target_identity(s['target'])==target_identity(t)]
         need(len(same)<self.limits['message_files'] and sum(s['size'] for s in same)+metadata['size']<=self.limits['message_bytes'],'limit')
         receiving=[s for s in live if s['state']=='receiving' and self.clock()<s['expires_at']]
         need(len(receiving)<self.limits['receiving_uploads'],'busy')
@@ -247,8 +253,13 @@ class AttachmentSpool:
             reason='bytes' if sum(s['size'] for s in live)+metadata['size']>self.limits['owner_bytes'] else 'objects' if len(live)>=self.limits['owner_objects'] else 'tombstones'
             LOG.warning('attachment_quota_refused reason=%s reserved_bytes=%d pinned_bytes=%d live_objects=%d pinned_objects=%d byte_limit=%d object_limit=%d',reason,sum(s['size'] for s in live),sum(s['size'] for s in live if s['attachment_id'] in protected),len(live),sum(s['attachment_id'] in protected for s in live),self.limits['owner_bytes'],self.limits['owner_objects'])
             raise Refusal('attachment_storage_full')
-        lease='l-'+digest(t)+'.json';l=self._read(lease,True)
-        if l is None:l={'expires_at':min(self.clock()+1800,t['auth_expires_at'])};self._write(lease,l)
+        lease='l-'+digest(target_identity(t))+'.json';l=self._read(lease,True)
+        if l is None:
+            # Existing stage timestamps also preserve leases created by an
+            # earlier version whose filename included the captured auth expiry.
+            prior=[s['expires_at'] for s in stages if target_identity(s['target'])==target_identity(t)]
+            l={'expires_at':min([self.clock()+1800,t['auth_expires_at']]+prior)}
+            self._write(lease,l)
         need(self.clock()<l['expires_at'],'stale')
         aid=str(uuid.uuid4())
         s=dict(attachment_id=aid,upload_id=metadata['upload_id'],target=copy.deepcopy(t),metadata=metadata,

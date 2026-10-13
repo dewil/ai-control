@@ -96,6 +96,53 @@ class AttachmentAuthor(unittest.TestCase):
         delete=self.client.post('/api/session-attachment-discard',json=dict(attachment_id=aid),headers=self.headers)
         self.assertEqual(delete.status_code,409)
         self.assertTrue(any(p.read_bytes()==b'opaque fixture' for p in (self.base/'web-attachments').glob('b-*')))
+    def test_same_login_http_expiry_renewal_preserves_sealed_attachment(self):
+        # /api/app/session mutates this same server-side record's expires only;
+        # attachment_scope and cookie remain stable. No global auth change.
+        store={};self.client.close()
+        self.client=TestClient(create_app(self.config,self.backend,session_store=store),base_url=ORIGIN)
+        self.addCleanup(self.client.close);self.login()
+        aid=self.upload(b'renewal fixture','fixture.bin')
+        current=next(iter(store.values()));scope=current['attachment_scope'];current['expires']+=600
+        response=self.client.post('/api/session-attachment-status',json=dict(attachment_id=aid),headers=self.headers)
+        self.assertEqual(response.status_code,200,response.text);self.assertEqual(response.json()['state'],'sealed')
+        self.assertEqual(current['attachment_scope'],scope)
+        self.assertEqual(self.send([aid]).json()['status'],'accepted')
+
+    def test_renewed_auth_preserves_target_and_original_message_lease(self):
+        from _control_web_attachments import AttachmentSpool
+        now=[1800000000];spool=AttachmentSpool(str(self.base/'renewal-spool'),clock=lambda:now[0])
+        original=dict(owner_uid=os.getuid(),root=str(self.project),sid=s.SID,context='synthetic',mapping_version=1,
+                      login_scope='same-login',auth_expires_at=now[0]+900,message_id=s.MID,
+                      process_generation=1,context_generation=1,grant_generation=1)
+        def meta(upload):return dict(upload_id=upload,size=1,filename='fixture',media_hint='')
+        first=spool.begin(original,meta(OTHER));expiry=first['expires_at'];now[0]+=10
+        renewed={**original,'auth_expires_at':now[0]+3600}
+        self.assertEqual(spool.begin(renewed,meta(OTHER)),first)
+        self.assertEqual(spool.status(renewed,first['attachment_id'])['expires_at'],expiry)
+        self.assertNotIn('error',spool.chunk(renewed,first['attachment_id'],0,b'a'))
+        self.assertEqual(spool.finish(renewed,first['attachment_id'])['expires_at'],expiry)
+        second=spool.begin(renewed,meta(s.ACTION));self.assertEqual(second['expires_at'],expiry)
+        self.assertNotIn('error',spool.chunk(renewed,second['attachment_id'],0,b'b'))
+        self.assertNotIn('error',spool.finish(renewed,second['attachment_id']))
+        reserved=spool.reserve(renewed,'send','',[first['attachment_id'],second['attachment_id']])
+        self.assertEqual(reserved['status'],'delivery_unknown')
+        lowered={**renewed,'auth_expires_at':now[0]}
+        self.assertEqual(spool.status(lowered,second['attachment_id']),{'error':'stale'})
+
+    def test_auth_renewal_never_revives_expired_original_message_lease(self):
+        from _control_web_attachments import AttachmentSpool
+        now=[1800000000];root=str(self.base/'expired-renewal-spool');spool=AttachmentSpool(root,clock=lambda:now[0])
+        original=dict(owner_uid=os.getuid(),root=str(self.project),sid=s.SID,context='synthetic',mapping_version=1,
+                      login_scope='same-login',auth_expires_at=now[0]+30,message_id=s.MID,
+                      process_generation=1,context_generation=1,grant_generation=1)
+        meta=dict(upload_id=OTHER,size=1,filename='fixture',media_hint='')
+        first=spool.begin(original,meta);now[0]=first['expires_at']
+        renewed={**original,'auth_expires_at':now[0]+3600};spool=AttachmentSpool(root,clock=lambda:now[0])
+        self.assertEqual(spool.chunk(renewed,first['attachment_id'],0,b'x'),{'error':'stale'})
+        self.assertEqual(spool.finish(renewed,first['attachment_id']),{'error':'stale'})
+        self.assertEqual(spool.begin(renewed,{**meta,'upload_id':s.ACTION}),{'error':'stale'})
+
     def test_fifo_substitution_refuses_promptly_in_bounded_subprocess(self):
         script=r"""
 import json,os,sys,time
