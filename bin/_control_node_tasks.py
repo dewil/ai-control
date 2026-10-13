@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 
-from _control_web_devbus import decode_event
+from _control_web_devbus import decode_event, _pairs
 
 SCHEMA_VERSION = 2
 
@@ -58,6 +58,14 @@ def _ancestor(info, path):
 def _json(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False,
                       sort_keys=True, separators=(',', ':'))
+
+
+def _valid_result(value):
+    return (type(value) is dict
+            and set(value) in ({'text', 'executor'}, {'text', 'executor', 'output_truncated'})
+            and type(value['text']) is str and value['executor'] == 'codex'
+            and ('output_truncated' not in value or type(value['output_truncated']) is bool)
+            and len(_json(value).encode('utf-8')) <= 60000)
 
 
 def _uuid(value):
@@ -181,7 +189,7 @@ class NodeTaskStore:
                 self._db.execute('BEGIN IMMEDIATE')
                 result = operation()
                 self._db.commit()
-            except (sqlite3.Error, ValueError, TypeError):
+            except (sqlite3.Error, ValueError, TypeError, RecursionError, OverflowError):
                 # Stored-data decoding failures are storage failures too; leave
                 # no open transaction to poison an independent healthy read.
                 try:
@@ -203,10 +211,19 @@ class NodeTaskStore:
 
     @staticmethod
     def _dto(row):
+        result = None
+        if row['result'] is not None:
+            raw = row['result']
+            if type(raw) is not str or len(raw.encode('utf-8')) > 60000:
+                raise ValueError()
+            result = json.loads(raw, object_pairs_hook=_pairs,
+                                parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+            if not _valid_result(result):
+                raise ValueError()
         return dict(schema=1, task_id=row['task_id'], node_id=row['node_id'],
                     prompt=row['prompt'], created_at=row['created_at'], updated_at=row['updated_at'],
                     delivery=row['delivery'], execution=row['execution'], coverage=row['coverage'],
-                    result=json.loads(row['result']) if row['result'] is not None else None,
+                    result=result,
                     quality='unreviewed', usage=None)
 
     def _counter(self, name):
@@ -347,9 +364,7 @@ class NodeTaskStore:
         if kind in ('accepted', 'running'):
             valid = payload == {}
         elif kind == 'completed':
-            valid = (set(payload) in ({'text', 'executor'}, {'text', 'executor', 'output_truncated'})
-                     and type(payload['text']) is str and payload['executor'] == 'codex'
-                     and ('output_truncated' not in payload or type(payload['output_truncated']) is bool))
+            valid = _valid_result(payload)
         elif kind == 'failed':
             valid = (set(payload) in ({'reason'}, {'reason', 'exit_code'})
                      and type(payload.get('reason')) is str

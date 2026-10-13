@@ -85,3 +85,5 @@ Existing schema v1 должна совпадать по ограничениям
 
 ### Повреждение сохранённых данных
 При открытии schema2 проверить ровно одну metadata singleton=1 row; fence допустим только null/retention_gap/invalid_event/id_conflict. Отсутствующая row, BLOB или неизвестное значение означают generic ValueError до изменения schema/data/journal settings; не восстанавливать singleton автоматически. Ошибка декодирования сохранённого result в операции означает generic storage error и немедленный rollback: следующая независимая исправная операция проходит без дополнительного «лечащего» вызова. Повреждённое значение не удаляется и не переписывается автоматически.
+
+Сохранённый result проверяется тем же exact text/executor/optional output_truncated контрактом и60000UTF8B cap, что и incoming completed; JSON array, неверные поля/типы, duplicate keys/nonfinite и чрезмерная вложенность не возвращаются как DTO. RecursionError/OverflowError декодирования также означают generic storage с rollback; следующий независимый healthy read не должен чинить оставленную транзакцию.
