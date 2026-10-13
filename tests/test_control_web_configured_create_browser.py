@@ -281,7 +281,9 @@ class ConfiguredCreateBrowser(unittest.TestCase):
         self.assertEqual(dialog.get_by_role('button', name='Отмена', exact=True).count(), 1)
         create = dialog.get_by_role('button', name='Создать', exact=True)
         self.assertEqual(create.count(), 1)
-        self.assertTrue(create.is_enabled(), 'Fresh available server capability enables explicit create')
+        # A newly inserted Codex option is enabled even while its parent select
+        # awaits options; wait for the capability-dependent Create DOM update.
+        expect(create, message='Fresh available server capability enables explicit create').to_be_enabled(timeout=5000)
         self.assertEqual(dialog.get_by_role('textbox').count(), 0, 'Create dialog has no title or first-message field')
         self.assertEqual(self.calls().count({'method': 'options', 'project': 'demo'}), 1)
 
