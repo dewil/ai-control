@@ -60,3 +60,41 @@ A complete coherent after tree with durable accepted==after and successful healt
 may finalize recovery; provisional rollback capability does not require reverting
 an otherwise fully committed healthy release. This correction preserves existing
 recovery behavior and targets the actual interrupted-before-commit window.
+
+## Historical fixtures and bootstrap receipt chain
+
+Only explicitly listed fresh4 tests load checksum-pinned accepted `d341ad6`
+helper `f7be4af1769618d99b6f180356a49457eeeb4aa94207905532ff58e7eaa86483`.
+Journal1..4 recovery continues exercising the current controller. The mixed
+journal4-recovery-then-new-release budget test now submits schema5/exact23 and
+still proves one rollback attempt per invocation. Old16→22 bootstrap uses that
+same historical22 candidate, while its bootstrap operator remains current.
+Current inventory tests explicitly check exact23 and preserved SCHEMAS[4].
+
+The existing root-owned live22 bootstrap receipt is immutable historical evidence.
+If its helper hash matches the executing helper, existing live gate behavior stays.
+If it differs, current helper requires a separate root-owned fixed-path receipt
+`/var/lib/ai-control-deploy/attachments-bootstrap-complete.json`, exposed as
+`ATTACHMENT_RECEIPT` for synthetic test path rebinding only. Exact closed schema:
+
+```
+{schema:1, operation:"attachments23-bootstrap",
+ prior_helper_sha256:<old live22 receipt helper_sha256>,
+ helper_sha256:<actual current helper SHA256>,
+ prior_receipt_sha256:<SHA256 of exact old receipt bytes>,
+ accepted_before_sha256:<hex64>, packet_sha256:<hex64>}
+```
+
+All receipt ownership/mode/regular-file/size and strict-JSON validations remain.
+Missing receipt, wrong binding, wrong operation/schema, malformed digest or unknown
+fields refuse before package mutation. Accepted-before and packet hashes preserve
+upgrade provenance; they do not rewrite old receipt or permit package drift.
+Root prepared upgrade packet must publish the new receipt durably after the reviewed
+helper installation. This test contract authorizes no production receipt creation.
+
+Additional independent RED checks exact chain allows5, oldreceipt bytes unchanged,
+and missing/mismatched chain preserves accepted/tree with no stops or pending.
+RED log `/var/tmp/attachments-bootstrap-chain-red.log`: valid chain currently refused
+by the existing live gate, so this is a behavioral failure beyond a missing constant.
+Prior fixture compatibility run with opaque copied current helper:61PASS; added
+current inventory assertion:5PASS. Native usage unknown.

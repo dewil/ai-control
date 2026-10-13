@@ -133,3 +133,33 @@ class AttachmentDeploy23Red(s.ControllerFixture):
         self.assertEqual((self.target/LEAF).read_bytes(),self.after23[LEAF])
         self.assertFalse((self.checkpoints/'pending.json').exists())
         self.assertTrue(self.stops(),'Must exercise failed5 install and actual rollback')
+
+    def bootstrap_chain(self):
+        # Preserve the old live22 receipt exactly; link newhelper via a separate root receipt.
+        self.api.ATTACHMENT_RECEIPT=self.state.parent/'attachments-bootstrap-complete.json'
+        old=json.loads(self.receipt.read_bytes());old['helper_sha256']=s.sha(s.accepted22_source())
+        oldraw=s.canonical(old);self.write(self.receipt,oldraw,0o600)
+        chain=dict(schema=1,operation='attachments23-bootstrap',
+            prior_helper_sha256=old['helper_sha256'],helper_sha256=s.sha(self.helper.read_bytes()),
+            prior_receipt_sha256=s.sha(oldraw),accepted_before_sha256=s.sha(self.state.read_bytes()),
+            packet_sha256='d'*64)
+        return oldraw,chain
+
+    def test_exact_separate_bootstrap_receipt_chain_accepts5_without_rewriting_old_receipt(self):
+        # INV-DEPLOY-03 INV-DEPLOY-25: root-upgrade provenance extends, never rewrites history.
+        oldraw,chain=self.bootstrap_chain()
+        self.write(self.api.ATTACHMENT_RECEIPT,s.canonical(chain),0o600);self.signed23()
+        self.accepted(dict(result='installed',release_id=8))
+        self.assertEqual(self.receipt.read_bytes(),oldraw);self.assertEqual(self.tree(),self.after23)
+
+    def test_missing_or_mismatched_bootstrap_receipt_chain_refuses_before_mutation(self):
+        # INV-DEPLOY-03 INV-DEPLOY-25: matching live dependency data cannot bless arbitraryhelper.
+        oldraw,chain=self.bootstrap_chain();self.signed23()
+        self.assert_untouched_refusal()
+        for field,value in [('prior_helper_sha256','e'*64),('helper_sha256','e'*64),
+                            ('prior_receipt_sha256','e'*64),('operation','other-bootstrap'),
+                            ('schema',True),('packet_sha256','not-hex'),
+                            ('accepted_before_sha256','not-hex')]:
+            with self.subTest(field=field):
+                self.write(self.api.ATTACHMENT_RECEIPT,s.canonical({**chain,field:value}),0o600)
+                self.assert_untouched_refusal();self.assertEqual(self.receipt.read_bytes(),oldraw)
