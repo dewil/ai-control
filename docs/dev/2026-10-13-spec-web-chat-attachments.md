@@ -591,3 +591,9 @@ pins не освобождаются. Квоты bytes/objects проверяю�
 Ранний file probe ошибочно передавал environments=[] и отключал executiontools. Эти неуспешные попытки не переигрывались.
 
 Radio clarification: группу показывать при выбранной сессии; неподдерживаемая очередь остаётся видимой, disabled, с объяснением и direct default. Модель/effort остаются select; queue по прежнему использует настройки сессии и не принимает explicitselection.
+
+
+## Реализационные уточнения
+Порядок locks: общий существующий receipt namespace → короткий spool lock. Spool никогда не вызывает receipt layer; ни один spool lock не удерживается во время native RPC. Это заменяет раннее предложение global→upload→receipt. Chunk/metadata bounded, отдельный upload lock не нужен.
+Фактический InteractiveRPC frame 4 MiB: суммарные native изображения ограничены2 MiB до reserve/dispatch (`image_payload_too_large`, HTTP422); options публикует max_image_bytes2097152. File mode до20 MiB остаётся. JSON/base64 echo не увеличивает общий transport bound.
+Для nontext queue row показывается безопасная native_summary без путей. Attachment send-now остаётся held/unavailable: этот выпуск не заявляет безопасный полный snapshot transfer; явный native queue start не копирует/не теряет input.
