@@ -1,6 +1,6 @@
 # Вложения, режим отправки и Codex ×3 в ai-control
 
-Дата: 13.10.2026. Статус: **proposal, DESIGN не принят, реализация не начата**.
+Дата: 13.10.2026. Статус: **DESIGN принят (Haiku, 03f15af), независимые RED зафиксированы, реализация в работе**.
 Владелец пакета: CONTROL-WEB-ATTACHMENTS. Child: CONTROL-WEB-GENERAL-FILE-ATTACHMENTS; Codex ×3: CONTROL-WEB-LIMITS-INTEGRATION.
 База: r27 / d341ad6. Пользователь13.10 разрешил общий SDD-пакет до deploy: вложения, radio и Codex ×3. Заменяет предложение06.10, не объявляет DESIGN принятым.
 Область: тот же выбранный чат, тот же настроенный native runtime и native queue;
@@ -584,3 +584,10 @@ pins не освобождаются. Квоты bytes/objects проверяю�
 - Quarantine receipt сохраняет известный accepted/queued, иначе delivery_unknown, с nullable `reason:"recovery_required"`; upload status при небезопасной metadata возвращает `{error:"recovery_required"}`. `options.reason` допустим null/unavailable/unsupported/stale/recovery_required/attachment_storage_full.
 - Переполнение begin возвращает HTTP507 `{error:"attachment_storage_full"}`. Receipt queued_submission_id — только фактический native ID из ACK/reconciliation, обязателен при queued; при unknown может сохраняться уже доказанный ID, но новый не выдумывается. explicit start принимает exact-ID и прежние scope guards.
 - ×3 не отменяет правила свежести: если всё окно истекло/данные устарели, прежнее сокрытие недостоверных чисел и маркеров сохраняется. Clamp ×3 проверять на 7/3 и 3 прошедших днях внутри ещё действующей недели.
+
+
+## 13.10 — подтверждённый native read witness
+Выбранный app-server0.162.1, binary SHA628e35487d888a28f0427fc37501da529dd3d81fcbad7a2c3421c1e8670d92e1: свежая собственная persistent synthetic session, readOnly/networkfalse, стандартная local environment, без смены auth/config. File+image direct и autoqueue PASS: реальные cat tool outputs совпали SHA256 с файлами; независимые visual canaries распознаны; native image normalization подтверждена. Очередь ACK2.494с, directcomplete54.676с, queuedstart54.698с. Private receipt native-defaultenv-cwd8ts9u, исходный repo03f15af, semantic mappingv1. Это закрывает ранний NOTPROVED для tool-bearing target; HTTP/spool/installed acceptance остаются отдельными.
+Ранний file probe ошибочно передавал environments=[] и отключал executiontools. Эти неуспешные попытки не переигрывались.
+
+Radio clarification: группу показывать при выбранной сессии; неподдерживаемая очередь остаётся видимой, disabled, с объяснением и direct default. Модель/effort остаются select; queue по прежнему использует настройки сессии и не принимает explicitselection.
