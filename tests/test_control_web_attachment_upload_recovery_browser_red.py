@@ -65,7 +65,7 @@ class AttachmentUploadRecoveryBrowserRED(unittest.TestCase):
         self.assertEqual(self.operations,before,'Uncertain chunk must not retry automatically')
         self.assert_no_execution()
         begin=self.payloads[0].copy();self.retry().click()
-        expect(self.page.get_by_text('Загружено',exact=True)).to_be_visible()
+        expect(self.page.get_by_text(re.compile(r'^Загружено(?:\s*·.*)?$'))).to_be_visible()
         self.assertEqual(self.operations.count(('POST','begin')),1)
         self.assertEqual(self.operations.count(('PUT','chunk')),1,'Status already confirmed all bytes; duplicate chunk prohibited')
         self.assertEqual(self.operations.count(('POST','status')),1)
@@ -84,7 +84,7 @@ class AttachmentUploadRecoveryBrowserRED(unittest.TestCase):
         before=list(self.operations);self.available=True;self.page.wait_for_timeout(200)
         self.assertEqual(self.operations,before,'Capability recovery must wait for explicit user retry')
         self.retry().click()
-        expect(self.page.get_by_text('Загружено',exact=True)).to_be_visible()
+        expect(self.page.get_by_text(re.compile(r'^Загружено(?:\s*·.*)?$'))).to_be_visible()
         after=self.operations[len(before):]
         self.assertEqual(after[0],('GET','options'),'Manual retry must read fresh options before any stage mutation')
         self.assertEqual(self.operations.count(('POST','begin')),1)
