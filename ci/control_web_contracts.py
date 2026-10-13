@@ -34,6 +34,8 @@ def collect():
     with redirect_stdout(sys.stderr):
         original = list(cases(loader.discover("tests", pattern="test_control_web*.py")))
         original.extend(cases(loader.discover("tests", pattern="test_ai_control_names.py")))
+        original.extend(cases(loader.discover("tests", pattern="test_control_node_*.py")))
+        original.extend(cases(loader.discover("tests", pattern="test_node_transport_generator_red.py")))
     if loader.errors:
         raise RuntimeError("Test collection failed:\n" + "\n".join(loader.errors))
     return original
