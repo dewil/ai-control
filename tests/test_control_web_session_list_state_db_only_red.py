@@ -61,7 +61,13 @@ class IndexedRPC:
         before = (self.context['transport_generation'], self.context['context_generation'])
         if before != (transport_generation, context_generation):
             raise RuntimeError('synthetic stale peer generation')
-        return self(method, params)
+        try:
+            return self(method, params)
+        except Exception:
+            if self.mutate == 'generation-after-read-error':
+                self.mutate = None
+                self.context['context_generation'] += 1
+            raise
 
     def __call__(self, method, params):
         self.calls.append((method, dict(params)))
@@ -203,6 +209,24 @@ class SessionListStateDbOnlyRED(unittest.TestCase):
                 result = chat.list_sessions('demo')
                 self.assertEqual(result, {'error': 'stale'},
                                  'Final root/peer generation recheck must deny raced list results')
+                self.assertEqual(rpc.repair_calls, 0)
+
+    def test_fenced_read_exception_is_stale_only_when_prepared_context_drifted(self):
+        for drift, expected in ((True, {'error': 'stale'}),
+                                (False, {'error': 'unavailable'})):
+            with self.subTest(context_drift=drift):
+                rpc = IndexedRPC(
+                    self.root,
+                    fail=RuntimeError('synthetic native read transport failure'),
+                    mutate='generation-after-read-error' if drift else None)
+                chat, _ = self.make_chat(rpc)
+                result = chat.list_sessions('demo')
+                self.assertEqual(result, expected,
+                                 'Only confirmed prepared-context drift classifies a read failure as stale')
+                list_calls = [call for call in rpc.calls if call[0] == 'thread/list']
+                self.assertEqual(len(list_calls), 1,
+                                 'Backend must not retry a failed fenced read itself')
+                self.assertIs(list_calls[0][1].get('useStateDbOnly'), True)
                 self.assertEqual(rpc.repair_calls, 0)
 
 
