@@ -31,8 +31,10 @@ LIVE_LEAVES = ('bin/_control_web_devbus.py', 'bin/_control_web_devbus_nats.py',
                'bin/_control_web_devbus.js', 'bin/_control_web_devbus.css',
                'requirements-devbus.lock', 'bin/_control_web_live.py')
 LIVE_MODES = {**APP_MODES, **dict.fromkeys(LIVE_LEAVES, 0o644)}
-MODES = LIVE_MODES
-SCHEMAS = {1: LEGACY_MODES, 2: CURRENT_MODES, 3: APP_MODES, 4: LIVE_MODES}
+ATTACHMENT_LEAF = "bin/_control_web_attachments.py"
+ATTACHMENT_MODES = {**LIVE_MODES, ATTACHMENT_LEAF: 0o644}
+MODES = ATTACHMENT_MODES
+SCHEMAS = {1: LEGACY_MODES, 2: CURRENT_MODES, 3: APP_MODES, 4: LIVE_MODES, 5: ATTACHMENT_MODES}
 LIVE_RECEIPT = Path('/var/lib/ai-control-deploy/live-bootstrap-complete.json')
 BROKER_UNIT = Path('/etc/systemd/system/ai-control-web-broker.service')
 HELPER = Path('/usr/local/sbin/ai-control-deploy')
@@ -411,7 +413,7 @@ def scope(files):
     if type(files) is dict and set(files) == set(LEGACY_MODES):
         return LEGACY_MODES
     if type(files) is dict:
-        for modes in (CURRENT_MODES, APP_MODES, LIVE_MODES):
+        for modes in (CURRENT_MODES, APP_MODES, LIVE_MODES, ATTACHMENT_MODES):
             if set(files) == set(modes):
                 return modes
     raise Rejected('Invalid fixed scope')
@@ -441,7 +443,7 @@ def state_value(value):
 
 
 def leaf_absent(target, owner_uid, leaf):
-    if leaf not in (NEW_LEAF, *APP_LEAVES, *LIVE_LEAVES):
+    if leaf not in (NEW_LEAF, *APP_LEAVES, *LIVE_LEAVES, ATTACHMENT_LEAF):
         raise Rejected('Unknown transition leaf path')
     parent = directory(Path(target) / Path(leaf).parent, owner_uid)
     try:
@@ -643,7 +645,7 @@ class Deploy:
 
     def transition_leaf(self, expected, remove=False, leaf=NEW_LEAF):
         """Only a closed transition leaf may be removed after anchored proof."""
-        if leaf not in (NEW_LEAF, *APP_LEAVES, *LIVE_LEAVES):
+        if leaf not in (NEW_LEAF, *APP_LEAVES, *LIVE_LEAVES, ATTACHMENT_LEAF):
             raise Rejected('Unknown transition leaf path')
         parent = directory(self.target / Path(leaf).parent, self.owner_uid)
         child = None
@@ -718,7 +720,7 @@ class Deploy:
             for leaf in after['files'].keys() - before['files'].keys():
                 self.transition_leaf(after['files'][leaf], remove=True, leaf=leaf)
             self.install(old)
-            self.start(live=before['schema'] == 4)
+            self.start(live=before['schema'] in (4, 5))
             self.match(before['files'])
             atomic_write(self.state_path, raw, 0o600, self.owner_uid)
             self.accepted_raw = raw
@@ -735,7 +737,7 @@ class Deploy:
         if type(journal['schema']) is not int or journal['schema'] not in SCHEMAS:
             raise Rejected('Invalid journal schema')
         before, after = state_value(journal['before']), state_value(journal['after'])
-        pairs = {1: {(1, 1)}, 2: {(1, 2), (2, 2)}, 3: {(2, 3), (3, 3)}, 4: {(3, 4), (4, 4)}}
+        pairs = {1: {(1, 1)}, 2: {(1, 2), (2, 2)}, 3: {(2, 3), (3, 3)}, 4: {(3, 4), (4, 4)}, 5: {(4, 5), (5, 5)}}
         if ((before['schema'], after['schema']) not in pairs[journal['schema']]
                 or after['release_id'] <= before['release_id']
                 or accepted not in (before, after)):
@@ -756,9 +758,9 @@ class Deploy:
         current = self.interrupted_tree(before, after)
         if accepted == after and current == after['files']:
             try:
-                if after['schema'] == 4:
+                if after['schema'] in (4, 5):
                     self.live_gate()
-                self.services(live=after['schema'] == 4)
+                self.services(live=after['schema'] in (4, 5))
             except Exception:
                 pass
             else:
@@ -793,11 +795,11 @@ class Deploy:
             raise Rejected('Signature verification failed')
         manifest = decode(raw)
         keys(manifest, ('schema', 'release_id', 'base', 'files'))
-        if type(manifest['schema']) is not int or manifest['schema'] != 4:
+        if type(manifest['schema']) is not int or manifest['schema'] != 5:
             raise Rejected('Invalid release schema')
         integer(manifest['release_id'], 1)
         hashes(manifest['base'])
-        if scope(manifest['base']) not in (APP_MODES, LIVE_MODES):
+        if scope(manifest['base']) not in (LIVE_MODES, ATTACHMENT_MODES):
             raise Rejected('Invalid staged base scope')
         keys(manifest['files'], MODES)
         expected = {}
@@ -859,17 +861,17 @@ class Deploy:
         if release < before['release_id']:
             raise Rejected('Release replay')
         if release == before['release_id']:
-            if before['schema'] != 4 or sha != before['manifest_sha256'] or expected != before['files']:
+            if before['schema'] != 5 or sha != before['manifest_sha256'] or expected != before['files']:
                 raise Rejected('Release identity reused')
             self.live_gate()
             self.services()
             return {'result': 'already_installed', 'release_id': release}
-        if before['schema'] not in (3, 4):
-            raise Rejected('Only accepted16 or accepted22 may advance')
+        if before['schema'] not in (4, 5):
+            raise Rejected('Only accepted22 or accepted23 may advance')
         if manifest['base'] != before['files']:
             raise Rejected('Signed base mismatch')
         self.live_gate()
-        after = {'schema': 4, 'release_id': release, 'manifest_sha256': sha, 'files': expected}
+        after = {'schema': 5, 'release_id': release, 'manifest_sha256': sha, 'files': expected}
         self.services()
         basenames = [Path(path).name for path in original] + ['accepted.json']
         if len(set(basenames)) != len(basenames):
@@ -885,7 +887,7 @@ class Deploy:
                 os.fsync(fd)
             finally:
                 os.close(fd)
-        journal = {'schema': 4, 'before': before, 'after': after, 'checkpoint': checkpoint.name}
+        journal = {'schema': 5, 'before': before, 'after': after, 'checkpoint': checkpoint.name}
         atomic_write(self.pending, encode(journal), 0o600, self.owner_uid)
         try:
             self.match(before['files'])
