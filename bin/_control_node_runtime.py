@@ -239,7 +239,7 @@ _V2_EXTRA = {'execution_profile_id', 'attempt_id', 'binding',
 def node_result_v2(value, kind, task_id=None):
     """Validate the public v2 boundary without assembling or repairing data."""
     try:
-        from _control_node_protocol import validate_binding_v2, validate_result_v2
+        from _control_node_protocol import _identifier, validate_binding_v2, validate_result_v2
         if type(value) is not dict or len(encoded(value)) > _LIMIT:
             raise ValueError()
         if set(value) == {'error'}:
@@ -258,7 +258,7 @@ def node_result_v2(value, kind, task_id=None):
                     or row['execution_profile_id'] != binding['execution_profile_id']
                     or row['session_verification'] not in ('pending', 'verified', 'unknown')
                     or row['effort_state'] != 'requested_unverified'
-                    or row['native_model'] is not None and type(row['native_model']) is not str
+                    or row['native_model'] is not None and not _identifier(row['native_model'])
                     or row['observed_session_uuid'] is not None and not _uuid(row['observed_session_uuid'])
                     or row['session_verification'] == 'verified'
                     and row['observed_session_uuid'] != binding['requested_session_uuid']):
