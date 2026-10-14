@@ -26,14 +26,14 @@ try:
     from _control_web_devbus import Observer, Projection, _timestamp, valid_id, valid_metadata
     from _control_web_devbus_nats import NatsConfig, connect
     from _control_node_tasks import NodeTaskStore, _uuid as valid_node_uuid
-    from _control_node_runtime import NodeTaskRuntime, STORE_PATH, load_node_tasks_config, node_result, valid_submit
+    from _control_node_runtime import NodeTaskRuntime, STORE_PATH, load_node_tasks_config, node_result, node_result_v2, valid_submit
 except ModuleNotFoundError as error:
-    if error.name not in {'_control_web_devbus', '_control_web_devbus_nats', '_control_node_tasks', '_control_node_runtime'}:
+    if error.name not in {'_control_web_devbus', '_control_web_devbus_nats', '_control_node_protocol', '_control_node_tasks', '_control_node_runtime'}:
         raise
     # The attention redactor also loads this file by spec without placing bin
     # on sys.path. Resolve only the two fixed siblings; preserve canonical module
     # identity when a normal import/test fixture already supplied either helper.
-    for name in ('_control_web_devbus', '_control_web_devbus_nats', '_control_node_tasks', '_control_node_runtime'):
+    for name in ('_control_web_devbus', '_control_web_devbus_nats', '_control_node_protocol', '_control_node_tasks', '_control_node_runtime'):
         if name not in sys.modules:
             spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().with_name(name + '.py'))
             module = importlib.util.module_from_spec(spec)
@@ -46,9 +46,12 @@ except ModuleNotFoundError as error:
     from _control_web_devbus import Observer, Projection, _timestamp, valid_id, valid_metadata
     from _control_web_devbus_nats import NatsConfig, connect
     from _control_node_tasks import NodeTaskStore, _uuid as valid_node_uuid
-    from _control_node_runtime import NodeTaskRuntime, STORE_PATH, load_node_tasks_config, node_result, valid_submit
+    from _control_node_runtime import NodeTaskRuntime, STORE_PATH, load_node_tasks_config, node_result, node_result_v2, valid_submit
 
 NODE_FIELDS = {
+    'node_tasks_overview_v2': {'op', 'principal'},
+    'node_task_get_v2': {'op', 'principal', 'task_id'},
+    'node_task_submit_v2': {'op', 'principal', 'request'},
     'node_tasks_overview': {'op', 'principal'},
     'node_task_get': {'op', 'principal', 'task_id'},
     'node_task_submit': {'op', 'principal', 'request_id', 'node_id', 'prompt'},
@@ -57,6 +60,14 @@ NODE_FIELDS = {
 
 def _valid_node_request(request):
     op = request.get('op')
+    if op == 'node_task_get_v2':
+        return set(request) == NODE_FIELDS[op] and valid_node_uuid(request['task_id'])
+    if op == 'node_task_submit_v2':
+        from _control_node_protocol import validate_submit_v2
+        try:
+            return set(request) == NODE_FIELDS[op] and bool(validate_submit_v2(request['request']))
+        except (ValueError, TypeError, KeyError, UnicodeError):
+            return False
     return (op in NODE_FIELDS and set(request) == NODE_FIELDS[op]
             and (op != 'node_task_get' or valid_node_uuid(request['task_id']))
             and (op != 'node_task_submit' or valid_submit(request['request_id'], request['node_id'], request['prompt'])))
@@ -64,6 +75,9 @@ def _valid_node_request(request):
 
 def _node_result(request, value):
     op = request['op']
+    if op.endswith('_v2'):
+        kind = 'overview' if op == 'node_tasks_overview_v2' else 'get' if op == 'node_task_get_v2' else 'submit'
+        return node_result_v2(value, kind, request.get('task_id', request.get('request', {}).get('request_id')))
     kind = 'overview' if op == 'node_tasks_overview' else 'get' if op == 'node_task_get' else 'submit'
     return node_result(value, kind, request.get('task_id', request.get('request_id')))
 
@@ -2041,6 +2055,15 @@ class RegistryBackend:
     def node_task_submit(self, principal, request_id, node_id, prompt):
         return node_result(self._node(principal, 'submit', request_id, node_id, prompt), 'submit', request_id)
 
+    def node_tasks_overview_v2(self, principal):
+        return node_result_v2(self._node(principal, 'overview_v2'), 'overview')
+
+    def node_task_get_v2(self, principal, task_id):
+        return node_result_v2(self._node(principal, 'task_v2', task_id), 'get', task_id)
+
+    def node_task_submit_v2(self, principal, request):
+        return node_result_v2(self._node(principal, 'submit_v2', request), 'submit', request.get('request_id'))
+
     def devbus_overview(self, task=None, agent=None):
         if not all(value is None or valid_id(value) for value in (task, agent)):
             return {'error': 'unavailable'}
@@ -2712,6 +2735,15 @@ class SocketBackend:
 
     def node_task_submit(self, principal, request_id, node_id, prompt):
         return self._node_call(dict(op='node_task_submit', principal=principal, request_id=request_id, node_id=node_id, prompt=prompt))
+
+    def node_tasks_overview_v2(self, principal):
+        return self._node_call(dict(op='node_tasks_overview_v2', principal=principal))
+
+    def node_task_get_v2(self, principal, task_id):
+        return self._node_call(dict(op='node_task_get_v2', principal=principal, task_id=task_id))
+
+    def node_task_submit_v2(self, principal, request):
+        return self._node_call(dict(op='node_task_submit_v2', principal=principal, request=request))
 
     def devbus_overview(self, task=None, agent=None):
         if not all(value is None or valid_id(value) for value in (task, agent)):

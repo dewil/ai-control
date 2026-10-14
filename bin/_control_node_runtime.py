@@ -232,10 +232,84 @@ def node_result(value, kind, task_id=None):
         return {'error': 'unavailable'}
 
 
+_V2_EXTRA = {'execution_profile_id', 'attempt_id', 'binding',
+             'session_verification', 'observed_session_uuid', 'native_model', 'effort_state'}
+
+
+def node_result_v2(value, kind, task_id=None):
+    """Validate the public v2 boundary without assembling or repairing data."""
+    try:
+        from _control_node_protocol import validate_binding_v2, validate_result_v2
+        if type(value) is not dict or len(encoded(value)) > _LIMIT:
+            raise ValueError()
+        if set(value) == {'error'}:
+            if value['error'] not in _ERRORS or type(value['error']) is not str:
+                raise ValueError()
+            return value
+        def task(row, detail=False):
+            expected = ((_SUMMARY - {'result_available'}) | {'schema', 'result'}
+                        if detail else _SUMMARY) | _V2_EXTRA
+            if type(row) is not dict or set(row) != expected:
+                raise ValueError()
+            binding = validate_binding_v2(row['binding'])
+            if (row['task_id'] != binding['task_id']
+                    or row['node_id'] != binding['node_id']
+                    or row['attempt_id'] != binding['attempt_id']
+                    or row['execution_profile_id'] != binding['execution_profile_id']
+                    or row['session_verification'] not in ('pending', 'verified', 'unknown')
+                    or row['effort_state'] != 'requested_unverified'
+                    or row['native_model'] is not None and type(row['native_model']) is not str
+                    or row['observed_session_uuid'] is not None and not _uuid(row['observed_session_uuid'])
+                    or row['session_verification'] == 'verified'
+                    and row['observed_session_uuid'] != binding['requested_session_uuid']):
+                raise ValueError()
+            old = {k: v for k, v in row.items() if k not in _V2_EXTRA}
+            if old.get('execution') == 'waiting_slot':
+                old['execution'] = 'waiting'
+            if detail:
+                if type(old['schema']) is not int or old['schema'] != 2:
+                    raise ValueError()
+                if old['result'] is not None:
+                    validate_result_v2(old['result'])
+                old.update(schema=1, result=None)
+            if detail and 'error' in node_result(old, 'get', row['task_id']):
+                raise ValueError()
+            if not detail:
+                if 'error' in node_result({'schema': 1, 'task': old}, 'submit', row['task_id']):
+                    raise ValueError()
+        if kind == 'get':
+            task(value, True)
+            if task_id is not None and value['task_id'] != task_id:
+                raise ValueError()
+        elif kind == 'submit':
+            if set(value) != {'schema', 'task'} or type(value['schema']) is not int or value['schema'] != 2:
+                raise ValueError()
+            task(value['task'])
+            if task_id is not None and value['task']['task_id'] != task_id:
+                raise ValueError()
+        elif kind == 'overview':
+            if (set(value) != {'schema', 'node', 'tasks', 'tasks_truncated', 'budget_trimmed', 'usage'}
+                    or type(value['schema']) is not int or value['schema'] != 2
+                    or type(value['tasks']) is not list or len(value['tasks']) > 50):
+                raise ValueError()
+            for row in value['tasks']:
+                task(row)
+            old = dict(value, schema=1, tasks=[])
+            if 'error' in node_result(old, 'overview'):
+                raise ValueError()
+        else:
+            raise ValueError()
+        return value
+    except (ImportError, ValueError, TypeError, KeyError, UnicodeError, RecursionError, OverflowError):
+        return {'error': 'unavailable'}
+
+
 class NodeTaskRuntime:
     def __init__(self, store, *, config_loader=load_node_tasks_config, nats_factory=None,
-                 observer_snapshot=None, bridge_status=None, clock=time.time, monotonic=time.monotonic):
+                 observer_snapshot=None, bridge_status=None, clock=time.time, monotonic=time.monotonic,
+                 profile_resolver=None):
         self.store, self._loader, self._factory = store, config_loader, nats_factory
+        self._profile_resolver = profile_resolver
         self._observer = observer_snapshot or (lambda: {})
         self._bridge = bridge_status or load_bridge_status
         self._clock, self._monotonic = clock, monotonic
@@ -340,10 +414,10 @@ class NodeTaskRuntime:
             reason, heartbeat = self._health()
             if reason == 'storage' and self.store is not None:
                 return {'error': 'storage'}
-            rows = self.store.recent() if self.store else []
+            rows = self.store.recent(schema=1) if self.store else []
             if type(rows) is not list:
                 return {'error': 'storage'}
-            count = self.store.count() if self.store else {'total': 0}
+            count = self.store.count(schema=1) if self.store else {'total': 0}
             if 'error' in count:
                 return {'error': 'storage'}
             node = dict(_NODE, readiness='disabled' if reason == 'disabled' else 'blocked' if reason else 'ready',
@@ -378,6 +452,64 @@ class NodeTaskRuntime:
             if self._loop and not self._loop.is_closed():
                 self._loop.call_soon_threadsafe(self._wake.set)
             return node_result(dict(schema=1, task=_summary(row)), 'submit', request_id)
+
+
+    def overview_v2(self):
+        with self._rpc_lock:
+            reason, heartbeat = self._health()
+            rows = self.store.recent(schema=2) if self.store else []
+            if type(rows) is not list:
+                return {'error': 'storage'}
+            count = self.store.count(schema=2) if self.store else {'total': 0}
+            if 'error' in count:
+                return {'error': 'storage'}
+            if self._profile_resolver is None and reason is None:
+                reason = 'profile_unverified'
+            node = dict(_NODE, readiness='disabled' if reason == 'disabled' else 'blocked' if reason else 'ready',
+                        reason=reason, heartbeat=heartbeat)
+            result = dict(schema=2, node=node, tasks=[_summary(row) for row in rows],
+                          tasks_truncated=count['total'] > len(rows), budget_trimmed=False, usage=None)
+            while len(encoded(result)) > _LIMIT and result['tasks']:
+                result['tasks'].pop()
+                result.update(tasks_truncated=True, budget_trimmed=True)
+            return node_result_v2(result, 'overview')
+
+    def task_v2(self, task_id):
+        if not _uuid(task_id):
+            return {'error': 'invalid_request'}
+        row = self.store.get(task_id) if self.store else {'error': 'not_found'}
+        if 'error' in row:
+            return row
+        if row.get('schema') != 2:
+            return {'error': 'not_found'}
+        return node_result_v2(_detail(row), 'get', task_id)
+
+    def submit_v2(self, request):
+        from _control_node_protocol import validate_submit_v2, validate_profile_snapshot_v2
+        try:
+            validate_submit_v2(request)
+        except (ValueError, TypeError, UnicodeError):
+            return {'error': 'invalid_request'}
+        with self._rpc_lock:
+            if self._stopping or self.store is None:
+                return {'error': 'not_ready'}
+            if self._profile_resolver is None:
+                return {'error': 'not_ready'}
+            try:
+                profile = self._profile_resolver(request['execution_profile_id'])
+                validate_profile_snapshot_v2(profile)
+            except (ValueError, TypeError, KeyError, OSError, UnicodeError):
+                return {'error': 'not_ready'}
+            # The resolver is trusted constructor DI. The installed default is
+            # absent until a separately reviewed live profile is configured.
+            if profile['account_attestation']['status'] != 'verified':
+                return {'error': 'not_ready'}
+            row = self.store.submit_v2(request, profile)
+            if 'error' in row:
+                return row
+            if self._loop and not self._loop.is_closed():
+                self._loop.call_soon_threadsafe(self._wake.set)
+            return node_result_v2(dict(schema=2, task=_summary(row)), 'submit', request['request_id'])
 
     async def _connect(self):
         if self._connections:
