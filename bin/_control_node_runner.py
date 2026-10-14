@@ -420,6 +420,25 @@ def _private_json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
 
 
+def _legacy_result(stdout):
+    """Keep the largest UTF-8 text prefix inside the actual v1 JSON budget."""
+    text = stdout.decode('utf-8', errors='replace')
+    result = dict(text=text, executor='codex')
+    if len(_private_json(result).encode('utf-8')) <= 60000:
+        return result
+    result['output_truncated'] = True
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        result['text'] = text[:middle]
+        if len(_private_json(result).encode('utf-8')) <= 60000:
+            low = middle
+        else:
+            high = middle - 1
+    result['text'] = text[:low]
+    return result
+
+
 class Runner:
     """Durable single-slot supervisor over the injected raw-process interface.
 
@@ -512,6 +531,13 @@ class Runner:
                      source=source, target='control-web', kind=kind,
                      created_at=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ'), payload=payload)
         wire = self._canonical(value)
+        if len(wire) > 129024:
+            raise ValueError('runner event exceeds wire budget')
+        if task['version'] == 1 and kind == 'completed':
+            # Validate with the receiving Store before sealing/releasing a
+            # legacy terminal. A durable outbox must contain consumable bytes.
+            from _control_node_tasks import NodeTaskStore
+            NodeTaskStore._event(wire)
         self.db.execute('INSERT OR IGNORE INTO outbox(message_id,task_id,wire) VALUES(?,?,?)',
                         (message_id, task_id, wire))
 
@@ -712,8 +738,8 @@ class Runner:
             argv = ((profile['cli_path'], '-p', '--output-format', 'stream-json',
                      '--verbose', '--session-id', receipt['requested_session_uuid'],
                      '--model', task['binding']['requested_model'], '--effort', task['binding']['requested_effort'],
-                     task['prompt']) if kind == 'claude' else
-                    (profile['cli_path'], 'exec', '-s', 'read-only', task['prompt']))
+                     '--', task['prompt']) if kind == 'claude' else
+                    (profile['cli_path'], 'exec', '-s', 'read-only', '--', task['prompt']))
             launch = dict(kind=kind, launch_token=task['launch_token'], argv=argv,
                           cwd=task['worktree'], env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'},
                           deadline=min(task['overall_deadline'], self.clock() + 900),
@@ -749,7 +775,7 @@ class Runner:
             receipt['drain_confirmed'] = True
             if task['version'] == 1:
                 self._seal(task, 'completed' if capture.exit_code == 0 else 'failed',
-                           {'text': bytes(capture.stdout).decode('utf-8', errors='replace'), 'executor': 'codex'}
+                           _legacy_result(bytes(capture.stdout))
                            if capture.exit_code == 0 else None,
                            None if capture.exit_code == 0 else 'executor_exit')
                 return True
