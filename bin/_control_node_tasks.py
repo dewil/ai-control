@@ -15,8 +15,11 @@ import time
 import uuid
 
 from _control_web_devbus import decode_event, _pairs
+from _control_node_protocol import (canonical_v2, decode_event_v2, validate_submit_v2,
+                                    validate_profile_snapshot_v2, validate_result_v2,
+                                    validate_binding_v2)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _TERMINAL = ('completed', 'failed', 'needs_attention')
 _FIELDS = {'message_id', 'task_id', 'correlation_id', 'source', 'target',
@@ -39,6 +42,12 @@ _SCHEMA = {
     'metadata': 'CREATE TABLE metadata(singleton INTEGER PRIMARY KEY CHECK(singleton=1), fence TEXT)',
     'diagnostics': 'CREATE TABLE diagnostics(name TEXT PRIMARY KEY, count INTEGER NOT NULL)',
 }
+_SCHEMA2 = dict(_SCHEMA)
+_SCHEMA['task_v2'] = '''CREATE TABLE task_v2(
+    task_id TEXT PRIMARY KEY REFERENCES tasks(task_id), request TEXT NOT NULL,
+    profile TEXT NOT NULL, binding TEXT NOT NULL,
+    session_verification TEXT NOT NULL, observed_session_uuid TEXT,
+    native_model TEXT, effort_state TEXT NOT NULL)'''
 
 
 def _schema_sql(sql):
@@ -135,12 +144,15 @@ class NodeTaskStore:
                 raise ValueError()
             version = self._db.execute('PRAGMA user_version').fetchone()[0]
             tables = {r[0] for r in self._db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            if not new and (version != SCHEMA_VERSION or tables != {'tasks', 'events', 'diagnostics', 'metadata'}):
+            if not new and (version not in (2, SCHEMA_VERSION) or
+                    tables != set(name for name in (_SCHEMA2 if version == 2 else _SCHEMA)
+                                  if name != 'events_task')):
                 raise ValueError()
             if not new:
                 actual = {name: _schema_sql(sql) for name, sql in self._db.execute(
                     'SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL')}
-                if actual != {name: _schema_sql(sql) for name, sql in _SCHEMA.items()}:
+                expected = _SCHEMA2 if version == 2 else _SCHEMA
+                if actual != {name: _schema_sql(sql) for name, sql in expected.items()}:
                     raise ValueError()
                 metadata = self._db.execute('SELECT singleton,fence FROM metadata').fetchall()
                 if (len(metadata) != 1 or metadata[0]['singleton'] != 1
@@ -161,6 +173,13 @@ class NodeTaskStore:
                     self._db.execute(sql)
                 self._db.execute("INSERT INTO diagnostics VALUES('invalid',0),('ignored',0),('conflict',0),('capacity',0)")
                 self._db.execute('INSERT INTO metadata VALUES(1,NULL)')
+                self._db.execute('PRAGMA user_version=' + str(SCHEMA_VERSION))
+                self._db.commit()
+            elif version == 2:
+                # Only the exact accepted schema2 is eligible. Existing rows and
+                # v1 wire bytes remain untouched; unknown schemas are not repaired.
+                self._db.execute('BEGIN IMMEDIATE')
+                self._db.execute(_SCHEMA['task_v2'])
                 self._db.execute('PRAGMA user_version=' + str(SCHEMA_VERSION))
                 self._db.commit()
         except (OSError, sqlite3.Error, ValueError, TypeError):
@@ -209,8 +228,9 @@ class NodeTaskStore:
     def _row(self, task):
         return self._db.execute('SELECT * FROM tasks WHERE task_id=?', (task,)).fetchone()
 
-    @staticmethod
-    def _dto(row):
+    def _dto(self, row):
+        v2 = self._db.execute('SELECT * FROM task_v2 WHERE task_id=?',
+                              (row['task_id'],)).fetchone()
         result = None
         if row['result'] is not None:
             raw = row['result']
@@ -218,13 +238,24 @@ class NodeTaskStore:
                 raise ValueError()
             result = json.loads(raw, object_pairs_hook=_pairs,
                                 parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
-            if not _valid_result(result):
+            if v2:
+                validate_result_v2(result)
+            elif not _valid_result(result):
                 raise ValueError()
-        return dict(schema=1, task_id=row['task_id'], node_id=row['node_id'],
+        dto = dict(schema=1, task_id=row['task_id'], node_id=row['node_id'],
                     prompt=row['prompt'], created_at=row['created_at'], updated_at=row['updated_at'],
                     delivery=row['delivery'], execution=row['execution'], coverage=row['coverage'],
                     result=result,
                     quality='unreviewed', usage=None)
+        if v2:
+            binding = json.loads(v2['binding'], object_pairs_hook=_pairs)
+            validate_binding_v2(binding)
+            dto.update(schema=2, execution_profile_id=binding['execution_profile_id'],
+                       attempt_id=binding['attempt_id'], binding=binding,
+                       session_verification=v2['session_verification'],
+                       observed_session_uuid=v2['observed_session_uuid'],
+                       native_model=v2['native_model'], effort_state=v2['effort_state'])
+        return dto
 
     def _counter(self, name):
         self._db.execute('UPDATE diagnostics SET count=min(count+1,2147483647) WHERE name=?', (name,))
@@ -246,6 +277,8 @@ class NodeTaskStore:
         def operation():
             row = self._row(request_id)
             if row:
+                if self._db.execute('SELECT 1 FROM task_v2 WHERE task_id=?', (request_id,)).fetchone():
+                    return {'error': 'conflict'}
                 return self._dto(row) if (row['node_id'], row['prompt']) == (node_id, prompt) else {'error': 'conflict'}
             total, unfinished = self._db.execute("SELECT count(*), sum(execution NOT IN ('completed','failed','needs_attention')) FROM tasks").fetchone()
             if total >= 1000 or (unfinished or 0) >= 32:
@@ -263,6 +296,57 @@ class NodeTaskStore:
             return self._dto(self._row(request_id))
         return self._run(operation)
 
+    def submit_v2(self, request, profile_snapshot):
+        try:
+            validate_submit_v2(request)
+            request_json = canonical_v2(request).decode('utf-8')
+            request = json.loads(request_json)
+        except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
+            return {'error': 'invalid_request'}
+
+        def operation():
+            task = request['request_id']
+            existing = self._row(task)
+            if existing:
+                record = self._db.execute('SELECT request FROM task_v2 WHERE task_id=?', (task,)).fetchone()
+                return (self._dto(existing) if record and record['request'] == request_json
+                        else {'error': 'conflict'})
+            try:
+                validate_profile_snapshot_v2(profile_snapshot)
+                profile_json = canonical_v2(profile_snapshot).decode('utf-8')
+                profile = json.loads(profile_json)
+            except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
+                return {'error': 'invalid_request'}
+            if profile['account_attestation']['status'] != 'verified':
+                return {'error': 'profile_unverified'}
+            total, unfinished = self._db.execute("SELECT count(*), sum(execution NOT IN ('completed','failed','needs_attention')) FROM tasks").fetchone()
+            if total >= 1000 or (unfinished or 0) >= 32:
+                return {'error': 'capacity'}
+            binding = {key: profile[key] for key in (
+                'execution_profile_id', 'profile_revision', 'provider', 'requested_model',
+                'requested_effort', 'account_ref', 'workspace_ref', 'base_sha')}
+            binding.update(task_id=task, node_id=request['node_id'],
+                           attempt_id=str(uuid.uuid4()), worktree_ref=str(uuid.uuid4()),
+                           requested_session_uuid=str(uuid.uuid4()))
+            now = datetime.fromtimestamp(self._clock(), timezone.utc).isoformat(
+                timespec='microseconds').replace('+00:00', 'Z')
+            mid = str(uuid.uuid4())
+            wire = canonical_v2(dict(message_id=mid, task_id=task, correlation_id=task,
+                source='control-web', target=profile['executor_target'], kind='submit',
+                created_at=now, payload=dict(schema=2, operation='submit', request=request, binding=binding)))
+            if len(wire) > 129024:
+                return {'error': 'invalid_request'}
+            self._db.execute('''INSERT INTO tasks(task_id,node_id,prompt,created_at,updated_at,
+                delivery,execution,coverage,message_id,wire,wire_sha256)
+                VALUES(?,?,?,?,?,'pending','waiting_slot','complete',?,?,?)''',
+                (task, request['node_id'], request['prompt'], now, now, mid, wire,
+                 hashlib.sha256(wire).hexdigest()))
+            self._db.execute('''INSERT INTO task_v2(task_id,request,profile,binding,
+                session_verification,effort_state) VALUES(?,?,?,?,'pending','requested_unverified')''',
+                (task, request_json, profile_json, canonical_v2(binding).decode('utf-8')))
+            return self._dto(self._row(task))
+        return self._run(operation)
+
     def get(self, task_id):
         if not _uuid(task_id):
             return {'error': 'invalid_request'}
@@ -277,14 +361,23 @@ class NodeTaskStore:
         return self._run(lambda: [self._dto(r) for r in self._db.execute(
             'SELECT * FROM tasks ORDER BY created_at,task_id LIMIT ?', (limit,))])
 
-    def recent(self, limit=50):
-        if type(limit) is not int or not 1 <= limit <= 50:
+    def recent(self, limit=50, *, schema=None):
+        if (type(limit) is not int or not 1 <= limit <= 50 or
+                schema is not None and (type(schema) is not int or schema not in (1, 2))):
             return {'error': 'invalid_request'}
+        condition = ('' if schema is None else
+                     ' WHERE ' + ('' if schema == 2 else 'NOT ') +
+                     'EXISTS(SELECT 1 FROM task_v2 WHERE task_v2.task_id=tasks.task_id)')
         return self._run(lambda: [self._dto(r) for r in self._db.execute(
-            'SELECT * FROM tasks ORDER BY created_at DESC,task_id DESC LIMIT ?', (limit,))])
+            'SELECT * FROM tasks' + condition + ' ORDER BY created_at DESC,task_id DESC LIMIT ?', (limit,))])
 
-    def count(self):
-        return self._run(lambda: {'total': self._db.execute('SELECT count(*) FROM tasks').fetchone()[0]})
+    def count(self, *, schema=None):
+        if schema is not None and (type(schema) is not int or schema not in (1, 2)):
+            return {'error': 'invalid_request'}
+        condition = ('' if schema is None else
+                     ' WHERE ' + ('' if schema == 2 else 'NOT ') +
+                     'EXISTS(SELECT 1 FROM task_v2 WHERE task_v2.task_id=tasks.task_id)')
+        return self._run(lambda: {'total': self._db.execute('SELECT count(*) FROM tasks' + condition).fetchone()[0]})
 
     def runtime_state(self):
         return self._run(lambda: {'fence': self._db.execute('SELECT fence FROM metadata WHERE singleton=1').fetchone()[0]})
@@ -294,8 +387,9 @@ class NodeTaskStore:
             return {'error': 'invalid_request'}
         return self._run(lambda: [dict(r) for r in self._db.execute('''
             SELECT task_id,message_id,wire,wire_sha256 FROM tasks
-            WHERE delivery IN ('pending','unknown') AND execution='waiting'
+            WHERE delivery IN ('pending','unknown') AND execution IN ('waiting','waiting_slot')
               AND coverage='complete' AND retry_at<=?
+              AND NOT EXISTS(SELECT 1 FROM events WHERE events.task_id=tasks.task_id AND kind='queued')
               AND (SELECT fence FROM metadata WHERE singleton=1) IS NULL ORDER BY created_at,task_id LIMIT ?''',
             (self._clock(), limit))])
 
@@ -307,7 +401,7 @@ class NodeTaskStore:
             if row is None:
                 return {'error': 'not_found'}
             if (self._db.execute('SELECT fence FROM metadata WHERE singleton=1').fetchone()[0] is not None
-                    or row['delivery'] == 'published' or row['execution'] != 'waiting'
+                    or row['delivery'] == 'published' or row['execution'] not in ('waiting','waiting_slot')
                     or row['coverage'] != 'complete' or row['retry_at'] > self._clock()):
                 return {'publish': False}
             self._db.execute("UPDATE tasks SET delivery='unknown',updated_at=? WHERE task_id=?",
@@ -337,7 +431,7 @@ class NodeTaskStore:
             row = self._row(task_id)
             if row is None:
                 return {'error': 'not_found'}
-            if row['delivery'] != 'published' and row['execution'] == 'waiting':
+            if row['delivery'] != 'published' and row['execution'] in ('waiting','waiting_slot'):
                 failures = min(row['failures'] + 1, 31)
                 self._db.execute("""UPDATE tasks SET delivery='unknown',failures=?,retry_at=?,updated_at=?
                     WHERE task_id=?""", (failures, self._clock() + min(2 ** (failures-1), 60), self._time(), task_id))
@@ -350,6 +444,10 @@ class NodeTaskStore:
             raise ValueError()
         # Reuse the bus's strict duplicate-key, nonfinite, ID and timestamp checks.
         candidate = json.loads(raw.decode('utf-8'))
+        if (type(candidate) is dict and type(candidate.get('payload')) is dict
+                and candidate['payload'].get('schema') == 2):
+            obj = decode_event_v2(raw)
+            return obj, hashlib.sha256(canonical_v2(obj['payload'])).hexdigest()
         source = candidate.get('source') if type(candidate) is dict else None
         if type(source) is not str:
             raise ValueError()
@@ -395,7 +493,10 @@ class NodeTaskStore:
                 return {'outcome': 'ignored', 'task_id': None}
             task = obj['task_id']
             row = self._row(task)
-            if (not row or obj['source'] != 'codex-ai-dev-1' or obj['target'] != 'control-web'
+            record = self._db.execute('SELECT * FROM task_v2 WHERE task_id=?', (task,)).fetchone()
+            v2 = type(obj['payload'].get('schema')) is int and obj['payload']['schema'] == 2
+            source = 'claude-alp-worktree-1' if record else 'codex-ai-dev-1'
+            if (not row or bool(record) != v2 or obj['source'] != source or obj['target'] != 'control-web'
                     or obj['correlation_id'] != task):
                 self._counter('ignored')
                 return {'outcome': 'ignored', 'task_id': None}
@@ -407,6 +508,17 @@ class NodeTaskStore:
                 self._db.execute('UPDATE events SET conflicted=1 WHERE event_id=?', (obj['message_id'],))
                 self._counter('conflict')
                 return {'outcome': 'conflict', 'task_id': previous['task_id']}
+            if v2:
+                payload = obj['payload']
+                binding = json.loads(record['binding'], object_pairs_hook=_pairs)
+                mismatch = canonical_v2(payload['binding']).decode('utf-8') != record['binding']
+                if payload['session_verification'] == 'verified':
+                    mismatch |= (payload['observed_session_uuid'] != binding['requested_session_uuid']
+                                 or payload['native_model'] != binding['requested_model'])
+                if mismatch:
+                    self._attention(task)
+                    self._counter('conflict')
+                    return {'outcome': 'conflict', 'task_id': task}
             count = self._db.execute('SELECT count(*) FROM events WHERE task_id=?', (task,)).fetchone()[0]
             if count >= 256:
                 self._attention(task)
@@ -415,6 +527,8 @@ class NodeTaskStore:
             kind, old = obj['kind'], row['execution']
             self._db.execute('INSERT INTO events(event_id,task_id,digest,kind,created_at) VALUES(?,?,?,?,?)',
                              (obj['message_id'], task, digest, kind, obj['created_at']))
+            if v2:
+                return self._apply_v2(row, record, obj, payload_digest)
             if old == 'needs_attention' and kind == 'completed' and row['result'] is None:
                 # Keep the first late result for review; uncertainty is sticky.
                 self._db.execute('''UPDATE tasks SET result=?,terminal_kind=?,terminal_digest=?,
@@ -439,6 +553,36 @@ class NodeTaskStore:
                                          (kind, self._time(), task))
             return {'outcome': 'applied', 'task_id': task}
         return self._run(operation)
+
+    def _apply_v2(self, row, record, obj, payload_digest):
+        task, kind, payload = obj['task_id'], obj['kind'], obj['payload']
+        old = row['execution']
+        result = payload['result']
+        if old in _TERMINAL:
+            if (row['terminal_kind'] is not None and
+                    (kind != row['terminal_kind'] or payload_digest != row['terminal_digest']) and
+                    payload['sequence'] == 3):
+                self._attention(task)
+            return {'outcome': 'applied', 'task_id': task}
+        if payload['sequence'] == 3:
+            self._db.execute('''UPDATE tasks SET execution=?,result=?,terminal_kind=?,
+                terminal_digest=?,updated_at=? WHERE task_id=?''',
+                (kind, _json(result) if result is not None else None, kind,
+                 payload_digest, self._time(), task))
+            if kind == 'needs_attention' or payload['session_verification'] != 'verified':
+                self._attention(task)
+        elif kind in ('accepted', 'running'):
+            order = {'waiting_slot': 0, 'accepted': 1, 'running': 2}
+            if order[kind] > order[old]:
+                self._db.execute('UPDATE tasks SET execution=?,updated_at=? WHERE task_id=?',
+                                 (kind, self._time(), task))
+        # A replayed queued/accepted observation cannot erase later native proof.
+        if (record['session_verification'] == 'pending' or payload['sequence'] == 3):
+            self._db.execute('''UPDATE task_v2 SET session_verification=?,observed_session_uuid=?,
+                native_model=? WHERE task_id=?''',
+                (payload['session_verification'], payload['observed_session_uuid'],
+                 payload['native_model'], task))
+        return {'outcome': 'applied', 'task_id': task}
 
     def mark_gap(self, reason='retention_gap'):
         if type(reason) is not str or reason not in {'retention_gap', 'invalid_event', 'id_conflict'}:
