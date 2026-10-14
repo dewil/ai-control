@@ -3,6 +3,8 @@
 The private service-UID directory is the filesystem trust boundary; this does
 not isolate against another malicious process running as the same UID.
 """
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -20,6 +22,29 @@ from _control_node_protocol import (canonical_v2, decode_event_v2, validate_subm
                                     validate_binding_v2)
 
 SCHEMA_VERSION = 3
+
+_store_hook = ContextVar('control_node_tasks_store_hook', default=None)
+
+
+@contextmanager
+def _test_dependencies(*, store_hook=None):
+    token = _store_hook.set(store_hook)
+    try:
+        yield
+    finally:
+        _store_hook.reset(token)
+
+
+def _notify_store(label, value):
+    hook = _store_hook.get()
+    if hook is not None:
+        hook(label, value)
+
+
+def _migration_step(connection, ordinal, operation):
+    connection.execute(operation)
+    _notify_store('migration_step', dict(connection=connection, ordinal=ordinal,
+                                         operation=operation))
 
 _TERMINAL = ('completed', 'failed', 'needs_attention')
 _FIELDS = {'message_id', 'task_id', 'correlation_id', 'source', 'target',
@@ -99,6 +124,7 @@ class NodeTaskStore:
         self._fd = None
         self._dir = None
         self._commits = 0
+        ready = False
         try:
             absolute = os.path.abspath(os.fspath(path))
             parts = absolute.split(os.sep)
@@ -169,22 +195,30 @@ class NodeTaskStore:
             self._db.execute('PRAGMA max_page_count=' + str(maxpages))
             if new:
                 self._db.execute('BEGIN IMMEDIATE')
-                for sql in _SCHEMA.values():
-                    self._db.execute(sql)
+                for ordinal, sql in enumerate(_SCHEMA.values()):
+                    _migration_step(self._db, ordinal, sql)
                 self._db.execute("INSERT INTO diagnostics VALUES('invalid',0),('ignored',0),('conflict',0),('capacity',0)")
                 self._db.execute('INSERT INTO metadata VALUES(1,NULL)')
-                self._db.execute('PRAGMA user_version=' + str(SCHEMA_VERSION))
+                _migration_step(self._db, len(_SCHEMA),
+                                'PRAGMA user_version=' + str(SCHEMA_VERSION))
+                _notify_store('before_migration_commit', self._db)
                 self._db.commit()
             elif version == 2:
                 # Only the exact accepted schema2 is eligible. Existing rows and
                 # v1 wire bytes remain untouched; unknown schemas are not repaired.
                 self._db.execute('BEGIN IMMEDIATE')
-                self._db.execute(_SCHEMA['task_v2'])
-                self._db.execute('PRAGMA user_version=' + str(SCHEMA_VERSION))
+                _migration_step(self._db, 0, _SCHEMA['task_v2'])
+                _migration_step(self._db, 1,
+                                'PRAGMA user_version=' + str(SCHEMA_VERSION))
+                _notify_store('before_migration_commit', self._db)
                 self._db.commit()
+            _notify_store('store_ready', self._db)
+            ready = True
         except (OSError, sqlite3.Error, ValueError, TypeError):
-            self.close()
             raise ValueError('unsafe or unavailable task store') from None
+        finally:
+            if not ready:
+                self.close()
 
     def close(self):
         with self._lock:
@@ -208,13 +242,15 @@ class NodeTaskStore:
                 self._db.execute('BEGIN IMMEDIATE')
                 result = operation()
                 self._db.commit()
-            except (sqlite3.Error, ValueError, TypeError, RecursionError, OverflowError):
+            except (sqlite3.Error, ValueError, TypeError, RecursionError, OverflowError) as error:
                 # Stored-data decoding failures are storage failures too; leave
                 # no open transaction to poison an independent healthy read.
                 try:
                     self._db.rollback()
                 except sqlite3.Error:
                     pass
+                if isinstance(error, sqlite3.Error):
+                    _notify_store('sqlite_error', error)
                 return {'error': 'storage'}
             self._commits += 1
             if self._commits % 64 == 0:
