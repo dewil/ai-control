@@ -14,6 +14,7 @@ import math
 import os
 from pathlib import Path
 import re
+import signal
 import sqlite3
 import subprocess
 import tempfile
@@ -42,6 +43,26 @@ class _CaptureError(Exception):
     pass
 
 
+class _GitDrainUnknown(subprocess.SubprocessError):
+    pass
+
+
+def _git_group_live(group):
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+            if int(fields[2]) == group and fields[0] != 'Z':
+                return True
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError, IndexError):
+            # An incomplete OS observation cannot establish stopped ownership.
+            return True
+    return False
+
+
 def _environment():
     # Do not inherit GIT_*, executable search paths, loader settings or secrets.
     return dict(PATH='/usr/bin:/bin', HOME='/nonexistent', LC_ALL='C', TZ='UTC',
@@ -59,13 +80,38 @@ def _git(cwd, args, env, *, gitdir=None, base=None):
         argv.extend(('--git-dir=' + str(gitdir), '--work-tree=' + str(cwd),
                      '-c', 'core.bare=false'))
     argv.extend(args)
-    result = subprocess.run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            timeout=30, close_fds=True, check=False)
-    if result.returncode:
+    process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               close_fds=True, start_new_session=True)
+    try:
+        try:
+            stdout, _ = process.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            # The direct child remains owned until wait/communicate reaps it.
+            # Its new session gives a private PGID; never search/kill by argv.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                raise _GitDrainUnknown('git stop unverified') from None
+            try:
+                process.communicate(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                raise _GitDrainUnknown('git drain unverified') from None
+            deadline = time.monotonic() + 1
+            while _git_group_live(process.pid):
+                if time.monotonic() >= deadline:
+                    raise _GitDrainUnknown('git drain unverified') from None
+                time.sleep(0.01)
+            raise
+    finally:
+        process.stdout.close()
+        process.stderr.close()
+    if process.returncode:
         # Git stderr can contain private paths or configuration. Never export it.
         raise _CaptureError('git_error')
-    return result.stdout
+    return stdout
 
 
 def _source(cwd, env):
@@ -734,13 +780,15 @@ class Runner:
                     root.mkdir(mode=0o700, parents=True, exist_ok=True)
                     worktree = root / task['binding'].get('worktree_ref', receipt['attempt_id'])
                     _git(Path(profile['repo_path']), ('worktree', 'add', '--detach', str(worktree), receipt['base_sha']), _environment())
-                except OSError:
-                    if task['version'] != 1:
-                        raise
+                except _GitDrainUnknown:
+                    self._hold(task)
+                    return True
+                except (OSError, _CaptureError, subprocess.TimeoutExpired) as error:
                     # This phase precedes launch intent, so failure has an
                     # affirmative no-spawn proof and needs no process drain.
                     receipt['drain_confirmed'] = True
-                    self._seal(task, 'failed', reason='local_executor_error')
+                    reason = 'timeout' if isinstance(error, subprocess.TimeoutExpired) else 'local_executor_error'
+                    self._seal(task, 'failed', reason=reason)
                     return True
                 task['worktree'] = str(worktree)
                 receipt.update(state='prepared', worktree_count=1)
