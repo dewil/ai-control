@@ -526,14 +526,24 @@ class Runner:
         else:
             source = 'codex-ai-dev-1'
             message_id = uuid.uuid5(uuid.NAMESPACE_URL, source + ':' + task_id + ':' + kind).hex
-            payload = result if kind == 'completed' else ({'reason': reason} if reason else {})
+            if kind == 'completed':
+                payload = result
+            elif kind == 'failed':
+                legacy_reason = {'prepare_timeout': 'timeout', 'timeout': 'timeout',
+                                 'output_limit': 'output_limit', 'executor_exit': 'executor_exit',
+                                 'local_executor_error': 'local_executor_error'}.get(reason, 'local_executor_error')
+                payload = {'reason': legacy_reason}
+            elif kind == 'needs_attention':
+                payload = {'reason': 'interrupted; outcome unknown; automatic retry disabled'}
+            else:
+                payload = {}
         value = dict(message_id=message_id, task_id=task_id, correlation_id=task_id,
                      source=source, target='control-web', kind=kind,
                      created_at=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ'), payload=payload)
         wire = self._canonical(value)
         if len(wire) > 129024:
             raise ValueError('runner event exceeds wire budget')
-        if task['version'] == 1 and kind == 'completed':
+        if task['version'] == 1 and kind in ('completed', 'failed', 'needs_attention'):
             # Validate with the receiving Store before sealing/releasing a
             # legacy terminal. A durable outbox must contain consumable bytes.
             from _control_node_tasks import NodeTaskStore
