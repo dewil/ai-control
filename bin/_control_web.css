@@ -129,7 +129,7 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 #limits-panel .lm-timeline-compact{margin-top:4px}#limits-panel .lm-timeline-compact .lm-track{margin-top:4px}
 #limits-panel .lm-track .lm-quota{height:100%;margin:0}
 #limits-panel .lm-marker{display:block;position:absolute;width:12px;height:12px;transform:translateX(-50%);border:2px solid var(--lm-ink);background:var(--lm-surface)}
-#limits-panel .lm-normal{top:1px;border-radius:50%;z-index:1}#limits-panel .lm-double{top:7px;width:14px;height:14px;background:var(--lm-amber);border-color:var(--lm-amber);clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}
+#limits-panel .lm-normal{top:1px;border-radius:50%;z-index:1}#limits-panel .lm-double{top:7px;width:10px;height:10px;background:var(--lm-amber);border-color:#11151c;transform:translateX(-50%) rotate(45deg)}
 #limits-panel .lm-scale{position:relative;height:18px;margin-inline:7px;font-size:11px;color:var(--lm-muted)}#limits-panel .lm-scale span{position:absolute;transform:translateX(-50%);white-space:nowrap}
 #limits-panel .lm-boundary,#limits-panel .lm-expired{font-size:12px;color:var(--lm-amber)}
 #limits-panel .lm-received{padding-top:10px;margin-top:12px;border-top:1px solid var(--lm-edge);font-size:12px;color:var(--lm-muted)}
@@ -218,7 +218,7 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 /* INV-WATT-10/11: native radio semantics and distinct time-marker lanes. */
 .send-mode{border:0;padding:0;margin:4px 0;min-width:0;display:flex;flex-wrap:wrap;gap:4px 12px}.send-mode legend{font-size:12px;color:var(--muted)}
 .send-mode label{display:inline-flex;align-items:center;gap:7px;min-width:44px;min-height:44px;margin:0;cursor:pointer}.send-mode input[type=radio]{width:18px;height:18px;margin:0;accent-color:var(--accent)}
-#limits-panel .lm-triple{top:-7px;width:10px;height:10px;background:#9d8ce0;border-color:#9d8ce0;border-radius:0;z-index:2}
+#limits-panel .lm-triple{top:-7px;width:10px;height:10px;background:#9d8ce0;border-color:#11151c;border-radius:0;z-index:2}
 #limits-panel .lm-triple-legend{color:#b9a9f4}#limits-panel .lm-triple-legend:before{content:'■'}
 @media(forced-colors:active){#limits-panel .lm-triple{border-color:CanvasText;background:Highlight}}
 .chat-attachments{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}.attachment-chip{display:flex;align-items:center;flex-wrap:wrap;gap:6px;max-width:100%;padding:4px 8px;border:1px solid var(--border,#555);border-radius:6px;font-size:12px}.attachment-chip .attachment-name{overflow-wrap:anywhere;min-width:0}.attachment-chip button{min-width:44px;min-height:44px;padding:4px 8px}.attachment-chip .meta{margin:0}
@@ -226,3 +226,6 @@ summary:focus-visible,a:focus-visible{outline:3px solid #b7c0ff;outline-offset:2
 /* Lighter composer labels retain the 44px native-label touch target. */
 #chat-form label,#chat-form button,#chat-form summary{font-weight:400}
 .send-mode label{font-size:14px}.send-mode legend{color:#adaeb7}
+
+/* INV-PSTAB-01: marker boundaries survive both quota fill and forced colors. */
+@media(forced-colors:active){#limits-panel .lm-double,#limits-panel .lm-triple{border-color:CanvasText;background:Canvas;forced-color-adjust:none}}

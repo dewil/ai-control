@@ -93,7 +93,8 @@ class SessionVendorProjection(unittest.TestCase):
                          ["thread/list", "thread/list", "thread/read", "thread/read"])
         list_params = {"cwd": str(self.root), "limit": 100,
                        "sourceKinds": ["cli", "vscode", "appServer"],
-                       "sortKey": "updated_at", "sortDirection": "desc"}
+                       # INV-PSTAB-02 replaces scan/repair with native indexed enumeration.
+                       "sortKey": "updated_at", "sortDirection": "desc", "useStateDbOnly": True}
         self.assertEqual([params for method, params in self.rpc.calls if method == "thread/list"],
                          [list_params, {**list_params, "cursor": "opaque-next-page"}])
         self.assertEqual([params for method, params in self.rpc.calls if method == "thread/read"],

@@ -605,15 +605,24 @@ class LiveUXBlindBrowser(unittest.TestCase):
         self.control(catalog=fixture.catalog(expires_in_ms=3000)); self.open()
         model, effort = self.ready_pair("Retained synthetic catalog draft")
         self.close_model_disclosure()
-        before = len(self.calls("models")); self.page.wait_for_timeout(3150)
-        hint = self.page.get_by_text("Каталог устарел", exact=True)
+        # INV-PSTAB-03 supersedes permanent expiry: retain the visible group
+        # while one read-only refresh holds the expired selection blocked.
+        held = []
+        self.page.route("**/api/session-models?*", lambda route: held.append(route))
+        self.page.wait_for_timeout(3150)
+        self.wait_until(lambda: len(held) == 1, "One expiry refresh must be pending")
+        hint = self.page.get_by_text("Проверяем выбор", exact=True)
         expect(hint).to_be_visible(); self.assert_caption()
         self.assertEqual(model.input_value(), "model-alpha"); self.assertEqual(effort.input_value(), "high")
         self.assertEqual(self.page.locator("textarea").input_value(), "Retained synthetic catalog draft")
         self.assertTrue(self.page.get_by_role("button", name="Отправить", exact=True).is_disabled())
-        self.assertEqual(len(self.calls("models")), before, "Catalog expiry timer created a model read")
+        self.assertEqual(len(held), 1, "Expiry refresh must be coalesced")
         self.assertFalse(hint.evaluate("e=>!!e.closest('#send-status,[data-local-outgoing],details:not([open])')"), "Hint must be visible outside pending/live region and closed model details")
         self.assertTrue(hint.evaluate("e=>{const next=document.querySelector('#next-model-status');for(let n=e.parentElement;n&&n!==document.body;n=n.parentElement){if(n.contains(next)&&n.querySelector('select'))return true;if(n===document.querySelector('#chat-form'))break;}return false;}"), "Hint and next caption must share the semantic model-selection group; chat-form is allowed")
+
+        held.pop().fulfill(status=200, json=fixture.catalog())
+        expect(self.page.get_by_role("button", name="Отправить", exact=True)).to_be_enabled()
+        self.assertEqual(model.input_value(), "model-alpha"); self.assertEqual(effort.input_value(), "high")
 
     def test_INV49_missing_effort_hint_and_inherit_remains_usable(self):
         self.open(); model, effort = self.ready_pair("Synthetic inherited choice")
