@@ -268,6 +268,7 @@ class _ProcessCapture:
         self.total = 0
         self.eof = set()
         self.timed_out = self.capture_error = False
+        self.output_limit = False
         self.done = False
         self.drained = False
         self.observation = None
@@ -290,6 +291,7 @@ class _ProcessCapture:
                 self.total += len(chunk)
                 if self.total > self.total_limit:
                     self.capture_error = True
+                    self.output_limit = True
                     break
                 if stream == 'stdout':
                     self.stdout.extend(chunk)
@@ -727,10 +729,19 @@ class Runner:
                 self._seal(task, 'failed', reason='prepare_timeout')
                 return True
             if state == 'claimed':
-                root = Path(profile['worktree_root'])
-                root.mkdir(mode=0o700, parents=True, exist_ok=True)
-                worktree = root / task['binding'].get('worktree_ref', receipt['attempt_id'])
-                _git(Path(profile['repo_path']), ('worktree', 'add', '--detach', str(worktree), receipt['base_sha']), _environment())
+                try:
+                    root = Path(profile['worktree_root'])
+                    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    worktree = root / task['binding'].get('worktree_ref', receipt['attempt_id'])
+                    _git(Path(profile['repo_path']), ('worktree', 'add', '--detach', str(worktree), receipt['base_sha']), _environment())
+                except OSError:
+                    if task['version'] != 1:
+                        raise
+                    # This phase precedes launch intent, so failure has an
+                    # affirmative no-spawn proof and needs no process drain.
+                    receipt['drain_confirmed'] = True
+                    self._seal(task, 'failed', reason='local_executor_error')
+                    return True
                 task['worktree'] = str(worktree)
                 receipt.update(state='prepared', worktree_count=1)
                 with self._transaction():
@@ -784,10 +795,13 @@ class Runner:
                 return True
             receipt['drain_confirmed'] = True
             if task['version'] == 1:
-                self._seal(task, 'completed' if capture.exit_code == 0 else 'failed',
+                reason = ('timeout' if capture.timed_out else
+                          'output_limit' if capture.output_limit else
+                          'local_executor_error' if capture.capture_error else
+                          'executor_exit' if capture.exit_code != 0 else None)
+                self._seal(task, 'failed' if reason else 'completed',
                            _legacy_result(bytes(capture.stdout))
-                           if capture.exit_code == 0 else None,
-                           None if capture.exit_code == 0 else 'executor_exit')
+                           if reason is None else None, reason)
                 return True
             native = decode_native_stream(bytes(capture.stdout).splitlines(keepends=True),
                                           receipt['requested_session_uuid'], task['binding']['requested_model'])
