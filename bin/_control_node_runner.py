@@ -743,6 +743,9 @@ class Runner:
                 else:
                     high = middle - 1
             result.update(text=text[:low], text_truncated=True)
+        if len(self._canonical(result)) > 60000:
+            diff.update(patch=None, patch_status='oversize',
+                        reasons=sorted(set(diff['reasons']) | {'result_budget'}))
         return validate_result_v2(result)
 
     def step(self):
