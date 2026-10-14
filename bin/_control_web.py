@@ -778,7 +778,7 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
         except Exception:
             return error('unavailable', 503)
 
-    async def node_route(request, kind, task_id=None):
+    async def node_route(request, kind, task_id=None, version=1):
         from _control_node_runtime import node_result, valid_submit, strict_json
         from _control_node_tasks import _uuid
         def node_error(code, status):
@@ -805,12 +805,28 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
                     if len(raw) > 128 * 1024:
                         return node_error('invalid_request', 413)
                 data = strict_json(bytes(raw), 128 * 1024)
-                if (type(data) is not dict or set(data) != {'request_id', 'node_id', 'prompt'}
-                        or not valid_submit(data['request_id'], data['node_id'], data['prompt'])):
+                if version == 2:
+                    from _control_node_protocol import validate_submit_v2
+                    data = validate_submit_v2(data)
+                elif (type(data) is not dict or set(data) != {'request_id', 'node_id', 'prompt'}
+                      or not valid_submit(data['request_id'], data['node_id'], data['prompt'])):
                     raise ValueError()
             except (ValueError, TypeError, UnicodeError, RecursionError):
                 return node_error('invalid_request', 422)
         def call():
+            if version == 2:
+                operation = getattr(backend, {
+                    'overview': 'node_tasks_overview_v2',
+                    'get': 'node_task_get_v2',
+                    'submit': 'node_task_submit_v2',
+                }[kind], None)
+                if not callable(operation):
+                    return {'error': 'unavailable'}
+                if kind == 'overview':
+                    return operation(current['principal'])
+                if kind == 'get':
+                    return operation(current['principal'], task_id)
+                return operation(current['principal'], data)
             if kind == 'overview':
                 return backend.node_tasks_overview(current['principal'])
             if kind == 'get':
@@ -823,7 +839,15 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
             _, failure = live_auth(request)
             if failure is not None:
                 return node_error('unauthorized' if failure.status_code == 401 else 'forbidden', failure.status_code)
-            result = node_result(result, kind, task_id if kind == 'get' else data['request_id'] if data else None)
+            result_id = task_id if kind == 'get' else data['request_id'] if data else None
+            if version == 2:
+                import _control_node_runtime as node_runtime
+                project = getattr(node_runtime, 'node_result_v2', None)
+                # Missing v2 backend/projection fails closed during staged source
+                # integration; an unavailable response is never a ready task DTO.
+                result = project(result, kind, result_id) if callable(project) else {'error': 'unavailable'}
+            else:
+                result = node_result(result, kind, result_id)
         except Exception:
             return node_error('unavailable', 503)
         if 'error' in result:
@@ -831,6 +855,18 @@ def create_app(config, backend, clock=None, *, owner_only=True, session_store=No
             return node_error(code, {'invalid_request':422, 'forbidden':403, 'conflict':409,
                 'capacity':429, 'not_found':404, 'not_ready':409}.get(code, 503))
         return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+    @app.get('/api/node-tasks/v2/overview')
+    async def node_tasks_overview_v2(request: Request):
+        return await node_route(request, 'overview', version=2)
+
+    @app.get('/api/node-tasks/v2/{task_id}')
+    async def node_task_get_v2(request: Request, task_id: str):
+        return await node_route(request, 'get', task_id, version=2)
+
+    @app.post('/api/node-tasks/v2')
+    async def node_task_submit_v2(request: Request):
+        return await node_route(request, 'submit', version=2)
 
     @app.get('/api/node-tasks/overview')
     async def node_tasks_overview(request: Request):
