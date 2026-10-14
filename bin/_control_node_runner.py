@@ -63,6 +63,19 @@ def _git_group_live(group):
     return False
 
 
+def _verify_git_drain(group, deadline):
+    while True:
+        try:
+            stopped = _git_group_live(group) is False
+        except (OSError, ValueError, IndexError):
+            stopped = False
+        if stopped:
+            return
+        if time.monotonic() >= deadline:
+            raise _GitDrainUnknown('git drain unverified')
+        time.sleep(0.01)
+
+
 def _environment():
     # Do not inherit GIT_*, executable search paths, loader settings or secrets.
     return dict(PATH='/usr/bin:/bin', HOME='/nonexistent', LC_ALL='C', TZ='UTC',
@@ -99,15 +112,14 @@ def _git(cwd, args, env, *, gitdir=None, base=None):
                 process.communicate(timeout=5)
             except (OSError, subprocess.TimeoutExpired):
                 raise _GitDrainUnknown('git drain unverified') from None
-            deadline = time.monotonic() + 1
-            while _git_group_live(process.pid):
-                if time.monotonic() >= deadline:
-                    raise _GitDrainUnknown('git drain unverified') from None
-                time.sleep(0.01)
+            _verify_git_drain(process.pid, time.monotonic() + 1)
             raise
     finally:
         process.stdout.close()
         process.stderr.close()
+    # communicate has reaped the direct child. Only observe here: signalling
+    # this numeric PGID afterwards could kill a recycled, unrelated group.
+    _verify_git_drain(process.pid, time.monotonic() + 1)
     if process.returncode:
         # Git stderr can contain private paths or configuration. Never export it.
         raise _CaptureError('git_error')
@@ -188,6 +200,8 @@ def canonical_patch(worktree, base_sha):
                       patch=text if status in ('ok', 'empty') else None,
                       patch_bytes=len(patch), patch_sha256=hashlib.sha256(patch).hexdigest(),
                       reasons=sorted(set(reasons)))
+    except _GitDrainUnknown:
+        raise
     except _CaptureError as error:
         result['reasons'] = [str(error)]
     except (OSError, ValueError, TypeError, UnicodeError, IndexError,
@@ -890,7 +904,11 @@ class Runner:
                 self._hold(task)
                 return True
             receipt['drain_confirmed'] = True
-            result = self._result(task, oracle.record)
+            try:
+                result = self._result(task, oracle.record)
+            except _GitDrainUnknown:
+                self._hold(task)
+                return True
             kind = ('needs_attention' if result['diff']['patch_status'] not in ('ok', 'empty')
                     else 'completed' if oracle.record['status'] == 'passed' else 'failed')
             self._seal(task, kind, result)
