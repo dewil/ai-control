@@ -80,7 +80,7 @@ def _environment():
     # Do not inherit GIT_*, executable search paths, loader settings or secrets.
     return dict(PATH='/usr/bin:/bin', HOME='/nonexistent', LC_ALL='C', TZ='UTC',
                 GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
-                GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0')
+                GIT_TERMINAL_PROMPT='0')
 
 
 def _git(cwd, args, env, *, gitdir=None, base=None):
@@ -93,48 +93,61 @@ def _git(cwd, args, env, *, gitdir=None, base=None):
         argv.extend(('--git-dir=' + str(gitdir), '--work-tree=' + str(cwd),
                      '-c', 'core.bare=false'))
     argv.extend(args)
+    dependencies = _DEPENDENCIES.get()
+    observer = dependencies[2] if dependencies is not None else None
+    details = dict(argv=tuple(argv), cwd=str(cwd), env=dict(env), returncode=None)
+    budget = _GIT_BUDGET.get()
+    if budget is not None and budget[0]() >= budget[1]:
+        raise subprocess.TimeoutExpired(argv, 0)
     process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                close_fds=True, start_new_session=True)
     try:
-        try:
-            stdout, _ = process.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            # The direct child remains owned until wait/communicate reaps it.
-            # Its new session gives a private PGID; never search/kill by argv.
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except OSError:
-                raise _GitDrainUnknown('git stop unverified') from None
-            try:
-                process.communicate(timeout=5)
-            except (OSError, subprocess.TimeoutExpired):
-                raise _GitDrainUnknown('git drain unverified') from None
-            _verify_git_drain(process.pid, time.monotonic() + 1)
-            raise
+        if observer is not None:
+            observer('git_start', dict(details, env=dict(details['env'])))
+        remaining = 30 if budget is None else min(30, budget[1] - budget[0]())
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(argv, 0)
+        stdout, _ = process.communicate(timeout=remaining)
     finally:
-        process.stdout.close()
-        process.stderr.close()
-    # communicate has reaped the direct child. Only observe here: signalling
-    # this numeric PGID afterwards could kill a recycled, unrelated group.
-    _verify_git_drain(process.pid, time.monotonic() + 1)
+        try:
+            # Reap before deciding whether signalling is still safe. A reaped
+            # child no longer owns a numeric PGID that we may signal.
+            if process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    raise _GitDrainUnknown('git stop unverified') from None
+                remaining = 5 if budget is None else min(5, max(0, budget[1] - budget[0]()))
+                try:
+                    process.communicate(timeout=remaining)
+                except (OSError, subprocess.TimeoutExpired):
+                    raise _GitDrainUnknown('git drain unverified') from None
+            # All exits, including nonzero/error paths, require owned drain.
+            remaining = 1 if budget is None else min(1, max(0, budget[1] - budget[0]()))
+            _verify_git_drain(process.pid, time.monotonic() + remaining)
+        finally:
+            process.stdout.close()
+            process.stderr.close()
+            if observer is not None and type(process.returncode) is int:
+                observer('git_exit', dict(details, env=dict(details['env']), returncode=process.returncode))
     if process.returncode:
         # Git stderr can contain private paths or configuration. Never export it.
         raise _CaptureError('git_error')
     return stdout
 
 
-def _source(cwd, env):
-    entries = _git(cwd, ('config', '--local', '--no-includes', '--null', '--list'), env)
+def _source(cwd, env, base):
+    entries = _git(cwd, ('config', '--local', '--no-includes', '--null', '--list'), env, base=base)
     for entry in entries.split(b'\0'):
         key = entry.split(b'\n', 1)[0].lower()
         if (key.startswith((b'include.', b'includeif.', b'filter.'))
                 or key == b'core.attributesfile'
                 or key == b'extensions.worktreeconfig'):
             raise _CaptureError('unsafe_git_config')
-    common = Path(os.fsdecode(_git(cwd, ('rev-parse', '--git-common-dir'), env).rstrip(b'\n')))
+    common = Path(os.fsdecode(_git(cwd, ('rev-parse', '--git-common-dir'), env, base=base).rstrip(b'\n')))
     if not common.is_absolute():
         common = cwd / common
     common = common.resolve(strict=True)
@@ -144,7 +157,7 @@ def _source(cwd, env):
     objects = (common / 'objects').resolve(strict=True)
     if not objects.is_dir() or '\n' in str(objects) or '\r' in str(objects):
         raise _CaptureError('invalid_repository')
-    head = _git(cwd, ('rev-parse', '--verify', 'HEAD'), env).decode('ascii').strip()
+    head = _git(cwd, ('rev-parse', '--verify', 'HEAD'), env, base=base).decode('ascii').strip()
     return objects, head
 
 
@@ -161,12 +174,12 @@ def canonical_patch(worktree, base_sha):
             raise _CaptureError('invalid_base')
         cwd = Path(worktree).resolve(strict=True)
         env = _environment()
-        objects, head = _source(cwd, env)
+        objects, head = _source(cwd, env, base_sha)
         reasons = [] if head == base_sha else ['head_moved']
         # Scratch lives outside the editable tree; no project files are excluded.
-        with tempfile.TemporaryDirectory(prefix='control-canonical-', dir='/var/tmp') as scratch:
+        with tempfile.TemporaryDirectory(prefix='control-canonical-', dir='/tmp') as scratch:
             gitdir = Path(scratch) / 'git'
-            _git(cwd, ('init', '--bare', '--template=', str(gitdir)), env)
+            _git(cwd, ('init', '--bare', '--template=', str(gitdir)), env, base=base_sha)
             (gitdir / 'objects' / 'info' / 'alternates').write_bytes(os.fsencode(objects) + b'\n')
             env['GIT_INDEX_FILE'] = str(Path(scratch) / 'index')
             _git(cwd, ('read-tree', base_sha), env, gitdir=gitdir, base=base_sha)
@@ -298,12 +311,13 @@ def decode_native_stream(lines, expected_session_uuid, expected_model):
 
 
 _DEPENDENCIES = ContextVar('control_runner_test_dependencies', default=None)
+_GIT_BUDGET = ContextVar('control_runner_git_budget', default=None)
 
 
 @contextmanager
-def _test_dependencies(process_factory, clock):
+def _test_dependencies(process_factory, clock, *, observer=None):
     """Scoped raw-process DI; never selected through profiles or wire input."""
-    token = _DEPENDENCIES.set((process_factory, clock))
+    token = _DEPENDENCIES.set((process_factory, clock, observer))
     try:
         yield
     finally:
@@ -321,8 +335,9 @@ def _owned_drain(observation, token):
 
 class _ProcessCapture:
     """One bounded I/O/ownership observation per supervisor pump cycle."""
-    def __init__(self, handle, launch, clock, total_limit):
+    def __init__(self, handle, launch, clock, total_limit, *, defer_drain=False):
         self.handle, self.launch, self.clock = handle, launch, clock
+        self.defer_drain = defer_drain
         self.total_limit = total_limit
         self.stdout = bytearray()
         self.total = 0
@@ -364,6 +379,9 @@ class _ProcessCapture:
         self.drained = _owned_drain(self.observation, self.launch['launch_token'])
         if self.clock() >= deadline or self.capture_error:
             self.timed_out = self.clock() >= deadline and not self.capture_error
+            if self.defer_drain:
+                self.done = True
+                return True
             self.handle.stop(deadline)
             self.exit_code = self.handle.poll()
             self.observation = self.handle.observe()
@@ -383,7 +401,7 @@ def _oracle_hash(path, worktree):
 
 
 class _OracleAttempt:
-    def __init__(self, profile, worktree, deadline, factory, clock):
+    def __init__(self, profile, worktree, deadline, factory, clock, *, defer_drain=False):
         self.profile, self.worktree, self.clock = profile, worktree, clock
         self.record = dict(test_id=profile['test_id'], status='notrun', exit_code=None,
                            oracle_sha256=profile['oracle_sha256'])
@@ -406,6 +424,9 @@ class _OracleAttempt:
             self.record['status'] = 'notrun'
             self.done = True
             return
+        if clock() >= deadline:
+            self.done = True
+            return
         launch = dict(kind='oracle', launch_token=str(uuid.uuid4()),
                       argv=('/usr/bin/python3', '-I', profile['oracle_path'],
                             '--worktree', worktree, '--sandbox', 'bwrap'),
@@ -420,7 +441,7 @@ class _OracleAttempt:
             self.record['status'] = 'unknown'
             self.done = True
             return
-        self.capture = _ProcessCapture(handle, launch, clock, 65536)
+        self.capture = _ProcessCapture(handle, launch, clock, 65536, defer_drain=defer_drain)
 
     def step(self):
         if self.done:
@@ -428,6 +449,10 @@ class _OracleAttempt:
         self.capture.step()
         if not self.capture.done:
             return True
+        self.finish()
+        return True
+
+    def finish(self):
         capture = self.capture
         self.drained = capture.drained
         self.record['exit_code'] = capture.exit_code
@@ -466,7 +491,7 @@ class _OracleAttempt:
 def run_oracle(profile, worktree, deadline):
     """Derive the exact public test record from actual injected process evidence."""
     dependencies = _DEPENDENCIES.get()
-    factory, clock = dependencies if dependencies is not None else (None, time.monotonic)
+    factory, clock = dependencies[:2] if dependencies is not None else (None, time.monotonic)
     attempt = _OracleAttempt(profile, worktree, deadline, factory, clock)
     while not attempt.done:
         attempt.step()
@@ -536,6 +561,7 @@ class Runner:
                 wire BLOB NOT NULL, acked INTEGER NOT NULL DEFAULT 0);
         ''')
         self._test_fault_hook = None
+        self._test_operation_observer = None
         self._mutex = threading.RLock()
         self._lock_depth = 0
         self._captures = {}
@@ -567,6 +593,62 @@ class Runner:
     def private_receipt(self, task_id):
         task = self._task(task_id)
         return task['receipt'] if task else None
+
+    def _phase_enter(self, task, phase):
+        phases = task.setdefault('phases', {})
+        if phase not in phases:
+            started = self.clock()
+            caps = dict(prepare=30, cli=900, cli_drain=30, oracle=60,
+                        oracle_drain=30, collect_seal=30)
+            details = dict(task_id=task['receipt']['task_id'],
+                           attempt_id=task['receipt']['attempt_id'], phase=phase,
+                           started_at=started,
+                           deadline=min(started + caps[phase], task['overall_deadline']),
+                           overall_deadline=task['overall_deadline'])
+            phases[phase] = details
+            self._save(task)
+            self._operation('phase_enter', details)
+        return phases[phase]['deadline']
+
+    def _operation(self, event, details):
+        observer = self._test_operation_observer
+        if observer is None:
+            dependencies = _DEPENDENCIES.get()
+            observer = dependencies[2] if dependencies is not None else None
+        if observer is not None:
+            observer(event, dict(details))
+
+    def _phase_exit(self, task, phase):
+        exited = task.setdefault('phases_exited', [])
+        if phase not in exited:
+            exited.append(phase)
+            self._save(task)
+            self._operation('phase_exit', task['phases'][phase])
+        expired = self.clock() >= task['phases'][phase]['deadline']
+        if expired:
+            task['phase_timeout'] = True
+        return expired
+
+    @contextmanager
+    def _git_budget(self, deadline):
+        token = _GIT_BUDGET.set((self.clock, deadline))
+        try:
+            yield
+        finally:
+            _GIT_BUDGET.reset(token)
+
+    def _drain(self, task, phase, capture):
+        deadline = self._phase_enter(task, phase)
+        if self.clock() >= deadline:
+            capture.timed_out = True
+        if not capture.drained:
+            capture.handle.stop(deadline)
+        capture.exit_code = capture.handle.poll()
+        capture.observation = capture.handle.observe()
+        capture.drained = _owned_drain(capture.observation, capture.launch['launch_token'])
+        if self._phase_exit(task, phase):
+            capture.timed_out = True
+        return capture.drained
 
     def _fault(self, label, task):
         if self._test_fault_hook is not None:
@@ -751,7 +833,10 @@ class Runner:
     def step(self):
         # Keep the owner lock through launch, not only through database writes.
         with self._transaction():
-            return self._step()
+            dependencies = _DEPENDENCIES.get()
+            observer = self._test_operation_observer or (dependencies[2] if dependencies else None)
+            with _test_dependencies(self.factory, self.clock, observer=observer):
+                return self._step()
 
     def _step(self):
         # Selection and claim are serialized across owner instances.
@@ -763,7 +848,8 @@ class Runner:
                 if task is None:
                     return False
                 task['receipt'].update(state='claimed', claim_count=1, slot_held=True)
-                task.update(overall_deadline=self.clock() + 1080, prepare_deadline=self.clock() + 30)
+                claimed_at = self.clock()
+                task.update(overall_deadline=claimed_at + 1080)
                 self._event(task, 1, 'accepted')
                 self._save(task)
                 claimed = True
@@ -783,7 +869,9 @@ class Runner:
                 self._save(task)
             return True
         if state in ('claimed', 'prepared', 'launch_intent'):
-            if self.clock() >= min(task['prepare_deadline'], task['overall_deadline']):
+            prepare_deadline = self._phase_enter(task, 'prepare')
+            if self.clock() >= prepare_deadline:
+                self._phase_exit(task, 'prepare')
                 if receipt['launch_intent_committed']:
                     receipt.update(counts_known=False, spawn_count=None)
                     self._hold(task)
@@ -796,13 +884,16 @@ class Runner:
                     root = Path(profile['worktree_root'])
                     root.mkdir(mode=0o700, parents=True, exist_ok=True)
                     worktree = root / task['binding'].get('worktree_ref', receipt['attempt_id'])
-                    _git(Path(profile['repo_path']), ('worktree', 'add', '--detach', str(worktree), receipt['base_sha']), _environment())
+                    with self._git_budget(prepare_deadline):
+                        _git(Path(profile['repo_path']), ('worktree', 'add', '--detach', str(worktree), receipt['base_sha']), _environment())
                 except _GitDrainUnknown:
+                    self._phase_exit(task, 'prepare')
                     self._hold(task)
                     return True
                 except (OSError, _CaptureError, subprocess.TimeoutExpired) as error:
                     # This phase precedes launch intent, so failure has an
                     # affirmative no-spawn proof and needs no process drain.
+                    self._phase_exit(task, 'prepare')
                     receipt['drain_confirmed'] = True
                     reason = 'timeout' if isinstance(error, subprocess.TimeoutExpired) else 'local_executor_error'
                     self._seal(task, 'failed', reason=reason)
@@ -820,6 +911,16 @@ class Runner:
                     self._save(task)
                 self._fault('after_launch_intent_commit', task)
                 return True
+            if self._phase_exit(task, 'prepare'):
+                receipt['drain_confirmed'] = True
+                self._seal(task, 'failed', reason='prepare_timeout')
+                return True
+            cli_deadline = self._phase_enter(task, 'cli')
+            if self.clock() >= cli_deadline:
+                self._phase_exit(task, 'cli')
+                receipt['drain_confirmed'] = True
+                self._seal(task, 'failed', reason='timeout')
+                return True
             kind = 'claude' if task['version'] == 2 else 'codex'
             argv = ((profile['cli_path'], '-p', '--output-format', 'stream-json',
                      '--verbose', '--session-id', receipt['requested_session_uuid'],
@@ -828,16 +929,17 @@ class Runner:
                     (profile['cli_path'], 'exec', '-s', 'read-only', '--', task['prompt']))
             launch = dict(kind=kind, launch_token=task['launch_token'], argv=argv,
                           cwd=task['worktree'], env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'},
-                          deadline=min(task['overall_deadline'], self.clock() + 900),
+                          deadline=cli_deadline,
                           capture_limits={'total_bytes': 4194304},
                           isolation={'execution_profile_id': receipt['execution_profile_id']})
             try:
                 handle = self.factory.spawn(launch)
             except OSError:
+                self._phase_exit(task, 'cli')
                 receipt.update(counts_known=False, spawn_count=None)
                 self._hold(task)
                 return True
-            capture = _ProcessCapture(handle, launch, self.clock, 4194304)
+            capture = _ProcessCapture(handle, launch, self.clock, 4194304, defer_drain=True)
             self._captures[task_id] = capture
             receipt.update(state='cli', spawn_count=1, process=handle.observe(), drain_confirmed=False)
             with self._transaction():
@@ -855,7 +957,9 @@ class Runner:
                 with self._transaction():
                     self._save(task)
                 return True
-            if not capture.drained:
+            if self._phase_exit(task, 'cli'):
+                capture.timed_out = True
+            if not self._drain(task, 'cli_drain', capture):
                 self._hold(task)
                 return True
             receipt['drain_confirmed'] = True
@@ -889,7 +993,8 @@ class Runner:
                 self._save(task)
             return True
         if state == 'oracle_ready':
-            oracle = _OracleAttempt(profile, task['worktree'], task['overall_deadline'], self.factory, self.clock)
+            deadline = self._phase_enter(task, 'oracle')
+            oracle = _OracleAttempt(profile, task['worktree'], deadline, self.factory, self.clock, defer_drain=True)
             self._oracles[task_id] = oracle
             receipt['state'] = 'oracle'
             with self._transaction():
@@ -903,16 +1008,42 @@ class Runner:
             oracle.step()
             if not oracle.done:
                 return True
+            expired = self._phase_exit(task, 'oracle')
+            if oracle.capture is not None:
+                if expired:
+                    oracle.capture.timed_out = True
+                if not self._drain(task, 'oracle_drain', oracle.capture):
+                    self._hold(task)
+                    return True
+                oracle.drained = oracle.capture.drained
+                oracle.record['exit_code'] = oracle.capture.exit_code
+                if oracle.capture.timed_out:
+                    oracle.record['status'] = 'timeout'
+                elif oracle.capture.capture_error:
+                    oracle.record['status'] = 'error'
             if not oracle.drained:
                 self._hold(task)
                 return True
             receipt['drain_confirmed'] = True
+            deadline = self._phase_enter(task, 'collect_seal')
+            if self.clock() >= deadline:
+                self._phase_exit(task, 'collect_seal')
+                self._seal(task, 'failed', reason='timeout')
+                return True
             try:
-                result = self._result(task, oracle.record)
+                with self._git_budget(deadline):
+                    result = self._result(task, oracle.record)
             except _GitDrainUnknown:
+                self._phase_exit(task, 'collect_seal')
                 self._hold(task)
                 return True
-            kind = ('needs_attention' if result['diff']['patch_status'] not in ('ok', 'empty')
+            except subprocess.TimeoutExpired:
+                self._phase_exit(task, 'collect_seal')
+                self._seal(task, 'failed', reason='timeout')
+                return True
+            self._phase_exit(task, 'collect_seal')
+            kind = ('failed' if task.get('phase_timeout') else
+                    'needs_attention' if result['diff']['patch_status'] not in ('ok', 'empty')
                     else 'completed' if oracle.record['status'] == 'passed' else 'failed')
             self._seal(task, kind, result)
             return True
