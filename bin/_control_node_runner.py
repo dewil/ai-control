@@ -1,15 +1,18 @@
-"""Canonical patch capture for the trusted, disposable ALP fixture workspace.
+"""Patch capture and native stream evidence for the disposable ALP fixture.
 
 The caller must first stop and drain the editing process. Staging uses private
 metadata and objects; the source repository's index, objects and refs are never
-written. This is a capture seam, not a process sandbox or task executor.
+written. These are evidence seams, not a process sandbox or task executor.
 """
 import hashlib
+import json
+import math
 import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
+import uuid
 
 
 _CONFIG = (
@@ -138,3 +141,90 @@ def canonical_patch(worktree, base_sha):
             subprocess.SubprocessError):
         result['reasons'] = ['capture_error']
     return result
+
+
+def _native_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate native field')
+        result[key] = value
+    return result
+
+
+def _native_float(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError('nonfinite native number')
+    return number
+
+
+def _native_constant(value):
+    raise ValueError('invalid native constant')
+
+
+def decode_native_stream(lines, expected_session_uuid, expected_model):
+    """Project bounded native JSON lines into session/model/turn evidence.
+
+    This does not prove process exit, account identity or execution isolation.
+    Limits count original bytes, including any supplied line separators; no
+    bytes are stripped or silently truncated before accounting.
+    """
+    evidence = dict(binding='unknown', model=None, successful_turn=False,
+                    effort_state='requested_unverified')
+    try:
+        if (type(expected_session_uuid) is not str
+                or str(uuid.UUID(expected_session_uuid)) != expected_session_uuid
+                or type(expected_model) is not str or not expected_model):
+            return evidence
+        total = 0
+        init = result = None
+        conflict = False
+        for raw in lines:
+            if type(raw) is not bytes:
+                return evidence
+            total += len(raw)
+            if len(raw) > 1048576 or total > 4194304:
+                return evidence
+            record = json.loads(raw.decode('utf-8'), object_pairs_hook=_native_object,
+                                parse_float=_native_float, parse_constant=_native_constant)
+            # Escaped lone surrogates are invalid UTF-8 evidence too.
+            json.dumps(record, ensure_ascii=False).encode('utf-8')
+            if type(record) is not dict or type(record.get('type')) is not str:
+                return evidence
+            if record['type'] == 'system' and record.get('subtype') == 'init':
+                projection = (record.get('session_id'), record.get('model'))
+                if any(type(value) is not str for value in projection):
+                    return evidence
+                if result is not None:
+                    conflict = True
+                if init is None:
+                    init = projection
+                elif init != projection:
+                    conflict = True
+            elif record['type'] == 'result':
+                projection = (record.get('session_id'), record.get('subtype'),
+                              record.get('is_error'))
+                if (type(projection[0]) is not str or type(projection[1]) is not str
+                        or type(projection[2]) is not bool):
+                    return evidence
+                if init is None:
+                    conflict = True
+                if result is None:
+                    result = projection
+                elif result != projection:
+                    conflict = True
+            # Irrelevant valid records and extra envelope fields have no
+            # session/model/turn authority, including rate_limit_event.
+        if init is not None and type(init[1]) is str:
+            evidence['model'] = init[1]
+        if (not conflict and init is not None and result is not None
+                and init[0] == result[0] == expected_session_uuid):
+            evidence['binding'] = 'verified'
+            evidence['successful_turn'] = (init[1] == expected_model
+                                           and result[1] == 'success'
+                                           and result[2] is False)
+    except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
+        # Never publish raw native lines, parser exception strings or tokens.
+        pass
+    return evidence
