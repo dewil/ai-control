@@ -1,0 +1,103 @@
+# Local auth authority — bounded first Mac codeunit
+
+SOURCE PREPARATION ONLY. New bin/_control_codex_auth_authority.py, stdlib only.
+No token/OAuth/TLS/native/filesystem/process/network or production Admission.
+Purpose: account-local refresh serialization, generations and quarantine; dependencies
+must supply external delivery guards before this authority is integrated into native.
+Parent auth5d29129 + Mac final fence amendment; INV-ACCOUNT04/05/09/13/14.
+
+## Exact API
+
+AuthError(code): ValueError, closed authority_stale/refresh_busy/refresh_unknown/
+unsupported_auth_profile/auth_expired/auth_unavailable/auth_response_invalid/
+identity_mismatch/owned_host_unproven/issuer_semantics_unproven. str/code safe code;
+invalid unknown code sanitized to authority_stale, never arbitrary exception text.
+AuthScope(reference,principal) frozen, repr=False, deep immutable private mapping.
+Exact V2 reference fields schema2/provider_idcodex/account_id/profile_instance_id/
+adapter_revision/registration_snapshot; snapshot dev>=0/ino>0/ctime_ns>0/hash64hex.
+Account grammar [a-z][a-z0-9_-]{0,63}; instance canonicalUUIDv4; schema ints notbool;
+adapter_revision codex-chatgpt-external-auth-host-v2. principal exact kind
+openid_subject_workspace, issuer https://auth.openai.com, subject printableASCII1..255,
+workspace_id ASCII[A-Za-z0-9_-]{1,128}. Extra/invalid keys reject authority_stale.
+Scope constructor does no IO, path or native admission; callers cannot override scope.
+
+AuthCoordinator(*,clock=time.monotonic): one shared object per Control owner.
+open(scope,*,deadline)->opaque AuthorityLease; exact account key provider/account.
+First capture freezes ref/principal, generation1/credential0. Later different
+ref/principal sameaccount authority_stale permanently (no automatic rebind/reset).
+Other account independent. Refresh mutex wait<=min(remaining,0.5s), busy refresh_busy.
+check(lease,scope,*,deadline): exact owner/thread/active lease, scope unchanged,
+notquarantined/deadline future, else authority_stale; no secret/native access.
+release(lease): sameowner/thread; idempotent; foreign/cross-thread reject, never
+unlock another account/owner lock. Released lease unusable except own quarantine.
+quarantine(lease,code,*,deadline): exact owner/thread capability (active or released), closed
+code required; once freezes quarantine and increments owner_generation, denies ALL
+further account checks/open/stamps; repeated quarantine no extra generation/reset.
+Unknown code authority_stale and no state mutation. Other account unchanged.
+
+Guard coordinator.delivery_guard(lease,scope,*,deadline): context manager holding
+peraccount RLock; wait min(remaining,1s). Captures lease/thread/fullscope/generation;
+window=min(caller deadline,entryclock+1s), never renews. Same-thread quarantine is
+allowed with RLock and invalidates guard immediately. Other-thread open independent
+accounts must work. The physical lock hold is a COOPERATING CALLER obligation: no
+unconditional preemption/bounded progress is claimed for stalled guard bodies.
+quarantine acquires state lock for min(remaining,1s); timeout refresh_busy means
+NO mutation occurred. Caller must handle this explicitly, never assume invalidation.
+guard.begin_enqueue(): once, verifies live guard/thread/lease/scope/generation and
+window; duplicate authority_stale; local marker only, DOES NOT send native.
+guard.confirm(): only after begin, once, checks same live authority/window; local
+caller-attested confirmed marker, not native proof. Duplicate/refused authority_stale.
+publish_delivery(lease,*,guard,deadline)->AuthorityStamp requires same active guard,
+begun+confirmed, once; deadline<=guard original CALLER deadline and strictlyfuture; effective deadline is
+min(supplied deadline,guard internal1s window), so passing original caller budget
+does not extend guard. No public guarddeadline is needed. Returns
+frozen reprFalse stamp(owner_generation,credential_generation), increments account
+credential once only. Out-ofguard/foreign/expired/unconfirmed/duplicate rejects.
+An expired method can refuse but cannot force a stalled caller to release RLock.
+Guard expires/exit no auto publication/redelivery/quarantine, because pure unit
+cannot know nativeeffects; real caller must quarantine unknown effect outcomes.
+Release during guard refuses before unlock (caller cannot free refresh lease early).
+All capability classes opaque reprFalse: no public fileno/index/FD/lock attributes,
+no accepted deserialized/fabricated lookalike, identity registry rejects copy/foreign.
+
+## Test obligations (independent blind RED before source)
+
+Scope exact/plainint/deepfreeze/secret-free repr; A/B keys; sameaccount changed
+reference/principal refusal; bounded busy; wrongowner/thread/released lease; duplicate
+release; reentrant quarantine beforebegin/duringconfirm/publish; no stamp after
+invalidation; guard wrongthread/foreign/expired/outofscope; begin+confirm+publish
+order/duplicate; releasewhileguard refusal; credential increments onlypublication;
+concurrentA-held Bprogress; deadlinefinite/bool/expired; no IO constructor.
+Synthetic tests prove local authority ONLY; no native login, production account
+access or server capability is advertised by this module. Full callback/validator
+and Linux launcher/store remain separate slices.
+
+## SOURCE findings clarification before fault RED06.10
+
+Coordinator retains independent deep immutable primitive snapshot of fullreference
+and principal at firstcapture; caller's AuthScope instance never becomes mutable
+accountauthority by alias. Slots/remove__dict__ is defense in depth, not the only
+identity fence. Even simulated external alias replacement on retained scope must
+not rebind alreadycaptured account: every use compares fresh suppliedscope snapshot
+to the immutable accountcapture. Public Python introspection is not OS security,
+but code must not silently accept mutated fullref/principal as existing identity.
+
+Every plainfield type/key validated before equality/regex/hash can invoke foreign
+methods. Malformed mappings/values raise only safe AuthError authority_stale;
+no raw userobject exception texts. Trusted clock is allowed to reenter public
+coordinator methods (e.g. quarantine). Every state transition samples needed clocks
+and validates callback outcomes BEFORE final live/generation/quarantine checks;
+NO callbacks between final validation and begun/confirmed/publication mutation.
+Clock-triggered invalidation always wins over later stamp; no stamp on quarantined
+account. No test-only branch or weakened public scope/deadline invariant.
+
+## Single-capture identity clarification before additional fault RED
+
+Opening a lease derives the registry key, retained account identity and lease
+authority from the SAME initial independent immutable primitive snapshot. Account
+construction must not resnapshot the caller object. If a caller scope alias changes
+after initial capture, later supplied-scope validation rejects the mismatch; it
+must never register the changed identity under the original account key or permit
+two simultaneous leases for the same captured account via distinct registry keys.
+Synthetic mutation between capture and account construction is in scope for this
+local invariant; it is not a claim of protection against arbitrary Python code.

@@ -1,0 +1,22 @@
+[
+  {
+    "commit": "5d29129ae7814b0b9fd369209bc8a8b46ce15747",
+    "path": "docs/dev/2026-10-06-spec-codex-account-auth-host-v2.md",
+    "sha256": "5b0f462bec2c8c2d01754583d80f4c147eef9e7c10eabe413304a02ef67209d4"
+  },
+  {
+    "commit": "5d29129ae7814b0b9fd369209bc8a8b46ce15747",
+    "path": "docs/dev/2026-10-06-spec-provider-execution-context.md",
+    "sha256": "9474449c97587783184bdc4ecc8c1841582347e94092b4c0e1acff9708d42771"
+  },
+  {
+    "commit": "656c9a85c2e0f4059ced67565c00406ef7e4ce14",
+    "path": "docs/dev/2026-10-06-spec-bound-interactive-web-session.md",
+    "sha256": "dd11968b7abdb8c7d0d6c536846b068d6eff4f4edf542673dcaf725eb54702b0"
+  },
+  {
+    "commit": "656c9a85c2e0f4059ced67565c00406ef7e4ce14",
+    "path": "docs/dev/2026-10-06-spec-bound-session-store.md",
+    "sha256": "ab4fcb485cde2df45caed94d61e8bfa281dbd87c63c650a861c77d91068caf58"
+  }
+]
