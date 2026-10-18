@@ -381,7 +381,7 @@ migrate_task_template() {
 }
 migrate_task_template
 if [[ ! -e "$CONTROL_DIR/task-codex-template.yaml" && ! -L "$CONTROL_DIR/task-codex-template.yaml" ]]; then
-  install -m 0600 "$REPO_DIR/examples/task-codex-template.yaml.example" "$CONTROL_DIR/task-codex-template.yaml"
+  run install -m 0600 "$REPO_DIR/examples/task-codex-template.yaml.example" "$CONTROL_DIR/task-codex-template.yaml"
 fi
 
 # Прополка упраздненных бинарей (аудит V2.10 r4, блокер 4). Убрать имя из
