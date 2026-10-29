@@ -1,4 +1,5 @@
 """Independent INV-WSESS-22/23 DOM-window acceptance; synthetic local backend only."""
+from contextlib import contextmanager
 import datetime
 import importlib
 import json
@@ -11,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+from urllib.parse import parse_qs, urlsplit
 from control_browser_helpers import choose_project
 from test_control_web_chat_width_browser import private_json, totp, PASSWORD, SECRET, SID
 
@@ -18,6 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 NOW = 1791248400  # 2026-10-06 01:00 UTC; Moscow04:00.
 OTHER = '44444444-4444-4444-8444-444444444444'
 CURSOR = 'opaque/native-before/界?part=128'
+CLOCKED_TESTS = {
+    'test_older_loaded_cache_is_local_then_exact_cursor_and_all128_page_items_reachable',
+    'test_inflight_latest_does_not_suppress_boundary_older',
+    'test_inflight_latest_does_not_suppress_boundary_older_latest_first',
+}
 
 def fixture(count=101, first=0):
     return {'count':count,'first':first,'delay':0,'older_mode':'normal'}
@@ -29,6 +36,7 @@ def history_items(first,count,prefix='MAIN'):
 
 
 def serve(root, evidence):
+    import asyncio
     import uvicorn
     sys.path.insert(0, str(root/'bin'))
     web = importlib.import_module('_control_web')
@@ -75,8 +83,30 @@ def serve(root, evidence):
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0)); listener.listen(128)
     origin = 'http://127.0.0.1:'+str(listener.getsockname()[1])
-    app = web.create_app({'origin': origin, 'password_hash': web.hash_password(PASSWORD), 'totp_secret': SECRET,
+    application = web.create_app({'origin': origin, 'password_hash': web.hash_password(PASSWORD), 'totp_secret': SECRET,
                           'session_ttl': 3600, 'secure_cookie': False}, Backend())
+    def wait_gate(path):
+        with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as gate:
+            gate.settimeout(15)
+            gate.connect(path)
+            gate.sendall(b'H')
+            if gate.recv(1)!=b'R':
+                raise RuntimeError('History-response gate was not released')
+
+    async def app(scope, receive, send):
+        path=None
+        if scope['type']=='http' and scope['path']=='/api/session-history':
+            query=parse_qs(scope.get('query_string',b'').decode('ascii'),keep_blank_values=True)
+            if query.get('project')==['demo'] and query.get('sid')==[SID]:
+                data=json.loads((evidence/'control.json').read_text())
+                path=data.get('older_gate' if 'cursor' in query else 'latest_gate')
+        async def gated_send(message):
+            if path and message['type']=='http.response.start':
+                # Hold the response without serializing the ASGI server's event loop.
+                await asyncio.to_thread(wait_gate,path)
+            await send(message)
+        await application(scope,receive,gated_send)
+
     private_json(evidence/'ready.json', {'url': origin})
     uvicorn.Server(uvicorn.Config(app, log_level='error', access_log=False)).run(sockets=[listener])
 
@@ -119,6 +149,12 @@ class HistoryWindowBrowser(unittest.TestCase):
     def setUp(self):
         private_json(self.evidence/'control.json', fixture())
         self.page=self.context.new_page(); self.addCleanup(self.page.close)
+        if self._testMethodName in CLOCKED_TESTS:
+            self.page.set_default_timeout(8000)
+            self.page.set_default_navigation_timeout(8000)
+            instant=datetime.datetime(2026,10,29,tzinfo=datetime.timezone.utc)
+            self.page.clock.install(time=instant)
+            self.page.clock.pause_at(instant+datetime.timedelta(seconds=1))
         self.network=[]; self.errors=[]
         self.page.on('request',lambda r:self.network.append((r.method,r.url)))
         self.page.on('pageerror',lambda e:self.errors.append(str(e)))
@@ -171,10 +207,14 @@ class HistoryWindowBrowser(unittest.TestCase):
         self.older().evaluate('button=>button.click()')
         self.page.wait_for_timeout(150)
 
-    def reader(self):
+    def reader(self, controlled=False):
         messages=self.page.locator('.chat-items').get_by_text(re.compile(r'^MAIN item '))
-        messages.nth(2).evaluate("el=>el.scrollIntoView({block:'start'})")
-        self.page.wait_for_timeout(100)
+        if controlled:
+            messages.nth(2).evaluate("el=>el.scrollIntoView({block:'start',behavior:'instant'})")
+            self.page.clock.run_for(32)
+        else:
+            messages.nth(2).evaluate("el=>el.scrollIntoView({block:'start'})")
+            self.page.wait_for_timeout(100)
         value=self.page.evaluate('''() => {const items=[...document.querySelector('.chat-items').querySelectorAll('p')].filter(el=>/^MAIN item /.test(el.textContent));const visible=items.filter(el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight});const el=visible[0];window.windowTestAnchor=el;return el&&{text:el.textContent,top:el.getBoundingClientRect().top};}''')
         self.assertIsNotNone(value,'Synthetic reader must expose visible anchor')
         return value
@@ -210,25 +250,226 @@ class HistoryWindowBrowser(unittest.TestCase):
         # history text and native time count already exclude hidden bubbles.
         self.assertNotIn('MAIN item 0899',self.page.locator('.chat-items').inner_text())
 
+    def history_cursors(self, requests):
+        cursors=[]
+        for method,url in requests:
+            query=parse_qs(urlsplit(url).query,keep_blank_values=True)
+            self.assertEqual(method,'GET')
+            self.assertEqual(query.get('project'),['demo'])
+            self.assertEqual(query.get('sid'),[SID])
+            values=query.get('cursor',[None])
+            self.assertEqual(len(values),1)
+            cursors.append(values[0])
+        return cursors
+
+    def history_response(self, response, continuation):
+        parts=urlsplit(response.url)
+        query=parse_qs(parts.query,keep_blank_values=True)
+        return (parts.path=='/api/session-history'
+                and query.get('project')==['demo'] and query.get('sid')==[SID]
+                and ('cursor' in query)==continuation)
+
+    def wait_older_window(self, prior):
+        number=min(prior)-1
+        self.page.locator('.chat-items').get_by_text(
+            re.compile(r'^MAIN item '+f'{number:04d}'+r' turn-')).wait_for(timeout=8000)
+        self.page.clock.run_for(32)  # Execute queued window/anchor animation frames.
+        current=self.cap()
+        self.assertEqual(current,list(range(min(current),max(current)+1)))
+        return current
+
+    def controlled_older(self, prior):
+        if min(prior)==0:
+            with self.page.expect_response(
+                    lambda r:self.history_response(r,True),timeout=8000) as response:
+                self.older().evaluate('button=>button.click()')
+            self.assertEqual(response.value.status,200)
+            self.assertIsNone(response.value.finished())
+        else:
+            self.older().evaluate('button=>button.click()')
+        return self.wait_older_window(prior)
+
     def test_older_loaded_cache_is_local_then_exact_cursor_and_all128_page_items_reachable(self):
         self.configure(count=1000); self.open(); self.cap()
+        # Positive control: run the genuine interval without an Older action.
+        before=len(self.requests())
+        with self.page.expect_response(
+                lambda r:self.history_response(r,False),timeout=8000) as refresh:
+            self.page.clock.run_for(6000)
+        self.assertEqual(refresh.value.status,200)
+        self.assertIsNone(refresh.value.finished())
+        self.assertEqual(self.history_cursors(self.requests()[before:]),[None])
+        self.page.clock.run_for(32)
         seen=set(self.ids()); fetched=False
         for _ in range(30):
             if not self.older().is_enabled(): break
-            before=list(self.requests()); prior=self.ids(); anchor=self.reader()
-            self.activate_older(); current=self.cap(); seen.update(current)
+            before=list(self.requests()); prior=self.ids(); anchor=self.reader(controlled=True)
+            current=self.controlled_older(prior); seen.update(current)
             self.assert_anchor(anchor)
-            if len(self.requests())>len(before):
-                from urllib.parse import parse_qs,urlsplit
-                cursors=[parse_qs(urlsplit(url).query).get('cursor',[None])[0] for _,url in self.requests()[len(before):]]
+            cursors=self.history_cursors(self.requests()[len(before):])
+            if min(prior)==0:
+                self.assertEqual(min(prior),0,'Only the cache boundary may fetch')
                 self.assertEqual(cursors,[CURSOR],'Only exact opaque continuation may fetch at cache boundary')
                 fetched=True
-            elif min(prior)>0:
-                self.assertLess(min(current),min(prior),'Older must expose hidden earlier loaded items locally')
+            else:
+                self.assertEqual(cursors,[],'Every local Older action must issue no history request')
+                if min(prior)>0:
+                    self.assertLess(min(current),min(prior),'Older must expose hidden earlier loaded items locally')
             if set(range(-128,1000))<=seen: break
         self.assertTrue(fetched)
         self.assertEqual(seen,set(range(-128,1000)),'Every hidden slice of the128-item native page remains reachable')
         self.assertFalse(self.older().is_enabled())
+        self.assertEqual([c for c in self.history_cursors(self.requests()) if c is not None],
+                         [CURSOR],'Exactly one continuation over the entire traversal')
+
+    @contextmanager
+    def history_gate(self, name):
+        path=self.evidence/(name+'-held.sock')
+        listener=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+        state={'path':str(path),'listener':listener,'connection':None,'released':False}
+        try:
+            listener.settimeout(8); listener.bind(str(path)); listener.listen(1)
+            yield state
+        finally:
+            try:
+                if state['connection'] is not None and not state['released']:
+                    self.release_history_gate(state)
+            finally:
+                if state['connection'] is not None:
+                    state['connection'].close()
+                listener.close()
+                path.unlink(missing_ok=True)
+
+    def accept_history_gate(self, state):
+        connection,_=state['listener'].accept()
+        state['connection']=connection
+        connection.settimeout(8)
+        self.assertEqual(connection.recv(1),b'H')
+
+    def release_history_gate(self, state):
+        # Mark before sending: cleanup must never repeat a release action.
+        state['released']=True
+        state['connection'].sendall(b'R')
+
+    def completed_history_response(self, response):
+        self.assertEqual(response.status,200)
+        self.assertIsNone(response.finished())
+
+    def assert_latest_merged(self):
+        # The refresh adds item 1000, making its application observable in the DOM.
+        pending=self.page.get_by_role('button',name=re.compile(
+            'Есть новые сообщения|Перейти к последним',re.I))
+        pending.first.wait_for(timeout=8000)
+        self.assertGreater(pending.count(),0)
+        self.page.clock.run_for(32)
+
+    def test_inflight_latest_does_not_suppress_boundary_older(self):
+        self.check_inflight_latest_order(older_first=True)
+
+    def test_inflight_latest_does_not_suppress_boundary_older_latest_first(self):
+        self.check_inflight_latest_order(older_first=False)
+
+    def check_inflight_latest_order(self, older_first):
+        self.configure(count=1000); self.open()
+        self.assertEqual(self.cap(),list(range(900,1000)))
+        for _ in range(30):
+            prior=self.cap()
+            if min(prior)==0: break
+            before=len(self.requests()); anchor=self.reader(controlled=True)
+            current=self.controlled_older(prior)
+            self.assert_anchor(anchor)
+            self.assertLess(min(current),min(prior))
+            self.assertEqual(self.requests()[before:],[],'Cached Older is local')
+        self.assertEqual(min(self.cap()),0,'Reach the boundary before starting the race')
+        self.assertTrue(self.older().is_enabled())
+        prior=self.ids(); anchor=self.reader(controlled=True)
+
+        with self.history_gate('latest') as latest_gate, self.history_gate('older') as older_gate:
+            self.configure(count=1001,latest_gate=latest_gate['path'],older_gate=older_gate['path'])
+            self.assertEqual(self.page.get_by_role('button',name=re.compile(
+                'Есть новые сообщения|Перейти к последним',re.I)).count(),0,
+                'Refresh merge witness must start absent')
+            latest_responses=[]; older_responses=[]; completed=[]
+            self.page.on('response',lambda r:latest_responses.append(r)
+                         if self.history_response(r,False) else None)
+            self.page.on('response',lambda r:older_responses.append(r)
+                         if self.history_response(r,True) else None)
+            self.page.on('requestfinished',lambda r:completed.append(
+                'older' if 'cursor' in parse_qs(urlsplit(r.url).query,keep_blank_values=True)
+                else 'latest') if urlsplit(r.url).path=='/api/session-history' else None)
+            before=len(self.requests())
+            self.page.clock.run_for(6000)
+            self.accept_history_gate(latest_gate)
+            self.assertEqual(self.history_cursors(self.requests()[before:]),[None])
+            self.assertEqual(latest_responses,[],'Latest request is held in the fixture')
+
+            # Click once with latest held. Both requests must reach their gates.
+            self.older().evaluate('button=>button.click()')
+            self.assertEqual(latest_responses,[],
+                             'Older was clicked while latest was still in flight')
+            self.accept_history_gate(older_gate)
+            self.assertEqual(self.history_cursors(self.requests()[before:]),[None,CURSOR])
+            self.assertEqual(older_responses,[],'Continuation is held in the fixture')
+            self.assertEqual(completed,[])
+
+            if older_first:
+                with self.page.expect_response(
+                        lambda r:self.history_response(r,True),timeout=8000) as older:
+                    self.release_history_gate(older_gate)
+                self.completed_history_response(older.value)
+                current=self.wait_older_window(prior)
+                self.assert_anchor(anchor)
+                self.assertEqual(latest_responses,[],'Latest remains held after Older merged')
+                self.assertEqual(completed,['older'])
+                older_window=list(current)
+                with self.page.expect_response(
+                        lambda r:self.history_response(r,False),timeout=8000) as latest:
+                    self.release_history_gate(latest_gate)
+                self.completed_history_response(latest.value)
+                self.assert_latest_merged()
+                self.assertEqual(self.cap(),older_window,
+                                 'Late latest must not replace or clobber the Older window')
+            else:
+                with self.page.expect_response(
+                        lambda r:self.history_response(r,False),timeout=8000) as latest:
+                    self.release_history_gate(latest_gate)
+                self.completed_history_response(latest.value)
+                self.assert_latest_merged()
+                self.assertEqual(self.cap(),prior,'Latest must preserve the boundary reader window')
+                self.assert_anchor(anchor)
+                self.assertEqual(older_responses,[],'Older remains held after latest merged')
+                self.assertEqual(completed,['latest'])
+                with self.page.expect_response(
+                        lambda r:self.history_response(r,True),timeout=8000) as older:
+                    self.release_history_gate(older_gate)
+                self.completed_history_response(older.value)
+                current=self.wait_older_window(prior)
+
+            self.assertEqual(completed,['older','latest'] if older_first else ['latest','older'])
+            self.assertEqual(len(latest_responses),1,'The real background refresh completed')
+            cursors=[c for c in self.history_cursors(self.requests()[before:]) if c is not None]
+            self.assertEqual(cursors,[CURSOR],'In-flight latest cannot suppress the exact continuation')
+            self.assertEqual(self.history_cursors(self.requests()[before:]),[None,CURSOR])
+            current=self.cap()
+            self.assertEqual(current,list(range(min(current),max(current)+1)),
+                             'Both responses merged into a contiguous reader window')
+            self.assertLess(min(current),0,'Both merges must retain the Older window')
+            self.assert_anchor(anchor)
+
+        seen=set(current)
+        for _ in range(30):
+            if not self.older().is_enabled(): break
+            prior=self.ids(); anchor=self.reader(controlled=True)
+            action_before=len(self.requests())
+            current=self.controlled_older(prior); seen.update(current)
+            self.assertEqual(self.history_cursors(self.requests()[action_before:]),[],
+                             'Remaining Older items must be locally reachable')
+            self.assert_anchor(anchor)
+            self.assertLess(min(current),min(prior))
+        self.assertEqual(seen & set(range(-128,0)),set(range(-128,0)))
+        self.assertFalse(self.older().is_enabled())
+        self.assertEqual([c for c in self.history_cursors(self.requests()) if c is not None],
+                         [CURSOR],'No retry or duplicate continuation is permitted')
 
     def test_same_item_id_in_distinct_turns_remains_distinct_full_identity(self):
         self.configure(count=101,repeat_ids=True); self.open()

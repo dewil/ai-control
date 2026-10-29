@@ -20,6 +20,7 @@ let renameDialogScope=null;
 let renameStatusTimer=null;
 const historyData = new Map();
 const historyFlights = new Map();
+const historyOlderFlights = new Map();
 const messages = {invalid_code:'Код уже использован или неверен. Дождитесь нового кода.',unauthorized:'Сеанс завершён или код неверен. Войдите снова.',forbidden:'Запрос не подтверждён. Войдите снова.',rate_limited:'Слишком много попыток. Подождите минуту.',invalid_request:'Проверьте введённые данные.',invalid_or_stale:'Вопрос или результат изменился. Обновите задачи.',stale:'Эта карточка устарела. Обновите задачи.',saved_pending:'Ответ сохранён, доставка пока не завершена. Повторите позже.',unavailable:'Control временно недоступен. Попробуйте ещё раз.'};
 function node(tag,text,cls){const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;}
 // Deliberately a bounded subset, not CommonMark. Message data only becomes text
@@ -228,7 +229,7 @@ async function loadModelCatalog(){
   }catch(_){if(current()){state.catalog=null;state.expires=0;state.message='Список моделей недоступен. Можно наследовать текущие настройки и отправить сообщение.';}}
   finally{if(state.request===request)state.loading=false;if(current())syncCurrentSessionControls();}
 }
-function syncCurrentSessionControls(){const key=currentSessionKey();const historyBusy=Boolean(key&&historyFlights.has(key));const state=key&&historyData.get(key);const hasOlder=Boolean(state&&(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error)));$('chat-send').disabled=!csrf||currentTab!=='sessions'||!key||Boolean(selectedSession?.created&&!state?.initialized&&!state?.confirmedOrigin)||sendsInFlight.has(key)||hasUnknown(key)||!explicitModelReady(key);$('chat-refresh').disabled=!key||historyBusy;$('history-older').disabled=!key||historyBusy||!hasOlder;$('history-retry').hidden=!(state&&state.historyError);$('history-retry').disabled=!key||historyBusy;renderModelControls();renderCurrentSendStatus();syncRenameControls();syncCreateControls();}
+function syncCurrentSessionControls(){const key=currentSessionKey();const olderBusy=Boolean(key&&historyOlderFlights.get(key)?.generation===selectionGeneration);const historyBusy=olderBusy||Boolean(key&&historyFlights.get(key)?.generation===selectionGeneration);const state=key&&historyData.get(key);const hasOlder=Boolean(state&&(hasEarlierHistory(state)||state.olderAnchors.some(anchor=>!anchor.error)));$('chat-send').disabled=!csrf||currentTab!=='sessions'||!key||Boolean(selectedSession?.created&&!state?.initialized&&!state?.confirmedOrigin)||sendsInFlight.has(key)||hasUnknown(key)||!explicitModelReady(key);$('chat-refresh').disabled=!key||historyBusy;$('history-older').disabled=!key||olderBusy||!hasOlder;$('history-retry').hidden=!(state&&state.historyError);$('history-retry').disabled=!key||historyBusy;renderModelControls();renderCurrentSendStatus();syncRenameControls();syncCreateControls();}
 function showTab(tab,load=true){attentionReset(true);currentTab=tab;const tasks=tab==='tasks';if(tasks)clearHistoryScrollSlack();$('tab-tasks').setAttribute('aria-selected',String(tasks));$('tab-sessions').setAttribute('aria-selected',String(!tasks));$('tasks-panel').hidden=!tasks;$('sessions-panel').hidden=tasks;syncCurrentSessionControls();if(tasks){stopPolling();if(load&&!taskLoaded)refresh();}else{if(load&&!projectNames.length)loadProjects();else if(load&&!selectedProject)loadSessionList(0,false);startPolling();}}
 function setSessionStatus(text){$('session-list-status').textContent=text;}
 function renderProjects(){
@@ -518,7 +519,9 @@ function historyErrorText(state){return [...new Set([state.latestHistoryError,st
 async function loadHistory(older=false,manual=false){
   if(!selectedSession||!selectedProject)return;
   const project=selectedProject,sid=selectedSession.sid,key=chatKey(project,sid),generation=selectionGeneration;
-  const existing=historyFlights.get(key);
+  // Latest refreshes and explicit continuations must not coalesce with each other.
+  const flights=older?historyOlderFlights:historyFlights;
+  const existing=flights.get(key);
   if(existing){if(existing.generation===generation)return existing.promise;existing.controller.abort();}
   const state=normalizeHistoryState(key);
   if(older&&hasEarlierHistory(state)){
@@ -535,12 +538,12 @@ async function loadHistory(older=false,manual=false){
   const deadline=new Promise((_,reject)=>{timeout=setTimeout(()=>{controller.abort();reject(new Error('Время загрузки переписки истекло. Повторите загрузку.'));},15000);});
   if(!state.initialized||manual)$('history-status').textContent='Загружаем переписку…';
   const flight={generation,controller,promise:null};
-  historyFlights.set(key,flight);
+  flights.set(key,flight);
   const promise=(async()=>{
     try{
       // The deadline includes JSON consumption, and only cancels this browser GET.
       const data=await Promise.race([api(path,undefined,controller.signal,()=>activeSelection(project,sid,generation)),deadline]);
-      if(!activeSelection(project,sid,generation)||historyFlights.get(key)!==flight)return;
+      if(!activeSelection(project,sid,generation)||flights.get(key)!==flight)return;
       if(Object.hasOwn(data,'history_state')){
         const keys=['history_state','reason','recent_sends'];if(Object.hasOwn(data,'needs_native_attention'))keys.push('needs_native_attention');
         if(older||!exactFields(data,keys)||data.history_state!=='unavailable'||data.reason!=='unavailable'||Object.hasOwn(data,'needs_native_attention')&&data.needs_native_attention!==true||!Array.isArray(data.recent_sends)||data.recent_sends.length>8||!data.recent_sends.every(row=>exactFields(row,['status','message_id','turn_id'])&&UUID_RE.test(row.message_id)&&(['accepted','delivery_unknown','rejected'].includes(row.status))&&(row.status==='accepted'?typeof row.turn_id==='string'&&row.turn_id.length>0&&Array.from(row.turn_id).length<=500:row.turn_id===null)))throw new Error(messages.unavailable);
@@ -563,9 +566,9 @@ async function loadHistory(older=false,manual=false){
       else if(historyItems(state).some(entry=>!known.has(entry.key)))state.pendingLatest=true;
       renderHistory(key);
       $('history-status').textContent=historyErrorText(state);
-      if(historyFlights.get(key)===flight){historyFlights.delete(key);syncCurrentSessionControls();restoreHistoryScroll(scrollDecision,project,sid,generation);}
+      if(flights.get(key)===flight){flights.delete(key);syncCurrentSessionControls();restoreHistoryScroll(scrollDecision,project,sid,generation);}
     }catch(err){
-      if(activeSelection(project,sid,generation)&&historyFlights.get(key)===flight){
+      if(activeSelection(project,sid,generation)&&flights.get(key)===flight){
         state.historyError=(controller.signal.aborted?'Время загрузки переписки истекло. Повторите загрузку.':chatError(err))+' История и черновик сохранены.';
         state.historyErrorOrigin=older?'older':'latest';
         if(!older)state.latestHistoryError=state.historyError;
@@ -573,7 +576,7 @@ async function loadHistory(older=false,manual=false){
       }
     }finally{
       clearTimeout(timeout);
-      if(historyFlights.get(key)===flight){historyFlights.delete(key);if(activeSelection(project,sid,generation))syncCurrentSessionControls();}
+      if(flights.get(key)===flight){flights.delete(key);if(activeSelection(project,sid,generation))syncCurrentSessionControls();}
     }
   })();
   flight.promise=promise;syncCurrentSessionControls();return promise;
