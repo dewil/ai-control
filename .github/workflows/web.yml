@@ -6,6 +6,7 @@ on:
 jobs:
   contracts:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v6
         with:
@@ -69,3 +70,8 @@ jobs:
           bash tests/test-install-completeness.sh
           bash tests/test-install-idempotent.sh
           bash tests/test-install-macos-legacy.sh
+      - name: DeepSeek bot mocked contracts
+        run: |
+          python tests/test-agent-limits-deepseek.py
+          python tests/test-agent-limits-deepseek-supplemental.py
+          python bin/ai-agent-limits-digest selftest

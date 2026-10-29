@@ -73,6 +73,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 
 try:
     from zoneinfo import ZoneInfo
@@ -1309,6 +1310,81 @@ def _kimi_section(data, tz, now):
     return '\n'.join(lines)
 
 
+DEEPSEEK_REASONS = {
+    0: "сеть недоступна",
+    401: "HTTP 401: ошибка авторизации",
+    403: "HTTP 403: доступ запрещен",
+    429: "HTTP 429: слишком много запросов",
+    "server": "HTTP 5xx: ошибка сервера",
+    "http": "неожиданный HTTP статус",
+    "shape": "неожиданный ответ API",
+}
+
+
+def _deepseek_balances(rows):
+    """Проверяем все поля; возвращаем только публичные денежные строки."""
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 2:
+        return None
+    balances, seen = [], set()
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        currency = row.get("currency")
+        if currency not in ("USD", "CNY") or currency in seen:
+            return None
+        balance = {"currency": currency}
+        for field in ("total_balance", "granted_balance", "topped_up_balance"):
+            value = row.get(field)
+            if (not isinstance(value, str) or len(value) > 64
+                    or re.fullmatch(r"[+-]?[0-9]+(?:\.[0-9]+)?", value) is None):
+                return None
+            try:
+                if not Decimal(value).is_finite():
+                    return None
+            except InvalidOperation:
+                return None
+            balance[field] = value
+        seen.add(currency)
+        balances.append(balance)
+    return balances
+
+
+def build_deepseek(now=None):
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    dto = {"source": "DeepSeek API",
+           "captured_at": now.astimezone(timezone.utc).isoformat()}
+    key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not key:
+        return dict(dto, status="not_configured", reason="нет ключа API")
+    reason = DEEPSEEK_REASONS["shape"]
+    try:
+        status, body = http_get(
+            "https://api.deepseek.com/user/balance",
+            {"Authorization": "Bearer " + key}, PROXY)
+    except Exception:
+        return dict(dto, status="error",
+                    reason=DEEPSEEK_REASONS[0])
+    if type(status) is not int or status != 200:
+        reason = DEEPSEEK_REASONS["http"]
+        if type(status) is int:
+            if 500 <= status <= 599:
+                reason = DEEPSEEK_REASONS["server"]
+            else:
+                reason = DEEPSEEK_REASONS.get(status, reason)
+        return dict(dto, status="error", reason=reason)
+    if not isinstance(body, dict) or type(body.get("is_available")) is not bool:
+        return dict(dto, status="error",
+                    reason=reason)
+    balances = _deepseek_balances(body.get("balance_infos"))
+    if balances is None:
+        return dict(dto, status="error",
+                    reason=reason)
+    return dict(dto, status="ok", is_available=body["is_available"],
+                balances=balances)
+
+
 def safe(fn):
     try:
         return fn()
@@ -1678,6 +1754,54 @@ def _yandex_section(data, tz):
     return _prepaid_section(YANDEX, data, tz)
 
 
+def _deepseek_section(data, now):
+    if data is None:
+        return "DeepSeek API: нет данных"
+    unavailable = "DeepSeek API: данные недоступны"
+    if not isinstance(data, dict) or data.get("source") != "DeepSeek API":
+        return unavailable
+    status = data.get("status")
+    if status == "ok" and type(data.get("is_available")) is bool:
+        balances = _deepseek_balances(data.get("balances"))
+        if balances is None:
+            lines = [unavailable]
+        else:
+            lines = ["DeepSeek API · баланс"] + [
+                " %s %s" % (row["total_balance"], row["currency"]) for row in balances]
+            if not data["is_available"]:
+                lines.append(" API недоступен по балансу")
+    elif status == "not_configured":
+        lines = ["DeepSeek API: не настроен · нет ключа API"]
+    elif status == "error":
+        reason = data.get("reason")
+        if reason not in tuple(DEEPSEEK_REASONS.values()):
+            reason = DEEPSEEK_REASONS["shape"]
+        lines = [unavailable + " · " + reason]
+    else:
+        lines = [unavailable]
+
+    stamp = data.get("captured_at")
+    try:
+        if not isinstance(stamp, str) or len(stamp) > 64:
+            raise ValueError
+        captured = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if captured.tzinfo is None:
+            raise ValueError
+        captured = captured.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        lines.append(" время снимка неизвестно")
+    else:
+        lines.append(" снимок %s" %
+                     captured.strftime("%H:%M %d.%m.%Y UTC"))
+        if captured > now:
+            lines.append(" время снимка в будущем")
+        else:
+            stale = _stale_line(captured.isoformat(), now=now)
+            if stale:
+                lines.append(" " + stale)
+    return "\n".join(lines)
+
+
 def _stale_line(received_at, now=None):
     received = parse_iso(received_at)
     if received is None:
@@ -1821,6 +1945,7 @@ def render(envelope, now=None):
     if yandex:
         lines.append("")
         lines.append(yandex)
+    lines.extend(["", _deepseek_section(snapshot.get("deepseek"), now_eff)])
     host = _host_section(snapshot.get("host"))
     if host:
         lines.append("")
@@ -2068,6 +2193,7 @@ def mode_once(argv):
     yandex = safe(build_yandex)
     if yandex is not None:
         snapshot["yandex"] = yandex
+    snapshot["deepseek"] = safe(build_deepseek)
     apply_clamp(snapshot)  # гасим спурьезные занижения реплик OpenAI (min remaining)
     envelope = {"received_at": iso_now(), "snapshot": snapshot}
     cache_write(envelope)  # всегда - /limits показывает текущее
@@ -2162,6 +2288,9 @@ def mode_selftest():
         # ~20% недели) - держит 🔺 под сквозной проверкой, а не только юнитом.
         " нед   ▓███░░░░░░  42% / Чт (5.6d) 🔺",
         " кред 12",
+        # INV-DSBOT05: старый snapshot явно показывает отсутствие DeepSeek.
+        "",
+        "DeepSeek API: нет данных",
     ])
     os.environ["AI_AGENT_TG_CARDS_COUNT"] = "/nonexistent/tgbot.cards.json"
     fresh = parse_iso("2026-07-17T06:00:00Z")
